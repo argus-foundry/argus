@@ -141,7 +141,7 @@ func (a *App) enterTasksRailTerminal() {
 	a.agentFocus = focusTerminal
 	a.mu.Unlock()
 	a.tasklist.SetFocused(false)
-	a.tasklist.SetCursorDimmed(true)
+	a.tasklist.SetCursorDimmed(false)
 	a.agentPane.SetFocused(true)
 	delete(a.idleUnvisited, task.ID)
 	a.viewedWhileAgent[task.ID] = true

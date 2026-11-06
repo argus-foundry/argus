@@ -12,6 +12,7 @@ import (
 	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/notify"
 	"github.com/drn/argus/internal/testutil"
+	"github.com/drn/argus/internal/tui/theme"
 	"github.com/drn/argus/internal/tui/widget"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -362,4 +363,43 @@ func TestSmoke_TasksRailSingleHeader(t *testing.T) {
 	check(true)
 	app.tapp.QueueUpdateDraw(func() { app.enterPendingAgentView(task) })
 	check(true)
+}
+
+// BUG-087: the rail row for the task shown in the agent pane stays in the
+// selected color while the terminal (not the rail) holds focus.
+func TestSmoke_TasksRailSelectedRowStaysHighlightedWhenAgentFocused(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := testDB(t)
+	testutil.NoError(t, d.SetConfigValue("ui.tasks_rail", "true"))
+	for _, task := range []*model.Task{{ID: "rail-a", Name: "Zebrafish", Project: "A", Status: model.StatusComplete, CreatedAt: time.Now()}, {ID: "rail-b", Name: "Second", Project: "B", Status: model.StatusComplete, CreatedAt: time.Now()}} {
+		testutil.NoError(t, d.Add(task))
+	}
+	app := New(d, agent.NewRunner(nil), false)
+	sim, stop := wireApp(t, app)
+	defer stop()
+	app.tapp.QueueUpdateDraw(func() { sim.SetSize(140, 40); app.switchTab(widget.TabTasks); app.tasklist.SelectByID("rail-a") })
+	syncUI(t, app.tapp)
+	sim.InjectKey(tcell.KeyEnter, 0, 0)
+	syncUI(t, app.tapp)
+	readUI(t, app.tapp, func() { testutil.Equal(t, app.mode, modeAgent) })
+	// Find the selected task's name cell in the rail (first 34 columns).
+	cells, w, h := sim.GetContents()
+	found := false
+	for y := 0; y < h && !found; y++ {
+		var row []rune
+		for x := 0; x < 34; x++ {
+			c := cells[y*w+x]
+			if len(c.Runes) > 0 {
+				row = append(row, c.Runes[0])
+			} else {
+				row = append(row, ' ')
+			}
+		}
+		if i := strings.Index(string(row), "Zebrafish"); i >= 0 {
+			fg, _, _ := cells[y*w+i].Style.Decompose()
+			testutil.Equal(t, fg, theme.ColorSelected)
+			found = true
+		}
+	}
+	testutil.Equal(t, found, true)
 }

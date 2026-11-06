@@ -5623,7 +5623,7 @@ func (a *App) bindTaskAgent(task *model.Task, autoStart, focus bool) {
 		a.mu.Unlock()
 		a.tasksRailPage.Bound = true
 		a.tasklist.SetFocused(!focus)
-		a.tasklist.SetCursorDimmed(focus)
+		a.tasklist.SetCursorDimmed(false)
 		a.root.ResizeItem(a.header, 1, 0)
 		a.pages.SwitchToPage("tasks-rail")
 		if focus {

@@ -111,3 +111,5 @@
 - **The bottom status bar counts the full `Tasks()` snapshot by stored status, including archived tasks; session liveness does not gate `in_progress`/active.** `in_review` needs its own count, or the four displayed counts no longer add up to the task rows that exist. When the count summary leaves little room, keep whole keybinding hints and reserve the final help/quit hint rather than clipping it mid-word.
 
 - **The persistent Tasks rail embeds `agentPanels`, not the classic `agentPage` header wrapper.** Its only outer rows are the root tabs and status bar; `computePTYSize` must deduct two rows before the terminal borders, or startup geometry loses the row reclaimed by omitting the duplicate task-name chip (BUG-085).
+
+- **The Tasks rail cursor is never dimmed when the terminal takes focus (BUG-087).** `SetCursorDimmed(true)` renders the row unselected with a dim `›` and exists only for the jump switcher's inactive column; the rail must keep the selected style so the task you are in stays visible, and signal focus via `SetFocused` (border) alone.
