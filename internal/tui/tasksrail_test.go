@@ -210,7 +210,7 @@ func TestSmoke_TasksRailFocusAndLayout(t *testing.T) {
 		_, _, rw, _ := app.tasklist.GetRect()
 		testutil.Equal(t, rw, 34)
 		rows, cols := app.computePTYSize()
-		testutil.Equal(t, rows, uint16(35))
+		testutil.Equal(t, rows, uint16(36))
 		testutil.Equal(t, cols, uint16(104))
 	})
 	sim.InjectKey(tcell.KeyEnter, 0, 0)
@@ -269,4 +269,55 @@ func TestTasksRailEnablePreservesNavigatedAgent(t *testing.T) {
 	app.setTasksRail(true)
 	testutil.Equal(t, app.agentState.TaskID, "b")
 	testutil.Equal(t, app.tasklist.SelectedTask().ID, "b")
+}
+
+func TestSmoke_TasksRailSingleHeader(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := testDB(t)
+	testutil.NoError(t, d.SetConfigValue("ui.tasks_rail", "true"))
+	task := &model.Task{ID: "header", Name: "unique-task-chip", Project: "A", Status: model.StatusComplete}
+	testutil.NoError(t, d.Add(task))
+	app := New(d, agent.NewRunner(nil), false)
+	sim, stop := wireApp(t, app)
+	defer stop()
+	app.tapp.QueueUpdateDraw(func() { sim.SetSize(140, 40); app.tasklist.SelectByID(task.ID) })
+	syncUI(t, app.tapp)
+	check := func(rail bool) {
+		t.Helper()
+		readUI(t, app.tapp, func() {
+			_, y, _, h := app.agentPane.GetRect()
+			testutil.Equal(t, y, 1)
+			testutil.Equal(t, h, 38)
+			rows, _ := app.computePTYSize()
+			testutil.Equal(t, rows, uint16(36))
+			sim.Show()
+			cells, w, _ := sim.GetContents()
+			rowText := func(row int) string {
+				var text strings.Builder
+				for _, cell := range cells[row*w : (row+1)*w] {
+					text.WriteString(string(cell.Runes))
+				}
+				return text.String()
+			}
+			if rail {
+				testutil.Contains(t, rowText(0), "Tasks")
+				testutil.Contains(t, rowText(0), "Projects")
+				testutil.Equal(t, strings.Contains(rowText(1), task.Name), false)
+			} else {
+				testutil.Contains(t, rowText(0), task.Name)
+				testutil.Equal(t, strings.Contains(rowText(0), "Projects"), false)
+			}
+		})
+	}
+	check(true) // Browsing a bound task already uses the content row.
+	app.tapp.QueueUpdateDraw(func() { app.onTaskSelect(task, false) })
+	check(true)
+	app.tapp.QueueUpdateDraw(func() { app.clearAgentZen() })
+	check(true)
+	app.tapp.QueueUpdateDraw(func() { app.setTasksRail(false) })
+	check(false)
+	app.tapp.QueueUpdateDraw(func() { app.setTasksRail(true) })
+	check(true)
+	app.tapp.QueueUpdateDraw(func() { app.enterPendingAgentView(task) })
+	check(true)
 }

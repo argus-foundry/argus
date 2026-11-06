@@ -1006,7 +1006,9 @@ func (a *App) buildUI() {
 	a.agentPage = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.agentHeader, 1, 0, false).
 		AddItem(a.agentPanels, 0, 1, true)
-	a.tasksRailPage = taskview.NewRailPage(a.tasklist, a.agentPage, a.agentPane)
+	// The rail identifies the selected task; only the classic page needs the
+	// task-name header. Rail content starts directly below the root tab bar.
+	a.tasksRailPage = taskview.NewRailPage(a.tasklist, a.agentPanels, a.agentPane)
 	a.tasksRailPage.PaneFocused = func() bool { return a.mode == modeAgent }
 	a.tasksRailPage.OnRailFocus = a.focusTasksRail
 	a.tasklist.SetRailMode(a.tasksRailEnabled)
@@ -6338,7 +6340,8 @@ func (a *App) computePTYSize() (rows, cols uint16) {
 			if !a.agentZen {
 				w = w * 3 / 5
 			}
-			return PTYSizeForRect(Rect{W: w, H: max(h-3, 1)})
+			// Only the root tab bar and status bar sit outside the panels.
+			return PTYSizeForRect(Rect{W: w, H: max(h-2, 1)})
 		}
 	}
 	rows, cols = ptySizeFromHostTerm(term.GetSize(int(os.Stdout.Fd())))
