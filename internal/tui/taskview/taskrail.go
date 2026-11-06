@@ -37,5 +37,5 @@ func (tl *TaskListView) drawRailCursor(screen tcell.Screen, x, y int) {
 	if tl.cursorDimmed {
 		style = theme.StyleDimmed
 	}
-	screen.SetContent(x, y, '›', nil, style)
+	screen.SetContent(x, y, theme.RailCaret, nil, style)
 }

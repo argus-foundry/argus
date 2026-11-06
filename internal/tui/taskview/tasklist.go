@@ -1511,8 +1511,12 @@ func (tl *TaskListView) drawTaskRow(screen tcell.Screen, x, y, w int, task *mode
 	prefix := "    "
 	col := x
 	widget.DrawText(screen, col, y, len(prefix), prefix, theme.StyleDefault)
-	if dimCursor {
+	if dimCursor && !tl.railMode {
 		screen.SetContent(col+1, y, '›', nil, theme.StyleDimmed)
+	}
+	if tl.railMode && (cursor || dimCursor) {
+		// Same marker, gutter column, and style as the Hera rail's selected row.
+		tl.drawRailCursor(screen, x, y)
 	}
 	col += len(prefix)
 

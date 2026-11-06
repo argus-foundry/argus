@@ -113,3 +113,5 @@
 - **The persistent Tasks rail embeds `agentPanels`, not the classic `agentPage` header wrapper.** Its only outer rows are the root tabs and status bar; `computePTYSize` must deduct two rows before the terminal borders, or startup geometry loses the row reclaimed by omitting the duplicate task-name chip (BUG-085).
 
 - **The Tasks rail cursor is never dimmed when the terminal takes focus (BUG-087).** `SetCursorDimmed(true)` renders the row unselected with a dim `›` and exists only for the jump switcher's inactive column; the rail must keep the selected style so the task you are in stays visible, and signal focus via `SetFocused` (border) alone.
+
+- **The Tasks rail's selected task row must draw `theme.RailCaret` itself (BUG-088).** `drawTaskRow` is not covered by the `drawRailCursor` calls in `Draw` (those only run for project/archive rows), so a task row got the pink name but no `›` gutter until `drawTaskRow` called it; the glyph is one shared constant with the Hera rail so the two cannot drift. Test cell positions by rune index, not `strings.Index` byte offset, since `›` is multi-byte.

@@ -1,10 +1,12 @@
 package taskview
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/testutil"
+	"github.com/drn/argus/internal/tui/theme"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -186,4 +188,68 @@ func TestTaskRailEnterCompleteAndHeader(t *testing.T) {
 	tl.CursorUp()
 	tl.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, 0), nil)
 	testutil.DeepEqual(t, tl.VisibleTaskIDs(), []string{"done"})
+}
+
+// BUG-088: the Tasks rail's selected task row matches the Hera rail's selected
+// row — theme.RailCaret in the gutter column (x), name in theme.StyleSelected.
+func TestTaskRailSelectedRowMatchesHeraStyle(t *testing.T) {
+	for _, dimmed := range []bool{false, true} {
+		tl := NewTaskListView()
+		tl.SetRailMode(true)
+		tl.SetCursorDimmed(dimmed)
+		tl.SetTasks([]*model.Task{{ID: "a", Name: "Alpha", Project: "A"}, {ID: "b", Name: "Bravo", Project: "A"}})
+		tl.SelectByID("a")
+		sim := tcell.NewSimulationScreen("UTF-8")
+		testutil.NoError(t, sim.Init())
+		defer sim.Fini()
+		sim.SetSize(34, 10)
+		tl.SetRect(0, 0, 34, 10)
+		tl.Draw(sim)
+		sim.Show()
+		cells, w, h := sim.GetContents()
+		found := false
+		for y := 0; y < h; y++ {
+			row := cells[y*w : (y+1)*w]
+			bi := strings.Index(string(rowRunes(row)), "Alpha")
+			if bi < 0 {
+				continue
+			}
+			i := len([]rune(string(rowRunes(row))[:bi]))
+			found = true
+			// Caret sits in the same gutter column as the rail's other rows.
+			gx := -1
+			for x, c := range row {
+				if len(c.Runes) > 0 && c.Runes[0] == theme.RailCaret {
+					gx = x
+				}
+			}
+			testutil.Equal(t, gx >= 0, true)
+			wantCaret := theme.StyleSelected
+			wantName := theme.StyleSelected
+			if dimmed {
+				wantCaret, wantName = theme.StyleDimmed, theme.StyleNormal
+			}
+			testutil.Equal(t, row[gx].Style, wantCaret)
+			testutil.Equal(t, row[i].Style, wantName)
+			// Unselected row has no caret.
+			for y2 := 0; y2 < h; y2++ {
+				if strings.Contains(string(rowRunes(cells[y2*w:(y2+1)*w])), "Bravo") {
+					testutil.Equal(t, strings.ContainsRune(string(rowRunes(cells[y2*w:(y2+1)*w])), theme.RailCaret), false)
+				}
+			}
+		}
+		testutil.Equal(t, found, true)
+	}
+}
+
+func rowRunes(row []tcell.SimCell) []rune {
+	var out []rune
+	for _, c := range row {
+		if len(c.Runes) == 0 {
+			out = append(out, ' ')
+			continue
+		}
+		out = append(out, c.Runes[0])
+	}
+	return out
 }
