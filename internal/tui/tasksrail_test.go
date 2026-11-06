@@ -22,6 +22,48 @@ type tasksRailStartRunner struct {
 	starts int
 }
 
+func TestSmoke_TasksRailNavigationSkipsHeaders(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := testDB(t)
+	testutil.NoError(t, d.SetConfigValue("ui.tasks_rail", "true"))
+	for _, id := range []string{"a", "b", "c"} {
+		testutil.NoError(t, d.Add(&model.Task{ID: id, Name: id, Project: id, Status: model.StatusComplete}))
+	}
+	app := New(d, agent.NewRunner(nil), false)
+	sim, stop := wireApp(t, app)
+	defer stop()
+	app.tapp.QueueUpdateDraw(func() { sim.SetSize(140, 40); app.tasklist.SelectByID("a") })
+	syncUI(t, app.tapp)
+	steps := []struct {
+		key  tcell.Key
+		rune rune
+		want string
+	}{
+		{tcell.KeyUp, 0, "a"},
+		{tcell.KeyRune, 'j', "b"},
+		{tcell.KeyDown, 0, "c"},
+		{tcell.KeyDown, 0, "c"},
+		{tcell.KeyRune, 'k', "b"},
+		{tcell.KeyUp, 0, "a"},
+	}
+	for _, step := range steps {
+		sim.InjectKey(step.key, step.rune, 0)
+		syncUI(t, app.tapp)
+		selected, boundTask := "", ""
+		bound := false
+		readUI(t, app.tapp, func() {
+			if task := app.tasklist.SelectedTask(); task != nil {
+				selected = task.ID
+			}
+			boundTask = app.agentState.TaskID
+			bound = app.tasksRailPage.Bound
+		})
+		testutil.Equal(t, selected, step.want)
+		testutil.Equal(t, boundTask, step.want)
+		testutil.Equal(t, bound, true)
+	}
+}
+
 func (r *tasksRailStartRunner) Start(*model.Task, config.Config, uint16, uint16, bool) (agent.SessionHandle, error) {
 	r.starts++
 	return nil, errors.New("recorded start attempt")

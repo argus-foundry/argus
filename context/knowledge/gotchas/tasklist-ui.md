@@ -1,5 +1,7 @@
 ## Task List & UI
 
+- **Tasks rail selection must finish on a task, never a project or section header.** Traversal may temporarily restore headers while expanding a destination, but public rebuild paths must clamp afterward; focus-fold can change the selected task without changing its row index, so cursor callbacks must compare the task as well as the index (BUG-086).
+
 - **The optional Tasks rail reuses the main task list and agent pane; never draw either primitive in both the legacy and rail pages in one frame.** Rail browsing binds without auto-start or a daemon focus claim; terminal entry claims focus, while Ctrl+Q clears it and leaves the pane visible.
 
 - **Reconcile Tasks rail selection after refresh releases `App.mu`, never from `Draw`.** Binding can switch pages and restore focus; tview holds its application lock while painting, so a draw-time page/focus change can deadlock. Narrow-window painting only updates logical region state; input routing repairs an obsolete focused child before forwarding the next event.
