@@ -102,6 +102,13 @@ const (
 	// identity and timing only, never the counts themselves.
 	EventTypeTaskUsageChanged = "task.usage_changed"
 
+	// EventTypeConfigChanged fires after a committed settings write so clients
+	// refetch the named resource. Payload carries identity only, e.g.
+	// {"resource":"accounts","name":"work"} or
+	// {"resource":"account_defaults","project":"argus"} (project omitted for
+	// the global default).
+	EventTypeConfigChanged = "config.changed"
+
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.
 	// It is never persisted in the events table — clients seeing it should

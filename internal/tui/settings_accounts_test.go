@@ -503,3 +503,59 @@ func TestAccounts_EditCancelledWhenConfigTomlStartsDefiningIt(t *testing.T) {
 	testutil.False(t, sv.IsEditing())
 	testutil.Equal(t, sv.accounts["work"].ClaudeConfigDir, "/toml/work")
 }
+
+func TestAccounts_ConcurrentFieldEdit(t *testing.T) {
+	sv, d := accountsSV(t)
+	addAccount(t, sv, "work")
+	selectRow(t, sv, srAccountField, accountKey("work", acctFieldCodex))
+	acctKey(sv, tcell.KeyRune, 'e')
+	acctType(sv, "~/.codex-work")
+	rows, err := d.Accounts()
+	testutil.NoError(t, err)
+	independent := rows["work"]
+	independent.Label = "REST label"
+	testutil.NoError(t, d.SetAccount("work", independent))
+	acctKey(sv, tcell.KeyEnter, 0)
+	testutil.Equal(t, sv.accountErr, "")
+	rows, err = d.Accounts()
+	testutil.NoError(t, err)
+	testutil.Equal(t, rows["work"].Label, "REST label")
+	testutil.Equal(t, rows["work"].CodexHome, "~/.codex-work")
+	testutil.Equal(t, sv.accounts["work"].Label, "REST label")
+}
+
+func TestAccounts_ConcurrentOwnershipChange(t *testing.T) {
+	for _, kind := range []string{"deleted", "config_file"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			dir := t.TempDir()
+			d, err := db.Open(filepath.Join(dir, "data.sql"))
+			testutil.NoError(t, err)
+			t.Cleanup(func() { _ = d.Close() })
+			original := config.Account{Label: "original", ClaudeConfigDir: "/tmp/account-work"}
+			testutil.NoError(t, d.SetAccount("work", original))
+			sv := NewSettingsView(d)
+			sv.Refresh()
+			sv.setCategory(catAccounts)
+			sv.setFocus(focusPane)
+			selectRow(t, sv, srAccountField, accountKey("work", acctFieldLabel))
+			acctKey(sv, tcell.KeyRune, 'e')
+			sv.acctEdit.buf = "changed"
+			if kind == "deleted" {
+				testutil.NoError(t, d.DeleteAccount("work"))
+			} else {
+				testutil.NoError(t, os.WriteFile(filepath.Join(dir, config.FileName), []byte("[accounts.work]\nclaude_config_dir = \"/tmp/file-work\"\n"), 0o600))
+			}
+			acctKey(sv, tcell.KeyEnter, 0)
+			testutil.True(t, sv.accountErr != "")
+			rows, err := d.Accounts()
+			testutil.NoError(t, err)
+			if kind == "deleted" {
+				_, present := rows["work"]
+				testutil.False(t, present)
+			} else {
+				testutil.DeepEqual(t, rows["work"], original)
+			}
+		})
+	}
+}

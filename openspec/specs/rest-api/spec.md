@@ -1167,3 +1167,63 @@ The system SHALL expose `POST /api/tasks/bulk-delete` accepting `task_ids` (1 to
 The daemon SHALL emit `task.runtime_changed` with payload `{"apply","changed_fields","started"}` once a runtime PATCH that persisted settles, and SHALL NOT emit it for rejections or a rolled-back restart. `task.updated` SHALL list `runtime` when `sandbox_override` changes.
 
 Client runtime controls remain named follow-ups for web (ENG-1076), TUI (ENG-1091), and macOS runtime controls: named follow-up, ticket to be filed.
+
+### Requirement: Account management endpoints
+
+The server SHALL let the master token create, edit and delete database-owned accounts, and SHALL report each account's field source and editability.
+
+#### Scenario: Create
+
+- **WHEN** the master token POSTs a valid new account
+- **THEN** the response is 201 with the effective account, the row is stored and `config.changed` `{"resource":"accounts","name":"<name>"}` is emitted
+
+#### Scenario: Non-master write
+
+- **WHEN** a device token POSTs, PATCHes or DELETEs an account
+- **THEN** the response is 403 and nothing is stored
+
+#### Scenario: Invalid or reserved input
+
+- **WHEN** the name or a directory is invalid, the name is `default`, or a directory is shared with another account
+- **THEN** the response is 400 and nothing is stored
+
+#### Scenario: config.toml ownership
+
+- **WHEN** an account is defined in config.toml
+- **THEN** its `source` fields are `config_file`, `editable` is false, and PATCH or DELETE return 409
+
+#### Scenario: Delete while referenced
+
+- **WHEN** a task (including resident and archived rows), default, project or artifact-home mapping, configured resident account or routing tier names the account
+- **THEN** DELETE returns 409 with a `references` body and the account is kept. An incomplete reference read returns 500 and leaves the account unchanged
+
+
+#### Scenario: Concurrent field edits
+
+- **WHEN** Settings and REST edit different fields of the same account
+- **THEN** each edit is merged with the current stored row and validated atomically, preserving compatible changes
+- **AND** an edit that would leave both credential directories empty changes nothing and returns HTTP 400 from REST or an inline validation error from Settings
+
+### Requirement: Account default endpoints
+
+The server SHALL expose the global and per-project account defaults and let any authenticated token change them unless config.toml owns the selection.
+
+#### Scenario: Distinguishable values
+
+- **WHEN** a client GETs `/api/account-defaults`
+- **THEN** each entry carries `explicit` (null when unset), `effective`, `source` and `editable`
+
+#### Scenario: Set and clear
+
+- **WHEN** a client PUTs `{"account":"work"}` then `{"account":null}`
+- **THEN** the stored selection is set then removed, other projects' mappings are untouched, and `config.changed` is emitted each time
+
+#### Scenario: Rejections
+
+- **WHEN** the account property is missing or the account is unknown
+- **THEN** the response is 400; an unknown project is 404; a config.toml-owned selection is 409; nothing is stored
+
+#### Scenario: Existing tasks
+
+- **WHEN** a default changes
+- **THEN** tasks already bound to an account keep it
