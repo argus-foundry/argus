@@ -324,3 +324,7 @@ When restarting the daemon, if the Shutdown RPC over the TUI's own connection fa
 - **WHEN** only the pre-spawn daemon answers until the timeout
 - **THEN** AutoStart returns an error rather than a client to the old daemon
 
+
+## Related API contracts
+
+See `rest-api` for daemon-only restart, boot identity, single-flight recovery and supervisor-mode requirements.

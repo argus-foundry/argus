@@ -1331,3 +1331,41 @@ On `/api/tasks/{id}/stream`, the `clipboard` event SHALL be `{"text":""}` for a 
 - **WHEN** an empty value is staged before and after the stream connects
 - **THEN** both events are `{"text":""}`
 
+
+### Requirement: Reveal a contained task path on the daemon host
+
+`POST /api/tasks/{id}/reveal` with JSON `{"path": "<relative>"}` or `{}` SHALL require the master token and open the task's worktree directory (`open -a Finder <dir>`, `"target":"worktree"`) when no path is given, or reveal one regular file (`open -R <file>`, `"target":"file"`) otherwise, responding 200 `{"status":"opened","target":...,"host":"daemon"}` only after the launcher returns success. The command SHALL run with an argument vector, never a shell, and clients cannot choose the application or command. The body SHALL contain one JSON value followed only by whitespace (an empty body is also allowed). Worktree mode SHALL require a real directory at the stored path, checked with Lstat; a final symlink or non-directory SHALL return 400 `invalid_path` without launching. Finder SHALL be selected explicitly so a post-check replacement cannot activate another application. Immediately before launch the server SHALL resolve symlinks and require the resolved path to stay inside the resolved worktree; absolute paths, `..` segments, NUL bytes, any `.git` segment (before or after resolution, case-insensitive), symlink escapes, and non-regular files SHALL return 400 `invalid_path` without launching. An unknown task or a task with no worktree SHALL return 404 `task_not_found`; a missing worktree or path 404 `path_not_found`; a non-darwin host 501 `unsupported_host`; a launcher failure 500 `reveal_failed`. No SSE event is emitted.
+
+#### Scenario: File with spaces
+- **WHEN** a master client reveals `sub/my file.txt`
+- **THEN** the launcher receives `open`, `-R`, and the resolved path as exactly one argument
+
+#### Scenario: Symlink escape
+- **WHEN** the path resolves outside the worktree
+- **THEN** the response is 400 `invalid_path` and the launcher is not invoked
+
+#### Scenario: Device token
+- **WHEN** a device token calls the route
+- **THEN** the response is 403 and nothing launches
+
+### Requirement: Daemon runtime identity and restart-only control
+
+`GET /api/runtime` SHALL serve to any authenticated token `{boot_id, daemon{hash,booted_at,state}, installed{hash}, supervisor{hash,state,compatibility}, restart_supported}`. `boot_id` is opaque and unique per daemon process. `state` is `current`, `stale` or `unknown` and compares content hashes against the installed executable; supervisor `compatibility` (`compatible`, `incompatible`, `unknown`) comes from the executed-surface verdict and is independent of hash equality. A missing installed executable, an unreachable supervisor or a failed BootInfo yields a null hash and `unknown`, never stale. Clients cannot supply executable paths.
+
+`POST /api/daemon/restart` with `{"expected_boot_id": "..."}` SHALL require the master token and replace only the daemon with the already-installed binary: no build, no file replacement, no supervisor restart. It SHALL return 400 for a malformed or missing body, 403 for a non-master token, 503 when `restart_supported` is false (supervisor mode off, since agents would not survive), 409 when `expected_boot_id` differs from the current boot or a restart is already pending, 500 if acceptance fails, and otherwise 202 `{"restart_requested":true,"boot_id":"<current>"}` flushed before the successor is launched. The body SHALL contain exactly one JSON value followed only by whitespace. A failed launch or a successor exit before takeover SHALL clear the pending latch so a retry can proceed; while the successor is starting, the latch SHALL remain held. Completion is observed by reconnecting and reading a different `boot_id`; a retry against the successor conflicts.
+
+#### Scenario: Concurrent requests
+- **WHEN** several restart requests with the current boot id arrive together
+- **THEN** exactly one is accepted and the successor is launched once
+
+#### Scenario: Legacy in-process mode
+- **WHEN** the daemon owns the agent PTYs itself
+- **THEN** restart returns 503 and no process is signalled
+
+#### Scenario: Stale boot id
+- **WHEN** the client sends a boot id from before a restart
+- **THEN** the response is 409 and nothing restarts
+
+#### Scenario: Successor exits before takeover
+- **WHEN** the accepted successor execs successfully but exits before replacing the serving daemon
+- **THEN** the original daemon permits a later restart request instead of returning restart_pending forever

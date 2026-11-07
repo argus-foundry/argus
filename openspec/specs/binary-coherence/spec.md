@@ -398,3 +398,6 @@ flight; the blocking startup modal SHALL remain the surface for skew present at 
 - **WHEN** finished-task stacks are reported
 - **THEN** no process is signaled and the exit code is unchanged
 
+## Related API contracts
+
+See `rest-api` for daemon, installed and supervisor runtime identities, unknown states and supervisor compatibility.
