@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -172,4 +173,29 @@ func TestHub_NewBootResetsLiveState(t *testing.T) {
 	h.Ingest("t", []Event{{Type: TypeTurnStart, Seq: 2, Boot: "b2"}}, t0.Add(time.Minute))
 	st, _ = h.Get("t")
 	testutil.True(t, st.Busy)
+}
+
+func TestContextValidateAndClone(t *testing.T) {
+	neg := int64(-1)
+	zero := int64(0)
+	nan := math.NaN()
+	pct := 5.0
+	for name, c := range map[string]*Context{
+		"negative tokens":   {Tokens: &neg},
+		"negative window":   {Window: -1},
+		"nan percent":       {Percent: &nan},
+		"negative category": {Categories: &ContextCategories{Skills: &neg}},
+	} {
+		t.Run(name, func(t *testing.T) { testutil.True(t, c.Validate() != nil) })
+	}
+	good := &Context{Tokens: &zero, Percent: &pct, Window: 10, Categories: &ContextCategories{Memory: &zero, Messages: &zero}}
+	testutil.NoError(t, good.Validate())
+	testutil.NoError(t, (*Context)(nil).Validate())
+	cp := good.Clone()
+	*cp.Categories.Memory = 9
+	*cp.Tokens = 9
+	testutil.Equal(t, *good.Categories.Memory, int64(0))
+	testutil.Equal(t, *good.Tokens, int64(0))
+	testutil.True(t, cp.Categories.Agents == nil)
+	testutil.True(t, (*Context)(nil).Clone() == nil)
 }

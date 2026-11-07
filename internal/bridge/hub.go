@@ -148,8 +148,7 @@ func apply(st *State, ev Event, now time.Time) {
 	case TypeMeasure:
 		st.LastMeasureAt = now
 		if ev.Context != nil {
-			c := *ev.Context
-			st.Context = &c
+			st.Context = ev.Context.Clone()
 		}
 		if ev.CostUSD != nil {
 			v := *ev.CostUSD
@@ -222,10 +221,7 @@ func (h *Hub) Prune(now time.Time) int {
 
 func copyState(st *State) State {
 	out := *st
-	if st.Context != nil {
-		c := *st.Context
-		out.Context = &c
-	}
+	out.Context = st.Context.Clone()
 	if st.CostUSD != nil {
 		v := *st.CostUSD
 		out.CostUSD = &v

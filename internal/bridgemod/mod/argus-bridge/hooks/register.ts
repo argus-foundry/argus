@@ -9,7 +9,7 @@
 // (`claude plugin validate` follows it nowhere else), so the helpers below take
 // `$` and the per-load `Bridge` state explicitly instead of closing over them.
 import type { Hook, Register } from 'claude-code'
-import { measureFields, MeasureThrottle } from './measure'
+import { categoriesFromBreakdown, measureFields, MeasureThrottle } from './measure'
 import { Reporter, type Env } from './reporter'
 import { Delivery } from './delivery'
 import { confidenceOf, GRACE_MS, NeedsInputTracker, type Kind, type Transition } from './tracker'
@@ -102,6 +102,15 @@ async function emitTransition($: Engine, b: Bridge, t: Transition | null): Promi
     await rep($, b).emit('needs_input', { kind: t.kind, confidence: t.confidence, tool: t.tool, tool_use_id: t.toolUseId })
   }
   else await rep($, b).emit('cleared', { tool_use_id: t.toolUseId })
+}
+
+async function readCategories($: Engine, wanted: boolean): Promise<Record<string, number> | undefined> {
+  if (!wanted) return undefined
+  try {
+    return categoriesFromBreakdown((await $.session.usage({ breakdown: 'summary' })).context.breakdown?.categories)
+  } catch {
+    return undefined
+  }
 }
 
 async function sendMeasure($: Engine, b: Bridge, fields: Record<string, unknown> | undefined): Promise<void> {
@@ -278,7 +287,7 @@ export const register: Register = on => {
   on('session.measure', async ($, e, next) => {
     await safe(async () => {
       if (!(await rep($, b).taskId())) return
-      await sendMeasure($, b, b.measure.offer(measureFields(e), await $.clock.now()))
+      await sendMeasure($, b, b.measure.offer(measureFields(e, await readCategories($, e.changed.includes('context'))), await $.clock.now()))
       scheduleUI($, b.ui)
     })
     return next(e)

@@ -11,6 +11,8 @@ import (
 
 	"github.com/drn/argus/internal/agent"
 	"github.com/drn/argus/internal/db"
+	"github.com/drn/argus/internal/events"
+	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/usagebudget"
 
 	"github.com/drn/argus/internal/bridge"
@@ -41,6 +43,17 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body", err)
 		return
 	}
+	for _, ev := range batch.Events {
+		if ev.Type != bridge.TypeMeasure {
+			continue
+		}
+		if err := ev.Context.Validate(); err != nil {
+			uxlog.Log("[bridge] invalid measurement task=%s: %v", id, err)
+			slog.Warn("[bridge] invalid measurement", "task", task.ID, "err", err) //nolint:gosec // G706: task.ID is a DB lookup result; slog encodes attributes.
+			writeErr(w, http.StatusBadRequest, "invalid measurement", err)
+			return
+		}
+	}
 	s.bridgeIngestMu.Lock()
 	accepted := 0
 	for _, ev := range batch.Events {
@@ -57,6 +70,12 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		if n > 0 && ev.Type == bridge.TypeMeasure {
 			if st, live := s.bridgeState(id, time.Now()); live {
 				s.stampBridgeMeasurement(id, st)
+				if st.Context != nil {
+					events.Emit(model.EventTypeTaskContextChanged, id, map[string]string{
+						"session_id":  st.SessionID,
+						"measured_at": st.LastMeasureAt.UTC().Format(time.RFC3339Nano),
+					})
+				}
 			}
 		}
 	}
