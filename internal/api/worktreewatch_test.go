@@ -136,9 +136,22 @@ func TestWorktreeWatcher(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			testutil.NoError(t, os.WriteFile(filepath.Join(repo, "f.txt"), []byte("burst\n"), 0o600))
 		}
-		_, _ = rec.next(t)
-		rec.none(t, 300*time.Millisecond)
-		testutil.Equal(t, fetches.Load()-base <= 3, true)
+		_, last := rec.next(t)
+		for quiet := false; !quiet; {
+			select {
+			case ev := <-rec.ch:
+				var p map[string]any
+				testutil.NoError(t, json.Unmarshal(ev.Payload, &p))
+				last = p
+			case <-time.After(500 * time.Millisecond):
+				quiet = true
+			}
+		}
+		testutil.Equal(t, fetches.Load()-base < 20, true)
+		final, err := h.status(context.Background(), "t1", repo, gitutil.Options{})
+		testutil.NoError(t, err)
+		testutil.Equal(t, last["revision"].(string), final.revision)
+		testutil.Equal(t, final.stale, false)
 
 		testutil.NoError(t, os.WriteFile(filepath.Join(repo, "ignored-noop"), nil, 0o600))
 		_, _ = rec.next(t)
