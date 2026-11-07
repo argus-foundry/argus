@@ -1,4 +1,5 @@
 export const shortcutHelp = [
+  ['Space / Up / Down / Escape (rail Select mode)', 'Toggle selection / Move checkbox focus / Exit selection'],
   ['Alt+Shift+D / Cmd+Shift+Enter (terminal)', 'Toggle split view'],
   ['Alt+1 / 2 / 3 / 4', 'Agent / Review / Changes / Info'],
   ['Alt+Shift+E / U', 'Copy worktree path / Open PR'],

@@ -40,12 +40,9 @@ function bridgeWindows(bridge, now) {
   });
 }
 
-function roleTotals(task, roster) {
-  const roles = [...array(roster?.orchestrators).flatMap(orch => array(orch.roles)), ...array(roster?.freelance)]
-    .filter(role => role.live && role.task_id === task.id);
-  if (roles.length !== 1) return [];
+export function roleTokenTotals(role) {
   return [['Input','tokens_input'],['Cached input','tokens_cache_read'],['Cache write (1h)','tokens_cache_write_1h'],['Cache write (5m)','tokens_cache_write_5m'],['Output','tokens_output']]
-    .filter(([,key]) => count(roles[0][key]) > 0).map(([label,key]) => [label,tokenCount(roles[0][key])]);
+    .filter(([,key]) => count(role[key]) > 0).map(([label,key]) => [label,tokenCount(role[key])]);
 }
 
 export function contextSnapshot(task, data = {}, now = Date.now()) {
@@ -55,7 +52,6 @@ export function contextSnapshot(task, data = {}, now = Date.now()) {
   // Raw metadata must have loaded before an absent account means the default account.
   const account = data.raw ? array(data.accounts).find(item => item.name === accountName) : null;
   const identity = [];
-  if (raw.account || account) identity.push(['Account',account?.label || accountName]);
   if (kind === 'claude') {
     if (account?.plan) identity.push(['Plan',account.plan]);
     if (account?.email) identity.push(['Email',account.email]);
@@ -65,5 +61,5 @@ export function contextSnapshot(task, data = {}, now = Date.now()) {
   if (kind === 'claude') for (const window of bridgeWindows(data.bridge,now)) {
     if (!windows.some(item => item.label === window.label)) windows.push(window);
   }
-  return {context:measuredContext(data.bridge,data.meta),kind,windows,identity,totals:roleTotals(task,data.roster)};
+  return {context:measuredContext(data.bridge,data.meta),kind,windows,identity};
 }

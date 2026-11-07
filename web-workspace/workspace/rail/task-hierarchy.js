@@ -41,15 +41,18 @@ export function taskParents(tasks, roster = {}) {
 }
 
 export function taskForest(tasks, hierarchy) {
-  const entries = new Map(tasks.map(task => [task.id, { task, children: [], needsInput: !task.archived && (task.needs_input || hierarchy.attention.has(task.id)) }]));
+  const entries = new Map(tasks.map(task => [task.id, { task, children: [], needsInput: !task.archived && (task.needs_input || hierarchy.attention.has(task.id)), failed: !task.archived && hierarchy.failed.has(task.id) }]));
   const roots = [];
   for (const entry of entries.values()) {
     const parent = entries.get(hierarchy.parents.get(entry.task.id));
     if (parent) parent.children.push(entry); else roots.push(entry);
   }
   function rollup(entry) {
-    for (const child of entry.children) if (rollup(child)) entry.needsInput = true;
-    return entry.needsInput;
+    for (const child of entry.children) {
+      rollup(child);
+      entry.needsInput ||= child.needsInput;
+      entry.failed ||= child.failed;
+    }
   }
   roots.forEach(rollup);
   return roots;

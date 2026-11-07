@@ -21,3 +21,9 @@
 @media(prefers-reduced-motion:reduce){.task-status-icon[data-status="working"],.task-status-icon[data-status="working"] *{animation:none}}
 
 .task-archive-pending{color:var(--secondary);font-size:16px;line-height:20px}
+
+.nav-summary{display:flex;align-items:center;justify-content:space-between;gap:var(--space-1)}.rail-selection-actions{display:flex;gap:2px;flex-shrink:0}.rail-selection-actions button{font-size:10px;padding:3px 4px;min-height:28px}.task-select{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:28px;height:28px;margin:0;accent-color:var(--accent);cursor:pointer}.task-row.batch-selected{box-shadow:inset 0 0 0 1px var(--accent);background:var(--raised)}#bulk-alert{max-height:140px;overflow:auto;flex-shrink:0;font-size:11px;padding:var(--space-2);overflow-wrap:anywhere}.delete-task-review+.delete-task-review{border-top:1px solid var(--border);margin-top:var(--space-3)}
+
+#rail-bulk-action.danger{color:var(--error)}.rail-select-all{width:18px;height:18px;flex:0 0 18px;accent-color:var(--accent)}.project-select{margin:0;position:absolute;top:50%;transform:translateY(-50%);opacity:1;right:5px;width:28px;height:28px;accent-color:var(--accent);cursor:pointer}.nav-summary #task-count{min-width:0;flex:1}.task-select[aria-checked="mixed"]{accent-color:var(--accent)}
+
+.project-header:has(.project-select){padding-right:36px}

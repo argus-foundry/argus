@@ -34,3 +34,16 @@ test('attachment paths are message content and never an upload-triggered newline
   assert.equal(uploadedPath({ paths: ['./.context/screen.png'] }), './.context/screen.png');
   for (const paths of [[], ['bad'], ['./.context/../bad'], ['./.context/a\nsubmit'], ['./.context/a', './.context/b']]) assert.throws(() => uploadedPath({ paths }));
 });
+
+test('attachment messages escape terminal path tokens', async t => {
+  for (const [name, text, paths, expected] of [
+    ['spaces', '', ['./.context/Screenshot 2026-11-07 at 1.22.14 PM.png'], String.raw`./.context/Screenshot\ 2026-11-07\ at\ 1.22.14\ PM.png`],
+    ['quotes', '', [`./.context/it's "ready".png`], String.raw`./.context/it\'s\ \"ready\".png`],
+    ['backslashes', '', [String.raw`./.context/a\b.png`], String.raw`./.context/a\\b.png`],
+    ['shell characters', '', ['./.context/$(a);&|<>`b`[c]*?{d}!#~^%=.png'], String.raw`./.context/\$\(a\)\;\&\|\<\>` + '\\`b\\`' + String.raw`\[c\]\*\?\{d\}\!\#\~\^\%\=.png`],
+    ['multiple attachments', '', ['./.context/one image.png', './.context/two.txt'], String.raw`./.context/one\ image.png ./.context/two.txt`],
+    ['text and paths', 'Describe "this"\nKeep $text literal.', ['./.context/one image.png', './.context/two.txt'], 'Describe "this"\nKeep $text literal. ' + String.raw`./.context/one\ image.png ./.context/two.txt`],
+    ['simple path', '', ['./.context/screen-1_2.png'], './.context/screen-1_2.png'],
+    ['unicode filename', '', ['./.context/café.png'], './.context/café.png'],
+  ]) await t.test(name, () => assert.equal(attachmentMessage(text, paths), expected));
+});

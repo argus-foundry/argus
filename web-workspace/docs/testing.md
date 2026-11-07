@@ -1,4 +1,4 @@
-# Workspace test commands
+# Theia test commands
 
 All commands below start at the repository root. Browser verification follows `web-tests/playwright.config.ts`, using the same package dependency, serial Playwright runner, failure artifacts and owned `webServer`. Browser suites remain manual and are not wired into CI or the Makefile.
 

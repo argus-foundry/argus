@@ -9,7 +9,7 @@ test('live bridge context supplies window fill independently from quota', () => 
   const view = contextSnapshot(task, {...data, bridge:{live:true, context:{tokens:421200,window:1000000,percent:42.12},last_measure_at:'2026-11-06T11:59:00Z'}}, now);
   assert.equal(view.context.percent, 42.12); assert.equal(view.context.limit, 1000000);
   assert.deepEqual(view.windows.map(w => w.left), [100,17]);
-  assert.deepEqual(view.identity, [['Account','Work'],['Plan','Team'],['Email','fixture@example.invalid']]);
+  assert.deepEqual(view.identity, [['Plan','Team'],['Email','fixture@example.invalid']]);
 });
 test('missing context stays unknown and zero is a valid measurement', () => {
   assert.equal(contextSnapshot(task,data,now).context, null);
@@ -22,19 +22,21 @@ test('recorded stamps never manufacture a window or reuse an older percent', () 
 });
 test('Codex never inherits Claude usage, email or plan from a shared account', () => {
   const view = contextSnapshot(task,{...data,backends:{backends:[{name:'work-agent',kind:'codex'}]}},now);
-  assert.deepEqual(view.windows,[]); assert.deepEqual(view.identity,[['Account','Work']]);
+  assert.deepEqual(view.windows,[]); assert.deepEqual(view.identity,[]);
 });
 test('invalid and expired usage windows and unrelated accounts are omitted', () => {
   assert.deepEqual(contextSnapshot(task,{...data,raw:{account:'other'}},now).windows,[]);
   const accounts = [{name:'work',usage:{five_hour_pct:NaN, weekly_pct:10, weekly_resets_at:'2026-11-06T11:00:00Z'}}];
   assert.deepEqual(contextSnapshot(task,{...data,accounts},now).windows,[]);
 });
-test('Hera token totals are role history, never a context breakdown or summed across duplicate bindings', () => {
+test('composer omits account identity and historical role totals', () => {
   const role = {live:true,task_id:'a',tokens_input:200,tokens_cache_read:100,tokens_output:3};
-  const view = contextSnapshot(task,{roster:{orchestrators:[{roles:[role]}]}},now);
-  assert.deepEqual(view.totals,[['Input','200'],['Cached input','100'],['Output','3']]);
-  assert.equal(view.context,null);
-  assert.deepEqual(contextSnapshot(task,{roster:{orchestrators:[{roles:[role,role]}]}},now).totals,[]);
+  for (const roles of [[role], [role,role]]) {
+    const view = contextSnapshot(task,{...data,roster:{orchestrators:[{roles}]}},now);
+    assert.equal('totals' in view,false);
+    assert.equal(view.identity.some(([label]) => label === 'Account'),false);
+    assert.equal(view.context,null);
+  }
 });
 test('invalid context is absent; exact measured percent and matching stamps remain usable', () => {
   assert.equal(contextSnapshot(task,{bridge:{live:true,context:{tokens:-1,percent:NaN,window:0}}},now).context,null);

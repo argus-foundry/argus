@@ -37,7 +37,7 @@ export class ComposerContext {
     if (document.hidden) { log('composer-context','skipped hidden poll'); return; }
     this.controller?.abort();
     const controller = this.controller = new AbortController(), task = this.task;
-    const paths = {bridge:`/api/tasks/${encodeURIComponent(task.id)}/bridge`,meta:`/api/tasks/${encodeURIComponent(task.id)}/meta?namespace=hera`,accounts:'/api/accounts',backends:'/api/backends',roster:'/api/hera'};
+    const paths = {bridge:`/api/tasks/${encodeURIComponent(task.id)}/bridge`,meta:`/api/tasks/${encodeURIComponent(task.id)}/meta?namespace=hera`,accounts:'/api/accounts',backends:'/api/backends'};
     const results = await Promise.allSettled(Object.entries(paths).map(async ([key,path]) => [key,await this.api.json(path,{signal:controller.signal})]));
     if (this.controller !== controller || controller.signal.aborted || this.task !== task) { log('composer-context','obsolete readings ignored',{stale:true}); return; }
     const data = {raw:this.data.raw};
@@ -58,7 +58,7 @@ export class ComposerContext {
   }
   render() {
     if (!this.panel) return;
-    const view = this.task ? contextSnapshot(this.task,this.data) : {context:null,windows:[],totals:[],identity:[]};
+    const view = this.task ? contextSnapshot(this.task,this.data) : {context:null,windows:[],identity:[]};
     const key = JSON.stringify(view); if (this.key === key) return; this.key = key;
     const context = view.context, fill = context?.percent;
     const ring = this.toggle.querySelector('.context-ring');
@@ -74,11 +74,6 @@ export class ComposerContext {
     else {
       if (fill == null) this.panel.append(node('p','context-note','Context window limit is not exposed.'));
       this.panel.append(node('p','context-note',`${context.recorded ? 'Last recorded' : 'Measured'}${context.at ? ` ${date(context.at)}` : ''}`));
-    }
-    if (view.totals.length) {
-      const group = node('div','context-group'); group.append(node('h3','','Role token totals'),node('p','context-note','Across this role’s binding history. These are not the current context breakdown.'));
-      for (const [label,value] of view.totals) group.append(this.row(label,value));
-      this.panel.append(group);
     }
     if (view.windows.length) {
       const group = node('div','context-group'); group.append(node('h3','',view.kind === 'claude' ? 'Claude usage' : 'Usage'));

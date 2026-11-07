@@ -26,6 +26,7 @@ async function setup(width = 1280) {
       orchestrators: [{
         id: 1,
         name: 'Fixture',
+        pinned: true,
         roles: [{
           role_id: 1,
           kind: 'coordinator',

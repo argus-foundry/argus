@@ -9,7 +9,7 @@ test('workspace attention mac-attention', async ({
   {
     await page.route('**/attention-fixture', route => route.fulfill({
       contentType: 'text/html',
-      body: `<!doctype html><title>Argus</title><link rel="icon" href="/icon-192.png"><footer class="nav-footer"></footer><script type="module">
+      body: `<!doctype html><title>Theia</title><link rel="icon" href="/icon-192.png"><footer class="nav-footer"></footer><script type="module">
  import {WorkspaceAttention} from '/workspace/attention/workspace-attention.js';
  const tasks=['a','b','c','d','e'].map(id=>({id,name:'Task '+id,needs_input:false}));const selected=[];
  window.notifications=0;window.Notification=class{static permission='granted';constructor(){window.notifications++;}close(){}};localStorage.setItem('argus-workspace:attention',JSON.stringify({banners:true}));
@@ -36,7 +36,7 @@ test('workspace attention mac-attention', async ({
     assert.deepEqual(await page.evaluate(() => window.fixture.selected), ['b']);
     await page.evaluate(() => window.fixture.attention.clear());
     assert.equal(await page.locator('.attention-alert').count(), 0);
-    assert.equal(await page.title(), 'Argus');
+    assert.equal(await page.title(), 'Theia');
     await page.evaluate(() => {
       window.fixture.attention.update(window.fixture.tasks, 'a');
       window.fixture.arrive('a');

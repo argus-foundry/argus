@@ -91,3 +91,9 @@ test('role changes and explicit secondary selection update retained rows',t=>{
   assert.equal(split.rosterRows.children[1].children.at(-1).dataset.roleStatus,'blocked');
   split.choose('');flush();assert.equal(split.picker.value,'');assert.equal(split.rosterRows.children[1].getAttribute('aria-current'),undefined);
 });
+
+test('team disclosure and agent activity use plain product copy',t=>{
+ const {split,open}=fixture(t);open();
+ assert.equal(split.rosterSummary.textContent,'Team tasks');
+ assert.equal(split.rosterRows.children[1].children.at(-1).getAttribute('aria-label'),'Agent working');
+});

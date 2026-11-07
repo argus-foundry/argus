@@ -34,8 +34,8 @@ export function fileRow(task,file,{openDiff,expandDirectory,counts}) {
   row.dataset.fileSummary=`${row.getAttribute('aria-label')}, ${statusLabel}`;
   row.append(path,numbers,badge);paintCounts(numbers,counts);
   if(file.directory)row.setAttribute('aria-expanded','false');
-  const entries=[{label:'Copy path',run:()=>copyNotice(file.path,'Copied relative path.')},{label:'Copy absolute path',disabled:!task.worktree_path?.startsWith('/'),run:()=>copyNotice(fileCopyPath(task.worktree_path,file.path),'Copied absolute path.')}];
-  const href=editorFileURL(task.worktree_path,file.path);if(href)entries.push({label:'Open in VS Code',href});
+  const entries=[{label:'Copy path',icon:'copy',run:()=>copyNotice(file.path,'Copied relative path.')},{label:'Copy absolute path',icon:'folder',disabled:!task.worktree_path?.startsWith('/'),run:()=>copyNotice(fileCopyPath(task.worktree_path,file.path),'Copied absolute path.')}];
+  const href=editorFileURL(task.worktree_path,file.path);if(href)entries.push({label:'Open in VS Code',icon:'external',href});
   line.append(row,...rowMenu({label:`File actions for ${file.path}`,text:'⌄',className:'file-more',entries}));container.append(line);return container;
 }
 export function drawTaskFiles(panel,files,renderFile) {

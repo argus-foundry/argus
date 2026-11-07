@@ -33,10 +33,10 @@ test('clearing attention before image load never draws a stale badge',t=>{
 });
 test('counts above the badge cap update the title without re-encoding the same badge',t=>{
  const {tab,labels,encodings,titles,load}=fixture(t);tab.update(100);load();tab.update(101);
- assert.deepEqual(labels,['99']);assert.equal(encodings.length,1);assert.equal(titles.at(-1),'(101) Argus');
+ assert.deepEqual(labels,['99']);assert.equal(encodings.length,1);assert.equal(titles.at(-1),'(101) Theia');
  tab.update(2);assert.deepEqual(labels,['99','2']);assert.equal(encodings.length,2);
 });
 test('initial zero count restores the title and keeps subsequent draws idle',t=>{
  const {tab,writes,titles}=fixture(t);tab.update(0);tab.update(0);tab.draw();
- assert.deepEqual(titles,['Argus']);assert.deepEqual(writes,['/icon.png']);
+ assert.deepEqual(titles,['Theia']);assert.deepEqual(writes,['/icon.png']);
 });

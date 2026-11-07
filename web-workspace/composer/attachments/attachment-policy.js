@@ -26,4 +26,7 @@ export function uploadedPath(result) {
   return paths[0];
 }
 
-export function attachmentMessage(text, paths) { return paths.length ? [text, ...paths].filter(Boolean).join(' ') : text; }
+export function attachmentMessage(text, paths) {
+  const escaped = paths.map(path => path.replace(/([\s"'\\`$&;|<>(){}\[\]*?!#~^%=])/g, '\\$1'));
+  return paths.length ? [text, ...escaped].filter(Boolean).join(' ') : text;
+}

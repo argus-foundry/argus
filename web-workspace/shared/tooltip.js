@@ -47,6 +47,7 @@ export function installTooltips(doc = document) {
   let active, timer, closeTimer;
   let hovered, bubbleHovered = false;
   const hide = () => {
+    observer.disconnect();
     win.clearTimeout(timer); timer = undefined;
     win.clearTimeout(closeTimer); closeTimer = undefined;
     if (active) {
@@ -56,8 +57,8 @@ export function installTooltips(doc = document) {
     active = null; bubbleHovered = false; bubble.hidden = true;
   };
   const show = target => {
-    if (!target.isConnected || !target.dataset.tooltip) return;
     hide();
+    if (!target.isConnected || target.hidden || !target.dataset.tooltip) return;
     const content = tooltipContent(target);
     if (!content) return;
     active = target; bubble.replaceChildren();
@@ -72,7 +73,9 @@ export function installTooltips(doc = document) {
     bubble.style.left = `${position.left}px`; bubble.style.top = `${position.top}px`;
     const ids = new Set((target.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean));
     ids.add(bubble.id); target.setAttribute('aria-describedby', [...ids].join(' '));
+    observer.observe(target, {attributes: true, attributeFilter: ['data-tooltip', 'data-tooltip-shortcut', 'hidden']});
   };
+  const observer = new win.MutationObserver(() => { if (active) show(active); });
   const owner = target => target?.closest?.('[data-tooltip]');
   const cancelClose = () => { win.clearTimeout(closeTimer); closeTimer = undefined; };
   const retained = () => active && (hovered === active || bubbleHovered || owner(doc.activeElement) === active);

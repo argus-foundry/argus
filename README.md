@@ -168,9 +168,9 @@ The first launch creates `~/.argus/data.sql`, seeds the `claude` / `codex` / `pi
 
 The sections below are the dense usage docs — keybindings, REST endpoints, configuration tables. Skim if you're getting started; bookmark if you're already running.
 
-### Optional web workspace
+### Theia web workspace
 
-Run `node web-workspace/dev-server.mjs` and open `http://127.0.0.1:7750`. Use `--port 7751` for another frontend port and `--api http://127.0.0.1:7743` for the loopback daemon origin. This optional client uses the existing daemon through a local proxy. See [workspace documentation](web-workspace/README.md).
+Run `node web-workspace/dev-server.mjs` and open `http://127.0.0.1:7750`. Use `--port 7751` for another frontend port and `--api http://127.0.0.1:7743` for the loopback daemon origin. This optional client uses the existing daemon through a local proxy. See [Theia documentation](web-workspace/README.md).
 
 ### Keybindings
 

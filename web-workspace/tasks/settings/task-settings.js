@@ -61,23 +61,24 @@ export class TaskSettingsView {
   confirm(operation, body) {
     if (this.busy) return;
     const task = { ...this.task }, generation = this.generation;
+    if(operation==='delete'){this.callbacks.deleteTask(task,this.abort.signal);return;}
     this.dialog = confirmTaskAction(task, operation, () => { if (this.active && generation === this.generation && this.task.id === task.id) return this.mutate(operation, body); }, this.abort.signal);
   }
   async mutate(operation, body) {
     if (this.busy || !this.active) return;
+    if(operation==='delete'){this.callbacks.deleteTask({...this.task},this.abort.signal);return;}
     this.busy = true; this.fields.disabled = true;
     const generation = this.generation, task = { ...this.task }, signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(120000)]);
     this.message('Saving…');
     try {
       const base = '/api/tasks/' + encodeURIComponent(task.id);
-      const result = await this.api.json(operation === 'delete' ? base : base + '/' + operation, {
-        method: operation === 'delete' ? 'DELETE' : 'POST', signal,
+      const result = await this.api.json(base + '/' + operation, {
+        method: 'POST', signal,
         ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
       });
       if (!this.active || generation !== this.generation || this.abort.signal.aborted) return;
       log('task-settings', 'updated', { status: true });
-      if (operation === 'delete') { this.leaveForTask(); await this.callbacks.changed({ deleted: task.id }); }
-      else if (operation === 'fork') {
+      if (operation === 'fork') {
         let created = { project: task.project, backend: task.backend, model: task.model, ...result, live: false };
         try { created = await this.api.json('/api/tasks/' + encodeURIComponent(result.id), { signal }); }
         catch (error) { if (this.abort.signal.aborted) return; log('task-settings', 'fork details unavailable', { status: error.status || 0 }); }

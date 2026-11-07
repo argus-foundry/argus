@@ -169,14 +169,14 @@ async function assertBuffered(page) {
   assert.equal(await page.locator('.task-name').filter({
     hasText: 'After event'
   }).count(), 0);
-  assert.equal(await page.title(), 'Argus');
+  assert.equal(await page.title(), 'Theia');
   assert.equal(await page.locator('.attention-alert').count(), 0);
 }
 async function assertReconciled(page) {
   await page.locator('.task-name').filter({
     hasText: 'After event'
   }).waitFor();
-  assert.equal(await page.title(), '(1) Argus');
+  assert.equal(await page.title(), '(1) Theia');
   assert.equal(await page.locator('.task-row').filter({
     hasText: 'After event'
   }).getByLabel('Needs input', {

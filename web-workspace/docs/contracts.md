@@ -1,6 +1,6 @@
 # Additive web client boundaries
 
-The optional workspace uses existing authenticated REST and SSE APIs with no Go, static shell, database or daemon behavior changes.
+Theia uses existing authenticated REST and SSE APIs with no Go, static shell, database or daemon behavior changes.
 
 A footer gear opens full-window Settings with General, repositories, Sandbox/proposals, read-only agents/accounts, schedules, notifications/devices, System/Logs, Maintenance and Update through existing REST APIs. Settings coverage and request limits are recorded in the archived [proposal](../../openspec/changes/archive/2026-11-07-add-desktop-web-workspace/proposal.md) and [design](../../openspec/changes/archive/2026-11-07-add-desktop-web-workspace/design.md).
 
@@ -135,7 +135,7 @@ The project rail uses `taskForest` and `projectGroup` exclusively. `workspace/ra
 
 `resolvePR` accepts only credential-free HTTP(S), prefers `pr.url` metadata and then output links marked `isPR`. Header, settings and shortcut share that policy. Changes renders a single git-status path list in flat/tree mode, retaining lazy untracked-directory expansion; both presentations share path-copy feedback. Info reads raw identity fields absent from the task DTO and fences late results.
 
-`confirmDialog` owns text-only explanations, initial Cancel focus, Escape, focus restoration, abort cleanup and asynchronous mutation failure feedback. Promise-only confirmations are canceled by section destruction; callback confirmations retain the dialog on failure. `copyNotice` owns clipboard success/failure feedback, with credential-specific status and abort guards. Account creation allows compatible Claude/Codex accounts plus default; movement requires an authoritative Claude backend and another Claude-compatible account.
+`confirmDialog` owns explanations with optional structured task details and danger styling, initial Cancel focus, Escape, focus restoration, abort cleanup and asynchronous mutation failure feedback. Promise-only confirmations are canceled by section destruction; callback confirmations retain the dialog on failure. `copyNotice` owns clipboard success/failure feedback, with credential-specific status and abort guards. Account creation allows compatible Claude/Codex accounts plus default; movement requires an authoritative Claude backend and another Claude-compatible account.
 
 `readProjects` sets `revalidate:true` for rail snapshots, including periodic and explicit refresh. `Api.json` then replaces a settled cache entry while sharing one still in flight. This option is client-only and never forwarded to fetch. Optional project failures retain navigation's last project list with its warning instead of replaying a cached success.
 
@@ -195,3 +195,11 @@ TaskChanges fingerprints decoded paths, statuses, per-path stat lines and summar
 TaskComposer forwards attachment intent through TaskTerminalCache and AgentTerminal to TerminalInput. Attachment submission writes one closed paste, then waits for fresh output and 100ms quiet outside Claude's transient Pasting… status. That wait is bounded at five seconds, including absent output or unknown layouts. Literal image paths are valid settled input. A final live check precedes exactly one standalone CR, serialized with other terminal input.
 
 The daemon's successful input response resolves the send and clears the captured draft and attachment chips. Screen contents are not a submission acknowledgment and never justify a retry. Cancellation or failed input requests retain the draft with the existing check-before-resending message. Explicit disconnect keeps its clearing behavior. Plain text, other frontends and the REST contract remain unchanged. Input text is never logged.
+
+`TaskClipboard` owns the selected task’s staged text. Selection and output-stream connection read the existing clipboard endpoint, while `TerminalStream` delivers text or cleared frames through the terminal cache for the selected primary task only. Revision fences prevent delayed reads from replacing live events. The copy gesture uses `copyNotice` directly and never clears staging; empty text remains present. Logs exclude payloads and focused clearing returns to the composer.
+
+### Menu icons
+
+Action menus render through shared/row-menu.js. Each entry receives exactly one leading decorative SVG from shared/menu-icon.js, including links and disabled entries. Callers choose a semantic `icon`; entries without a choice retain the shared action icon. Set `danger: true` for a red label/icon and a preceding separator. Menu anchors and buttons share border, padding and icon geometry so labels align. Settings navigation uses the same stroke set, with repository letters retained as identity avatars. Native select options retain browser rendering and keyboard behavior.
+
+TaskSelection owns an explicit ID set independent of the viewer and search. Cascades use the full hierarchy restricted to current search matches, including collapsed tasks. Tri-state controls derive from current scope membership. TaskBatch freezes targets; confirmDialog owns the shared task-list body, tone, progress and Stop for archive, restore and delete, at N=1 or N>1. runTaskBatch caps requests at four and retains separate succeeded, failed and not-started IDs. Stop/auth/network failures stop dispatch while in-flight requests finish. Bulk observations use cached task/roster/PR data only. Single delete alone may enrich with changedFiles and safe PR resolution. Cached header PR links clear on disconnect.

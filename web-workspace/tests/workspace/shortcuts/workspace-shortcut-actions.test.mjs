@@ -30,3 +30,32 @@ test('new task releases Settings then task settings before opening creation',asy
   newTask:{open:project=>calls.push(project)},composer:{focus:()=>{}},navigation:{projects:[]}});
  assert.deepEqual(calls,['settings','task-settings','demo']);
 });
+
+test('pin shortcut uses live root and nested coordinator bindings and ordinary task pins',async t=>{
+ const {TaskNavigation}=await import('../../../workspace/rail/tasks.js');
+ const {HeraKanban}=await import('../../../workspace/rail/hera-kanban.js');
+ const {RailActions}=await import('../../../workspace/rail/rail-actions.js');
+ t.mock.timers.enable({apis:['setTimeout']});
+ globalThis.document={getElementById:()=>({textContent:'',hidden:false})};
+ for(const kind of ['root','nested','ordinary','stale','archived','failure'])await t.test(kind,async()=>{
+  const currentTask={id:'selected',name:'Selected',pinned:false,archived:kind==='archived'},requests=[],messages=[];
+  const api={json:async(path,options)=>{requests.push([path,options?.method]);if(kind==='failure')throw new Error('Denied');return {...currentTask};}};
+  const navigation=Object.create(TaskNavigation.prototype);
+  const heraKanban=new HeraKanban(api,()=>{},async()=>{},message=>messages.push(message));
+  navigation.actions={heraKanban};
+  navigation.roster={orchestrators:[{id:7,pinned:kind==='nested',bridge_parent_orch_id:kind==='nested'?1:undefined,roles:[{kind:'coordinator',live:kind!=='stale',task_id:kind==='ordinary'?'other':'selected'}]}]};
+  const railActions=new RailActions(api,async()=>{});
+  await workspaceShortcutAction('pin',{state:()=>({currentTask,tasks:[currentTask]}),navigation,railActions});
+  if(kind==='archived'){
+   assert.deepEqual(requests,[['/api/tasks/selected/raw',undefined]]);assert.equal(railActions.pinned.has('selected'),false);
+  }else if(['ordinary','stale'].includes(kind)){
+   assert.deepEqual(requests,[['/api/tasks/selected/raw',undefined],['/api/tasks/selected/raw','PUT']]);assert.equal(railActions.pinned.has('selected'),true);
+  }else{
+   assert.deepEqual(requests,[[`/api/hera/orchestrators/7/${kind==='nested'?'unpin':'pin'}`,'POST']]);
+   assert.match(messages[0],kind==='failure'?/not confirmed.*Denied/:/Task (?:un)?pinned/);
+   assert.equal(heraKanban.pending.size,0);assert.equal(heraKanban.overrides.size,0);
+   assert.equal(navigation.coordinators().get('selected').pinned,kind==='nested');
+  }
+  railActions.clear();
+ });
+});

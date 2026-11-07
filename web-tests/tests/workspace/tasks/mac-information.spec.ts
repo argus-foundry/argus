@@ -49,7 +49,7 @@ test('tasks mac-information', async ({
       }
       let payload = {};
       if (path === '/api/tasks') payload = {
-        tasks: [task]
+        tasks: succeed ? [task, {...task, id: 'created', name: 'Created account task'}] : [task]
       };else if (path === '/api/projects') payload = {
         projects: [{
           name: 'fixture'
@@ -208,6 +208,7 @@ test('tasks mac-information', async ({
         prompt: 'Account creation fixture'
       }
     }]);
+    assert.equal(await page.locator('.task-row[aria-current="page"]').getAttribute('data-task-id'), 'created');
     assert.equal(creates.at(-1).account, 'codex-work');
     assert.equal(creates.at(-1).backend, 'codex');
     console.log('PASS consolidated Changes flat/tree, copy controls, safe Info/header links and backend creation choice');

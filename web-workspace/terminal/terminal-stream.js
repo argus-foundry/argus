@@ -90,6 +90,7 @@ export class TerminalStream {
       opened = true;
       this.healthyTimer = setTimeout(healthy, 10000);
       this.hooks.state('Live terminal', 'live', true);
+      this.hooks.clipboardRefresh?.();
       log('terminal', 'stream connected');
     };
     source.onmessage = event => {
@@ -117,6 +118,16 @@ export class TerminalStream {
         log('terminal', 'invalid output frame');
       }
     };
+    source.addEventListener('clipboard', event => {
+      if (!current()) return;
+      try {
+        const value = JSON.parse(event.data);
+        if (value?.cleared === true) this.hooks.clipboardRefresh?.();
+        else if (typeof value?.text === 'string') this.hooks.clipboard?.(value.text);
+        else throw new Error('Invalid clipboard frame');
+        log('staged-clipboard', value.cleared === true ? 'presence refresh requested' : 'stream updated');
+      } catch { log('staged-clipboard', 'invalid frame'); }
+    });
     source.addEventListener('exit', event => {
       if (!current()) return;
       this.close();

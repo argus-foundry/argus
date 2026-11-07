@@ -31,7 +31,12 @@ export function workspaceShortcutAction(action, dependencies) {
   if (['agent','review'].includes(action)) { selectTab('tab-' + action); return; }
   if (['files','info'].includes(action)) { if (!layout.visible.tools) layout.toggle('tools'); tools.selectTab(action === 'info' ? 'tool-status' : 'tool-changes'); return; }
   if (!currentTask) return;
-  if (action === 'pin') { await railActions.run(currentTask,'pin'); return; }
+  if (action === 'pin') {
+    const coordinator = navigation.coordinators().get(currentTask.id);
+    if (coordinator && !currentTask.archived) await navigation.actions.heraKanban.run(coordinator,'pin');
+    else await railActions.run(currentTask,'pin');
+    return;
+  }
   if (action === 'archive') { archive.open(currentTask); return; }
   if (action === 'open-worktree') { if(currentTask.worktree_path){await copyNotice(currentTask.worktree_path,'Copied worktree path.');}else notice('Worktree path unavailable.'); return; }
   if (action === 'open-pr') {

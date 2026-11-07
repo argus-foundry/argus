@@ -1,4 +1,4 @@
-import { test } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { resetServer } from '../../../_helpers';
 import assert from 'node:assert/strict';
 import { frontend } from '../../_lifecycle-fixture.ts';
@@ -215,12 +215,12 @@ test('hidden 60-second polling makes no reads and visibility return refreshes ea
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await page.waitForFunction(() => document.querySelector('#connection-state').dataset.state === 'connected');
-  // Wait for the two independent refreshes to finish through their API responses.
-  for (let i = 0; i < 50 && reads.length < before + 8; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  const expected = ['/api/tasks', '/api/projects/full', '/api/hera', '/api/tasks/task0/bridge', '/api/tasks/task0/meta', '/api/accounts'];
+  await expect.poll(() => expected.map(path => reads.slice(before).filter(value => value === path).length)).toEqual(expected.map(() => 1));
   const visible = reads.slice(before);
   assert.equal(visible.filter(path => path === '/api/tasks').length, 1);
   assert.equal(visible.filter(path => path === '/api/projects/full').length, 1);
-  assert.equal(visible.filter(path => path === '/api/hera').length, 2);
+  assert.equal(visible.filter(path => path === '/api/hera').length, 1);
   for (const path of ['/api/tasks/task0/bridge', '/api/tasks/task0/meta', '/api/accounts']) assert.equal(visible.filter(value => value === path).length, 1, path);
   assert.equal(await page.evaluate(() => window.streamStarts), 1, 'Visibility return keeps the existing SSE stream');
   await page.locator('#disconnect').click();

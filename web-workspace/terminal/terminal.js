@@ -9,8 +9,8 @@ import { resizeTerminalSession } from './terminal-resize.js';
 import { TerminalStream } from './terminal-stream.js';
 
 export class AgentTerminal {
-  constructor(api, container, onState = () => {}, onFit = () => {}) {
-    Object.assign(this, { api, container, onState, onFit, visible: true, generation: 0 });
+  constructor(api, container, onState = () => {}, onFit = () => {}, onClipboard = () => {}) {
+    Object.assign(this, { api, container, onState, onFit, onClipboard, visible: true, generation: 0 });
   }
 
   state(message, kind, interactive = this.interactive) {
@@ -96,6 +96,8 @@ export class AgentTerminal {
         });
       });
       this.stream = new TerminalStream(this.api, task, signal, {
+        clipboard: value => { if (current()) this.onClipboard(task.id, value); },
+        clipboardRefresh: () => { if (current()) this.onClipboard(task.id, undefined); },
         currentSize: () => ({cols:this.term?.cols,rows:this.term?.rows}),
         updateTask: task => { if(current()){this.mergeTask(task);this.autoFit?.check();} },
         write: bytes => current() ? this.output.write(bytes) : Promise.resolve(),

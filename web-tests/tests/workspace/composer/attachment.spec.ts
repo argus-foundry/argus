@@ -141,6 +141,20 @@ test('file drops prevent navigation, upload files and show local image previews'
   }), false);
   assert.equal(await transfer(page, 'drop', '#draft', [], 'plain text'), true);
 });
+test('attachment send preserves text and terminal-escapes each uploaded path', async () => {
+  const { page } = await fixture();
+  const paths = ['./.context/Screenshot 2026-11-07 at 1.22.14 PM.png', './.context/it\'s "ready".txt'];
+  let index = 0;
+  await page.route('**/api/tasks/*/upload', route => route.fulfill({ json: { paths: [paths[index++]] } }));
+  await transfer(page, 'drop', '#draft', [screenshot('Screenshot 2026-11-07 at 1.22.14 PM.png'), note('it\'s "ready".txt')]);
+  await expect(page.locator('.attachment-chip[data-state="ready"]')).toHaveCount(2);
+  await page.locator('#draft').fill('Describe these images.');
+  await page.locator('#send').click();
+  await expect.poll(() => page.evaluate(() => window.fixture.sent)).toEqual([{
+    text: String.raw`Describe these images. ./.context/Screenshot\ 2026-11-07\ at\ 1.22.14\ PM.png ./.context/it\'s\ \"ready\".txt`,
+    task: taskA.id
+  }]);
+});
 test('image paste and repeated plaintext paste coexist without automatic send', async () => {
   const {
     page,

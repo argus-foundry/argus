@@ -128,7 +128,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid frontend port.');
     const server = createWorkspaceServer({ api: option('--api', 'http://127.0.0.1:7743') });
     server.on('error', error => { console.error(`Workspace server failed (${error.code || 'unknown'}).`); process.exitCode = 1; });
-    server.listen(port, '127.0.0.1', () => console.log(`Optional Argus workspace at http://127.0.0.1:${port}`));
+    server.listen(port, '127.0.0.1', () => console.log(`Theia at http://127.0.0.1:${port}`));
     for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { server.closeAllConnections(); server.close(); });
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

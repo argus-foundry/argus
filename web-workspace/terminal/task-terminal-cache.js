@@ -4,8 +4,8 @@ import {AgentTerminal} from './terminal.js';
 export const TERMINAL_CACHE_LIMIT = 8;
 
 export class TaskTerminalCache {
-  constructor(api,container,onState=()=>{},onFit=()=>{},create=(...args)=>new AgentTerminal(...args)) {
-    Object.assign(this,{api,container,onState,onFit,create,records:new Map(),visible:true});
+  constructor(api,container,onState=()=>{},onFit=()=>{},create=(...args)=>new AgentTerminal(...args),onClipboard=()=>{}) {
+    Object.assign(this,{api,container,onState,onFit,create,onClipboard,records:new Map(),visible:true});
   }
   get current(){return this.records.get(this.selected)?.terminal;}
   get secondaryTerminal(){return this.records.get(this.secondary?.id)?.terminal;}
@@ -16,7 +16,8 @@ export class TaskTerminalCache {
     if(!record){
       this.evict();
       record={host:document.createElement('div')};record.host.className='cached-terminal';
-      record.terminal=this.create(this.api,record.host,state=>{record.state=state;this.emit(task.id,'state',state);},fit=>{record.fit=fit;this.emit(task.id,'fit',fit);});
+      record.terminal=this.create(this.api,record.host,state=>{record.state=state;this.emit(task.id,'state',state);},fit=>{record.fit=fit;this.emit(task.id,'fit',fit);},
+        (id,value)=>{if(this.selected===id)this.onClipboard(id,value);});
       this.records.set(task.id,record);log('terminal-cache','created',{count:this.records.size});
     }
     this.records.delete(task.id);this.records.set(task.id,record);

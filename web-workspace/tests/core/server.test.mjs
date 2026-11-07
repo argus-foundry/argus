@@ -157,10 +157,14 @@ test('rejects cross-site proxy requests and preserves upstream failures', async 
   assert.equal(await result.text(), 'denied');
 });
 
-test('uses the Argus tab title and serves the original app icons read only', async t => {
+test('uses the Theia tab title and serves the original app icons read only', async t => {
   const { url } = await withProxy(t, (_request, response) => { response.writeHead(500); response.end(); });
   const html = await (await fetch(url)).text();
-  assert.match(html, /<title>Argus<\/title>/);
+  assert.match(html, /<title>Theia<\/title>/);
+  assert.match(html, /class="brand" aria-label="Theia"/);
+  assert.match(html, /<strong>Theia<\/strong>/);
+  const diagnostic = await (await fetch(`${url}/diagnostics/wispr-check.html`)).text();
+  assert.match(diagnostic, /<title>Theia dictation check<\/title>/);
   for (const [rel, asset] of [['icon', 'icon-192.png'], ['apple-touch-icon', 'apple-touch-icon.png']]) {
     assert.match(html, new RegExp(`rel="${rel}" href="/${asset}"`));
     const response = await fetch(`${url}/${asset}`);

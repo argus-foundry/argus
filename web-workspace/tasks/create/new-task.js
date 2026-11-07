@@ -1,3 +1,4 @@
+import {creationBackend, creationOverrides} from './new-task-choices.js';
 import {accountList,creationAccounts,creationAccount} from './new-task-account.js';
 import { $, node, button } from '../../shared/dom.js';
 import { log } from '../../core/api.js';
@@ -16,14 +17,24 @@ export class NewTaskView {
     this.backend = this.field('Backend (optional)', 'new-task-backend', 'select'); this.backend.append(node('option','','Daemon default')); this.backend.firstChild.value='';
     this.account = this.field('Account', 'new-task-account', 'select'); this.account.hidden=true;this.account.previousElementSibling.hidden=true;this.accounts=[];this.backends=[];
     this.account.addEventListener('change',()=>{this.accountPicked=this.account.value;this.capture();});
-    this.backend.addEventListener('input',()=>this.renderAccounts());
+    this.backend.addEventListener('input',()=>{delete this.restoredModel;this.model.value='';this.renderModels();this.renderAccounts();});
+    this.model = this.field('Model', 'new-task-model', 'input');
+    this.sandbox = this.field('Sandbox', 'new-task-sandbox', 'select');
+    for (const [value, label] of [['', 'Project default'], ['enabled', 'Enabled'], ['disabled', 'Disabled']]) {
+      const option = node('option', '', label); option.value = value; this.sandbox.append(option);
+    }
+    const choices = node('div', 'new-task-choices');
+    for (const field of [this.model, this.sandbox]) {
+      const group = node('div'); group.append(field.previousElementSibling, field); choices.append(group);
+    }
+    this.form.append(choices);
     this.prompt = this.field('Prompt', 'new-task-prompt', 'textarea'); this.prompt.rows = 7; this.prompt.placeholder = 'What should the agent work on?';
     this.error = node('p', 'error-text'); this.error.id = 'new-task-error'; this.error.setAttribute('role', 'alert'); this.error.hidden = true;
     this.cancel = button('Cancel', () => this.close(), ''); this.cancel.setAttribute('aria-label', 'Cancel new task');
     this.start = button('Start task', () => {}, 'primary'); this.start.type = 'submit';
     const actions = node('div', 'new-task-actions'); actions.append(this.cancel, this.start);
     this.form.append(this.error, actions); this.panel.append(title, this.form); $('main').append(this.panel);
-    for (const field of [this.name, this.prompt, this.backend]) field.addEventListener('input', () => { this.capture(); this.render(); });
+    for (const field of [this.name, this.prompt, this.backend, this.model, this.sandbox]) field.addEventListener('input', () => { this.capture(); this.render(); });
     this.prompt.addEventListener('compositionstart', () => { this.composing = true; });
     this.prompt.addEventListener('compositionend', () => { this.composing = false; });
     this.prompt.addEventListener('paste', event => {
@@ -51,6 +62,7 @@ export class NewTaskView {
     this.project = project; this.restoreFocus = restoreFocus; this.composing = false;
     const draft = this.drafts.get(project) || {};
     this.projectField.value = project; this.name.value = draft.name || ''; this.prompt.value = draft.prompt || ''; this.backend.value = draft.backend || '';
+    this.restoredModel = draft.model || ''; this.model.value = this.restoredModel; this.sandbox.value = draft.sandbox || ''; this.backends=[]; this.defaultBackend=''; this.renderModels();
     this.accountPicked=draft.account||'';this.accounts=[];this.renderAccounts();
     this.loadBackends(draft.backend || '');
     this.error.textContent = draft.error || ''; this.error.hidden = !draft.error;
@@ -72,9 +84,13 @@ export class NewTaskView {
       const projectBackend=results[3].status==='fulfilled'?results[3].value.projects?.find(item=>item.name===project)?.backend:'';
       this.defaultBackend=projectBackend||this.defaultBackend;
       this.backends=result.backends||[];
-      const value=this.backend.value || selected; this.backend.replaceChildren(node('option','','Daemon default'));this.backend.firstChild.value='';
-      for(const backend of this.backends){const option=node('option','',backend.name);option.value=backend.name;this.backend.append(option);}this.backend.value=value;
-      this.renderAccounts();
+      if (results[0].status === 'fulfilled') {
+        const value=this.backend.value || (this.restoredModel !== undefined ? selected : ''); this.backend.replaceChildren(node('option','','Daemon default'));this.backend.firstChild.value='';
+        for(const backend of this.backends){const option=node('option','',backend.name);option.value=backend.name;this.backend.append(option);}this.backend.value=value;
+      }
+      this.renderAccounts(); this.renderModels();
+      if (creationBackend(this.backends, this.backend.value)) delete this.restoredModel;
+      this.render();
       for(const result of results)if(result.status==='rejected')log('new-task','optional choice read failed');
       log('new-task','choices loaded',{count:this.backends.length});
     }catch(error){if(!abort.signal.aborted)log('new-task','choices failed');}
@@ -86,12 +102,28 @@ export class NewTaskView {
     this.account.value=selected||'';this.account.hidden=this.account.previousElementSibling.hidden=!selected;
   }
 
+  renderModels() {
+    const backend = creationBackend(this.backends, this.backend.value);
+    const value = this.restoredModel ?? this.model.value, curated = !!backend?.models?.length;
+    const field = node(curated || !backend ? 'select' : 'input'); field.id = 'new-task-model';
+    const label = backend ? (backend.model ? `Backend default (${backend.model})` : 'Backend default') : 'Daemon default';
+    if (field.tagName === 'SELECT') {
+      for (const [id, text] of [['', label], ...(backend?.models || []).map(id => [id, id])]) {
+        const option = node('option', '', text); option.value = id; field.append(option);
+      }
+    } else { field.placeholder = label; field.autocomplete = 'off'; }
+    this.model.replaceWith(field); this.model = field; this.model.value = value;
+    this.model.addEventListener('input', () => { delete this.restoredModel; this.capture(); this.render(); });
+    this.render();
+  }
+
   capture() {
-    if (this.active) this.drafts.set(this.project, { name: this.name.value, prompt: this.prompt.value, backend: this.backend.value, account:this.accountPicked, error: this.error.textContent });
+    if (this.active) this.drafts.set(this.project, { name: this.name.value, prompt: this.prompt.value, backend: this.backend.value, account:this.accountPicked, model:this.restoredModel ?? this.model.value, sandbox:this.sandbox.value, error: this.error.textContent });
   }
   render() {
-    this.name.readOnly = this.prompt.readOnly = !!this.pending; this.backend.disabled = this.account.disabled = !!this.pending;
-    this.start.disabled = !!this.pending || !this.prompt.value.trim();
+    this.name.readOnly = this.prompt.readOnly = !!this.pending; this.backend.disabled = this.account.disabled = this.sandbox.disabled = !!this.pending;
+    this.model.disabled = !!this.pending || !creationBackend(this.backends, this.backend.value);
+    this.start.disabled = !!this.pending || !!this.restoredModel || !this.prompt.value.trim();
     this.start.textContent = this.pending ? 'Starting…' : 'Start task';
   }
   close(restoreFocus = true) {
@@ -108,11 +140,17 @@ export class NewTaskView {
     log('new-task', 'closed', { status: true });
   }
   async submit() {
-    if (!this.active || this.pending || !this.prompt.value.trim() || this.composing) return;
+    if (!this.active || this.pending || this.restoredModel || !this.prompt.value.trim() || this.composing) return;
+    let overrides;
+    try { overrides = creationOverrides(this.model.value, this.sandbox.value, creationBackend(this.backends, this.backend.value)); }
+    catch (error) {
+      this.error.textContent = error.message; this.error.hidden = false;
+      log('new-task', 'model rejected'); return;
+    }
     this.capture(); this.pending = true; this.confirmed = false;
     const generation = ++this.generation, project = this.project;
     const account=creationAccount(this.usableAccounts||[],this.account.value);
-    const request = { project, ...(account ? {account} : {}), ...(this.backend.value ? { backend: this.backend.value } : {}), prompt: this.prompt.value, ...(this.name.value.trim() ? { name: this.name.value.trim() } : {}) };
+    const request = { project, ...overrides, ...(account ? {account} : {}), ...(this.backend.value ? { backend: this.backend.value } : {}), prompt: this.prompt.value, ...(this.name.value.trim() ? { name: this.name.value.trim() } : {}) };
     const abort = this.abort = new AbortController(); this.timer = setTimeout(() => abort.abort(), 120000);
     this.error.hidden = true; this.error.textContent = ''; this.render();
     try {

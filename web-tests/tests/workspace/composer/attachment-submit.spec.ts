@@ -212,7 +212,7 @@ test('Claude mixed text and image path remains literal, submits once and clears 
   await new Promise(resolve => setTimeout(resolve, 1700));
   const rows = await events();
   const pasted = rows.find(row => row.event === 'paste').value;
-  assert.match(pasted, /Screenshot 2026-11-06 at 8\.34\.43\u202fPM(?:-\d+)?\.png$/);
+  assert.equal(pasted, 'Please inspect this image ./.context/Screenshot\\ 2026-11-06\\ at\\ 8.34.43\\\u202fPM.png');
   assert.equal(rows.find(row => row.event === 'submitted').text, pasted);
   assert.equal(rows.filter(row => row.event === 'bytes').map(row => Buffer.from(row.value, 'base64').toString()).join(''), `\x1b[200~${pasted}\x1b[201~\r`);
   assert.deepEqual({

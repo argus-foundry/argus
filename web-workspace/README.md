@@ -1,4 +1,4 @@
-# Optional Argus workspace
+# Theia
 
 A separate desktop web client using the existing Argus API. The original web UI, daemon, TUI and native app are unchanged. No daemon restart is required.
 
@@ -68,6 +68,10 @@ See `web-tests/tests/workspace/workspace/rail/nest.spec.ts` with the same isolat
 
 Task rows use one line with a labeled status icon and a truncated name. Active sessions spin unless reduced motion is enabled. PRs are green, completed or terminal PRs purple, failed Hera roles red, and input attention retains its warning color. The API combines merged and closed PRs, so their icon says PR merged or closed; ordinary task failure is not available in the task payload. See `web-tests/tests/workspace/workspace/rail/task-row.spec.ts` for icon, compact layout, ellipsis and reduced-motion checks.
 
+The final red Delete entry in each task menu opens a task review with advisory session, Hera, changed-file and PR details. Cancel is initially focused. Deletion is permanent and requests forced worktree and local/remote branch cleanup in the background.
+
+Select beside the task count enters bulk mode. Task bodies toggle individual selection without changing the viewer or draft. Native tri-state select-all, project and coordinator checkboxes select matching tasks through collapsed trees. Active offers Archive; Archived offers Delete, including live or Hera-bound tasks. Space toggles a focused checkbox, Up/Down moves between visible checkboxes, and Escape or Cancel exits. Search retains selection and announces hidden selected tasks; changing Active/Archived clears it. All single and bulk actions share one confirmation with capped attention and ordinary-task groups. Up to four requests run concurrently with progress and Stop. Failures remain checked with their reasons for inspection before an explicit retry.
+
 ## Project actions
 
 Project rows show a letter avatar, a plus button and a Configuration gear on hover or focus. Empty projects stay visible without an expand control or task count. The plus button opens a main-pane form for that project with a prompt and optional name. Start task uses daemon defaults and opens the created agent. Enter starts the task; Shift+Enter adds a line. Pasted text never submits. Errors retain the prompt, while Cancel or Escape returns to the previous view. If creation was canceled or unconfirmed, refresh tasks before retrying because it may have completed. Creation drafts stay in tab memory and clear on disconnect. Attach files after creating the task. Repository configuration is available in workspace Settings.
@@ -80,7 +84,7 @@ The composer uses a roomy rounded draft area with a read-only backend/model labe
 
 See `web-tests/tests/workspace/composer/composer-layout.spec.ts` for the bottom-bar geometry, read-only model and native file-picker checks.
 
-Click the context ring for measured context and usage. Live bridge readings can fill the ring; recorded Hera stamps are dated. A dashed ring means context percentage is unavailable. Claude account limits show remaining usage and reset times when exposed. Historical role input, cache and output totals are labeled separately from the current context. Unsupported fields stay hidden. The [data availability table](docs/context-data.md) identifies the daemon work needed for Codex quota and full context breakdown parity.
+Click the context ring for measured context and usage. Live bridge readings can fill the ring; recorded Hera stamps are dated. A dashed ring means context percentage is unavailable. Claude account limits show remaining usage and reset times when exposed. Plan, email and organization remain here when exposed. Account and historical role input, cache and output totals appear in task Info. Unsupported fields stay hidden. The [data availability table](docs/context-data.md) identifies the daemon work needed for Codex quota and full context breakdown parity.
 
 See `web-tests/tests/workspace/composer/composer-context.spec.ts` for context/quota mapping, dismissal, narrow viewport, stale task reads and disconnect checks. Reads refresh every 15 seconds without touching draft input or sending terminal commands.
 
@@ -166,7 +170,7 @@ The list uses the API's returned branch and working paths. The daemon chooses it
 
 ### Compact task header
 
-Task identity, branch copy, PR link, Agent/Review tabs and Split/Fit icon buttons share one compact bar. Hover the task name for its full name and project. At narrow widths the bar wraps to two lines. Terminal status remains accessible; reconnect feedback appears when needed. Existing split shortcuts and automatic fitting remain available alongside manual Fit.
+Task identity, branch copy, PR link, Agent/Review tabs and Split/Fit icon buttons share one compact bar. Hover the task name for its full name and project. At narrow widths the bar wraps to two lines. Terminal status remains accessible; reconnect feedback appears when needed. Existing split shortcuts and automatic fitting remain available alongside manual Fit. When the selected task has staged text, Copy staged text appears beside the terminal with a preview tooltip. Copy preserves the staged value for reuse; Cmd+Shift+C continues copying visible terminal output.
 
 See `web-tests/tests/workspace/tasks/task-header.spec.ts` for desktop height, long-name/branch containment at 390 pixels, keyboard access, branch/PR links, split, manual Fit and reconnect recovery.
 

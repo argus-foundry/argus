@@ -1,7 +1,7 @@
 # desktop-web-workspace Specification
 
 ## Purpose
-Define the optional standalone Argus web workspace using existing authenticated REST and SSE operations, including task navigation, terminals, review tools, Settings and client state protections.
+Define Theia, the optional standalone Argus web workspace using existing authenticated REST and SSE operations, including task navigation, terminals, review tools, Settings and client state protections.
 
 ## Non-Goals and named follow-ups
 
@@ -16,13 +16,16 @@ The optional web workspace is the client we converge on. This specification is t
 - `workspace-backend-management` evaluates existing master-only backend CRUD and permission defaults. Agents and accounts remain read-only in this change.
 - `workspace-bridge-controls` evaluates existing bridge configuration controls for workspace Settings.
 
-The native `add-web-hera-mutations` follow-up remains separate. Spawn, new coordinator, move, join, detach, inbox and merge-safety Cleanup retain their standing TUI-only disposition. The workspace's rail, split and roster do not add Hera mutations. One unified project rail intentionally replaces separate Tasks/Hera modes, the Hera visibility filter and kanban grouping in this client. Task status remains editable in Settings rather than through quick workflow transitions. Archive/restore remains in the rail. Session selection remains beside Stop/Resume. Web Push is the desktop-alert channel; in-page attention preferences remain separate.
+The native `add-web-hera-mutations` follow-up remains separate. Spawn, new coordinator, move, join, detach, inbox and merge-safety Cleanup retain their standing TUI-only disposition. The workspace rail supports coordinator kanban and orchestrator pin mutations through existing endpoints. One unified project rail replaces separate Tasks/Hera modes, the Hera visibility filter and a separate Freelance section. Task status remains editable in Settings rather than through quick workflow transitions. Archive/restore remains in the rail. Session selection remains beside Stop/Resume. Web Push is the desktop-alert channel; in-page attention preferences remain separate.
 
 Browser drawers, DOM tooltips and their pixel geometry do not require literal native or terminal copies. Path copy and encoded VS Code links replace native Finder/Xcode launching. Opt-out origin token storage replaces Keychain. Tab title/favicon attention and the unified rail replace Dock/menu-bar affordances. Native window controls remain platform-specific. These equivalents add no backend requirements.
 
 ### Settings interaction follow-up
 
 - `workspace-settings-unsaved-edit-confirmation` adds a leave confirmation for unsaved Settings edits, shared by Back, Escape, task selection and surface shortcuts. Current departures discard unsaved edits without saving and refuse while a save is in flight. This follow-up does not add a dialog in this delivery.
+
+- `workspace-task-bulk-actions-parity` covers selected-ID bulk archive/delete in the TUI, original web and macOS clients.
+- `workspace-rail-selection-accelerators` covers optional modifier and range selection.
 
 ### Backend contracts deferred
 
@@ -240,7 +243,7 @@ The client SHALL accept file drops on the composer and selected task's agent pan
 #### Scenario: Switch task or send attachments
 - **WHEN** task selection changes during an upload
 - **THEN** its resulting paths and chips SHALL remain associated with the original task
-- **AND** explicit send SHALL include ready attachment paths separated by spaces, without an upload-triggered submission
+- **AND** explicit send SHALL include ready attachment paths as space-separated tokens, escaping whitespace, quotes, backslashes and shell-significant characters with backslashes as terminal file drag-and-drop does, leaving simple paths unchanged and preserving the user text without an upload-triggered submission
 - **AND** removed chips SHALL NOT contribute paths to subsequent sends
 - **AND** uploads or errors SHALL require completion, removal or explicit retry before sending
 
@@ -330,7 +333,7 @@ The optional workspace SHALL show a large rounded draft box with no placeholder 
 - **AND** native paste, dictation, IME and per-task drafts preserve existing behavior
 
 ### Requirement: Measured context popover
-The context control SHALL open an accessible dismissible popover, show only sourced existing REST values with their correct scope, and indicate unavailable context without fabricating a fill or percent. Unsupported backend fields SHALL be omitted. Switching tasks and disconnecting SHALL cancel reads and reject late results.
+The context control SHALL open an accessible dismissible popover, show only sourced existing REST values with their correct scope, and indicate unavailable context without fabricating a fill or percent. The popover SHALL retain Claude plan, email, organization and usage limit windows when available, while Account and historical role token totals SHALL remain in task Info and SHALL NOT appear in the composer popover. The composer SHALL NOT fetch the Hera roster for context readings. Unsupported backend fields SHALL be omitted. Switching tasks and disconnecting SHALL cancel reads and reject late results.
 
 #### Scenario: Backend measurements are partial
 - **WHEN** REST exposes account usage but no context-window measurement
@@ -345,14 +348,19 @@ The context control SHALL open an accessible dismissible popover, show only sour
 
 #### Scenario: Shared account across backends
 - **WHEN** a Codex task uses an account that also supports Claude
-- **THEN** the matching configured account label may appear
+- **THEN** the composer omits the Account row and task Info retains the raw account identity
 - **AND** Claude plan, email and account quotas SHALL NOT be attributed to Codex
 - **AND** unsupported Codex fields remain absent as documented in web-workspace/docs/context-data.md
 
 #### Scenario: Historical token totals
 - **WHEN** a task has exactly one live bound role with measured REST token totals
-- **THEN** available counts appear as role-history totals, distinct from the current context breakdown
+- **THEN** available counts remain in task Info under its cost display rules and SHALL NOT appear in the composer popover
 - **AND** ambiguous multiple role bindings are not summed or arbitrarily selected
+
+#### Scenario: Composer keeps distinct Claude account details
+- **WHEN** the matching Claude account exposes plan, email, organization and valid usage limit windows
+- **THEN** those values remain in the composer with measured context and reset times
+- **AND** the composer omits Account and historical role token totals without reading the Hera roster
 
 ### Requirement: Project rows and task creation
 Project headers SHALL show a letter avatar and project name, an always-visible New task (+) button and a hover/focus Configuration gear. Project headers SHALL omit task counts. Empty projects SHALL have no disclosure control, expanded state or empty child area, including when previously expanded projects become empty after refresh or archive filters. Non-empty groups SHALL retain existing pointer, keyboard and in-memory disclosure behavior. The Configuration gear SHALL open the project editor directly; no single-item project menu or duplicate New task action SHALL remain.
@@ -360,13 +368,27 @@ Project headers SHALL show a letter avatar and project name, an always-visible N
 #### Scenario: Start a task from a project
 - **WHEN** New task is chosen from a project's plus button
 - **THEN** the main pane SHALL open a task-creation form with that project preselected, a native prompt field and optional name
-- **AND** POST /api/tasks SHALL use existing JSON fields and omit backend and account overrides unless explicitly selected, and omit branch and model overrides so daemon defaults apply
+- **AND** POST /api/tasks SHALL use existing JSON fields and omit backend and account overrides unless explicitly selected, omit branch overrides, and omit blank model and inherited sandbox overrides
 - **AND** successful creation SHALL select the new task and open its agent terminal
 - **AND** prompt paste SHALL preserve multiline text without submitting; ordinary Enter SHALL submit and Shift+Enter SHALL insert a newline, retaining composition guards
 - **AND** errors SHALL show inline while keeping the prompt and name for correction or retry
 - **AND** Escape or Cancel SHALL return to the previous workspace view without sending agent input
 - **AND** canceling an in-flight request SHALL ignore late results and explain that creation may have completed
 - **AND** creation drafts SHALL stay in tab memory and clear on disconnect; pre-creation attachments remain outside scope, with task attachments available after creation
+
+### Requirement: Task creation model and sandbox
+The optional workspace SHALL expose model and sandbox choices only during task creation, using existing backend metadata and POST /api/tasks fields.
+
+#### Scenario: Choose creation model and sandbox
+- **WHEN** the task creation form opens
+- **THEN** Model SHALL show only Daemon default and remain disabled while Backend is inherited, regardless of project or global backend metadata, because routing can select another backend
+- **AND** choosing an explicit backend with a nonempty models list SHALL offer only Backend default and listed identifiers, rejecting unlisted identifiers
+- **AND** choosing an explicit backend without a models list SHALL allow trimmed free text with a Backend default placeholder
+- **AND** changing Backend SHALL reset Model to default and refresh its control and choices
+- **AND** Sandbox SHALL offer Project default, Enabled and Disabled with Project default selected initially
+- **AND** POST /api/tasks SHALL include every explicitly selected nonempty model, including one equal to the backend default, omit blank model, and include sandbox_override only as enabled or disabled when explicitly selected
+- **AND** each project draft SHALL preserve both choices across cancellation and failed creation, clearing on successful creation or disconnect
+- **AND** both controls SHALL have accessible names, visible keyboard focus when enabled and be disabled while creation is pending
 
 ### Requirement: Settings home and project management
 The footer SHALL replace its original UI link with an accessible settings gear beside connection status. Settings SHALL retain the workspace's task draft and terminal attachment, support General/repository section navigation and return through Escape, Back, task selection or surface shortcuts. Departure SHALL refuse while a settings save is in flight, matching Back. Unsaved edits SHALL be discarded without saving on departure. Leave confirmation remains deferred to `workspace-settings-unsaved-edit-confirmation` in the canonical follow-up register above. Closing or disconnecting SHALL cancel stale settings reads and guard late results.
@@ -399,7 +421,7 @@ Archiving or restoring SHALL retain the current rail filter and scroll position 
 - **AND** switching to a filter that contains the current task SHALL reveal its selection without changing the main task
 
 ### Requirement: Rail configuration and task settings
-Project Configuration gears SHALL open the existing Settings project editor directly and SHALL be hidden when no configuration action is available. Repository navigation SHALL own the only project list and Add repository entry; the Projects overview SHALL be removed. Task rows SHALL offer a hover/focus actions button left of the existing archive icon, without selecting the row. Its menu SHALL offer Task settings, explicit Pin/Unpin and copying available task ID, branch and worktree values. Archive/restore SHALL remain on the rail, in task settings and on the shortcut; the header and menu archive actions SHALL be removed. Menus SHALL support keyboard dismissal, focus restoration and periodic rail refresh without losing their target.
+Project Configuration gears SHALL open the existing Settings project editor directly and SHALL be hidden when no configuration action is available. Repository navigation SHALL own the only project list and Add repository entry; the Projects overview SHALL be removed. Task rows SHALL offer a hover/focus actions button left of the existing archive icon, without selecting the row. Its menu SHALL offer Task settings, explicit Pin/Unpin and copying available task ID, branch and worktree values, followed by a separated red Delete action in Active and Archived. Archive/restore SHALL remain on the rail, in task settings and on the shortcut; the header and menu archive actions SHALL be removed. Every action menu item SHALL have exactly one leading decorative inline SVG icon from the shared monochrome stroke set, in a fixed aligned column, inheriting its label color. Destructive items SHALL have red text and icons and a preceding divider. Settings navigation entries SHALL use the same icon set, including Add repository, while repository identity avatars SHALL retain their letters. Labels, accessible names and keyboard behavior SHALL remain unchanged. Native form select options SHALL retain browser rendering. Menus SHALL support keyboard dismissal, focus restoration and periodic rail refresh without losing their target.
 
 #### Scenario: Inspect and change a captured task
 - **WHEN** Task settings is chosen for a task
@@ -412,6 +434,13 @@ Project Configuration gears SHALL open the existing Settings project editor dire
 - **AND** a failed details read after a confirmed mutation SHALL remain visible with recovery rather than being replaced by a successful-load message
 - **AND** readonly facts SHALL NOT become generic raw-task overwrites or claims of runtime model/sandbox/branch changes
 - **AND** Escape, Back and Forward SHALL restore the prior workspace; selecting another task SHALL leave settings without dispatching a pending action to the new task
+
+#### Scenario: Consistent icons in every action menu
+- **WHEN** a task, coordinator or Changes file menu is rendered, including disabled and link items
+- **THEN** every item SHALL contain exactly one leading aria-hidden SVG with shared size and stroke
+- **AND** destructive items SHALL inherit red for their icon and label and have a preceding separator
+- **AND** light or dark color tokens and a 220px rail SHALL preserve aligned labels without clipping
+- **AND** keyboard arrows, Home/End, Escape and focus restoration SHALL retain their existing behavior
 
 ### Requirement: Responsive terminal viewport
 The optional workspace SHALL retain viewport-contained columns at 320px through ultrawide widths. The client terminal host SHALL occupy the pane content box while preserving authoritative PTY dimensions. Narrower terminal output SHALL NOT cause horizontal scroll; wider PTYs MAY scroll only inside the terminal pane.
@@ -574,7 +603,7 @@ Closing split SHALL return to the single view without disposing either retained 
 
 ### Requirement: Task rail quick actions
 
-The workspace SHALL expose task settings, explicit Pin/Unpin and copies through task row menus, reachable by context click and keyboard. Workflow status SHALL be edited only through the task settings select. Pin SHALL consume supplied boolean task state without another selection raw read, lazily resolve unknown menu state, preserve the fresh raw record when mutating and reject archived tasks. All live Hera-bound tasks, including freelance bindings, SHALL remain available without a separate visibility filter.
+The workspace SHALL expose task settings, explicit Pin/Unpin and copies through task row menus, reachable by context click and keyboard. Workflow status SHALL be edited only through the task settings select. Ordinary task Pin SHALL consume supplied boolean task state without another selection raw read, lazily resolve unknown menu state, preserve the fresh raw record when mutating and reject archived tasks. Coordinator Pin/Unpin SHALL instead use the orchestrator's pin state and targeted authenticated endpoints without full task-record writes. All live Hera-bound tasks, including freelance bindings, SHALL remain available without a separate visibility filter.
 
 #### Scenario: Captured row action
 
@@ -639,7 +668,7 @@ The workspace SHALL strip SUB (0x1A) at the outbound terminal-input chokepoint, 
 
 ### Requirement: Browser attention parity
 
-The workspace SHALL reuse the existing favicon link, showing /icon-192.png and the title Argus when no tasks need input. With N tasks needing input, the title SHALL be (N) Argus and the original icon SHALL retain its shield with a small count badge composited over it; failed image loading SHALL retain the plain original icon. Returning to zero SHALL restore the plain icon and title, including when image loading completes afterward. The workspace SHALL use the task rail as the sole task list. Needs-input alerts SHALL default on in the page, idle alerts SHALL default off. Desktop alerts SHALL use one explicit Web Push permission/subscription control; the page SHALL NOT construct a second desktop Notification. Notifications SHALL ignore focused tasks, dedupe pending task IDs until attention clears and post the first three distinct arrivals immediately within a rolling five-second window. Further arrivals SHALL update one summary. Snapshots SHALL update badges silently. Disconnect SHALL clear alerts, notifications, timers and badge counts. Needs-input and idle in-page preferences SHALL live in Settings Notifications using their existing persisted flags; the removed browser-banner preference SHALL be ignored. There SHALL be no separate attention task popover. Native Dock counts SHALL use tab badges; the native menu-bar extra is not applicable to a browser. Next-attention navigation SHALL respect current rail filters.
+The workspace SHALL reuse the existing favicon link, showing /icon-192.png and the title Theia when no tasks need input. With N tasks needing input, the title SHALL be (N) Theia and the original icon SHALL retain its shield with a small count badge composited over it; failed image loading SHALL retain the plain original icon. Returning to zero SHALL restore the plain icon and title, including when image loading completes afterward. The workspace SHALL use the task rail as the sole task list. Needs-input alerts SHALL default on in the page, idle alerts SHALL default off. Desktop alerts SHALL use one explicit Web Push permission/subscription control; the page SHALL NOT construct a second desktop Notification. Notifications SHALL ignore focused tasks, dedupe pending task IDs until attention clears and post the first three distinct arrivals immediately within a rolling five-second window. Further arrivals SHALL update one summary. Snapshots SHALL update badges silently. Disconnect SHALL clear alerts, notifications, timers and badge counts. Needs-input and idle in-page preferences SHALL live in Settings Notifications using their existing persisted flags; the removed browser-banner preference SHALL be ignored. There SHALL be no separate attention task popover. Native Dock counts SHALL use tab badges; the native menu-bar extra is not applicable to a browser. Next-attention navigation SHALL respect current rail filters.
 
 #### Scenario: Burst coalescing
 
@@ -708,7 +737,7 @@ Needs-input tasks and their collapsed ancestors SHALL use bold, brighter names a
 
 Header, task settings and Open PR SHALL share credential-free HTTP(S) PR resolution, preferring pr.url metadata and falling back to output links marked isPR. Output links SHALL share one read within a task selection. Backend and full-project rosters SHALL share cached reads with independent consumer cancellation, clone isolation, failed-read eviction and invalidation on settings writes or credential changes. Explicit project refresh SHALL bypass old roster results.
 
-All confirmations SHALL use one text-only modal supporting Cancel, Escape, focus restoration, owning-section cancellation and async mutation errors. Clipboard operations SHALL share success/failure feedback while retaining credential-specific warnings. Creation and move SHALL share explicit account policies; moving SHALL remain Claude-only with a visible explanation. Task settings SHALL expose only one Resume agent start action using the resume endpoint, which also guards pending daemon rerender restarts. Copy worktree path SHALL be named explicitly in shortcut help.
+All confirmations SHALL use one shared modal with optional structured task details and a danger treatment supporting Cancel, Escape, focus restoration, owning-section cancellation and async mutation errors. Clipboard operations SHALL share success/failure feedback while retaining credential-specific warnings. Creation and move SHALL share explicit account policies; moving SHALL remain Claude-only with a visible explanation. Task settings SHALL expose only one Resume agent start action using the resume endpoint, which also guards pending daemon rerender restarts. Copy worktree path SHALL be named explicitly in shortcut help.
 
 #### Scenario: Canceled consumer does not cancel a shared roster
 - **WHEN** one of two roster consumers is destroyed
@@ -956,3 +985,131 @@ Periodic context and fallback task snapshot reads SHALL pause while the optional
 - **WHEN** a connected workspace remains hidden for sixty seconds
 - **THEN** its context and fallback timer polls SHALL make no API reads
 - **AND** returning to visibility SHALL refresh each poll source once without reconnecting SSE
+
+### Requirement: Coordinator triage in the unified project rail
+
+Within each project the workspace SHALL show root trees classified active directly below the project without a triage header or divider, using In progress wherever that classification needs a display label. Missing state SHALL default to active. Blocked trees SHALL remain visible and expanded with a secondary Blocked label. Ordinary tasks SHALL precede deferred footers. Nonempty Backlog and Done groups SHALL appear as project footers in that order, collapsed by default, counting root trees rather than descendants. Footer disclosure SHALL persist through guarded browser preferences and remain usable without storage. Nested trees SHALL remain below their parent and pins SHALL sort first within each triage class. Task row geometry, status icons, activity chips, 12px nesting and 220px rail support SHALL remain intact, including reduced motion. Global Active/Archived labels SHALL retain lifetime semantics.
+
+#### Scenario: Grouping and pinned ordering
+- **WHEN** a project contains ordinary tasks and root trees in multiple triage states
+- **THEN** In progress trees SHALL have no group header and Blocked trees SHALL remain expanded with their classification visible
+- **AND** ordinary tasks SHALL remain reachable before nonempty Backlog and Done footers, without a separate team mode
+- **AND** pinned roots SHALL remain first within their triage class, including projects containing only Done
+
+#### Scenario: Remembered disclosure and navigation
+- **WHEN** a user changes a Backlog or Done disclosure and reloads the workspace
+- **THEN** that project and state SHALL retain the preference through guarded storage
+- **AND** unavailable or malformed storage SHALL retain usable default disclosures
+- **AND** search SHALL temporarily reveal matches without saving that temporary opening, while explicit navigation SHALL reveal the selected tree without changing indentation
+
+#### Scenario: Deferred attention and filtered descendants
+- **WHEN** a collapsed footer contains tasks needing input or attention
+- **THEN** its visible summary and accessible name SHALL expose those counts and project attention SHALL remain visible
+- **WHEN** search finds a descendant whose parent is filtered out
+- **THEN** its accessible task name SHALL retain the root tree's triage context
+
+### Requirement: Coordinator menu triage actions
+
+The shared task menu SHALL offer explicit task Pin/Unpin for live lead agents and the four kanban destinations for root trees. Active SHALL display as In progress. Nested trees SHALL NOT offer kanban changes. Ordinary task pins SHALL retain their behavior. Mutations SHALL use existing authenticated REST targets and values, optimistically update the rail, log success and failure, and restore authoritative state with error feedback on failure. Menu keyboard access and focus restoration SHALL remain available when a move hides its source row. Workspace product copy, tooltips and accessible labels SHALL use task, team tasks, agent and unavailable rather than orchestration implementation terms; browser service worker terminology SHALL remain unchanged.
+
+#### Scenario: Coordinator triage mutation
+- **WHEN** a root task menu changes triage or pin
+- **THEN** the client SHALL POST to the existing orchestrator kanban, pin or unpin endpoint with unchanged values
+- **AND** the tree SHALL move or reorder without changing task selection, with Move to In progress as the active destination label
+
+#### Scenario: Failed mutation and focus
+- **WHEN** a triage or pin mutation fails
+- **THEN** the optimistic change SHALL roll back and existing error feedback SHALL appear
+- **AND** focus SHALL remain on the equivalent row action or destination disclosure, returning to the source action if rollback removes the footer
+
+### Requirement: Selected-task staged clipboard
+The workspace SHALL show a compact, keyboard-accessible Copy staged text button beside the selected task's terminal only when staging is present, including an empty staged string. Its shared tooltip SHALL show a bounded plaintext preview. Selection SHALL read the existing clipboard endpoint, treating 204 as absent; task output clipboard SSE frames SHALL update or clear staging without changing the terminal output cursor. Reconnecting the output stream SHALL refresh staging. Late reads and events from other selections SHALL NOT replace current state; a live event SHALL supersede an earlier pending read. Malformed frames and staging read failures SHALL be logged without breaking terminal output. Clipboard reads and event logs SHALL NOT include staged text.
+
+#### Scenario: Load and copy repeatedly
+- **WHEN** a selected task has staged text
+- **THEN** its copy button and preview SHALL appear
+- **AND** mouse or keyboard activation SHALL use shared clipboard success/failure feedback
+- **AND** repeated copies SHALL preserve staging without a DELETE request
+- **AND** Cmd+Shift+C SHALL retain its separate visible-output copy behavior
+
+#### Scenario: Live replacement and clearing
+- **WHEN** the selected task receives a clipboard frame with text, including an empty string
+- **THEN** the control SHALL copy that exact text
+- **WHEN** a cleared frame or a 204 read reports absence
+- **THEN** the control SHALL hide and restore composer focus only if it owned focus
+
+#### Scenario: Selection and stream recovery
+- **WHEN** selection changes or the task stream reconnects
+- **THEN** staging SHALL be read for the selected task
+- **AND** late reads, superseded stream events and another task's frames SHALL NOT overwrite selected-task staging
+
+#### Scenario: Staging failure isolation
+- **WHEN** a clipboard frame is malformed, a staging read fails or a clipboard write is denied
+- **THEN** terminal output SHALL remain usable, failures SHALL be logged without payload text, and copy failures SHALL use shared feedback
+
+### Requirement: Estimated task cost in Info
+The optional workspace SHALL show measured Hera role cost only in the selected task's Info tab, formatted as US dollars with two decimals and labeled as an estimate. The client SHALL reuse the existing roster snapshot and refresh without additional fetching or polling. Available role token totals SHALL appear beside cost, including cache read and cache write values carried by REST.
+
+#### Scenario: Worker or freelancer
+- **WHEN** the selected task has one live worker or freelance binding with measured cost
+- **THEN** Info SHALL show that role's estimated cost and available token breakdown
+
+#### Scenario: Coordinator
+- **WHEN** the selected task has a live coordinator binding
+- **THEN** Info SHALL show its measured own cost and the measured orchestrator total labeled Team total (this team), identified as an estimate
+- **AND** the total SHALL explicitly state that nested teams are excluded
+- **AND** a unique coordinator binding SHALL take precedence over a worker binding for the same task
+
+#### Scenario: Missing or ambiguous measurement
+- **WHEN** a task is non-Hera, has no measured cost, or has ambiguous bindings without one unique coordinator
+- **THEN** Info SHALL omit unavailable cost rows rather than fabricate zero
+
+#### Scenario: Roster refresh
+- **WHEN** the existing roster refresh updates cost or bindings
+- **THEN** Info SHALL update for the current task without adding cost to the rail or split roster
+
+### Requirement: Rail task deletion review
+Every task row SHALL offer Delete as its separated final red menu entry. The shared modal SHALL default focus to Cancel, require no typing and show task name, ID, project, branch and worktree. It SHALL explain record, messages/metadata, session logs/artifacts, forced worktree removal, attempted local/remote branch deletion, stopped session and ended live Hera bindings. Cleanup SHALL be described as background work whose completion cannot be verified here. Cheap existing REST observations of live sessions, Hera bindings, reported changed files and PR state/link SHALL be advisory and never block deletion.
+
+#### Scenario: Confirm deletion
+- **WHEN** Delete is confirmed
+- **THEN** the captured task ID SHALL receive exactly one DELETE request
+- **AND** success SHALL remove its row before refresh, detach a deleted open viewer and select a sensible neighbor without discarding other drafts
+- **AND** focus SHALL reach the next remaining task row or the current filter when empty
+
+#### Scenario: Cancel or fail
+- **WHEN** the review is canceled or its request fails
+- **THEN** cancellation SHALL send no mutation and failure SHALL retain the row with an alert
+- **AND** no delete SHALL be retried automatically
+
+### Requirement: Rail Select mode
+A small Select control SHALL sit at the right of the task-count summary and become Cancel while selecting. The header SHALL contain a native tri-state select-all checkbox, an announced selected count, a contextual action and Cancel. Each task row SHALL replace trailing actions with a native named checkbox without widening the row or changing status icons. Project headers SHALL have a tri-state checkbox aligned in that action column. Row body activation SHALL toggle only that task independently of the open viewer. Coordinator checkboxes SHALL cascade through the whole task tree, including collapsed rows; project checkboxes SHALL include every matching task in that project. Parent and select-all checkboxes SHALL be mixed for partial selection. Unchecking a parent SHALL clear its matching subtree. Select-all and cascades SHALL cover only current search matches.
+
+Search SHALL preserve selected IDs and announce N selected, M not shown when search hides selections. Switching Active/Archived, Cancel and Escape SHALL clear selection without applying actions. Disclosures SHALL remain operable and SHALL preserve selections. New arrivals SHALL never become selected automatically, and missing or archived-elsewhere tasks SHALL leave selection. Space SHALL toggle focused native controls; rail Up/Down SHALL move among exposed task checkboxes. Escape SHALL dismiss menus/dialogs before exiting selection. Header Delete SHALL be red in Archived and Archive SHALL remain neutral in Active. The action SHALL be disabled at zero selected.
+
+#### Scenario: Cascade and mixed selection
+- **WHEN** a project, coordinator or select-all checkbox is checked
+- **THEN** every matching task in its scope SHALL be selected, including collapsed rows, and the confirmation SHALL include every selected task
+- **AND** selecting only part of a scope or receiving a new task SHALL expose mixed state without selecting the new task
+
+#### Scenario: Search and cancellation
+- **WHEN** search hides selected tasks
+- **THEN** selected IDs SHALL be retained and the hidden selected count SHALL be announced
+- **AND** Cancel, Escape or a filter switch SHALL exit and clear selection without mutation
+
+### Requirement: Shared task confirmation and bounded execution
+Single archive, single restore, single delete, bulk archive and bulk delete SHALL use the same shared confirmation component with task-list body, neutral/danger tone and progress state. Single actions SHALL use the N=1 path. The shared runner SHALL process all task actions with at most four simultaneous per-task requests. Archive SHALL always explicitly POST archive and restore SHALL POST unarchive. Bulk delete SHALL be available only in Archived and MAY include live sessions and live Hera bindings. No typed confirmation SHALL be required.
+
+Large-batch confirmation SHALL have a fixed height, a one-line effects summary, a Needs attention (k) list of tasks flagged by live sessions, named Hera roles/orchestrators or open/draft PR state/link, and Everything else (m) behind a Show list disclosure in capped scroll space. Bulk flags SHALL use only the cached task snapshot, roster and PR state, with no per-task reads. Single delete MAY enrich its own task details with existing cheap REST reads. Bulk delete SHALL use danger styling, title Delete N tasks permanently and button Delete N tasks. Bulk archive SHALL use neutral Archive N tasks. Single actions SHALL retain their established singular labels. Cancel SHALL receive initial focus. Detailed irreversible effects SHALL remain available for inspection. Archive SHALL preserve the open viewer/draft and promptly apply its archived input restrictions.
+
+#### Scenario: Progress and Stop
+- **WHEN** a confirmed batch runs
+- **THEN** the shared modal SHALL announce completed progress such as 37 of 140 deleted and offer Stop
+- **AND** Stop or authentication/connection loss SHALL halt new dispatch while in-flight requests finish
+- **AND** outcomes SHALL retain distinct succeeded, failed and not-started task IDs with no automatic delete retries
+
+#### Scenario: Completion and partial failure
+- **WHEN** all selected requests succeed
+- **THEN** selection SHALL exit with a short notice and focus SHALL reach a surviving row or current filter
+- **AND** partial failures SHALL stay selected with an alert naming task failures and their reasons; not-started tasks SHALL remain available for explicit continuation
+- **AND** deletion of the open task SHALL select a sensible neighbor without discarding other drafts

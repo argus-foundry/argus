@@ -16,7 +16,7 @@ async function fixture() {
   });
   await page.route('**/attention-fixture', route => route.fulfill({
     contentType: 'text/html',
-    body: `<!doctype html><title>Argus</title><link rel="icon" href="/icon-192.png"><script type="module">
+    body: `<!doctype html><title>Theia</title><link rel="icon" href="/icon-192.png"><script type="module">
  import {WorkspaceAttention} from '/workspace/attention/workspace-attention.js';
  window.originalIcon=document.querySelector('link[rel="icon"]');
  window.attention=new WorkspaceAttention(()=>{});
@@ -28,7 +28,7 @@ async function fixture() {
   return page;
 }
 async function plain(page) {
-  assert.equal(await page.title(), 'Argus');
+  assert.equal(await page.title(), 'Theia');
   assert.equal(await page.locator('link[rel="icon"]').count(), 1);
   assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/icon-192.png');
   assert.equal(await page.evaluate(() => document.querySelector('link[rel="icon"]') === window.originalIcon), true);
@@ -50,11 +50,11 @@ test.afterEach(async () => {
   }
   if (errors.length) throw new AggregateError(errors, 'Fixture cleanup failed');
 });
-test('attention restores the existing Argus icon and title after 0, 5, 0', async () => {
+test('attention restores the existing icon and Theia title after 0, 5, 0', async () => {
   const page = await fixture();
   await plain(page);
   await page.evaluate(() => window.count(5));
-  assert.equal(await page.title(), '(5) Argus');
+  assert.equal(await page.title(), '(5) Theia');
   await page.waitForFunction(() => document.querySelector('link[rel="icon"]').href.startsWith('data:image/png'));
   assert.equal(await page.locator('link[rel="icon"]').count(), 1);
   const pixels = await page.evaluate(async () => {
@@ -82,7 +82,7 @@ test('attention restores the existing Argus icon and title after 0, 5, 0', async
   assert.notDeepEqual(pixels.badged, pixels.original, 'The count must be drawn over the original icon');
   assert.deepEqual(await page.evaluate(() => window.badgeTexts), ['5']);
   await page.evaluate(() => window.count(100));
-  assert.equal(await page.title(), '(100) Argus');
+  assert.equal(await page.title(), '(100) Theia');
   assert.deepEqual(await page.evaluate(() => window.badgeTexts), ['5', '99']);
   await page.evaluate(() => window.count(0));
   await plain(page);
@@ -93,7 +93,7 @@ test('canvas failure retains the original icon and can clear attention', async (
   const failed = page.waitForEvent('console', message => message.text().includes('favicon badge unavailable'));
   await page.evaluate(() => window.count(4));
   await failed;
-  assert.equal(await page.title(), '(4) Argus');
+  assert.equal(await page.title(), '(4) Theia');
   assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/icon-192.png');
   await page.evaluate(() => window.count(0));
   await plain(page);
@@ -104,7 +104,7 @@ test('failed icon loading retains the original href with the attention title', a
   const failed = page.waitForEvent('console', message => message.text().includes('favicon image unavailable'));
   await page.evaluate(() => window.count(2));
   await failed;
-  assert.equal(await page.title(), '(2) Argus');
+  assert.equal(await page.title(), '(2) Theia');
   assert.equal(await page.locator('link[rel="icon"]').count(), 1);
   assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/icon-192.png');
   await page.evaluate(() => window.count(0));

@@ -142,7 +142,7 @@ test('Maintenance confirms the deletion boundary and reports all daemon counts',
   const result = await page.locator('#maintenance-result').textContent();
   assert.match(result, /2 worktrees/);
   assert.match(result, /1 orphan/);
-  assert.match(result, /3.*Hera/);
+  assert.match(result, /3.*still attached to a team/);
   assert.deepEqual(calls, [{
     path: '/api/maintenance/prune-completed',
     method: 'POST'

@@ -1,3 +1,4 @@
+import {taskCostRows} from './task-cost.js';
 import { renderTaskLinks } from './task-links.js';
 import {ToolRefresh} from './tools-live.js';
 import {TaskChanges} from './changes/task-changes.js';
@@ -35,6 +36,7 @@ export class TaskTools {
     this.task = task;
     this.selectTab(`tool-${this.selectedTools.get(task?.id) || 'changes'}`);
   }
+  updateRoster(roster) { this.roster = roster; if (this.tool === 'status') this.drawStatus(); }
   updateTask(task) { this.task = task; if (this.tool === 'status') this.drawStatus(); }
   async load(refresh = true) {
     if(refresh)this.invalidateIdentity();
@@ -125,6 +127,7 @@ export class TaskTools {
     if(this.identity!==identity||identity.abort.signal.aborted||this.generation!==generationAtRead||this.task?.id!==task.id||this.tool!=='status'||!this.visible())return;
     const current=this.task, raw=identity.raw;
     const rows=[['State', taskState(current)], ['Project', current.project || 'Unassigned'], ['Agent', current.backend || 'Not specified'], ['Model', raw ? raw.model || 'Default' : 'Not available'], ['Account', raw ? raw.account || 'default' : 'Not available'], ['Base branch', raw?.base_branch || 'Not available'], ['Branch', current.branch || 'Not available'], ['Worktree', current.worktree_path || 'Not available'], ['Session', current.live ? 'Live' : 'Offline'], ['Elapsed', current.elapsed || 'Not available'], ['Review', current.pr_state || 'No review state available'], ['Created', current.created_at || 'Not available'], ['Task ID', current.id]];
+    rows.push(...taskCostRows(current,this.roster));
     const fingerprint=JSON.stringify([rows,current.prompt,!!identity.error]);
     const panel=$('tool-panel');
     const mounted=this.statusView?.list.isConnected;
@@ -156,5 +159,5 @@ export class TaskTools {
       log('task-info','links loaded',{count:result.links?.length || 0});
     } catch(error) { if (generation === this.generation && links.isConnected) { links.setAttribute('role','alert'); links.textContent='Links unavailable. Refresh to retry.'; links.append(button('Refresh',()=>this.load())); log('task-info','links failed'); } }
   }
-  clear() { this.invalidateIdentity(); this.abort?.abort(); this.generation++; this.task = null; this.selectedTools.clear(); this.tool = 'changes'; this.selectTab('tool-changes'); }
+  clear() { this.invalidateIdentity(); this.abort?.abort(); this.generation++; this.task = null; this.roster = null; this.selectedTools.clear(); this.tool = 'changes'; this.selectTab('tool-changes'); }
 }

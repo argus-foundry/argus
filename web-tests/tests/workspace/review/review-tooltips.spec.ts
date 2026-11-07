@@ -246,7 +246,7 @@ test('split picker and roster preserve full names while labeled dialogs avoid re
   const worker = page.locator('#split-roster .task-row[data-task-id="w"]');
   await worker.waitFor();
   assert.equal(await worker.getAttribute('data-tooltip'), 'Full worker name');
-  assert.equal(await worker.getAttribute('aria-label'), 'Full worker name, Session offline, worker · working');
+  assert.equal(await worker.getAttribute('aria-label'), 'Full worker name, Session offline, Agent working');
   assert.equal(await worker.getAttribute('title'), null);
   assert.deepEqual(result.confirm, [undefined, undefined]);
   assert.deepEqual(result.close, [{

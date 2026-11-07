@@ -1,5 +1,9 @@
+import {TaskSelection} from './task-selection.js';
+import {coordinators} from './hera-kanban.js';
+import {KanbanDisclosure} from './kanban-group.js';
 import { $, node, button, empty } from '../../shared/dom.js';
-import {railChevron} from './rail-chevron.js';
+import {taskFamily} from './task-family.js';
+import {taskTriage} from './task-triage.js';
 import { taskParents } from './task-hierarchy.js';
 import { log } from '../../core/api.js';
 import {compactTaskRow} from './task-row.js';
@@ -22,6 +26,7 @@ export class TaskNavigation {
     this.filter = 'active'; this.pinned = new Set();
     this.collapsed = new Set();
     this.collapsedTasks = new Set();
+    this.kanbanDisclosure = new KanbanDisclosure();
     this.roster = {};
     this.hierarchy = taskParents([]);
     this.hierarchyWarning = node('p', 'projects-warning');
@@ -29,9 +34,10 @@ export class TaskNavigation {
     this.hierarchyWarning.hidden = true;
     $('projects-warning').after(this.hierarchyWarning);
     this.query = '';
+    this.selection=new TaskSelection(this,tasks=>this.actions.bulkAction?.(tasks));
     $('search-clear').addEventListener('click', () => { $('search').value = ''; $('search-clear').hidden = true; $('search').dispatchEvent(new Event('input')); $('search').focus(); });
     $('search').addEventListener('input', event => { this.query = event.target.value; $('search-clear').hidden = !this.query; this.menuTask = null; this.render(); });
-    for (const filter of ['active', 'archive']) $(filter === 'active' ? 'active-filter' : 'archive-filter').addEventListener('click', () => { this.filter = filter; this.menuTask = null; this.render(); });
+    for (const filter of ['active', 'archive']) $(filter === 'active' ? 'active-filter' : 'archive-filter').addEventListener('click', () => { if(this.selection.active)this.selection.exit(false); this.filter = filter; this.menuTask = null; this.render(); });
   }
   update(tasks, selected, projectState, hierarchyState, { defer = false } = {}) {
     this.tasks = tasks; this.selected = selected;
@@ -50,11 +56,12 @@ export class TaskNavigation {
     if (defer) this.scheduleRender();
     else if (this.renderKey() !== this.renderedKey) this.render();
   }
-  renderKey() {
+  coordinators() { return new Map([...coordinators(this.roster)].map(([id,coordinator])=>[id,this.actions.heraKanban?.value(coordinator)||coordinator])); }
+  renderKey(coordinatorMap = this.coordinators()) {
     return JSON.stringify([
       this.tasks.map(task => [task.id, task.name, task.project, task.branch, task.worktree_path, task.status, task.archived, task.archive_pending, task.needs_input, task.live, task.idle, task.pr_state, task.pinned]),
-      this.projects.map(project => project.name), this.selected,
-      [...this.pinned],
+      this.projects.map(project => project.name), this.selected, this.selection?.active,[...this.selection?.ids||[]],
+      [...this.pinned], [...coordinatorMap].map(([id,orch])=>[id,orch.id,orch.root,orch.kanban_status,orch.pinned,this.actions.heraKanban?.pending.has(orch.id)]),
       [...this.roles || []].map(([id, role]) => [id, role.role_id, role.name, role.kind, role.live, role.status, role.ready_to_close, role.archived, role.needs_input]),
       [...this.hierarchy.parents], [...this.hierarchy.attention], [...this.hierarchy.failed],
       this.tasks.map(task => this.actions.pinKnown?.(task) ?? true),
@@ -69,6 +76,10 @@ export class TaskNavigation {
     return this.tasks.filter(task=>!!task.archived===(this.filter==='archive')&&`${task.name} ${task.project} ${task.branch||''}`.toLocaleLowerCase().includes(query));
   }
   reveal(task) {
+    let root=task;
+    for(let parent=this.hierarchy.parents.get(root.id);parent;parent=this.hierarchy.parents.get(root.id)){const next=this.tasks.find(item=>item.id===parent);if(!next)break;root=next;}
+    const coordinator=this.coordinators().get(root.id);
+    if(coordinator?.root)this.kanbanDisclosure.set(root.project||'Other tasks',coordinator.kanban_status||'active',false);
     this.collapsed.delete(task.project || 'Other tasks');
     for (let ancestor = this.hierarchy.parents.get(task.id); ancestor; ancestor = this.hierarchy.parents.get(ancestor)) {
       this.collapsedTasks.delete(ancestor);
@@ -78,6 +89,7 @@ export class TaskNavigation {
   }
   latestTask(task) { return this.tasks.find(item => item.id === task.id) || task; }
   select(task) {
+    if(this.selection?.active){this.selection.toggle(task);return;}
     task = this.latestTask(task);
     this.selected = task.id;
     this.reveal(task);
@@ -86,9 +98,11 @@ export class TaskNavigation {
   }
   render() {
     if (this.renderFrame != null) { cancelAnimationFrame(this.renderFrame); this.renderFrame = null; }
-    this.renderedKey = this.renderKey();
+    const coordinatorMap = this.coordinators();
+    this.renderedKey = this.renderKey(coordinatorMap);
     log('rail', 'rendered', { count: this.tasks.length });
     const scrollTop = $('task-groups').scrollTop;
+    const focusedKanban=document.activeElement?.dataset.kanbanKey;
     const focusedKey=document.activeElement?.dataset.rowKey;
     const focusedTask = document.activeElement?.dataset.taskId;
     const focusedArchive = document.activeElement?.classList.contains('task-archive');
@@ -103,29 +117,45 @@ export class TaskNavigation {
     const query = this.query.toLocaleLowerCase().trim();
     const filtered = this.filteredTasks();
     $('task-count').textContent = `${filtered.length} ${filtered.length === 1 ? 'task' : 'tasks'}`;
-    const fragment = drawTaskGroups(this, filtered, query);
+    const fragment = drawTaskGroups(this, filtered, query, coordinatorMap);
     const hasGroups=fragment.childNodes.length>0;
     $('task-groups').replaceChildren(fragment);
     if (focusedTaskAction) queueMicrotask(() => {
-      [...$('task-groups').querySelectorAll('.task-control')].find(item => item.dataset.taskId === focusedTask && item.dataset.taskAction === focusedTaskAction && (!focusedKey || item.dataset.rowKey===focusedKey))?.focus({ preventScroll: true });
+      const control=[...$('task-groups').querySelectorAll('.task-control')].find(item => item.dataset.taskId === focusedTask && item.dataset.taskAction === focusedTaskAction && (!focusedKey || item.dataset.rowKey===focusedKey));
+      const group=control?.closest('.kanban-group');
+      if(group&&!group.open)group.querySelector('summary')?.focus({preventScroll:true});
+      else if(control?.getClientRects().length)control.focus({preventScroll:true});
     });
+    else if(focusedKanban){
+      const group=[...$('task-groups').querySelectorAll('.kanban-header')].find(item=>item.dataset.kanbanKey===focusedKanban);
+      const source=[...$('task-groups').querySelectorAll('.task-more')].find(item=>item.dataset.taskId===this.kanbanFocusTask);
+      (group||source)?.focus({preventScroll:true});
+    }
     else if (focusedTask) [...$('task-groups').querySelectorAll(focusedArchive ? '.task-archive' : '.task-row')].find(item => item.dataset.taskId === focusedTask && (!focusedKey || item.dataset.rowKey===focusedKey))?.focus();
     else if (focusedParent) [...$('task-groups').querySelectorAll('.task-disclosure')].find(item => item.dataset.parentTaskId === focusedParent && (!focusedKey || item.dataset.rowKey===focusedKey))?.focus();
     else if (focusedProjectAction) this.focusProject(focusedProject, focusedProjectAction);
     else if (focusedProject) [...$('task-groups').querySelectorAll('summary')].find(item => item.dataset.project === focusedProject)?.focus();
     $('task-groups').scrollTop = scrollTop;
+    if(this.selection?.active)this.selection.prune();else this.selection?.header();
+    this.renderedKey=this.renderKey(coordinatorMap);
     if (!hasGroups) empty($('task-groups'), '', query ? 'No tasks match your search.' : 'No tasks match this view.');
   }
   focusProject(project, action) {
     [...$('task-groups').querySelectorAll('.project-action')].find(control => control.dataset.project === project && control.dataset.projectAction === action)?.focus();
   }
-  taskItem(entry, query) {
+  taskItem(entry, query, coordinatorMap) {
     const { task, needsInput } = entry;
     const key=task.id;
     const role=this.roles?.get(task.id);
-    const row=compactTaskRow({task,role,selected:this.selected,needsInput,ownInput:!task.archived&&(task.needs_input||this.hierarchy.attention.has(task.id)),failed:role?.status==='failed'||this.hierarchy.failed.has(task.id),pinned:!task.archived&&this.pinned.has(task.id),select:selected=>this.select(selected)});
+    const coordinator=coordinatorMap.get(task.id);
+    const row=compactTaskRow({task,role,selected:this.selected,needsInput,ownInput:!task.archived&&(task.needs_input||this.hierarchy.attention.has(task.id)),failed:role?.status==='failed'||this.hierarchy.failed.has(task.id),pinned:!task.archived&&(coordinator?coordinator.pinned:this.pinned.has(task.id)),select:selected=>this.select(selected)});
     row.dataset.rowKey=key;
     const item = node('div', 'task-item');
+    item.append(row);taskTriage(item,row,{task,query,coordinatorMap,hierarchy:this.hierarchy});
+    if(this.selection?.active){
+      row.classList.toggle('batch-selected',this.selection.ids.has(task.id));row.setAttribute('aria-pressed',String(this.selection.ids.has(task.id)));row.removeAttribute('aria-current');item.append(this.selection.checkbox(task));
+      return taskFamily(this,item,entry,query,key,coordinatorMap);
+    }
     const action = button('', event => {
       event.stopPropagation();
       item.dispatchEvent(new CustomEvent('task-archive', { bubbles: true, detail: this.latestTask(task) }));
@@ -141,54 +171,23 @@ export class TaskNavigation {
     outline.setAttribute('d', task.archived ? 'M4 14v6h16v-6M12 16V4m-4 4 4-4 4 4' : 'M4 8v12h16V8M3 4h18v4H3zM9 12h6');
     icon.append(outline);
     action.append(icon);
-    item.append(row, action, ...taskMenu({...task,pinned:typeof task.pinned==='boolean'?task.pinned:this.pinned.has(task.id)}, {
+    item.append(action, ...taskMenu({...task,pinned:typeof task.pinned==='boolean'?task.pinned:this.pinned.has(task.id)}, {
+      coordinator,heraPending:this.actions.heraKanban?.pending.has(coordinator?.id),
+      heraAction:(operation,status)=>{this.menuTask=null;this.kanbanFocusTask=task.id;item.querySelector('.task-more').focus();this.actions.heraKanban?.run(this.coordinators().get(task.id),operation,status);},
       pinKnown:this.actions.pinKnown?.(task)??true,
       quickAction: (task, operation) => this.actions.quickAction?.(this.latestTask(task), operation),
       open: this.menuTask === key,
-      changed: open => { if (open) {this.menuTask = key;this.actions.inspect?.(this.latestTask(task));} else if (this.menuTask === key) this.menuTask = null; },
+      changed: open => { if (open) {this.menuTask = key;if(!coordinator)this.actions.inspect?.(this.latestTask(task));} else if (this.menuTask === key) this.menuTask = null; },
+      deleteTask: selected => this.actions.deleteTask?.(this.latestTask(selected)),
       settings: selected => this.actions.taskSettings?.(this.latestTask(selected)),
     }));
     item.addEventListener('contextmenu', event => { if (event.target.closest('.task-menu')) return; event.preventDefault(); setTimeout(() => { if (item.isConnected) item.querySelector('.task-more').click(); }, 0); });
     for(const control of item.querySelectorAll('[data-task-id]'))control.dataset.rowKey=key;
-    return this.taskFamily(item,entry,query,key);
-  }
-  taskFamily(item,entry,query,key) {
-    const {task,children}=entry;
-    if(!children.length)return item;
-    const collapseKey=task.id;
-    const family = node('details', 'task-family');
-    family.open = !this.collapsedTasks.has(collapseKey) || !!query;
-    const summary = node('summary', 'task-disclosure');
-    summary.dataset.parentTaskId = task.id;summary.dataset.rowKey=key;
-    summary.setAttribute('aria-label', `Toggle children of ${task.name}`);
-    const describeDisclosure = () => { summary.dataset.tooltip = `${family.open ? 'Collapse' : 'Expand'} ${children.length} ${children.length === 1 ? 'task' : 'tasks'}`; };
-    describeDisclosure();
-    summary.append(railChevron('task-caret'), item);
-    family.append(summary);
-    const descendants = node('div', 'task-children');
-    descendants.append(...children.map(child => this.taskItem(child, query)));
-    family.append(descendants);
-    const setExpanded = expanded => {
-      family.open = expanded;
-      describeDisclosure();
-      if (family.open) this.collapsedTasks.delete(collapseKey); else this.collapsedTasks.add(collapseKey);
-      log('task-hierarchy', 'disclosure', { expanded: family.open });
-    };
-    summary.addEventListener('click', event => {
-      if (event.target.closest('button')) return;
-      event.preventDefault();
-      setExpanded(!family.open);
-    });
-    summary.addEventListener('keydown', event => {
-      if (event.target !== summary || !['ArrowRight', 'ArrowLeft'].includes(event.key)) return;
-      event.preventDefault();
-      setExpanded(event.key === 'ArrowRight');
-    });
-    return family;
+    return taskFamily(this,item,entry,query,key,coordinatorMap);
   }
 
   clear() {
-    this.menuTask = null; this.pinned.clear();
+    this.selection?.clear();this.menuTask = null; this.pinned.clear();
     this.tasks = []; this.projects = []; this.selected = null; this.query = ''; this.filter = 'active'; this.collapsed.clear(); this.collapsedTasks.clear(); this.roster = {}; this.roles=new Map(); this.hierarchy = taskParents([]); this.hierarchyWarning.hidden = true;
     $('search').value = ''; $('search-clear').hidden = true; $('projects-warning').hidden = true; $('projects-warning').textContent = ''; this.render();
   }

@@ -19,7 +19,7 @@ export class SplitWorkspace {
     this.reconnect=button('Reconnect',()=>this.cache()?.secondaryTerminal?.reconnect());this.reconnect.hidden=true;this.reconnect.dataset.tooltip='Reconnect terminal output';this.reconnect.setAttribute('aria-label','Reconnect secondary terminal');
     this.fit=button('Fit session',async()=>{try{await this.cache()?.secondaryTerminal?.fitSession();}catch(error){notice(error.message);log('split','fit failed');}});this.fit.disabled=true;this.fit.dataset.tooltip='Fit session to the secondary pane';this.fit.setAttribute('aria-label','Fit secondary session');
     toolbar.append(label,this.picker,this.status,this.reconnect,this.fit);
-    this.rosterDetails=node('details','split-roster');this.rosterDetails.id='split-roster';this.rosterSummary=node('summary','','Coordinator roster');this.rosterRows=node('div','split-roster-rows');this.rosterDetails.append(this.rosterSummary,this.rosterRows);
+    this.rosterDetails=node('details','split-roster');this.rosterDetails.id='split-roster';this.rosterSummary=node('summary','','Team tasks');this.rosterRows=node('div','split-roster-rows');this.rosterDetails.append(this.rosterSummary,this.rosterRows);
     this.rosterDetails.addEventListener('toggle',()=>{if(this.rosterDetails.open&&this.rosterDirty)this.renderRoster();});
     this.host=node('div','secondary-terminal');this.host.id='secondary-terminal';
     this.empty=node('p','empty-state','Choose any other task to show alongside this one.');
@@ -80,7 +80,7 @@ export class SplitWorkspace {
     const coordinator=coordinatorContext(this.task.id,this.roster);
     if(!coordinator){this.rosterDetails.remove();this.rosterRenderedKey=null;return;}
     if(this.rosterDetails.parentNode!==this.pane)this.pane.insertBefore(this.rosterDetails,this.host);
-    this.rosterSummary.textContent=`${coordinator.name||'Coordinator'} roster`;
+    this.rosterSummary.textContent=coordinator.name?`${coordinator.name} tasks`:'Team tasks';
     this.rosterDirty=this.rosterRenderKey(coordinator)!==this.rosterRenderedKey;
     if(!this.rosterDirty||!this.rosterDetails.open||this.rosterFrame!=null)return;
     this.rosterFrame=requestAnimationFrame(()=>{this.rosterFrame=null;this.renderRoster();});
@@ -103,5 +103,5 @@ export class SplitWorkspace {
     log('split','roster rendered',{count:entries.length});
   }
   terminalFor(target){return this.cache()?.terminalFor(target);}
-  clear(){if(this.rosterFrame!=null){cancelAnimationFrame(this.rosterFrame);this.rosterFrame=null;}this.rosterRenderedKey=null;this.rosterDirty=false;this.cache()?.releaseSecondary();this.task=null;this.tasks=[];this.roster={};this.choices.clear();this.workers.clear();this.rosterRows.replaceChildren();this.rosterDetails.open=false;this.rosterDetails.remove();this.rosterSummary.textContent='Coordinator roster';this.picker.replaceChildren();this.optionsSignature=null;this.host.replaceChildren();this.status.textContent='Choose another task';this.render();}
+  clear(){if(this.rosterFrame!=null){cancelAnimationFrame(this.rosterFrame);this.rosterFrame=null;}this.rosterRenderedKey=null;this.rosterDirty=false;this.cache()?.releaseSecondary();this.task=null;this.tasks=[];this.roster={};this.choices.clear();this.workers.clear();this.rosterRows.replaceChildren();this.rosterDetails.open=false;this.rosterDetails.remove();this.rosterSummary.textContent='Team tasks';this.picker.replaceChildren();this.optionsSignature=null;this.host.replaceChildren();this.status.textContent='Choose another task';this.render();}
 }

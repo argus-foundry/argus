@@ -7,7 +7,7 @@ export class AttentionTab {
  }
  update(count){
   if(count===this.count)return;
-  this.count=count;document.title=(count?`(${count}) `:'')+'Argus';
+  this.count=count;document.title=(count?`(${count}) `:'')+'Theia';
   this.draw();
   if(count&&!this.image){
    this.image=new Image();

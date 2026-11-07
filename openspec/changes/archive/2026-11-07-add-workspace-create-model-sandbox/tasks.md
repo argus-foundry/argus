@@ -1,0 +1,4 @@
+- [x] 1.1 Add failing creation model and sandbox tests.
+- [x] 1.2 Add compact accessible fields, backend suggestions, draft retention and default omission.
+- [x] 1.3 Verify unit and browser regressions and document creation invariants.
+- [x] 1.4 Merge the integration branch and archive the spec.

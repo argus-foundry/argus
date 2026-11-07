@@ -33,3 +33,16 @@ test('terminal LRU bounds live instances and protects selected and split-visible
  for(let i=0;i<24;i++){await cache.attachSecondary({id:'right'+i},right);assert.equal(primary.destroyed,undefined);assert.equal(cache.secondaryTerminal.destroyed,undefined);assert.equal(created.filter(terminal=>!terminal.destroyed).length,8);}
  cache.destroy();assert.equal(created.filter(terminal=>!terminal.destroyed).length,0);
 });
+
+test('clipboard callbacks belong only to the selected primary terminal',async()=>{
+ globalThis.document={createElement:()=>({hidden:false})};const host={replaceChildren(){}},right={replaceChildren(){}},callbacks=new Map(),updates=[];
+ const cache=new TaskTerminalCache({},host,()=>{},()=>{},(api,container,state,fit,clipboard)=>({
+  attach:async task=>callbacks.set(task.id,clipboard),show(){},pauseInput(){},pauseOutput(){},resumeInput(){},resumeOutput(){},destroy(){},
+ }),(id,value)=>updates.push([id,value]));
+ await cache.attach({id:'a'});await cache.attachSecondary({id:'b'},right);
+ callbacks.get('a')('a','main');callbacks.get('b')('b','split');
+ assert.deepEqual(updates,[['a','main']]);
+ await cache.attach({id:'b'});callbacks.get('a')('a','late');callbacks.get('b')('b',undefined);
+ assert.deepEqual(updates,[['a','main'],['b',undefined]]);
+ cache.destroy();callbacks.get('b')('b','after disconnect');assert.equal(updates.length,2);
+});

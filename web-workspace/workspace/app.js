@@ -1,3 +1,7 @@
+import {TaskBatch} from '../tasks/task-batch.js';
+import {TaskDelete} from '../tasks/task-delete.js';
+import {deletionNeighbor} from '../tasks/task-delete-policy.js';
+import {HeraKanban} from './rail/hera-kanban.js';
 import { connectionState } from './connection-state.js';
 import { installTooltips } from '../shared/tooltip.js';
 import { workspaceShortcutAction } from './shortcuts/workspace-shortcut-actions.js';
@@ -5,6 +9,7 @@ import { WorkspaceAttention } from './attention/workspace-attention.js';
 import { WorkspaceEvents } from './events/workspace-events.js';
 import { patchEvent } from './events/workspace-events-policy.js';
 import { TaskHeaderLinks } from '../tasks/task-links.js';
+import { TaskClipboard } from '../tasks/task-clipboard.js';
 import { RailActions } from './rail/rail-actions.js';
 import { SplitWorkspace } from './split/split-workspace.js';
 import { WorkspaceRoster } from './workspace-roster.js';
@@ -31,13 +36,15 @@ import { restoreWorkspaceView } from './workspace-route.js';
 
 installTooltips();
 const api = new Api(id => tasks.find(task => task.id === id));
-let historyState, events, attention;
+let historyState, events, attention, deleteFocus;
 let split, rosterWatch, taskSettings, settings, newTask, terminal, currentTask, tasks = [], refreshAbort, refreshGeneration = 0;
 const taskTabs = new Map();
 const taskLinks = new TaskHeaderLinks(api);
 const railActions = new RailActions(api, async () => { navigation.pinned = railActions.pinned; await refreshTasks(); }, () => { navigation.pinned=railActions.pinned; navigation.render(); });
+const heraKanban = new HeraKanban(api,()=>navigation.render(),()=>refreshTasks());
 const sessions = new ClaudeSessions(api, async (task, status) => { if(status !== 'unchanged')tools.invalidateIdentity(task.id); if (currentTask?.id === task.id && status !== 'unchanged') terminal?.reconnect(); await refreshTasks();if(taskSettings?.active&&taskSettings.task?.id===task.id)await taskSettings.load(); });
 const composer = new TaskComposer((text, task, options) => terminal.send(text, task, options), api);
+const stagedClipboard = new TaskClipboard(api, $('terminal-actions'), () => composer.focus());
 function showAgent(){const visible=!taskSettings?.active&&!settings?.active&&!newTask?.active&&!$('agent-panel').hidden;terminal?.show(visible);split?.setVisible(visible);}
 const layout = new WorkspaceLayout(showAgent);
 const selectTab = tabs(document.querySelector('.workspace-tabs'), tab => {
@@ -61,6 +68,9 @@ const navigation = new TaskNavigation(selectTask, (project, action) => {
     if (layout.compact.matches) $('toggle-nav').focus(); else navigation.focusProject(project, action);
   });
 }, {
+  heraKanban,
+  bulkAction: tasks => taskBatch.open(tasks),
+  deleteTask: task => {deleteFocus=taskNeighbor(task)?.id;taskDelete.open(task);},
   projectConfiguration: project => { taskSettings.leaveForTask(); settings.openProject(project); },
   taskSettings: task => taskSettings.open(task),
   quickAction: (task, operation) => railActions.run(task, operation),
@@ -79,21 +89,50 @@ newTask = new NewTaskView(api, createdTask, open => {
   showAgent();
   if (!open && connection.connected && currentTask && !tasks.some(task => task.id === currentTask.id)) historyState.restore();
 });
-const archive = new TaskArchive(api, async task => {
-  tasks = tasks.map(item => item.id === task.id ? { ...item, archived: !task.archived } : item);
+function applyArchive(task,archived) {
+  tasks = tasks.map(item => item.id === task.id ? { ...item, archived } : item);
   if (currentTask?.id === task.id) {
-    currentTask = tasks.find(item => item.id === task.id) || { ...currentTask, archived: !task.archived };
+    currentTask = tasks.find(item => item.id === task.id) || { ...currentTask, archived };
     composer.task = currentTask; composer.render(); tools.updateTask(currentTask); header(currentTask);
     terminal?.attach(currentTask);
   }
   navigation.update(tasks, currentTask?.id); split?.select(currentTask,tasks,navigation.roster);
+}
+const archive = new TaskArchive(api, async task => {
+  applyArchive(task,!task.archived);
   await refreshTasks();
   if (taskSettings.active && taskSettings.task?.id === task.id) await taskSettings.load();
-});
+},()=>({roster:navigation.roster,links:taskLinks.urls}));
+function taskNeighbor(task) {
+  const rows=[...$('task-groups').querySelectorAll('.task-row')].filter(row=>row.getClientRects().length);
+  const ordered=rows.map(row=>tasks.find(item=>item.id===row.dataset.taskId)).filter(Boolean);
+  const excluded=new Set([task.id,...taskBatch.deletingIds]);
+  return deletionNeighbor(ordered,excluded)||deletionNeighbor(navigation.filteredTasks(),excluded);
+}
+function removeDeletedTask(task,{selectNeighbor=true}={}) {
+  if(taskSettings?.active&&taskSettings.task?.id===task.id)taskSettings.leaveForTask();
+  const neighbor=currentTask?.id===task.id?taskNeighbor(task):null;
+  tasks=tasks.filter(item=>item.id!==task.id);
+  navigation.update(tasks,currentTask?.id);
+  if(currentTask?.id===task.id){
+    currentTask=null;terminal?.attach(null);composer.select(null);review.selectTask(null);tools.selectTask(null);header(null);
+    historyState.write(null,'agent',null,true);
+    if(neighbor&&selectNeighbor)selectTask(neighbor,{replace:true});
+    else terminalState({message:'Choose a task to connect.',interactive:false});
+  }
+  terminal?.retain(new Set(tasks.map(item=>item.id)));
+  return neighbor;
+}
+const taskDelete = new TaskDelete(api, async (task,options) => {removeDeletedTask(task,options);await refreshTasks();},()=>navigation.roster,task=>{
+  const rows=[...$('task-groups').querySelectorAll('.task-row')].filter(row=>row.getClientRects().length);
+  const target=rows.find(row=>row.dataset.taskId===task.id)?.closest('.task-item')?.querySelector('.task-more')||rows.find(row=>row.dataset.taskId===deleteFocus)||rows[0];
+  (target||$(navigation.filter==='archive'?'archive-filter':'active-filter')).focus({preventScroll:true});
+},()=>taskLinks.urls);
+const taskBatch = new TaskBatch(api,navigation.selection,taskDelete,(task,action)=>{if(action==='delete')removeDeletedTask(task);else applyArchive(task,true);},()=>refreshTasks());
 const taskView = new WorkspaceTaskView(composer, archive);
 
 function terminalState(state) { taskView.state(state, currentTask); }
-function header(task) { taskView.header(task, connection.connected); taskLinks.select(task); attention?.update(tasks,task?.id);if(!task)split?.select(null,tasks,navigation.roster); }
+function header(task) { taskView.header(task, connection.connected); taskLinks.select(task); stagedClipboard.select(task); attention?.update(tasks,task?.id);if(!task)split?.select(null,tasks,navigation.roster); }
 function writeLocation(replace = false) {
   if (currentTask) historyState?.write(currentTask, $('review-panel').hidden ? 'agent' : 'review', review.selections.get(currentTask.id), replace);
 }
@@ -150,7 +189,7 @@ async function refreshTasks() {
     tasks = events ? events.snapshot(result.tasks || [],tasks) : result.tasks || [];
     terminal?.retain(new Set(tasks.map(task=>task.id))); railActions.reconcile(tasks);
     attention?.update(tasks,currentTask?.id);
-    navigation.update(tasks, currentTask?.id, projects, hierarchy);
+    navigation.update(tasks, currentTask?.id, projects, hierarchy); tools.updateRoster(navigation.roster);
 
     if (currentTask) {
       const next = tasks.find(task => task.id === currentTask.id);
@@ -178,37 +217,31 @@ settings = new WorkspaceSettings(api, {
   restore: () => historyState.restore(), changed: () => refreshTasks(),
 });
 taskSettings = new TaskSettingsView(api, {
+  deleteTask:(task,signal)=>taskDelete.open(task,{id:'task-action-dialog',confirmLabel:'Confirm',signal,selectNeighbor:false}),
   history: historyState,
   beforeOpen: () => { if (!settings.leaveForTask()) return false; newTask.close(false); },
   opened: () => { layout.taskSelected(); showAgent(); },
   closed: () => { sessions.close();showAgent(); },
   restore: () => historyState.restore(), archive: task => archive.open(task), created: createdTask, switchSession:task=>sessions.open(task),
-  changed: async (change = {}) => {
+  changed: async () => {
     tools.invalidateIdentity(taskSettings.task?.id);
-    if (change.deleted) {
-      tasks = tasks.filter(task => task.id !== change.deleted); navigation.update(tasks, currentTask?.id);
-      if (currentTask?.id === change.deleted) {
-        currentTask = null; terminal?.attach(null); composer.select(null); review.selectTask(null); tools.selectTask(null); header(null);
-        historyState.write(null, 'agent', null, true); terminalState({ message: 'Choose a task to connect.', interactive: false });
-      }
-    }
     await refreshTasks();
   },
 });
 const connection = new WorkspaceConnection(api, {
   refresh: refreshTasks, openEvents: () => events.start(), closeEvents: () => events.stop(),
   connected: (loaded, projects, hierarchy) => {
-    tasks = events.snapshot(loaded); terminal = new TaskTerminalCache(api, $('terminal'), terminalState, state => taskView.fit(state));
+    tasks = events.snapshot(loaded); terminal = new TaskTerminalCache(api, $('terminal'), terminalState, state => taskView.fit(state), undefined, (id,value) => stagedClipboard.update(id,value));
     railActions.reconcile(tasks);navigation.pinned=railActions.pinned;
-    navigation.update(tasks, null, projects, hierarchy); settings.setConnected(true); rosterWatch.start();
+    navigation.update(tasks, null, projects, hierarchy); tools.updateRoster(navigation.roster); settings.setConnected(true); rosterWatch.start();
     if (historyState.read().task || historyState.read().settings || historyState.read().taskSettings) historyState.restore();
     else { const initial = tasks.find(task => !task.archived); if (initial) selectTask(initial, { replace: true }); else header(null); }
     composer.focus();
   },
   disconnected: () => {
-    refreshGeneration++; refreshAbort?.abort(); attention?.clear(); sessions.clear(); taskLinks.clear(); railActions.clear(); rosterWatch?.stop(); split?.clear(); newTask.clear(); taskSettings.dismiss(); settings.setConnected(false);
+    refreshGeneration++; refreshAbort?.abort(); attention?.clear(); sessions.clear(); taskLinks.clear(); taskLinks.urls.clear(); railActions.clear(); heraKanban.clear(); rosterWatch?.stop(); split?.clear(); newTask.clear(); taskSettings.dismiss(); settings.setConnected(false);
     terminal?.destroy(); terminal = null; currentTask = null; tasks = [];
-    composer.clear(); review.clear(); tools.clear(); navigation.clear(); archive.clear(); taskTabs.clear();
+    composer.clear(); review.clear(); tools.clear(); navigation.clear(); archive.clear(); taskDelete.clear(); taskBatch.clear(); taskTabs.clear();
     $('terminal').replaceChildren(); $('notice').hidden = true; header(null); selectTab('tab-agent');
     terminalState({ message: 'No task selected', interactive: false });
   },
@@ -218,10 +251,11 @@ $('fit-session').addEventListener('click', async () => {
   try { await terminal?.fitSession(); }
   catch (error) { notice(`Could not fit the session. ${error.message}`); }
 });
-window.addEventListener('pagehide', () => { attention?.destroy(); sessions.clear(); taskLinks.clear(); railActions.clear(); rosterWatch?.stop(); split?.clear(); newTask.clear(); refreshAbort?.abort(); terminal?.destroy(); composer.clear(); review.clear(); tools.clear(); archive.clear(); settings.clear(); taskSettings.dismiss(); });
+window.addEventListener('pagehide', () => { attention?.destroy(); sessions.clear(); taskLinks.clear(); stagedClipboard.select(null); railActions.clear(); heraKanban.clear(); rosterWatch?.stop(); split?.clear(); newTask.clear(); refreshAbort?.abort(); terminal?.destroy(); composer.clear(); review.clear(); tools.clear(); archive.clear(); taskDelete.clear(); taskBatch.clear(); settings.clear(); taskSettings.dismiss(); });
 events = new WorkspaceEvents(api, { refresh: refreshTasks, event: event => {
   if (!connection.connected) return;
   tools.event(event);
+  if(event.type==='task.deleted')removeDeletedTask({id:event.task_id});
   const result = patchEvent(tasks, event); tasks = result.tasks;
   terminal?.retain(new Set(tasks.map(task=>task.id))); railActions.reconcile(tasks);
   navigation.update(tasks,currentTask?.id,undefined,undefined,{defer:true});
@@ -234,7 +268,7 @@ events = new WorkspaceEvents(api, { refresh: refreshTasks, event: event => {
 split = new SplitWorkspace(() => terminal);
 rosterWatch = new WorkspaceRoster(api, () => navigation.roles?.size>0||split.enabled&&split.visible, result => {
   const hierarchy=result.warning?{roster:navigation.roster,warning:result.warning}:result;
-  navigation.update(tasks,currentTask?.id,undefined,hierarchy,{defer:true});split.select(currentTask,tasks,navigation.roster);
+  navigation.update(tasks,currentTask?.id,undefined,hierarchy,{defer:true});tools.updateRoster(navigation.roster);split.select(currentTask,tasks,navigation.roster);
 });
 attention = new WorkspaceAttention(task => selectTask(task));
 new WorkspaceShortcuts({ connected: () => connection.connected, run: action => workspaceShortcutAction(action, {

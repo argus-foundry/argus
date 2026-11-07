@@ -9,6 +9,30 @@ import { interruptedSend, browserHistory } from './_browser-cases.ts';
 import { railArchive } from './workspace/rail/_rail-browser.ts';
 import { rememberedToken } from './_token-browser-cases.ts';
 import { renderingNegativeControl } from './_browser-negative.ts';
+test('client branding fits the existing responsive header', async ({ page }) => {
+  await page.goto('/');
+  const brand = page.locator('.workspace-header .brand');
+  assert.equal(await brand.getAttribute('aria-label'), 'Theia');
+  assert.equal(await brand.locator('strong').textContent(), 'Theia');
+  for (const width of [1440, 1100, 1099, 601, 600, 390, 361, 360, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    assert.equal(await brand.isVisible(), width > 360);
+    assert.equal(await brand.locator('strong').isVisible(), width > 600);
+    assert.equal(await brand.locator('.edition').isVisible(), width > 1099);
+    const fits = await page.locator('.workspace-header').evaluate(header => {
+      const bounds = header.getBoundingClientRect();
+      return [...header.querySelectorAll('.brand, .brand strong, .edition, button')]
+        .filter(element => element.getClientRects().length)
+        .every(element => {
+          const rect = element.getBoundingClientRect();
+          return rect.left >= bounds.left && rect.right <= bounds.right &&
+            rect.top >= bounds.top && rect.bottom <= bounds.bottom &&
+            element.scrollWidth <= element.clientWidth;
+        });
+    });
+    assert.equal(fits, true, `Header content must fit at ${width}px`);
+  }
+});
 test('workspace authenticated workflows', async ({
   browser
 }) => {

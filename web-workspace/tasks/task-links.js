@@ -6,7 +6,7 @@ export function renderTaskLinks(host,links){
  for(const link of safeTaskLinks(links)){const control=node('a','',link.label||link.url);control.href=link.url;control.target='_blank';control.rel='noopener noreferrer';host.append(control,document.createTextNode(' '));}
 }
 export class TaskHeaderLinks {
- constructor(api){this.api=api;this.host=node('div','task-header-links');document.getElementById('task-title').after(this.host);this.generation=0;}
+ constructor(api){this.api=api;this.urls=new Map();this.host=node('div','task-header-links');document.getElementById('task-title').after(this.host);this.generation=0;}
  async select(task){
   if(!task){this.clear();return;}
   const sameSelection=this.task?.id===task?.id&&this.task?.branch===task?.branch;
@@ -28,6 +28,7 @@ export class TaskHeaderLinks {
    if(generation!==this.generation)return;
    links.replaceChildren();links.removeAttribute('role');
    const url=resolvePR(meta.entries||[],result.links||[]);
+   if(url)this.urls.set(task.id,url);else this.urls.delete(task.id);
    if(url){renderTaskLinks(links,[{url,label:'PR ↗'}]);const link=links.querySelector('a');link.dataset.tooltip='Open pull request';link.setAttribute('aria-label','Open pull request');}
    this.prLoaded=true;
    log('task-links','loaded',{count:result.links?.length||0});

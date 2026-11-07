@@ -1,0 +1,4 @@
+- [x] 1.1 Reproduce curated identifier rejection and explicit default loss with failing tests.
+- [x] 1.2 Restrict model controls using explicit backend metadata and preserve explicit model values.
+- [x] 1.3 Update browser coverage, base specification and model gotchas.
+- [x] 1.4 Run affected browser specs, unit suite and strict spec validation. Archive in branch.

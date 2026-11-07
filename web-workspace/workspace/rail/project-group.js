@@ -1,18 +1,18 @@
 import { node, button } from '../../shared/dom.js';
 import {railChevron} from './rail-chevron.js';
 
-export function projectGroup(project, entries, { collapsed, onCollapse, onCreate, onConfigure, renderTask }) {
+export function projectGroup(project, entries, { collapsed, onCollapse, onCreate, onConfigure, renderTask, renderEntries,selection }) {
   const group = node(entries.length ? 'details' : 'section', 'project-group');
   group.dataset.project = project;
   if (entries.length) group.open = !collapsed;
   const header = node(entries.length ? 'summary' : 'div', 'project-header');
   header.dataset.project = project;
   header.dataset.tooltip = project; header.dataset.tooltipOverflow = '';
-  const needsInput=entries.some(entry=>entry.needsInput);header.classList.toggle('needs-attention',needsInput);group.classList.toggle('needs-attention',needsInput);
+  const needsAttention=entries.some(entry=>entry.needsInput||entry.failed);header.classList.toggle('needs-attention',needsAttention);group.classList.toggle('needs-attention',needsAttention);
   if (entries.length) {
     const caret = node('span', 'project-caret'); caret.setAttribute('aria-label', `Toggle ${project}`); caret.dataset.tooltip = `Toggle ${project}`; caret.append(railChevron('project-chevron')); header.append(caret);
     header.addEventListener('click', event => {
-      if (event.target.closest('button, [role="menu"]')) return;
+      if (event.target.closest('button,input, [role="menu"]')) return;
       event.preventDefault(); group.open = !group.open; onCollapse(!group.open);
     });
   }
@@ -26,8 +26,8 @@ export function projectGroup(project, entries, { collapsed, onCollapse, onCreate
   add.append(projectActionIcon('M12 4v16M4 12h16'));
   add.setAttribute('aria-label',`New task in ${project}`);add.dataset.tooltip=`New task in ${project}`;
   for(const [control,action] of [[configure,'configuration'],[add,'new']]){control.dataset.project=project;control.dataset.projectAction=action;}
-  if(onConfigure)header.append(configure);header.append(add);group.append(header);
-  if(entries.length){const children=node('div','project-children');children.append(...entries.map(renderTask));group.append(children);}
+  if(selection?.active)header.append(selection.projectCheckbox(project));else{if(onConfigure)header.append(configure);header.append(add);}group.append(header);
+  if(entries.length){const children=node('div','project-children');children.append(...(renderEntries?renderEntries(entries):entries.map(renderTask)));group.append(children);}
   return group;
 }
 

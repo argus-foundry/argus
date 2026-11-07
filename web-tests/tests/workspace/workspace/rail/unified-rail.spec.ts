@@ -25,6 +25,7 @@ async function fixture({
   });
   page.setDefaultTimeout(8000);
   cleanup.push(() => page.close());
+  roster=structuredClone(roster);for(const orch of roster.orchestrators)orch.pinned=false;
   const writes = [],
     errors = [],
     state = {
@@ -49,6 +50,7 @@ async function fixture({
         path,
         body: request.postData()
       });
+      if(path.startsWith('/api/hera/orchestrators/')){const orch=roster.orchestrators.find(orch=>orch.id===Number(path.split('/')[4]));orch.pinned=path.endsWith('/pin');return route.fulfill({json:{}});}
       const id = path.split('/')[3],
         operation = path.split('/')[4],
         body = request.postData() ? request.postDataJSON() : {};
@@ -317,6 +319,7 @@ test('captured row actions, archive and pin preserve the same main task in the p
     exact: true
   });
   await menu().click();
+  assert.equal(await page.getByRole('menuitem', {name:/Move to (Active|Backlog|Blocked|Done)/}).count(),0);
   assert.equal(await page.getByRole('menuitem', {
     name: 'Revert status',
     exact: true
@@ -346,16 +349,16 @@ test('captured row actions, archive and pin preserve the same main task in the p
   await until(() => state.tasks.find(task => task.id === 'w').status === 'in_review');
   assert.equal(state.tasks.find(task => task.id === 'w').status, 'in_review');
   assert.equal(await page.locator('#task-title').textContent(), 'Coordinator');
-  const pins = writes.filter(write => write.path.endsWith('/raw')).length;
+  const pins = writes.filter(write => write.path.endsWith('/pin')).length;
   await menu().click();
   await page.getByRole('menuitem', {
     name: 'Pin',
     exact: true
   }).click();
-  await until(() => writes.filter(write => write.path.endsWith('/raw')).length === pins + 1);
+  await until(() => writes.filter(write => write.path.endsWith('/pin')).length === pins + 1);
   await page.waitForFunction(() => /Task (un)?pinned/.test(document.querySelector('#notice').textContent));
-  assert.equal(writes.filter(write => write.path.endsWith('/raw')).at(-1).path, '/api/tasks/w/raw');
-  assert.equal(state.tasks.find(task => task.id === 'w').pinned, true);
+  assert.equal(writes.filter(write => write.path.endsWith('/pin')).at(-1).path, '/api/hera/orchestrators/2/pin');
+  assert.equal(roster.orchestrators.find(orch => orch.id === 2).pinned, true);
   await page.locator('.task-row[data-task-id="w"] .task-pin').waitFor();
   await page.locator('.task-archive[data-task-id="w"]').click();
   await page.locator('#archive-dialog').getByRole('button', {
@@ -382,7 +385,7 @@ test('captured row actions, archive and pin preserve the same main task in the p
     status: 'complete'
   } : task);
   await refreshWorkspace(page);
-  assert.ok(writes.every(write => write.path.startsWith('/api/tasks/w/')));
+  assert.ok(writes.every(write => write.path.startsWith('/api/tasks/w/') || write.path === '/api/hera/orchestrators/2/pin'));
 });
 test('attention emphasis rolls up while collapsed and clears with the existing signal in both themes', async () => {
   const {
@@ -511,15 +514,7 @@ test('failed captured pin preserves the unrelated main draft', async () => {
   } = await fixture();
   await page.locator('.task-row[data-task-id="c"]').click();
   await page.locator('#draft').fill('Unrelated main draft');
-  await page.route('**/api/tasks/w/raw', route => route.request().method() === 'GET' ? route.fulfill({
-    json: {
-      ...tasks.find(task => task.id === 'w'),
-      pinned: false
-    }
-  }) : route.fulfill({
-    status: 503,
-    json: {}
-  }));
+  await page.route('**/api/hera/orchestrators/2/pin', route => route.fulfill({status:503,json:{}}));
   await page.getByRole('button', {
     name: 'Task actions for Worker',
     exact: true
