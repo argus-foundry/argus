@@ -30,12 +30,20 @@ const (
 	EventTypeTaskArchived      = "task.archived"
 	EventTypeTaskDeleted       = "task.deleted"
 	EventTypeTaskRenamed       = "task.renamed"
-	EventTypeTaskForked        = "task.forked"
-	EventTypeMessageSent       = "message.sent"
-	EventTypeMessageAcked      = "message.acked"
-	EventTypeSessionStarted    = "session.started"
-	EventTypeSessionExited     = "session.exited"
-	EventTypeSessionIdle       = "session.idle"
+	EventTypeTaskUpdated       = "task.updated"
+	// EventTypeTaskFailureChanged carries {"failure": null | TaskFailure}
+	// after a Result write changes the explicit-failure projection.
+	EventTypeTaskFailureChanged = "task.failure_changed"
+	EventTypeTaskForked         = "task.forked"
+	// EventTypeTaskPRChanged carries PRChangedPayload {"url","state","lifecycle","source"},
+	// published after a changed PR cache commit by the daemon poller or a
+	// manual PR link change.
+	EventTypeTaskPRChanged  = "task.pr_changed"
+	EventTypeMessageSent    = "message.sent"
+	EventTypeMessageAcked   = "message.acked"
+	EventTypeSessionStarted = "session.started"
+	EventTypeSessionExited  = "session.exited"
+	EventTypeSessionIdle    = "session.idle"
 
 	// EventTypeSessionNeedsInput fires when a session transitions into or out
 	// of the "blocked waiting on the user" state (the red ? in the TUI). One
@@ -45,6 +53,10 @@ const (
 	// (internal/api/push.go) so external consumers render the signal without
 	// re-deriving argus's detection heuristic from session logs.
 	EventTypeSessionNeedsInput = "session.needs_input"
+
+	// EventTypeSessionRuntimeChanged carries {"live","idle","needs_input"}
+	// whenever any of the task's REST runtime flags changes.
+	EventTypeSessionRuntimeChanged = "session.runtime_changed"
 
 	// EventTypeSessionFocus fires when the TUI's agent view gains or loses
 	// human focus for a task. Payload: {"focused":true|false}. Emitted by
@@ -65,3 +77,46 @@ const (
 // "paths":["rel/file"]} — revision and paths are optional; a consumer seeing
 // no revision must treat the event as an invalidation and refetch status.
 const EventTypeWorktreeChanged = "worktree.changed"
+
+// Field names carried in a task.updated payload's changed_fields array. The
+// payload is identity plus this aggregate only — never prompt, result, or
+// credential content — so clients treat the event as an invalidation and
+// re-read the task over REST.
+const (
+	TaskFieldName     = "name"
+	TaskFieldStatus   = "status"
+	TaskFieldArchived = "archived"
+	TaskFieldPinned   = "pinned"
+	TaskFieldRuntime  = "runtime"
+	TaskFieldAccount  = "account"
+	TaskFieldResult   = "result"
+	TaskFieldPR       = "pr"
+)
+
+// TaskUpdatedFields is the canonical, ordered changed_fields vocabulary.
+var TaskUpdatedFields = []string{
+	TaskFieldName, TaskFieldStatus, TaskFieldArchived, TaskFieldPinned,
+	TaskFieldRuntime, TaskFieldAccount, TaskFieldResult, TaskFieldPR,
+}
+
+// ChangedTaskFields reports which task.updated fields differ between two task
+// snapshots. runtime covers backend, model, and session identity.
+func ChangedTaskFields(old, cur *Task) []string {
+	if old == nil || cur == nil {
+		return nil
+	}
+	var out []string
+	add := func(changed bool, f string) {
+		if changed {
+			out = append(out, f)
+		}
+	}
+	add(old.Name != cur.Name, TaskFieldName)
+	add(old.Status != cur.Status, TaskFieldStatus)
+	add(old.Archived != cur.Archived, TaskFieldArchived)
+	add(old.Pinned != cur.Pinned, TaskFieldPinned)
+	add(old.Backend != cur.Backend || old.Model != cur.Model || old.SessionID != cur.SessionID, TaskFieldRuntime)
+	add(old.Account != cur.Account || old.AccountRouted != cur.AccountRouted, TaskFieldAccount)
+	add(old.Result != cur.Result, TaskFieldResult)
+	return out
+}

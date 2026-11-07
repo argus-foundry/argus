@@ -400,6 +400,8 @@ func TestHandleListTasks_NeedsInput(t *testing.T) {
 	testutil.NoError(t, d.Add(pending))
 
 	// Pending is also flagged to prove the in_progress gate suppresses it.
+	startLiveSleep(t, srv, d, blocked)
+	startLiveSleep(t, srv, d, pending)
 	srv.runner.SetNeedsInputIDs([]string{"blocked", "pending"})
 
 	req := authedReq("GET", "/api/tasks", "")

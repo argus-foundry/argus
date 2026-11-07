@@ -264,3 +264,66 @@ func TestTask_SetStatus_Pending_NoTimestamps(t *testing.T) {
 		t.Error("EndedAt should remain zero for pending")
 	}
 }
+
+func TestChangedTaskFields(t *testing.T) {
+	base := func() *Task { return &Task{ID: "t", Name: "n", Prompt: "p", Backend: "b"} }
+	tests := []struct {
+		name string
+		mut  func(*Task)
+		want []string
+	}{
+		{"identical", func(*Task) {}, nil},
+		{"prompt is not tracked", func(x *Task) { x.Prompt = "other" }, nil},
+		{"name", func(x *Task) { x.Name = "m" }, []string{"name"}},
+		{"status", func(x *Task) { x.Status = StatusComplete }, []string{"status"}},
+		{"pinned and archived", func(x *Task) { x.Pinned = true; x.Archived = true }, []string{"archived", "pinned"}},
+		{"runtime", func(x *Task) { x.Model = "opus" }, []string{"runtime"}},
+		{"account", func(x *Task) { x.AccountRouted = true }, []string{"account"}},
+		{"result", func(x *Task) { x.Result = "{}" }, []string{"result"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cur := base()
+			tc.mut(cur)
+			got := ChangedTaskFields(base(), cur)
+			if len(tc.want) == 0 {
+				testutil.Equal(t, len(got), 0)
+				return
+			}
+			testutil.DeepEqual(t, got, tc.want)
+		})
+	}
+	t.Run("nil", func(t *testing.T) {
+		testutil.Equal(t, len(ChangedTaskFields(nil, base())), 0)
+	})
+}
+
+func TestParseTaskFailure(t *testing.T) {
+	tests := []struct {
+		name, in, reason string
+		ok               bool
+	}{
+		{"explicit", `{"failed":true,"reason":"boom"}`, "boom", true},
+		{"no reason", `{"failed":true}`, "", true},
+		{"false", `{"failed":false}`, "", false},
+		{"string flag", `{"failed":"true"}`, "", false},
+		{"malformed", `{`, "", false},
+		{"array", `[]`, "", false},
+		{"empty", ``, "", false},
+		{"non-string reason", `{"failed":true,"reason":3}`, "", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, ok := ParseTaskFailure(tc.in)
+			testutil.Equal(t, ok, tc.ok)
+			testutil.Equal(t, r, tc.reason)
+		})
+	}
+}
+
+func TestFailureFromResult_ZeroTimeOmitsRecordedAt(t *testing.T) {
+	f := FailureFromResult(`{"failed":true,"reason":"x"}`, time.Time{})
+	testutil.Equal(t, f.RecordedAt, "")
+	testutil.Equal(t, f.Source, FailureSourceTaskResult)
+	testutil.Equal(t, FailureFromResult(`{}`, time.Now()) == nil, true)
+}
