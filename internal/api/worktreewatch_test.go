@@ -461,3 +461,52 @@ func TestHandleGitDiscard(t *testing.T) {
 		testutil.Equal(t, w.Code, http.StatusNotFound)
 	})
 }
+
+func TestGitStatusFileCounts(t *testing.T) {
+	srv, d := testServer(t)
+	srv.wt.debounce = 30 * time.Millisecond
+	repo := wtRepo(t)
+	task := &model.Task{Name: "w", Status: model.StatusPending, Worktree: repo}
+	testutil.NoError(t, d.Add(task))
+	testutil.NoError(t, os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\ny\nz\n"), 0o600))
+	testutil.NoError(t, os.WriteFile(filepath.Join(repo, "new.txt"), []byte("n\n"), 0o600))
+
+	get := func() (rev string, files []gitutil.FileChange, status string) {
+		w := httptest.NewRecorder()
+		srv.routes().ServeHTTP(w, authedReq("GET", "/api/tasks/"+task.ID+"/git/status", ""))
+		testutil.Equal(t, w.Code, http.StatusOK)
+		var got struct {
+			GitRevision string               `json:"git_revision"`
+			Files       []gitutil.FileChange `json:"files"`
+			Status      string
+		}
+		testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		return got.GitRevision, got.Files, got.Status
+	}
+	rev, files, status := get()
+	testutil.Contains(t, status, "f.txt")
+	testutil.Equal(t, len(files), 2)
+	m := map[string]gitutil.FileChange{}
+	for _, f := range files {
+		m[f.Path] = f
+	}
+	testutil.Equal(t, *m["f.txt"].Additions, 2)
+	testutil.Equal(t, *m["f.txt"].Deletions, 0)
+	testutil.Equal(t, *m["new.txt"].Additions, 1)
+
+	testutil.NoError(t, os.WriteFile(filepath.Join(repo, "new.txt"), []byte("n\nm\n"), 0o600))
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		rev2, files2, _ := get()
+		if rev2 != rev {
+			for _, f := range files2 {
+				if f.Path == "new.txt" {
+					testutil.Equal(t, *f.Additions, 2)
+				}
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("revision did not move with counts")
+}

@@ -55,6 +55,11 @@ func FetchGitStatus(taskID, worktree string, opts Options) GitStatusRefreshMsg {
 		}
 	}
 
+	msg.Files = collectFileChanges(worktree, msg.Comparison.MergeBase)
+	if msg.Files == nil {
+		msg.Files = []FileChange{}
+	}
+
 	return msg
 }
 
@@ -298,11 +303,16 @@ func sortBranchesWithPriority(branches []string) []string {
 	return append(result, rest...)
 }
 
+var runGitHook func()
+
 func runGit(dir string, args ...string) (string, error) {
 	return runGitWithInput(dir, nil, nil, args...)
 }
 
 func runGitWithInput(dir string, input io.Reader, extraEnv []string, args ...string) (string, error) {
+	if runGitHook != nil {
+		runGitHook()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-pager"}, args...)...)
