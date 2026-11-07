@@ -106,6 +106,9 @@ type Server struct {
 	// Started in New, stopped in Shutdown.
 	metrics *sysmetrics.Collector
 
+	// wt caches per-worktree git status and publishes worktree.changed.
+	wt *wtHub
+
 	// hostSleep caches the async pmset sleep-posture check served on
 	// /api/system-metrics. Never nil: a zero Monitor is built in New.
 	hostSleep *hostsleep.Monitor
@@ -195,6 +198,8 @@ func New(database *db.DB, runner agent.SessionRunner, token string, creator Task
 		metrics:        sysmetrics.New(db.DataDir()),
 		hostSleep:      hostsleep.NewMonitor(),
 	}
+	srv.wt = newWtHub(srv.Emit)
+	go srv.worktreeSweeper()
 	srv.rehydratePluginSections()
 	// Start the idle watcher unconditionally. It fires session.idle events
 	// for the plugin substrate (PR 2) every tick, and ALSO triggers Web
@@ -359,6 +364,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	if s.metrics != nil {
 		s.metrics.Close()
+	}
+	if s.wt != nil {
+		s.wt.closeAll()
 	}
 	done := make(chan struct{})
 	go func() { s.heraBG.Wait(); close(done) }()

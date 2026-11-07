@@ -293,6 +293,7 @@ func runGit(dir string, args ...string) (string, error) {
 	cmd.Dir = dir
 	cmd.Env = append(cmd.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
 	)
 	var out bytes.Buffer
 	cmd.Stdout = &out

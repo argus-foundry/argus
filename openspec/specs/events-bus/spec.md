@@ -135,3 +135,19 @@ The stream SHALL register each connection as a subscriber on connect and SHALL d
 
 - **WHEN** a connected SSE client cancels its request and closes the connection
 - **THEN** the subscriber is removed and the active subscriber count returns to zero
+
+### Requirement: Worktree change events
+
+The daemon SHALL emit `worktree.changed` with the task id and payload `{"revision":"<opaque>","reason":"filesystem|git|discard","paths":[...]}` (revision and paths optional). A consumer receiving an event without a revision SHALL treat it as an invalidation. Payloads carry no file contents.
+
+#### Scenario: Replay
+- **WHEN** a client reconnects with `since` before a worktree event
+- **THEN** the ring replays it, or a `resync` tells the client to refetch status
+
+### Requirement: Discard publishes a worktree change
+
+After a successful discard the daemon SHALL emit `worktree.changed` with reason `discard` and the discarded path, only once the status cache reflects the new file state.
+
+#### Scenario: Failure emits nothing
+- **WHEN** a discard is rejected
+- **THEN** no `worktree.changed` event with reason `discard` is emitted

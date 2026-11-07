@@ -133,6 +133,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/tasks/{id}/clipboard", s.handleClipboardClear)
 	mux.HandleFunc("GET /api/tasks/{id}/git/status", s.handleGitStatus)
 	mux.HandleFunc("GET /api/tasks/{id}/git/diff", s.handleGitDiff)
+	mux.HandleFunc("POST /api/tasks/{id}/git/discard", s.handleGitDiscard)
 	mux.HandleFunc("GET /api/tasks/{id}/files", s.handleFileTree)
 	// Session artifacts: list metadata + serve raw bytes (scoped to the
 	// registered manifest set; see internal/api/artifacts.go). Authenticated

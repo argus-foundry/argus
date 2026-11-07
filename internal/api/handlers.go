@@ -1869,6 +1869,16 @@ func (s *Server) handleHasPendingRestart(w http.ResponseWriter, r *http.Request)
 
 // --- Git status / diff / files ---
 
+type gitStatusResponse struct {
+	gitutil.GitStatusRefreshMsg
+	GitRevision string `json:"git_revision"`
+	Stale       bool   `json:"stale"`
+}
+
+func writeCodeErr(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
+}
+
 func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	task, err := s.db.Get(id)
@@ -1876,14 +1886,76 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "task or worktree not found", nil)
 		return
 	}
-	msg := gitutil.FetchGitStatus(task.ID, task.Worktree, gitutil.Options{BaseBranch: task.BaseBranch})
-	if msg.Err != nil {
-		uxlog.Log("[api] git status failed task=%s: %v", task.ID, msg.Err)
+	snap, err := s.wt.status(r.Context(), task.ID, task.Worktree, gitutil.Options{BaseBranch: task.BaseBranch})
+	if errors.Is(err, errWtUnavailable) {
+		uxlog.Log("[api] git status unavailable task=%s", task.ID)
+		writeCodeErr(w, http.StatusServiceUnavailable, "git_status_unavailable", "git status unavailable")
+		return
+	}
+	if err != nil {
+		uxlog.Log("[api] git status failed task=%s: %v", task.ID, err)
 		writeErr(w, http.StatusInternalServerError, "git status failed", nil)
 		return
 	}
-	uxlog.Log("[api] git status task=%s base=%q resolved=%q", task.ID, msg.Comparison.RequestedBase, msg.Comparison.ResolvedBase)
-	writeJSON(w, http.StatusOK, msg)
+	msg := snap.msg
+	uxlog.Log("[api] git status task=%s base=%q resolved=%q revision=%s stale=%v", task.ID, msg.Comparison.RequestedBase, msg.Comparison.ResolvedBase, snap.revision, snap.stale)
+	writeJSON(w, http.StatusOK, gitStatusResponse{GitStatusRefreshMsg: msg, GitRevision: snap.revision, Stale: snap.stale})
+}
+
+type gitDiscardRequest struct {
+	Path            string `json:"path"`
+	Scope           string `json:"scope"`
+	DeleteUntracked bool   `json:"delete_untracked"`
+}
+
+func (s *Server) handleGitDiscard(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	task, err := s.db.Get(id)
+	if err != nil || task == nil || task.Worktree == "" {
+		writeCodeErr(w, http.StatusNotFound, "task_not_found", "task or worktree not found")
+		return
+	}
+	if _, serr := os.Stat(task.Worktree); serr != nil {
+		writeCodeErr(w, http.StatusNotFound, "worktree_not_found", "task or worktree not found")
+		return
+	}
+	var req gitDiscardRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeCodeErr(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if req.Scope == "" {
+		req.Scope = "local"
+	}
+	if req.Scope != "local" {
+		writeCodeErr(w, http.StatusBadRequest, "invalid_scope", "scope must be local")
+		return
+	}
+
+	opts := gitutil.Options{BaseBranch: task.BaseBranch}
+	e := s.wt.register(task.ID, task.Worktree, opts)
+	e.mutate.Lock()
+	derr := gitutil.DiscardFile(task.Worktree, req.Path, req.DeleteUntracked)
+	e.mutate.Unlock()
+	if derr != nil {
+		var de *gitutil.DiscardError
+		if !errors.As(derr, &de) {
+			de = &gitutil.DiscardError{Code: gitutil.DiscardGitFailed, Msg: "discard failed"}
+		}
+		status := http.StatusConflict
+		switch de.Code {
+		case gitutil.DiscardInvalidPath:
+			status = http.StatusBadRequest
+		case gitutil.DiscardGitFailed:
+			status = http.StatusInternalServerError
+		}
+		uxlog.Log("[api] git discard rejected task=%s code=%s", task.ID, de.Code)
+		writeCodeErr(w, status, de.Code, de.Msg)
+		return
+	}
+	uxlog.Log("[api] git discard ok task=%s", task.ID)
+	s.wt.publishDiscard(task.ID, task.Worktree, opts, []string{req.Path})
+	writeJSON(w, http.StatusOK, map[string]any{"path": req.Path, "discarded": true, "scope": "local"})
 }
 
 func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {

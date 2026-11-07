@@ -80,6 +80,9 @@ func (s *Server) Emit(ev model.Event) {
 		return
 	}
 	s.eventBus.publish(*saved)
+	if s.wt != nil && (ev.Type == model.EventTypeTaskDeleted || ev.Type == model.EventTypeTaskArchived) {
+		s.wt.remove(ev.TaskID)
+	}
 }
 
 // emitForTest is the test-only variant of Emit that returns the persisted

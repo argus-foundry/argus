@@ -895,7 +895,8 @@ Every authenticated token has the same permissions **except** a small master-onl
 
 | Method | Endpoint                               | Description                                             |
 | ------ | -------------------------------------- | ------------------------------------------------------- |
-| `GET`  | `/api/tasks/{id}/git/status`           | git status output + branch diff for the task's worktree, plus `comparison` (base the task is compared against) |
+| `GET`  | `/api/tasks/{id}/git/status`           | git status output + branch diff for the task's worktree, plus `comparison`, `git_revision` (opaque) and `stale`; 503 `git_status_unavailable` on a cold-read timeout |
+| `POST` | `/api/tasks/{id}/git/discard`          | Restore one file to HEAD: `{path, scope:"local", delete_untracked}`; 400 `invalid_path`, 409 `untracked_requires_delete`/`rename_requires_explicit_paths`/`conflict_state`/`no_changes`; publishes `worktree.changed` |
 | `GET`  | `/api/tasks/{id}/git/diff?path=<file>` | Unified diff for a single file, plus `comparison`       |
 | `GET`  | `/api/tasks/{id}/files?dir=<rel>`      | Worktree file listing                                   |
 
@@ -1022,7 +1023,7 @@ Plugins authenticate with a **scope token** (`X-Argus-Auth: scope:<name>`), a th
 
 | Method | Endpoint                       | Token | Description                                                                                                                                                                                |
 | ------ | ------------------------------ | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/events/stream?since=<n>` | any   | SSE feed of `task.*`, `session.*`, `message.*`, `link.*` events. `since` is an exclusive cursor that replays missed events; a cursor older than the ring emits a synthetic `resync` so the client re-snapshots. 30 s keepalives. |
+| `GET`  | `/api/events/stream?since=<n>` | any   | SSE feed of `task.*`, `session.*`, `message.*`, `link.*`, `worktree.changed` events (`{revision?,reason:filesystem|git|discard,paths?}`; no revision ⇒ refetch git status). `since` is an exclusive cursor that replays missed events; a cursor older than the ring emits a synthetic `resync` so the client re-snapshots. 30 s keepalives. |
 
 ### Keep the host awake
 
