@@ -120,6 +120,11 @@ const (
 	// or "codex"; measured_at omitted when usage became unavailable).
 	EventTypeAccountUsageChanged = "account.usage_changed"
 
+	// EventTypeBackendTiersUsageChanged fires when the readings routing scores
+	// the configured backend tiers with change. Payload is the tier-list
+	// revision only: {"revision":"..."}.
+	EventTypeBackendTiersUsageChanged = "backend_tiers.usage_changed"
+
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.
 	// It is never persisted in the events table — clients seeing it should

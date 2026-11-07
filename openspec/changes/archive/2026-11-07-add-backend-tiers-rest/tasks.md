@@ -1,0 +1,6 @@
+- [x] Shared tier usage projection + revision (`internal/backendtier/tierusage.go`)
+- [x] `GET/PUT /api/backend-tiers`, `GET /api/backend-tiers/usage`
+- [x] `backend_tiers.usage_changed` event + daemon watcher hook
+- [x] Tests (handler shape/status/store/events, projection vs routing, watcher)
+- [x] Gotcha, README endpoint/event rows
+- [x] Archive into `openspec/specs/rest-api`

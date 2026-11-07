@@ -11,6 +11,7 @@ import (
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/events"
 	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
@@ -25,7 +26,9 @@ type usageSignature struct {
 // projected usage differs from the previous tick. The first observation of a
 // key is a baseline, not a change.
 type usageWatcher struct {
-	last map[string]usageSignature
+	last      map[string]usageSignature
+	tiersSeen bool
+	tiersSig  string
 }
 
 func usageFingerprint(u *backendtier.ProviderUsage) usageSignature {
@@ -72,6 +75,20 @@ func (w *usageWatcher) tick(cfg config.Config, now time.Time) {
 			uxlog.Log("[usage] account=%s kind=%s usage changed (available=%t)", name, kind, u != nil)
 		}
 	}
+	w.tickTiers(cfg, claude, now)
+}
+
+func (w *usageWatcher) tickTiers(cfg config.Config, claude map[string]usagebudget.Reading, now time.Time) {
+	tiers := cfg.BackendRouting.Tiers
+	sig := backendtier.TierUsageFingerprint(cfg, tiers, claude, backendtier.CachedReading, now)
+	seen, prev := w.tiersSeen, w.tiersSig
+	w.tiersSeen, w.tiersSig = true, sig
+	if !seen || prev == sig {
+		return
+	}
+	rev := backendtier.TierRevision(tiers)
+	events.Emit(model.EventTypeBackendTiersUsageChanged, "", map[string]string{"revision": rev})
+	uxlog.Log("[usage] backend tier readings changed revision=%s tiers=%d", rev, len(tiers))
 }
 
 func (d *Daemon) runUsageEventWatcher() {
