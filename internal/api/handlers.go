@@ -1959,6 +1959,11 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msg := snap.msg
+	if msg.HeadErr != nil || msg.Head == nil {
+		uxlog.Log("[api] git head unavailable task=%s: %v", task.ID, msg.HeadErr)
+		writeCodeErr(w, http.StatusInternalServerError, "git_head_unavailable", "git head unavailable")
+		return
+	}
 	uxlog.Log("[api] git status task=%s base=%q resolved=%q revision=%s stale=%v", task.ID, msg.Comparison.RequestedBase, msg.Comparison.ResolvedBase, snap.revision, snap.stale)
 	writeJSON(w, http.StatusOK, gitStatusResponse{GitStatusRefreshMsg: msg, GitRevision: snap.revision, Stale: snap.stale})
 }

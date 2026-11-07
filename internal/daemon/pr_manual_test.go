@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/drn/argus/internal/gitutil"
@@ -143,4 +144,47 @@ func TestPollPR_ClearedLinkRestoresAutomaticDiscovery(t *testing.T) {
 	testutil.NoError(t, d.db.ClearManualPR("a1"))
 	d.pollPRStatesOnce(context.Background())
 	testutil.Equal(t, storedPR(t, d, "a1")["url"], "https://github.com/o/r/pull/2")
+}
+
+func TestPollPR_UsesLiveHeadBranch(t *testing.T) {
+	setup := func(t *testing.T, head func(string) (gitutil.Head, error)) (*Daemon, *[]string) {
+		d, _ := testDaemon(t)
+		seedTask(t, d.db, "a", "argus/recorded", false)
+		d.prLiveHead = head
+		var mu sync.Mutex
+		queried := []string{}
+		d.prBatchFetch = func(_ context.Context, _ string, branches map[string]string) (map[string]gitutil.PRResult, int, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			out := map[string]gitutil.PRResult{}
+			for b := range branches {
+				queried = append(queried, b)
+				out[b] = gitutil.PRResult{State: model.PRApproved, URL: "https://github.com/o/r/pull/2"}
+			}
+			return out, 1, nil
+		}
+		d.prResolveRepo = resolveAll("o/r")
+		return d, &queried
+	}
+
+	t.Run("queries the checked-out branch, not the recorded one", func(t *testing.T) {
+		live := "feature-live"
+		d, queried := setup(t, func(string) (gitutil.Head, error) { return gitutil.Head{Branch: &live}, nil })
+		d.pollPRStatesOnce(context.Background())
+		testutil.DeepEqual(t, *queried, []string{"feature-live"})
+		tk, err := d.db.Get("a")
+		testutil.NoError(t, err)
+		testutil.Equal(t, tk.Branch, "argus/recorded")
+	})
+	t.Run("detached head is not looked up", func(t *testing.T) {
+		d, queried := setup(t, func(string) (gitutil.Head, error) { return gitutil.Head{Detached: true}, nil })
+		d.pollPRStatesOnce(context.Background())
+		testutil.Equal(t, len(*queried), 0)
+		testutil.Equal(t, len(storedPR(t, d, "a")), 0)
+	})
+	t.Run("unreadable head is not replaced by the stored branch", func(t *testing.T) {
+		d, queried := setup(t, func(string) (gitutil.Head, error) { return gitutil.Head{}, errors.New("boom") })
+		d.pollPRStatesOnce(context.Background())
+		testutil.Equal(t, len(*queried), 0)
+	})
 }

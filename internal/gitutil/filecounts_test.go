@@ -157,7 +157,7 @@ func TestFileChanges_BatchedCommands(t *testing.T) {
 	defer func() { runGitHook = nil }()
 	msg := FetchGitStatus("t", dir, Options{})
 	testutil.Equal(t, len(msg.Files), 32)
-	if gitCalls > 15 {
+	if gitCalls > 18 {
 		t.Fatalf("git commands scale with files: %d", gitCalls)
 	}
 }

@@ -41,6 +41,12 @@ func FetchGitStatus(taskID, worktree string, opts Options) GitStatusRefreshMsg {
 		msg.Diff = strings.TrimRight(out, "\n")
 	}
 
+	if h, herr := ReadHead(worktree); herr == nil {
+		msg.Head = &h
+	} else {
+		msg.HeadErr = herr
+	}
+
 	msg.Comparison = resolveComparison(worktree, opts)
 	if base := msg.Comparison.MergeBase; base != "" {
 		if out, err := runGit(worktree, "diff", "--stat", base+"..HEAD"); err == nil {

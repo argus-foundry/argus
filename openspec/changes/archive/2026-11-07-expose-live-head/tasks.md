@@ -1,0 +1,5 @@
+- [x] gitutil.ReadHead + Head in GitStatusRefreshMsg
+- [x] REST head + 500 git_head_unavailable
+- [x] PR poller uses live HEAD branch
+- [x] Tests: checkout, rename, detached, unborn, poller, ownership unchanged
+- [x] README, gotcha, archive

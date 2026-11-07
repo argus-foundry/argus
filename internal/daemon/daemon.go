@@ -205,6 +205,9 @@ type Daemon struct {
 	// gitutil.ResolveDefaultRepo; tests swap it. Runs off the UI thread (the
 	// poller goroutine), consistent with all other git ops.
 	prResolveRepo func(ctx context.Context, worktree string) (string, bool)
+	// prLiveHead reads a worktree's current HEAD; the poller looks up the PR
+	// for that branch, never the recorded Task.Branch. Seam for tests.
+	prLiveHead func(worktree string) (gitutil.Head, error)
 
 	// prAliasCap is the per-query alias cap that triggers chunking of an
 	// oversized repo group (Decision 5). Defaults to prDefaultAliasCap; tests
@@ -306,6 +309,7 @@ func New(database *db.DB) *Daemon {
 		prBatchFetch:      gitutil.FetchPRStatesBatch,
 		prURLFetch:        gitutil.FetchPRByURL,
 		prResolveRepo:     gitutil.ResolveDefaultRepo,
+		prLiveHead:        gitutil.ReadHead,
 		prAliasCap:        prDefaultAliasCap,
 		prDisableFlagPath: filepath.Join(db.DataDir(), prPollDisableFlag),
 		usageBudgetProbe:  func(ctx context.Context) error { return usagebudget.ProbeConfiguredAccounts(ctx, database.Config()) },
@@ -747,13 +751,30 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 	// pr/url (when present) is authoritative for repo resolution, else the
 	// worktree's default GitHub repo via d.prResolveRepo.
 	aliasToTask := make(map[string]*model.Task, len(eligible))
+	liveBranch := make(map[string]string, len(eligible))
+	live := eligible[:0:0]
+	for _, t := range eligible {
+		h, herr := d.prLiveHead(t.Worktree)
+		if herr != nil || h.Branch == nil || *h.Branch == "" {
+			skipped++
+			uxlog.Log("[pr] poll: skip %s (live head unavailable or detached: %v)", t.ID, herr)
+			continue
+		}
+		liveBranch[t.ID] = *h.Branch
+		live = append(live, t)
+	}
+	eligible = live
+	if len(eligible) == 0 {
+		uxlog.Log("[pr] poll: eligible=0 skipped=%d", skipped)
+		return
+	}
 	inputs := make([]gitutil.BranchRepoInput, 0, len(eligible))
 	for _, t := range eligible {
 		alias := prAliasID(t.ID)
 		aliasToTask[alias] = t
 		inputs = append(inputs, gitutil.BranchRepoInput{
 			ID:        alias,
-			Branch:    t.Branch,
+			Branch:    liveBranch[t.ID],
 			Worktree:  t.Worktree,
 			CachedURL: prMeta[t.ID]["url"],
 		})
