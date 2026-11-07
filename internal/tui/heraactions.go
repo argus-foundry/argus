@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/app/agentview"
 	"github.com/drn/argus/internal/daemon"
 	"github.com/drn/argus/internal/db"
 	herasvc "github.com/drn/argus/internal/hera"
@@ -1076,35 +1075,26 @@ func (a *App) heraOpenForceRecycle(sel hera.Selection) {
 // KickRerender has); reuses the identical daemon.HeraRecycleRunner the
 // background RecycleWatcher runs on, so both paths kill/restart identically.
 func (a *App) heraDoForceRecycle(role *hera.RoleView) {
-	d, ok := a.db.(*db.DB)
+	svc, ok := a.heraLifecycle()
 	if !ok {
-		return
-	}
-	runner, ok := a.runner.(agent.SessionRunner)
-	if !ok {
-		uxlog.Log("[hera-view] force recycle: runner has no Recycle (remote?) — skipping role %d", role.RoleID)
+		uxlog.Log("[hera-view] force recycle: unavailable (remote?) — skipping role %d", role.RoleID)
 		a.statusbar.SetError("Force recycle: unavailable in this mode")
 		return
 	}
 	taskID := roleReclaimTask(role)
-	sessionID := ""
-	if taskID != "" {
-		if t, err := d.Get(taskID); err == nil && t != nil {
-			sessionID = t.SessionID
-		}
-	}
 	// Mirror maybeKickRerender's pendingRerenderRestart bookkeeping (app.go):
-	// RecycleCoord's kill+respawn is the same "session dies non-cleanly, a
+	// the recycle's kill+respawn is the same "session dies non-cleanly, a
 	// fresh one for the SAME task follows" shape a rerender kick is, so
 	// handleSessionExitUI's dedicated immediate-resume branch should handle
-	// it too rather than falling through to the generic crash/stop path —
-	// otherwise a coordinator open in the plain (non-hera) agent view flashes
-	// an "exited" state instead of resuming gaplessly in place.
+	// it too rather than falling through to the generic crash/stop path.
 	if taskID != "" {
 		a.pendingRerenderRestart[taskID] = true
 	}
-	rr := daemon.NewHeraRecycleRunner(d, runner, d.Config)
-	if err := herasvc.RecycleCoord(d, rr, role.RoleID, sessionID, herasvc.RecycleHumanForced); err != nil {
+	op, err := svc.ForceRecycle(herasvc.NewOperationID(), role.RoleID, true)
+	if err == nil && op.State == herasvc.LifecycleStateFailed {
+		err = errors.New(op.Error)
+	}
+	if err != nil {
 		if taskID != "" {
 			delete(a.pendingRerenderRestart, taskID)
 		}
@@ -1114,6 +1104,20 @@ func (a *App) heraDoForceRecycle(role *hera.RoleView) {
 	}
 	uxlog.Log("[hera-view] force recycle: role=%d restarted", role.RoleID)
 	a.heraRefresh()
+}
+
+// heraLifecycle builds the shared bounce/recycle service for local mode (a
+// real *db.DB plus a runner that can recycle); remote TUIs get ok=false.
+func (a *App) heraLifecycle() (*herasvc.LifecycleService, bool) {
+	d, ok := a.db.(*db.DB)
+	if !ok {
+		return nil, false
+	}
+	runner, ok := a.runner.(agent.SessionRunner)
+	if !ok {
+		return nil, false
+	}
+	return daemon.NewHeraLifecycleService(d, runner, d.Config), true
 }
 
 // --- `B` bounce worker/freelance (add-worker-bounce) ------------------------
@@ -1144,37 +1148,26 @@ func (a *App) heraOpenBounceWorker(sel hera.Selection) {
 		func() { a.heraDoBounceWorker(role) })
 }
 
-// heraBounceInstruction is the system-input instruction sent to a role's live
-// session on confirm. It never mentions "coordinator" — the same wording
-// applies to a worker or freelance role (design.md D7).
-const heraBounceInstruction = "You've been asked to bounce (fresh session, same task/worktree/branch). " +
-	"Please wrap up: call hera_status with handoff_note summarizing what's done, the current state, and what's next, and request_recycle=true, so your session restarts fresh once you go idle."
-
-// heraDoBounceWorker sends heraBounceInstruction to role's live session via
-// WriteInput with agentview.OriginSystem — a plain queued input, not a
-// reliable-notify delivery (no idle gating, no retry): the confirm modal is
-// the human speed bump this
-// path relies on (design.md Risks), and D6 explicitly rules out a
-// fallback/timeout if the role never responds. No daemon-side kill/restart
-// call happens here; the role's own subsequent hera_status call is what
-// drives the rest via the widened self-service pipeline (Stages 2-3).
+// heraDoBounceWorker asks role's live session to hand off and recycle itself
+// via the shared lifecycle service: one system-input instruction, no direct
+// kill and no timeout fallback. The role's own subsequent hera_status call
+// drives the rest through the self-service pipeline.
 func (a *App) heraDoBounceWorker(role *hera.RoleView) {
-	taskID := roleReclaimTask(role)
-	if taskID == "" {
+	svc, ok := a.heraLifecycle()
+	if !ok {
+		a.statusbar.SetError("Bounce: unavailable in this mode")
 		return
 	}
-	sess := a.runner.Get(taskID)
-	if sess == nil || !sess.Alive() {
-		uxlog.Log("[hera-view] bounce: no live session for role=%d task=%s — skipping", role.RoleID, taskID)
-		a.statusbar.SetError("Bounce: session not live")
-		return
+	op, err := svc.Bounce(herasvc.NewOperationID(), role.RoleID)
+	if err == nil && op.State == herasvc.LifecycleStateFailed {
+		err = errors.New(op.Error)
 	}
-	if _, err := sess.WriteInput([]byte(heraBounceInstruction), agentview.OriginSystem); err != nil {
-		uxlog.Log("[hera-view] bounce: write failed role=%d task=%s: %v", role.RoleID, taskID, err)
+	if err != nil {
+		uxlog.Log("[hera-view] bounce failed role=%d: %v", role.RoleID, err)
 		a.statusbar.SetError("Bounce failed: " + err.Error())
 		return
 	}
-	uxlog.Log("[hera-view] bounce: instruction sent role=%d task=%s", role.RoleID, taskID)
+	uxlog.Log("[hera-view] bounce: instruction sent role=%d task=%s", role.RoleID, op.TaskID)
 	a.statusbar.SetInfo("Bounce instruction sent to " + role.Name)
 }
 

@@ -170,7 +170,8 @@ type Daemon struct {
 	// polls for coordinators with a pending recycle request and restarts
 	// each once its session goes idle.
 	heraRecycleWatcher *hera.RecycleWatcher
-	clipboard          *clipboard.Store // agent-staged clipboard, in-memory
+	heraLifecycle      *hera.LifecycleService // shared bounce/force-recycle operations
+	clipboard          *clipboard.Store       // agent-staged clipboard, in-memory
 
 	// Boot identity — recorded once at New() so the TUI can detect when the
 	// on-disk binary has been rebuilt since the daemon started. binaryHash is
@@ -1429,6 +1430,9 @@ func (d *Daemon) Serve(sockPath string) error {
 	// synthetic times instead of sleeping.
 	go d.runHostSuspendWatcher()
 
+	d.heraLifecycle = NewHeraLifecycleService(d.db, d.runner, d.cfgFn)
+	d.heraLifecycle.Recover()
+
 	// Hera plan-DAG gater (add-hera-plan-substrate). Runs whenever hera is
 	// enabled, independent of the KB/MCP server: it materializes already-authored
 	// planned nodes whose blockers have all reached role-status done. Inert when no
@@ -1465,6 +1469,7 @@ func (d *Daemon) Serve(sockPath string) error {
 		// cfg.Hera.Enabled — both are hera-native background loops with no
 		// meaning when hera is off.
 		d.heraRecycleWatcher = hera.NewRecycleWatcher(d.db, NewHeraRecycleRunner(d.db, d.runner, d.cfgFn))
+		d.heraRecycleWatcher.SetOutcomeHook(d.heraLifecycle.ObserveRecycle)
 		go d.heraRecycleWatcher.Start()
 	}
 
@@ -1571,6 +1576,7 @@ func (d *Daemon) Serve(sockPath string) error {
 			apiSrv.SetClipboard(d.clipboard)
 			apiSrv.SetMCPRegistry(pluginRegistry)
 			apiSrv.SetNotifier(d.notifier)
+			apiSrv.SetHeraLifecycle(d.heraLifecycle)
 			apiSrv.SetFocusTracker(d.focusTracker)
 			d.apiServer = apiSrv
 			d.restoreBridgeUsage = usagebudget.SetBridgeReader(apiSrv.BridgeUsage)

@@ -476,6 +476,31 @@ func (d *DB) createTables() error {
 		return err
 	}
 
+	// Generic operation receipts: a durable record per accepted long-running
+	// request, keyed by the client's request_id so retries are idempotent.
+	// active=1 rows are unique per (subject_type, subject_id), which is how
+	// concurrent duplicate requests are rejected atomically.
+	if _, err := d.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS operations (
+			id           TEXT PRIMARY KEY,
+			request_id   TEXT NOT NULL UNIQUE,
+			fingerprint  TEXT NOT NULL,
+			kind         TEXT NOT NULL,
+			subject_type TEXT NOT NULL,
+			subject_id   TEXT NOT NULL,
+			task_id      TEXT NOT NULL DEFAULT '',
+			state        TEXT NOT NULL,
+			error        TEXT NOT NULL DEFAULT '',
+			active       INTEGER NOT NULL DEFAULT 1,
+			created_at   TEXT NOT NULL,
+			updated_at   TEXT NOT NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_operations_active_subject
+			ON operations(subject_type, subject_id) WHERE active=1;
+	`); err != nil {
+		return fmt.Errorf("creating operations table: %w", err)
+	}
+
 	return nil
 }
 

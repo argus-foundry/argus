@@ -1,0 +1,7 @@
+- [x] operations table + db methods, tests
+- [x] hera.LifecycleService (bounce, force recycle, observe, recover), tests
+- [x] RecycleWatcher outcome hook, tests
+- [x] REST routes + handlers, tests (400/401/404/409/500/503)
+- [x] hera.lifecycle_changed event
+- [x] daemon adapter + wiring; TUI actions call the shared service
+- [x] gotchas, README reference tables, archive change
