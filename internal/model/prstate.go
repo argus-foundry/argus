@@ -96,3 +96,50 @@ func (s *PRState) UnmarshalText(data []byte) error {
 	*s = parsed
 	return nil
 }
+
+// PRLifecycle is the GitHub lifecycle of a task's PR, independent of review
+// state: PRState collapses merged and closed into one value, while this keeps
+// them apart. Only GitHub merge evidence yields PRLifecycleMerged.
+type PRLifecycle string
+
+const (
+	PRLifecycleOpen    PRLifecycle = "open"
+	PRLifecycleMerged  PRLifecycle = "merged"
+	PRLifecycleClosed  PRLifecycle = "closed"
+	PRLifecycleUnknown PRLifecycle = "unknown"
+)
+
+// ParsePRLifecycle returns the lifecycle for a persisted string, or
+// PRLifecycleUnknown for anything unrecognized or empty.
+func ParsePRLifecycle(s string) PRLifecycle {
+	switch l := PRLifecycle(s); l {
+	case PRLifecycleOpen, PRLifecycleMerged, PRLifecycleClosed:
+		return l
+	}
+	return PRLifecycleUnknown
+}
+
+// ResolvePRLifecycle projects the cached pr meta (state + lifecycle strings)
+// into the API lifecycle. A terminal state with no verified lifecycle stays
+// unknown rather than being guessed; a non-terminal PR state is open by
+// construction.
+func ResolvePRLifecycle(state, lifecycle string) PRLifecycle {
+	if state == PRMergedClosed.String() && lifecycle == string(PRLifecycleOpen) {
+		return PRLifecycleUnknown
+	}
+	if l := ParsePRLifecycle(lifecycle); l != PRLifecycleUnknown {
+		return l
+	}
+	if st, err := ParsePRState(state); err == nil && (st.IsActionable() || st == PRDraft) {
+		return PRLifecycleOpen
+	}
+	return PRLifecycleUnknown
+}
+
+// PRChangedPayload is the task.pr_changed event body. Fields are additive:
+// consumers must ignore keys they do not know.
+type PRChangedPayload struct {
+	URL       string      `json:"url"`
+	State     string      `json:"state"`
+	Lifecycle PRLifecycle `json:"lifecycle"`
+}

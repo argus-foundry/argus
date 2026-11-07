@@ -249,6 +249,9 @@ type Daemon struct {
 	// them onto one cycle. Reset to 0 on restart (the schedule simply re-phases).
 	pollCycle uint64
 
+	// Track the one immediate attempt without writing retry state to storage.
+	prTerminalVerificationAttempted map[string]bool
+
 	// notifier is the reliable pane-delivery service. Created in Serve once
 	// the runner and focus tracker are ready. Nil until Serve runs.
 	notifier *notify.Notifier
@@ -725,8 +728,8 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 	// task are dropped here and counted in `skipped` (everything eligible by base
 	// criteria but not queried this cycle), preserving len(eligible) == written +
 	// errored:
-	//   1. Terminal cached state (merged/closed) — skipped permanently; that
-	//      state can never change, so re-polling can never return anything new.
+	//   1. Terminal cached state with verified merged/closed lifecycle.
+	//      Unverified terminal entries get one immediate attempt before dormancy retries.
 	//   2. Dormancy cadence — an eligible task not due this cycle. GitHub's
 	//      GraphQL budget is cost-based (~1 unit per branch resolved), so querying
 	//      every dormant PR-less branch every cycle drains it; we poll them on a
@@ -734,6 +737,7 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 	//      and is always polled.
 	now := time.Now()
 	eligible := make([]*model.Task, 0, len(tasks))
+	terminalAtStart := make(map[string]bool, len(tasks))
 	var skipped int
 	for _, t := range tasks {
 		if t == nil || t.Archived || t.Branch == "" {
@@ -748,12 +752,23 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 				state = st
 			}
 		}
-		if state.IsTerminal() {
+		terminalAtStart[t.ID] = state.IsTerminal()
+		lifecycle := model.ParsePRLifecycle(prMeta[t.ID]["lifecycle"])
+		if state.IsTerminal() && (lifecycle == model.PRLifecycleMerged || lifecycle == model.PRLifecycleClosed) {
 			skipped++
 			uxlog.Log("[pr] poll: skip terminal %s (state=%s)", t.ID, state)
 			continue
 		}
-		if stride := prPollCadenceStride(t, state, now); !prCadenceSelects(d.pollCycle, t.ID, stride) {
+		if state.IsTerminal() && !d.prTerminalVerificationAttempted[t.ID] {
+			if d.prTerminalVerificationAttempted == nil {
+				d.prTerminalVerificationAttempted = make(map[string]bool)
+			}
+			d.prTerminalVerificationAttempted[t.ID] = true
+			uxlog.Log("[pr] poll: first terminal verification %s (lifecycle=%s)", t.ID, lifecycle)
+		} else if stride := prPollCadenceStride(t, state, now); !prCadenceSelects(d.pollCycle, t.ID, stride) {
+			if state.IsTerminal() {
+				uxlog.Log("[pr] poll: defer terminal verification %s (stride=%d)", t.ID, stride)
+			}
 			skipped++
 			continue
 		}
@@ -865,17 +880,28 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 					// every TUI's Hera rail to rebuild (one commit per task per
 					// minute before this). The merge notifications below key off
 					// the fetched result, not off whether a write happened.
-					if _, werr := d.db.SetMetaBatchIfChanged(t.ID, "pr", map[string]string{
-						"state": res.State.String(),
-						"url":   res.URL,
-					}); werr != nil {
+					lifecycle := res.Lifecycle()
+					wrote, werr := d.db.SetMetaBatchIfChanged(t.ID, "pr", map[string]string{
+						"state":     res.State.String(),
+						"url":       res.URL,
+						"lifecycle": string(lifecycle),
+					})
+					if werr != nil {
 						uxlog.Log("[pr] poll: persist failed for %s: %v", t.ID, werr)
 						continue
 					}
 					written++
-					if res.Merged {
+					if wrote {
+						events.Emit(model.EventTypeTaskPRChanged, t.ID, model.PRChangedPayload{
+							URL: res.URL, State: res.State.String(), Lifecycle: lifecycle,
+						})
+						uxlog.Log("[pr] poll: %s changed state=%s lifecycle=%s", t.ID, res.State, lifecycle)
+					}
+					if res.Merged && !terminalAtStart[t.ID] {
 						d.notifyCoordinatorOfMergedPR(t, res.URL)
 						d.notifyRoleOfMergedPR(t, res.URL)
+					} else if res.Merged {
+						uxlog.Log("[pr] poll: suppress historical merge notices for %s", t.ID)
 					}
 				}
 			}
