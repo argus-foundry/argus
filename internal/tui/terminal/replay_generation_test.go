@@ -212,47 +212,65 @@ func TestStashReplayEmulator_DropTripwire(t *testing.T) {
 // Pre-fix ordering bug: ResetVT cleared replayBuilding while rebuild A was
 // still running, so a second rebuild (B, for the new binding) could start,
 // finish FIRST, and then A — carrying the PREVIOUS task's content — published
-// last and overwrote B's fresh emulator (a garbling source). A is made slow
-// with a large dense log and B tiny so B reliably finishes first. Both
-// rebuilds are started directly (bypassing the in-flight gate, as the old
-// code allowed) and A must still not win.
+// last and overwrote B's fresh emulator (a garbling source). Deterministic:
+// A is parked at testHookBeforePublish (content already emulated), B then runs
+// to completion and publishes, and only then is A released. No sleeps, no
+// large logs, no timing dependence. Both rebuilds are started directly
+// (bypassing the in-flight gate, as the old code allowed) and A must not win.
 func TestReplayRebuild_SlowStaleRebuildCannotOverwriteFresh(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds a multi-MB log")
-	}
-	setupTaskLog(t, "slowA", "STALE-A-MARKER\r\n"+denseLogContent(8*1024*1024))
+	setupTaskLog(t, "slowA", "STALE-A-MARKER\r\n")
 	addTaskLogContent(t, "fastB", "FRESH-B-MARKER\r\n")
 	tp := NewTerminalPane()
 	tp.ptyCols, tp.ptyRows = 80, 24
 
+	// Only the first rebuild to reach the publish point (A) parks; B's call
+	// finds the gate already consumed and passes straight through.
+	entered, release := make(chan struct{}), make(chan struct{})
+	var parked atomic.Bool
+	tp.testHookBeforePublish = func() {
+		if parked.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
+		}
+	}
+
 	aDone := make(chan struct{})
 	go func() {
+		defer close(aDone)
 		tp.asyncReplayRebuild("slowA", 0, 24, 80, 24, nil, nil, 0, false, false, nil)
-		close(aDone)
 	}()
-	// Never let the slow goroutine outlive the test: testing.AllocsPerRun in
+	// Never let the goroutine outlive the test: testing.AllocsPerRun in
 	// unrelated tests counts allocations process-wide.
-	t.Cleanup(func() { <-aDone })
-	time.Sleep(50 * time.Millisecond) // let A read its log and start emulating
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		<-aDone
+	})
+	waitChan(t, entered, "rebuild A parked before publish")
+
 	tp.SetTaskID("fastB")
 	tp.ResetVT() // rail switch to B while A is in flight
 	tp.asyncReplayRebuild("fastB", 0, 24, 80, 24, nil, nil, 0, false, false, nil)
-	select {
-	case <-aDone:
-	case <-time.After(90 * time.Second): // slow shared CI runners under -race
-		t.Fatal("timed out waiting for slow A to finish")
-	}
+
+	tp.mu.Lock()
+	published := tp.replayEmu != nil && strings.Contains(tp.replayEmu.String(), "FRESH-B-MARKER")
+	tp.mu.Unlock()
+	testutil.Equal(t, published, true) // B is live before A is released
+
+	close(release)
+	waitChan(t, aDone, "stale rebuild A to finish")
 
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
-	if tp.replayEmu == nil {
-		t.Fatal("no replay emulator published")
-	}
 	got := tp.replayEmu.String()
-	if strings.Contains(got, "STALE-A-MARKER") && !strings.Contains(got, "FRESH-B-MARKER") {
-		t.Fatalf("stale rebuild A overwrote fresh rebuild B's emulator")
+	if strings.Contains(got, "STALE-A-MARKER") {
+		t.Fatalf("stale rebuild A overwrote fresh rebuild B's emulator: %q", got)
 	}
 	testutil.Equal(t, strings.Contains(got, "FRESH-B-MARKER"), true)
+	testutil.Equal(t, tp.replayEmuStale, 1)
 }
 
 // Each generation-bumping event must independently invalidate an in-flight
