@@ -14,13 +14,14 @@ import (
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/spinner"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // settingsResponse is the JSON shape returned by GET /api/settings.
 // It mirrors the slice of TUI settings that are meaningful to manage from
-// the web or remote TUI (sandbox, KB, defaults, API, bridge). TUI-rendering settings (spinner,
-// theme, keybindings) are intentionally omitted.
+// the web or remote TUI (sandbox, KB, defaults, API, bridge, display). Theme and
+// keybindings are intentionally omitted.
 type settingsResponse struct {
 	Bridge   bridgeSettings `json:"bridge"`
 	UI       uiSettings     `json:"ui"`
@@ -28,6 +29,11 @@ type settingsResponse struct {
 	KB       kbJSON         `json:"kb"`
 	API      apiSettings    `json:"api"`
 	Defaults defaultsJSON   `json:"defaults"`
+	Display  displayJSON    `json:"display"`
+}
+
+type displayJSON struct {
+	SpinnerStyle string `json:"spinner_style"`
 }
 
 type bridgeSettings struct {
@@ -93,6 +99,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			ShareProject:   cfg.Defaults.ShareProject,
 			PermissionMode: cfg.Defaults.PermissionMode,
 		},
+		Display: displayJSON{SpinnerStyle: string(spinner.Get(spinner.Style(cfg.UI.SpinnerStyle)).Style)},
 	})
 }
 
@@ -106,6 +113,11 @@ type updateSettingsReq struct {
 	KB       *kbUpdate       `json:"kb,omitempty"`
 	API      *apiUpdate      `json:"api,omitempty"`
 	Defaults *defaultsUpdate `json:"defaults,omitempty"`
+	Display  *displayUpdate  `json:"display,omitempty"`
+}
+
+type displayUpdate struct {
+	SpinnerStyle *string `json:"spinner_style,omitempty"`
 }
 
 type bridgeUpdate struct {
@@ -170,6 +182,11 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	if req.Display != nil && req.Display.SpinnerStyle != nil && !validSpinnerStyle(*req.Display.SpinnerStyle) {
+		uxlog.Log("[api] settings rejected: invalid spinner style")
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid spinner style", "code": "invalid_spinner_style"})
+		return
 	}
 	updates := buildSettingsUpdates(req)
 	for k, v := range updates {
@@ -262,7 +279,14 @@ func buildSettingsUpdates(req updateSettingsReq) map[string]string {
 			out["defaults.permission_mode"] = *d.PermissionMode
 		}
 	}
+	if d := req.Display; d != nil && d.SpinnerStyle != nil && validSpinnerStyle(*d.SpinnerStyle) {
+		out["ui.spinner"] = *d.SpinnerStyle
+	}
 	return out
+}
+
+func validSpinnerStyle(v string) bool {
+	return slices.Contains(spinner.Styles(), spinner.Style(v))
 }
 
 func boolStr(b bool) string {

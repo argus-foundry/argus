@@ -576,9 +576,17 @@ func (d *DB) setPinnedLocked(id string, pinned bool) (oldArchived, oldPinned boo
 // status-changed / completed events as the full-row Update path so downstream
 // consumers (hera, idle watcher) see the transition regardless of write path.
 func (d *DB) SetStatus(id string, s model.Status) error {
-	oldStatus, err := d.setStatusLocked(id, s)
+	_, err := d.setStatus(id, s, nil)
+	return err
+}
+
+func (d *DB) setStatus(id string, s model.Status, expected *model.Status) (bool, error) {
+	oldStatus, err := d.setStatusLocked(id, s, expected)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if expected != nil && oldStatus != *expected {
+		return false, nil
 	}
 	if oldStatus != s {
 		events.Emit(model.EventTypeTaskStatusChanged, id, map[string]string{
@@ -590,10 +598,10 @@ func (d *DB) SetStatus(id string, s model.Status) error {
 		}
 		events.EmitTaskUpdated(id, model.TaskFieldStatus)
 	}
-	return nil
+	return oldStatus != s, nil
 }
 
-func (d *DB) setStatusLocked(id string, s model.Status) (model.Status, error) {
+func (d *DB) setStatusLocked(id string, s model.Status, expected *model.Status) (model.Status, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -608,6 +616,9 @@ func (d *DB) setStatusLocked(id string, s model.Status) (model.Status, error) {
 		return model.StatusPending, err
 	}
 	oldStatus, _ := model.ParseStatus(oldStatusStr)
+	if expected != nil && oldStatus != *expected {
+		return oldStatus, nil
+	}
 
 	// No-op fast path: a same-status set must not touch the row. Without this,
 	// model.SetStatus(Complete) on an already-complete task would re-stamp

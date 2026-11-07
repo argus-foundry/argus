@@ -19,12 +19,14 @@ import (
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/app/agentview"
 	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/clipboard"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/events"
 	"github.com/argus-foundry/argus/internal/gitutil"
 	"github.com/argus-foundry/argus/internal/links"
 	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/profiles"
 	"github.com/argus-foundry/argus/internal/sanitize"
 	"github.com/argus-foundry/argus/internal/skills"
 	"github.com/argus-foundry/argus/internal/uxlog"
@@ -1703,9 +1705,9 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 	clipCh := make(chan clipEvent, 16)
 	var unsubClip func()
 	if s.clipboard != nil {
-		unsubClip = s.clipboard.Subscribe(id, func(text string) {
+		unsubClip = s.clipboard.Subscribe(id, func(u clipboard.Update) {
 			select {
-			case clipCh <- clipEvent{text: text, present: text != ""}:
+			case clipCh <- clipEvent{text: u.Text, present: u.Present}:
 			default:
 			}
 		})
@@ -1825,6 +1827,9 @@ type projectJSON struct {
 	Branch  string                  `json:"branch,omitempty"`
 	Backend string                  `json:"backend,omitempty"`
 	Sandbox *projectSandboxOverride `json:"sandbox,omitempty"`
+	// Profile is a pointer so a request can tell omitted (preserve) from ""
+	// (clear); responses always carry it.
+	Profile *string `json:"profile,omitempty"`
 }
 
 // projectSandboxOverride is a JSON-friendly view of config.ProjectSandboxConfig.
@@ -1838,7 +1843,8 @@ type projectSandboxOverride struct {
 }
 
 func projectToJSON(name string, p config.Project) projectJSON {
-	out := projectJSON{Name: name, Path: p.Path, Branch: p.Branch, Backend: p.Backend}
+	profile := p.Profile
+	out := projectJSON{Name: name, Path: p.Path, Branch: p.Branch, Backend: p.Backend, Profile: &profile}
 	if p.Sandbox.Enabled != nil || len(p.Sandbox.DenyRead) > 0 || len(p.Sandbox.ExtraWrite) > 0 || len(p.Sandbox.AllowAppleEvents) > 0 {
 		out.Sandbox = &projectSandboxOverride{
 			Enabled:          p.Sandbox.Enabled,
@@ -1869,6 +1875,9 @@ func projectFromJSON(req projectJSON) config.Project {
 		Path:    req.Path,
 		Branch:  req.Branch,
 		Backend: req.Backend,
+	}
+	if req.Profile != nil {
+		out.Profile = *req.Profile
 	}
 	if req.Sandbox != nil {
 		out.Sandbox.Enabled = req.Sandbox.Enabled
@@ -1914,6 +1923,21 @@ func sortProjects(items []projectJSON, less func(a, b projectJSON) bool) {
 	}
 }
 
+// knownProfile reports whether name resolves to a diligence profile: the
+// canonical "default" or any profile in the library directory.
+func knownProfile(name string) bool {
+	if name == "" || name == "default" {
+		return true
+	}
+	loader := &profiles.Loader{LibraryDir: filepath.Join(db.DataDir(), "profiles")}
+	for _, n := range loader.Discover() {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	var req projectJSON
 	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
@@ -1929,11 +1953,27 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg, nil)
 		return
 	}
-	if err := s.db.SetProject(req.Name, projectFromJSON(req)); err != nil {
+	if req.Profile != nil && !knownProfile(*req.Profile) {
+		writeErr(w, http.StatusBadRequest, "unknown profile", nil)
+		return
+	}
+	if s.db.ProjectInConfigToml(req.Name) {
+		writeErr(w, http.StatusConflict, "project is defined in config.toml", nil)
+		return
+	}
+	stored, changed, err := s.db.SaveProject(req.Name, projectFromJSON(req), db.ProjectSaveOptions{})
+	if err != nil {
+		uxlog.Log("[api] create project %q failed: %v", req.Name, err)
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, req)
+	if changed {
+		events.Emit(model.EventTypeConfigChanged, "", map[string]string{"resource": "projects", "name": req.Name})
+		uxlog.Log("[api] project %q created or updated", req.Name)
+	} else {
+		uxlog.Log("[api] project %q save was a no-op; no event", req.Name)
+	}
+	writeJSON(w, http.StatusCreated, projectToJSON(req.Name, stored))
 }
 
 func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
@@ -1953,12 +1993,34 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg, nil)
 		return
 	}
-	if err := s.db.SetProject(name, projectFromJSON(req)); err != nil {
+	if req.Profile != nil && !knownProfile(*req.Profile) {
+		writeErr(w, http.StatusBadRequest, "unknown profile", nil)
+		return
+	}
+	if s.db.ProjectInConfigToml(name) {
+		writeErr(w, http.StatusConflict, "project is defined in config.toml", nil)
+		return
+	}
+	if s.beforeProjectSave != nil {
+		s.beforeProjectSave()
+	}
+	stored, changed, err := s.db.SaveProject(name, projectFromJSON(req), db.ProjectSaveOptions{PreserveProfile: req.Profile == nil, RequireExisting: true})
+	if errors.Is(err, db.ErrProjectNotFound) {
+		writeErr(w, http.StatusNotFound, "project not found", nil)
+		return
+	}
+	if err != nil {
+		uxlog.Log("[api] update project %q failed: %v", name, err)
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
-	req.Name = name
-	writeJSON(w, http.StatusOK, req)
+	if changed {
+		events.Emit(model.EventTypeConfigChanged, "", map[string]string{"resource": "projects", "name": name})
+		uxlog.Log("[api] project %q updated", name)
+	} else {
+		uxlog.Log("[api] project %q update was a no-op; no event", name)
+	}
+	writeJSON(w, http.StatusOK, projectToJSON(name, stored))
 }
 
 func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {

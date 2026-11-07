@@ -101,6 +101,8 @@ func TestHandleSessionExit_HeraWorker(t *testing.T) {
 func TestHandleSessionExit_Recapture(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("CODEX_SQLITE_HOME", "")
+	t.Setenv("CODEX_HOME", "")
 
 	d, _ := testDaemon(t)
 	testutil.NoError(t, d.db.SetBackend("codex", config.Backend{Command: "codex"}))
@@ -144,6 +146,8 @@ func TestHandleSessionExit_Recapture(t *testing.T) {
 func TestHandleSessionExit_StreamLostDoesNotRecapture(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("CODEX_SQLITE_HOME", "")
+	t.Setenv("CODEX_HOME", "")
 
 	d, _ := testDaemon(t)
 	testutil.NoError(t, d.db.SetBackend("codex", config.Backend{Command: "codex"}))

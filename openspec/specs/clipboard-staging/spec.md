@@ -3,9 +3,7 @@
 ## Purpose
 
 Clipboard staging provides an ephemeral, per-task buffer where an agent can stage text it wants the user to copy, decoupling the moment the agent produces the text from the moment the user performs the OS-clipboard write. This solves the iOS Safari constraint that a clipboard write must happen inside a synchronous user gesture: the agent stages text ahead of time, then the user takes a single tap (PWA) or keypress (TUI ctrl+y) that performs the real copy. Staged entries are intentionally short-lived — one slot per task, last-write-wins, no persistence across daemon restarts, and an automatic time-to-live expiry.
-
 ## Requirements
-
 ### Requirement: Per-task staging buffer
 
 The staging store SHALL hold at most one text payload per task, keyed by task ID, with last-write-wins semantics. Payloads for different tasks SHALL be isolated from one another. An empty task ID SHALL be rejected silently — staging a payload under an empty task ID SHALL store nothing and SHALL return no error, and reading or clearing an empty task ID SHALL report absence.
@@ -231,4 +229,13 @@ hidden.
 - **WHEN** a previously present payload becomes absent and the cache is
   refreshed
 - **THEN** the tracked payload is cleared and the hint is hidden
+
+### Requirement: Subscribers learn presence from the operation
+
+Clipboard store subscribers SHALL be told whether a value is present by the operation: `Set`, including with empty text, is present; `Clear` and expiry are not.
+
+#### Scenario: Empty set is present
+
+- **WHEN** `Set("")` is called for a task
+- **THEN** subscribers receive a present update with empty text
 

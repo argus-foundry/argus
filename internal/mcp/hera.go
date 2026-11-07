@@ -77,6 +77,9 @@ type HeraStore interface {
 	SetHeraTreeCursor(roleID, cursor int64) error
 	// Task meta mirror (best-effort soft-fail).
 	SetMeta(taskID, namespace, key, value string) error
+	// ClearHeraReadyToClose backs a worker's status="working" clearing its
+	// stale close-out mark.
+	ClearHeraReadyToClose(taskID string) error
 	// RollHeraWorkerToReview is the BUG-050 close-out roll shared with the
 	// session-exit hooks; the hera_status("done") trigger calls it. No-op
 	// unless the task is a live worker AND currently in_progress.
@@ -1576,6 +1579,15 @@ func (s *Server) toolHeraMarkRead(id interface{}, args json.RawMessage) *Respons
 // Callers that need soft-fail semantics on the whole apply (hera_send) should
 // log any returned error rather than blocking the message send.
 func (s *Server) applyRoleStatus(caller *callerRoleResult, sv db.HeraRoleStatusValue) error {
+	// A worker resuming work drops its close-out mark BEFORE the status commits,
+	// so no reader sees working alongside a stale ready_to_close. Hard-fail:
+	// leaving the mark would let a resting worker present unfinished work as ready.
+	if sv == db.HeraStatusWorking && caller.role.Kind == db.HeraKindWorker {
+		if cErr := s.heraStore.ClearHeraReadyToClose(caller.binding.ArgusTaskID); cErr != nil {
+			slog.Error("[hera] apply-status(working): clear ready_to_close failed (status not applied)", "task_id", caller.binding.ArgusTaskID, "role", caller.role.Name, "err", cErr)
+			return fmt.Errorf("clear readiness failed: %w", cErr)
+		}
+	}
 	if err := s.heraStore.UpsertHeraRoleStatus(caller.role.ID, sv); err != nil {
 		return fmt.Errorf("update status failed: %w", err)
 	}

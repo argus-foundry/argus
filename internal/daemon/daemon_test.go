@@ -809,6 +809,8 @@ var _ = time.Now
 // daemon.go:186.
 func TestDaemon_CaptureSessionIDPostExit_CaptureError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no ~/.codex/state_5.sqlite → CaptureCodexSessionID errors
+	t.Setenv("CODEX_SQLITE_HOME", "")
+	t.Setenv("CODEX_HOME", "")
 
 	d, _ := testDaemon(t)
 	tk := &model.Task{Name: "t", Project: "p", Worktree: t.TempDir(), Backend: "codex"}

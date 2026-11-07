@@ -1373,9 +1373,9 @@ func (d *DB) RollHeraWorkerFailed(taskID string) (bool, error) {
 // restores a worker-bound task from in_review OR complete back to in_progress
 // when its session is genuinely revived/resumed and working again. It is the
 // SINGLE shared helper behind every revive trigger – the TUI's reviveHeraWorker
-// (KickRerender on a suspended worker), the daemon's supervisor-mode startup
-// reattach (a session the supervisor confirms still alive), and hera_revive's
-// shared ReviveRole primitive – so none of them can drift.
+// (KickRerender on a suspended worker), hera_revive's
+// shared ReviveRole primitive. Automatic reattach uses ReconcileHeraWorkerToInProgress,
+// which shares these guards but excludes complete tasks.
 //
 // It acts ONLY when the task holds a live worker-kind binding AND is currently
 // in StatusInReview or StatusComplete AND is NOT awaiting close-out. A worker
@@ -1391,6 +1391,15 @@ func (d *DB) RollHeraWorkerFailed(taskID string) (bool, error) {
 // the live session (DB status only). Returns (true, nil) when it restored the
 // task, (false, nil) on any no-op. Idempotent.
 func (d *DB) ReviveHeraWorkerToInProgress(taskID string) (bool, error) {
+	return d.reviveHeraWorkerToInProgress(taskID, true)
+}
+
+// ReconcileHeraWorkerToInProgress leaves accepted tasks closed across daemon restarts.
+func (d *DB) ReconcileHeraWorkerToInProgress(taskID string) (bool, error) {
+	return d.reviveHeraWorkerToInProgress(taskID, false)
+}
+
+func (d *DB) reviveHeraWorkerToInProgress(taskID string, explicit bool) (bool, error) {
 	worker, err := d.TaskHoldsLiveHeraWorkerBinding(taskID)
 	if err != nil {
 		return false, err
@@ -1402,7 +1411,7 @@ func (d *DB) ReviveHeraWorkerToInProgress(taskID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if t == nil || (t.Status != model.StatusInReview && t.Status != model.StatusComplete) {
+	if t == nil || (t.Status != model.StatusInReview && (t.Status != model.StatusComplete || !explicit)) {
 		return false, nil // only un-roll a review-parked or accepted worker; never clobber pending/in_progress
 	}
 	awaiting, err := d.HeraWorkerAwaitingCloseout(taskID)
@@ -1412,10 +1421,7 @@ func (d *DB) ReviveHeraWorkerToInProgress(taskID string) (bool, error) {
 	if awaiting {
 		return false, nil // genuinely done/failed — leave for coordinator close-out (#707 / BUG-050)
 	}
-	if err := d.SetStatus(taskID, model.StatusInProgress); err != nil {
-		return false, err
-	}
-	return true, nil
+	return d.setStatus(taskID, model.StatusInProgress, &t.Status)
 }
 
 // HeraWorkerAwaitingCloseout reports whether a worker-bound task is in the
