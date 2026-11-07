@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/db"
 	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/testutil"
@@ -610,4 +613,85 @@ func TestHandleHera_RequiresAuth(t *testing.T) {
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, authedReq("GET", "/api/hera", ""))
 	testutil.Equal(t, w.Code, http.StatusOK)
+}
+
+func TestHandleHera_ModelResolutionAndContext(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	srv, d := testServer(t)
+	testutil.NoError(t, d.SetConfigValue("defaults.backend", "claude"))
+	testutil.NoError(t, d.SetBackend("claude", config.Backend{Command: "claude"}))
+	testutil.NoError(t, d.SetProject("p", config.Project{Path: t.TempDir(), Profile: "lean"}))
+	dir := filepath.Join(db.DataDir(), "profiles")
+	testutil.NoError(t, os.MkdirAll(dir, 0o755))
+	testutil.NoError(t, os.WriteFile(filepath.Join(dir, "lean.toml"),
+		[]byte("[archetype.code_slice]\nmodels = { claude = \"sonnet\" }\neffort = \"high\"\n"), 0o644))
+
+	bound := &model.Task{Name: "w", Project: "p", Model: "opus", Archetype: "code_slice", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(bound))
+	coordTask := &model.Task{Name: "c", Project: "p", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(coordTask))
+	orch, err := d.CreateHeraOrchestrator("o", "")
+	testutil.NoError(t, err)
+	_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "w1", Kind: db.HeraKindWorker, ArgusProject: "p", Archetype: "code_slice"}, bound.ID, "/tmp/wt")
+	testutil.NoError(t, err)
+	_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "coord", Kind: db.HeraKindCoordinator, ArgusProject: "p"}, coordTask.ID, "/tmp/wt2")
+	testutil.NoError(t, err)
+	_, err = d.CreateHeraRole(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "planned", Kind: db.HeraKindWorker, ArgusProject: "p", Archetype: "code_slice"})
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.SetMeta(bound.ID, db.HeraMetaNamespace, db.HeraMetaKeyContextSize, "120000"))
+	testutil.NoError(t, d.SetMeta(coordTask.ID, db.HeraMetaNamespace, db.HeraMetaKeyContextSize, "garbage"))
+
+	raw := getHeraRaw(t, srv)
+	testutil.True(t, !strings.Contains(raw, "observed_at\":\""))
+	var resp heraJSON
+	testutil.NoError(t, json.Unmarshal([]byte(raw), &resp))
+	roles := map[string]heraRoleJSON{}
+	for _, r := range resp.Orchestrators[0].Roles {
+		roles[r.Name] = r
+	}
+
+	w := roles["w1"]
+	testutil.Equal(t, w.Archetype, "code_slice")
+	testutil.Equal(t, w.ModelResolution.RequestedModel, "opus")
+	testutil.Equal(t, *w.ModelResolution.EffectiveModel, "opus")
+	testutil.Equal(t, w.ModelResolution.Source, "task_override")
+	testutil.Equal(t, w.ModelResolution.Basis, "current_config")
+	testutil.Equal(t, w.ModelResolution.Effort, "high")
+	testutil.Nil(t, w.ModelResolution.Warning)
+	testutil.NotNil(t, w.Context)
+	testutil.Equal(t, w.Context.Tokens, 120000)
+	testutil.Equal(t, w.Context.DenominatorKind, "worker_window")
+	testutil.Equal(t, *w.Context.DenominatorTokens, 1000000)
+	testutil.Equal(t, *w.Context.Percent, 12)
+	testutil.Nil(t, w.Context.ObservedAt)
+
+	p := roles["planned"]
+	testutil.Equal(t, p.ModelResolution.Basis, "planned_intent")
+	testutil.Equal(t, p.ModelResolution.RequestedModel, "")
+	testutil.Equal(t, *p.ModelResolution.EffectiveModel, "sonnet")
+	testutil.Equal(t, p.ModelResolution.Source, "profile")
+	testutil.Nil(t, p.Context)
+
+	c := roles["coord"]
+	testutil.Nil(t, c.Context)
+	testutil.True(t, strings.Contains(raw, `"context":null`))
+	testutil.Equal(t, c.ModelResolution.Source, "cli_default")
+	testutil.Nil(t, c.ModelResolution.EffectiveModel)
+}
+
+func TestHandleHera_CoordinatorContextUsesRecycleBudget(t *testing.T) {
+	srv, d := testServer(t)
+	task := &model.Task{Name: "c", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	orch, err := d.CreateHeraOrchestrator("o2", "")
+	testutil.NoError(t, err)
+	_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "coord", Kind: db.HeraKindCoordinator}, task.ID, "/tmp/wt")
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.SetMeta(task.ID, db.HeraMetaNamespace, db.HeraMetaKeyContextSize, "150000"))
+
+	c := getHera(t, srv).Orchestrators[0].Roles[0]
+	testutil.NotNil(t, c.Context)
+	testutil.Equal(t, c.Context.DenominatorKind, "coordinator_recycle_budget")
+	testutil.Equal(t, *c.Context.DenominatorTokens, d.Config().Hera.CoordinatorContextBudget)
+	testutil.Equal(t, *c.Context.Percent, 50)
 }

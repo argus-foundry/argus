@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -48,9 +49,8 @@ func composerTail(body string) []byte {
 
 func keepPlaceServer(t *testing.T, tail []byte) (*Server, *model.Task, *keepKickRunner, *atomic.Int64) {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
 	srv, d := testServer(t)
+	home := os.Getenv("HOME")
 	reads := &atomic.Int64{}
 	r := &keepKickRunner{
 		transcriptKickRunner: &transcriptKickRunner{Runner: agent.NewRunner(nil)},

@@ -248,15 +248,13 @@ func TestHandleSettings_GetIsAvailableToDevice(t *testing.T) {
 }
 
 func TestHandleGetLog(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	srv, d := testServer(t)
 	t.Setenv("ARGUS_DATA_DIR", "")
 	// HOME-rooted ~/.argus/ux.log path.
-	dataDir := filepath.Join(dir, ".argus")
+	dataDir := filepath.Join(os.Getenv("HOME"), ".argus")
 	testutil.NoError(t, os.MkdirAll(dataDir, 0o700))
 	testutil.NoError(t, os.WriteFile(filepath.Join(dataDir, "ux.log"), []byte("hello\nworld\n"), 0o600))
 
-	srv, d := testServer(t)
 	mux := srv.routes()
 
 	t.Run("ux returns content", func(t *testing.T) {
