@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {confirmDialog} from '../../shared/confirm-dialog.js';
 import { node, button, errorMessage } from '../../shared/dom.js';
 import { projectForm } from './settings-project-form.js';
@@ -11,6 +12,7 @@ export class ProjectSettings {
     this.abort = new AbortController(); this.load();
   }
   async load() {
+    const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:this.abort.signal});
     this.host.replaceChildren(node('p', 'settings-note', 'Loading projects…'));
     try {
       const signal = settingsSignal(this.abort.signal);
@@ -22,7 +24,7 @@ export class ProjectSettings {
       if (this.abort.signal.aborted) return;
       this.host.replaceChildren(errorMessage(`Projects unavailable. ${error.message}`), button('Retry Projects', () => this.load()));
       log('settings-projects', 'load failed', { status: error.status || 'error' });
-    }
+    } finally { restore(); }
   }
   render() {
     const project=this.target===null?null:this.projects.find(project=>project.name===this.target);
@@ -39,6 +41,7 @@ export class ProjectSettings {
   async save(values, original, fields) {
     let body;
     try { body = projectPayload(values, original); } catch (error) { this.status(error.message, true); return; }
+    const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:this.abort.signal});
     fields.disabled = true; this.busy(true); this.status('Saving project…');
     try {
       if (!original) {
@@ -55,7 +58,7 @@ export class ProjectSettings {
     } catch (error) {
       if (!this.abort.signal.aborted) this.status(`Save was not confirmed. Your edits are kept. ${error.message}`, true);
       log('settings-projects', 'save failed', { status: error.status || 'error' });
-    } finally { fields.disabled = false; this.busy(false); }
+    } finally { fields.disabled = false; this.busy(false); restore(); }
   }
   remove(project) {
     this.dialog=confirmDialog({id:'project-delete-dialog',title:`Remove ${project.name}?`,message:'Remove this project configuration from Argus. Existing tasks and worktrees remain.',confirmLabel:'Remove project',signal:this.abort.signal,onConfirm:async()=>{

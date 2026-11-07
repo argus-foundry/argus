@@ -44,7 +44,7 @@ const railActions = new RailActions(api, async () => { navigation.pinned = railA
 const heraKanban = new HeraKanban(api,()=>navigation.render(),()=>refreshTasks());
 const sessions = new ClaudeSessions(api, async (task, status) => { if(status !== 'unchanged')tools.invalidateIdentity(task.id); if (currentTask?.id === task.id && status !== 'unchanged') terminal?.reconnect(); await refreshTasks();if(taskSettings?.active&&taskSettings.task?.id===task.id)await taskSettings.load(); });
 const composer = new TaskComposer((text, task, options) => terminal.send(text, task, options), api);
-const stagedClipboard = new TaskClipboard(api, $('terminal-actions'), () => composer.focus());
+const stagedClipboard = new TaskClipboard(api, $('terminal-actions'), () => {if($('draft').disabled){const filter=$(navigation.filter==='archive'?'archive-filter':'active-filter');(filter.getClientRects().length?filter:$('toggle-nav')).focus({preventScroll:true});}else composer.focus();});
 function showAgent(){const visible=!taskSettings?.active&&!settings?.active&&!newTask?.active&&!$('agent-panel').hidden;terminal?.show(visible);split?.setVisible(visible);}
 const layout = new WorkspaceLayout(showAgent);
 const selectTab = tabs(document.querySelector('.workspace-tabs'), tab => {

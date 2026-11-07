@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {AgentTerminal} from '../../terminal/terminal.js';
 import {TaskTerminalCache} from '../../terminal/task-terminal-cache.js';
 
-function host(){return {firstChild:null,replaceChildren(child=null){this.firstChild=child;}};}
+function host(){return {contains(){return false;},firstChild:null,replaceChildren(child=null){this.firstChild=child;}};}
 function fixture(t){
  t.mock.method(console,'debug',()=>{});
  globalThis.document={createElement:host};

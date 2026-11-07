@@ -9,4 +9,3 @@ The workspace SHALL reuse the existing favicon link, showing /icon-192.png and t
 - **WHEN** five distinct unfocused tasks need input within five seconds
 - **THEN** the first three alerts appear immediately and the remaining two update one summary
 - **AND** repeated events for a pending task add no alert
-

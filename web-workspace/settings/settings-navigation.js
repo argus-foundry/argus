@@ -1,3 +1,4 @@
+import {captureFocus} from '../shared/focus-recovery.js';
 import { node, button } from '../shared/dom.js';
 import { settingsSections } from './settings-sections.js';
 import { settingsSignal } from './settings-fields.js';
@@ -25,11 +26,13 @@ export class SettingsNavigation {
     try {
       const result = await this.api.json('/api/projects/full', { signal: settingsSignal(abort.signal) });
       if (abort.signal.aborted) return;
-      this.projects = result.projects || []; this.note.replaceChildren(); this.render();
+      const restore=captureFocus(this.note,()=>this.search,{signal:abort.signal});
+      this.projects = result.projects || []; this.note.replaceChildren(); this.render(); restore();
       log('settings-navigation', 'repositories loaded', { count: this.projects.length });
     } catch (error) {
       if (abort.signal.aborted) return;
-      this.note.replaceChildren(node('span', '', 'Repository list unavailable. '), button('Retry repositories', () => this.load()));
+      const restore=captureFocus(this.note,()=>this.search,{signal:abort.signal});
+      this.note.replaceChildren(node('span', '', 'Repository list unavailable. '), button('Retry repositories', () => this.load())); restore();
       log('settings-navigation', 'repository read failed', { status: error.status || 'error' });
     }
   }
@@ -41,7 +44,7 @@ export class SettingsNavigation {
     const option = node('option', '', label); option.value = id; this.optionGroup.append(option);
   }
   render() {
-    const focusedSection = [...this.nav.querySelectorAll('[data-section]')].find(control => control === document.activeElement)?.dataset.section;
+    const restore=captureFocus(this.nav,()=>this.search);
     this.nav.replaceChildren(); this.selector.replaceChildren();
     for (const groupName of [...new Set(settingsSections.map(section => section.group)), 'Repositories']) {
       this.optionGroup = node('optgroup'); this.optionGroup.label = groupName; this.selector.append(this.optionGroup);
@@ -57,11 +60,7 @@ export class SettingsNavigation {
       this.nav.append(group);
     }
     this.select(this.selected); this.setBusy(this.busy); this.filter();
-    if (focusedSection) {
-      const target = [...this.nav.querySelectorAll('[data-section]')].find(control => control.dataset.section === focusedSection && !control.hidden);
-      target?.focus({ preventScroll: true });
-      log('settings-navigation', 'section focus restored', { status: target ? 'restored' : 'unavailable' });
-    }
+    restore();
   }
   searchChanged() { this.query = this.search.value.trim().toLowerCase(); this.clear.hidden = !this.search.value; this.shortcut.hidden = !!this.search.value; this.filter(); }
   filter() {

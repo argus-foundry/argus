@@ -1,3 +1,4 @@
+import {captureFocus} from '../shared/focus-recovery.js';
 import {log} from '../core/api.js';
 import {AgentTerminal} from './terminal.js';
 
@@ -66,7 +67,8 @@ export class TaskTerminalCache {
   }
   releaseSecondary(){
     if(!this.secondary)return;
-    const slot=this.secondary;this.secondary=null;this.pause(slot.id);slot.container.replaceChildren();
+    const slot=this.secondary,restore=captureFocus(slot.container,()=>document.getElementById('secondary-task-picker'));
+    this.secondary=null;this.pause(slot.id);slot.container.replaceChildren();restore();
   }
   terminalFor(target){
     if(this.secondary && this.records.get(this.secondary.id)?.host.contains?.(target))return this.secondaryTerminal;
@@ -79,7 +81,7 @@ export class TaskTerminalCache {
   retain(ids){
     if(this.secondary && !ids.has(this.secondary.id))this.releaseSecondary();
     for(const [id,record] of this.records)if(!ids.has(id)){
-      if(this.selected===id){this.selected=null;this.container.replaceChildren();this.onFit({needed:false,size:null,current:null});}
+      if(this.selected===id){const restore=captureFocus(this.container,()=>document.getElementById('active-filter'));this.selected=null;this.container.replaceChildren();this.onFit({needed:false,size:null,current:null});restore();}
       record.terminal.destroy();this.records.delete(id);log('terminal-cache','pruned',{count:this.records.size});
     }
   }

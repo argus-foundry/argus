@@ -1,3 +1,4 @@
+import {captureFocus} from '../shared/focus-recovery.js';
 import {taskCostRows} from './task-cost.js';
 import { renderTaskLinks } from './task-links.js';
 import {ToolRefresh} from './tools-live.js';
@@ -38,16 +39,18 @@ export class TaskTools {
   }
   updateRoster(roster) { this.roster = roster; if (this.tool === 'status') this.drawStatus(); }
   updateTask(task) { this.task = task; if (this.tool === 'status') this.drawStatus(); }
+  restoreLoadFocus() { const restore=this.restoreFocus;this.restoreFocus=null;restore?.(); }
   async load(refresh = true) {
+    this.abort?.abort();this.restoreLoadFocus();
     if(refresh)this.invalidateIdentity();
     this.statusView=null;
     this.live.stop();this.changes=null;this.artifactFingerprint=null;this.error=null;
-    this.abort?.abort();
     this.abort = new AbortController();
     this.generation++;
+    const restore=this.restoreFocus=captureFocus($('tool-panel'),()=>document.getElementById(`tool-${this.tool}`),{signal:this.abort.signal});
     const task = this.task, tool = this.tool;
-    if (!task) { empty($('tool-panel'), '', 'Select a task to explore its work.'); return; }
-    if (tool === 'status') { this.drawStatus(); return; }
+    if (!task) { empty($('tool-panel'), '', 'Select a task to explore its work.'); this.restoreLoadFocus(); return; }
+    if (tool === 'status') { await this.drawStatus(); if(this.restoreFocus===restore)this.restoreLoadFocus();else restore(); return; }
     empty($('tool-panel'), '', tool === 'artifacts' ? 'Loading artifacts…' : 'Loading changes…');
     this.wasVisible=this.visible();this.live.select(task.id,tool);
   }
@@ -57,22 +60,25 @@ export class TaskTools {
   }
   event(event) {this.live.event(event);}
   apply(result) {
+    const restore=captureFocus($('tool-panel'),()=>document.getElementById(`tool-${this.tool}`),{signal:this.abort.signal});
     this.error?.remove();this.error=null;
     if(this.tool==='changes') {
       if(!this.changes)this.drawChanges(result);
       else if(!this.changes.show(result))log('tools-live','skipped unchanged');
     } else {
       const fingerprint=JSON.stringify(result.artifacts||[]);
-      if(this.artifactFingerprint===fingerprint){log('tools-live','skipped unchanged');return;}
+      if(this.artifactFingerprint===fingerprint){restore();this.restoreLoadFocus();log('tools-live','skipped unchanged');return;}
       this.artifactFingerprint=fingerprint;this.drawArtifacts(result.artifacts||[]);
     }
+    restore();this.restoreLoadFocus();
     log('tools','loaded',{count:this.tool==='artifacts'?(result.artifacts||[]).length:changedFiles(result).length,status:this.tool});
   }
   failed(error) {
+    const restore=captureFocus($('tool-panel'),()=>document.getElementById(`tool-${this.tool}`),{signal:this.abort.signal});
     this.error?.remove();
     const box=node('div','tool-error');box.setAttribute('role','alert');box.append(node('p','tool-note',`${this.tool==='artifacts'?'Artifacts':'Changes'} unavailable. ${error.message}`),button('Retry',()=>this.live.trigger('retry')));
     if(!this.changes&&!this.artifactFingerprint)$('tool-panel').replaceChildren(box);else $('tool-panel').prepend(box);
-    this.error=box;
+    this.error=box;restore();this.restoreLoadFocus();
   }
   heading(text) {
     const header = node('div', 'tool-summary');
@@ -159,5 +165,5 @@ export class TaskTools {
       log('task-info','links loaded',{count:result.links?.length || 0});
     } catch(error) { if (generation === this.generation && links.isConnected) { links.setAttribute('role','alert'); links.textContent='Links unavailable. Refresh to retry.'; links.append(button('Refresh',()=>this.load())); log('task-info','links failed'); } }
   }
-  clear() { this.invalidateIdentity(); this.abort?.abort(); this.generation++; this.task = null; this.roster = null; this.selectedTools.clear(); this.tool = 'changes'; this.selectTab('tool-changes'); }
+  clear() { this.invalidateIdentity(); this.abort?.abort();this.restoreLoadFocus(); this.generation++; this.task = null; this.roster = null; this.selectedTools.clear(); this.tool = 'changes'; this.selectTab('tool-changes'); }
 }

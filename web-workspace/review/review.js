@@ -1,3 +1,4 @@
+import {captureFocus} from '../shared/focus-recovery.js';
 import { $, node, button, empty, notice } from '../shared/dom.js';
 import { log } from '../core/api.js';
 import { renderDiff } from './review-diff.js';
@@ -28,6 +29,7 @@ export class TaskReview {
   }
   async restoreArtifact(task, filename) {
     this.cancel();
+    const restore=captureFocus($('review-panel'),()=>document.getElementById('tab-review'),{signal:this.abort.signal});
     const generation = this.generation;
     empty($('review-panel'), '', 'Finding registered artifact…');
     try {
@@ -35,17 +37,18 @@ export class TaskReview {
       if (generation !== this.generation || this.task?.id !== task.id) return;
       const artifact = result.artifacts?.find(item => item.filename === filename);
       log('review', 'artifact location resolved', { count: artifact ? 1 : 0 });
-      if (artifact) this.openArtifact(task, artifact, false);
+      if (artifact) { restore(); await this.openArtifact(task, artifact, false); }
       else empty($('review-panel'), 'Artifact unavailable', 'This artifact is no longer registered for the task. Choose another artifact from task tools.', 'alert');
     } catch (error) {
       if (generation !== this.generation || error.name === 'AbortError') return;
       log('review', 'artifact location failed', { status: error.status || 'error' });
       const box = empty($('review-panel'), 'Artifact unavailable', error.message, 'alert');
       box.append(button('Retry', () => this.restoreArtifact(task, filename)));
-    }
+    } finally { restore(); }
   }
   async openDiff(task, path, activate = true) {
     this.cancel();
+    const restore=captureFocus($('review-panel'),()=>document.getElementById('tab-review'),{signal:this.abort.signal});
     const generation = this.generation;
     const previous = this.selections.get(task.id);
     const selection = { type: 'diff', path, mode: previous?.mode || 'unified' };
@@ -63,11 +66,12 @@ export class TaskReview {
       const box = empty($('review-panel'), 'Diff unavailable', error.message, 'alert');
       box.append(button('Retry', () => this.openDiff(task, path)));
       log('review', 'diff failed', { status: error.status || 'error' });
-    }
+    } finally { restore(); }
   }
   drawDiff(selection, diff) { renderDiff($('review-panel'), { ...selection, diff }, mode => { selection.mode = mode; this.drawDiff(selection, diff); this.onSelection(); }); }
   async openArtifact(task, artifact, activate = true) {
     this.cancel();
+    const restore=captureFocus($('review-panel'),()=>document.getElementById('tab-review'),{signal:this.abort.signal});
     const generation = this.generation;
     const isCurrent = () => generation === this.generation && this.task?.id === task.id;
     this.selections.set(task.id, { type: 'artifact', artifact });
@@ -78,7 +82,7 @@ export class TaskReview {
     toolbar.append(download);
     const content = node('div', 'artifact-preview');
     $('review-panel').replaceChildren(toolbar, node('p', 'preview-note', `${artifact.type} · ${sizeLabel(artifact.size)}${artifact.type === 'html' ? ' · Safe preview, scripts disabled' : artifact.type === 'markdown' ? ' · Markdown source' : ''}`), content);
-    if (artifact.size > PREVIEW_LIMIT) { empty(content, 'Ready to download', 'This artifact is too large to preview here. Download it to view the full file.'); return; }
+    if (artifact.size > PREVIEW_LIMIT) { empty(content, 'Ready to download', 'This artifact is too large to preview here. Download it to view the full file.'); restore(); return; }
     empty(content, '', 'Loading artifact…');
     try {
       const response = await this.api.request(artifactPath(task, artifact), { signal: this.abort.signal });
@@ -92,10 +96,11 @@ export class TaskReview {
       const box = empty(content, 'Preview unavailable', error.message, 'alert');
       box.append(button('Retry preview', () => this.openArtifact(task, artifact)));
       log('review', 'artifact failed', { status: error.status || 'error' });
-    }
+    } finally { restore(); }
   }
   makeURL(blob) { const url = URL.createObjectURL(blob); this.urls.add(url); return url; }
   async download(task, artifact, control, isCurrent) {
+    const restore=captureFocus(control,()=>document.getElementById('tab-review'),{signal:this.abort.signal});
     control.disabled = true;
     control.textContent = 'Downloading…';
     try {
@@ -114,7 +119,7 @@ export class TaskReview {
       log('review', 'artifact download', { count: blob.size });
     } catch (error) {
       if (isCurrent() && error.name !== 'AbortError') { notice(`Download failed. ${error.message}`); log('review', 'download failed', { status: error.status || 'error' }); }
-    } finally { if (isCurrent()) { control.disabled = false; control.textContent = 'Download'; } }
+    } finally { if (isCurrent()) { control.disabled = false; control.textContent = 'Download'; } restore(); }
   }
   clear() { this.cancel(); this.task = null; this.selections.clear(); empty($('review-panel'), 'See the work take shape.', 'Choose a changed file or registered artifact from task tools.'); }
 }

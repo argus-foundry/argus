@@ -1,3 +1,4 @@
+import {captureFocus} from '../shared/focus-recovery.js';
 import { log } from '../core/api.js';
 import { isCtrlZ, isInteractive, requestSignal, terminalSize, terminalBusy } from './terminal-policy.js';
 import { TerminalInput } from './terminal-input.js';
@@ -35,11 +36,13 @@ export class AgentTerminal {
         return;
       }
     }
+    const abort=new AbortController();
+    const restore=this.task?.id===task?.id&&this.term?captureFocus(this.container,()=>document.getElementById('draft'),{signal:abort.signal}):()=>{};
     this.detach();
     this.task = task ? { ...task } : null;
     const generation = this.generation;
     if (!task) { this.state('No task selected', 'empty', false); return; }
-    this.abort = new AbortController();
+    this.abort = abort;
     const signal = this.abort.signal;
     const current = () => !signal.aborted && this.generation === generation;
     this.state('Loading terminal…', 'connecting', false);
@@ -116,7 +119,7 @@ export class AgentTerminal {
       this.stream?.destroy();
       this.state(error.message || 'Terminal failed to load', 'error', false);
       log('terminal', 'attach failed');
-    }
+    } finally { restore(); }
   }
 
   mergeTask(task) {

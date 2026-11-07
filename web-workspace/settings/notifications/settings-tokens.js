@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {confirmDialog} from '../../shared/confirm-dialog.js';
 import { node, button, errorMessage } from '../../shared/dom.js';
 import { field, settingsSignal } from '../settings-fields.js';
@@ -13,29 +14,32 @@ export class DeviceTokens {
   }
   async load() {
     this.read?.abort(); const read = this.read = new AbortController();
+    let restore=()=>{};
     try {
       const { tokens = [] } = await this.api.json('/api/tokens', { signal: settingsSignal(AbortSignal.any([read.signal, this.abort.signal])) });
       if (read.signal.aborted || this.abort.signal.aborted) return;
+      restore=captureFocus(this.list,()=>this.label,{signal:read.signal});
       this.list.replaceChildren(); if (!tokens.length) this.list.append(node('p', 'settings-note', 'No device tokens.'));
       for (const token of tokens) {
         const row = node('div', 'settings-record'); row.append(node('strong', '', token.label || 'Device'), node('p', 'settings-note', `Ending ${token.last4 || 'unknown'} · ${token.revoked ? 'Revoked' : 'Active'}`));
         if (token.last_used) row.append(node('p', 'settings-note', `Last used ${new Date(token.last_used * 1000).toLocaleString()}`));
-        if (!token.revoked) { const revoke = button('Revoke', () => this.revoke(token)); revoke.setAttribute('aria-label', `Revoke ${token.label || 'Device'}`); row.append(revoke); }
+        if (!token.revoked) { const revoke = button('Revoke', () => this.revoke(token)); revoke.dataset.focusKey=JSON.stringify([token.id,'revoke']); revoke.setAttribute('aria-label', `Revoke ${token.label || 'Device'}`); row.append(revoke); }
         this.list.append(row);
       }
       log('settings-tokens', 'loaded', { count: tokens.length });
     } catch (error) {
-      if (!read.signal.aborted && !this.abort.signal.aborted) this.list.replaceChildren(errorMessage(error.status === 403 ? 'A master token is required to list API tokens.' : `Tokens unavailable. ${error.message}`));
+      if (!read.signal.aborted && !this.abort.signal.aborted) { restore=captureFocus(this.list,()=>this.label,{signal:read.signal}); this.list.replaceChildren(errorMessage(error.status === 403 ? 'A master token is required to list API tokens.' : `Tokens unavailable. ${error.message}`)); }
       log('settings-tokens', 'load failed', { status: error.status });
-    }
+    } finally { restore(); }
   }
   async action(operation, success) {
+    const restore=captureFocus(this.list,()=>this.label,{signal:this.abort.signal});
     this.busy(true);
-    try { const result = await operation(); if (!this.abort.signal.aborted) { success(result); await this.load(); } }
+    try { const result = await operation(); if (!this.abort.signal.aborted) { const restoreSecret=captureFocus(this.secret,()=>this.label,{signal:this.abort.signal});success(result);restoreSecret();await this.load(); } }
     catch (error) {
       if (!this.abort.signal.aborted) this.status(error.status === 403 ? 'A master token is required to manage API tokens.' : `Token operation was not confirmed. Refresh before retrying. ${error.message}`, true);
       log('settings-tokens', 'operation failed', { status: error.status });
-    } finally { this.busy(false); }
+    } finally { this.busy(false); restore(); }
   }
   mint() {
     const body = JSON.stringify({ label: this.label.value.trim() || 'device' });

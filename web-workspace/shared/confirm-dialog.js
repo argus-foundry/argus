@@ -1,8 +1,10 @@
+import {captureDialogFocus,captureFocus} from './focus-recovery.js';
 import {node,button} from './dom.js';
 import {confirmTaskList} from './confirm-task-list.js';
 import {runTaskBatch} from '../tasks/task-batch-policy.js';
 import {log} from '../core/api.js';
 export function confirmDialog({title='Confirm action',message='',confirmLabel='Confirm',id='confirm-dialog',signal,onConfirm,content,danger=false,restoreFocus,tasks,taskAction,roster={},links=new Map(),enrich,request,onTaskSuccess,onComplete,onBusy,keepFailuresOpen=false,validate,canDispatch}={}) {
+ restoreFocus ||= captureDialogFocus(signal);
  danger=danger||taskAction==='delete';
  const taskList=tasks?confirmTaskList(tasks,{action:taskAction,roster,links,enrich,signal}):null;
  if(taskList)content=taskList.body;
@@ -10,8 +12,8 @@ export function confirmDialog({title='Confirm action',message='',confirmLabel='C
  const heading=node('h2','',title);heading.id=id+'-title';const error=node('p','error-text');error.setAttribute('role','alert');error.hidden=true;error.tabIndex=-1;
  const explanation=node('p','',message);explanation.id=id+'-message';explanation.style.whiteSpace='pre-line';
  const actions=node('div','settings-actions'),previous=document.activeElement;
- let resolve,settled=false,control;const progress=node('p','task-action-progress');progress.setAttribute('role','status');progress.setAttribute('aria-live','polite');progress.hidden=true;
- const stop=button('Stop',()=>{if(control)control.stopped=true;stop.disabled=true;log('task-action','stop requested');});stop.hidden=true;
+ let resolve,settled=false,control;const progress=node('p','task-action-progress');progress.setAttribute('role','status');progress.setAttribute('aria-live','polite');progress.hidden=true;progress.tabIndex=-1;
+ const stop=button('Stop',()=>{if(control)control.stopped=true;const restore=captureFocus(dialog,()=>progress,{signal,neighbors:false});stop.disabled=true;restore();log('task-action','stop requested');});stop.hidden=true;
  const result=new Promise(done=>resolve=done);
  const finish=value=>{if(settled)return;settled=true;resolve(value);signal?.removeEventListener('abort',cancel);dialog.remove();if(restoreFocus)restoreFocus();else if(previous?.isConnected)previous.focus({preventScroll:true});};
  const cancel=()=>{dialog.close();finish(false);};

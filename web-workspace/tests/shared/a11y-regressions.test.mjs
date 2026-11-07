@@ -9,7 +9,10 @@ import {ScheduleSettings} from '../../settings/schedules/settings-schedules.js';
 
 function fixture(t) {
   const dom=focusDOM(t),host=dom.element('section');dom.body.append(host);
-  const proto=Object.getPrototypeOf(host);
+  const proto=Object.getPrototypeOf(host),listeners=new Set();
+  proto.getClientRects=function(){return this.isConnected?[{}]:[];};
+  document.addEventListener=(type,listener)=>{if(type==='focusin')listeners.add(listener);};document.removeEventListener=(type,listener)=>listeners.delete(listener);
+  const focus=proto.focus;proto.focus=function(){focus.call(this);for(const listener of [...listeners])listener({target:this});};
   proto.addEventListener=function(type,handler){(this.listeners??={})[type]=handler;};
   const click=control=>control.listeners.click();
   const named=(root,name)=>root.querySelectorAll('button').find(control=>control.textContent===name);

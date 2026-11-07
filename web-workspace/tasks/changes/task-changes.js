@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {node,button,errorMessage} from '../../shared/dom.js';
 import {changedFiles,gitPath} from './git.js';
 import {drawTaskFiles,fileRow,paintCounts} from './task-files.js';
@@ -95,6 +96,7 @@ export class TaskChanges {
   async expandDirectory(file,row,container) {
     const previous=container.querySelector(':scope > .directory-files');
     if(previous){previous.remove();row.setAttribute('aria-expanded','false');return;}
+    const restore=captureFocus(container,()=>document.getElementById('tool-changes'),{signal:this.signal});
     const content=node('div','directory-files');container.append(content);row.setAttribute('aria-expanded','true');row.disabled=true;
     content.append(node('p','tool-note','Loading directory…'));
     try {
@@ -109,6 +111,6 @@ export class TaskChanges {
     } catch(error) {
       if(this.signal.aborted||!content.isConnected)return;
       content.replaceChildren(errorMessage(`Directory unavailable. ${error.message}`,'tool-note'));log('tools','directory failed',{status:error.status||0});
-    } finally {if(!this.signal.aborted)row.disabled=false;}
+    } finally {if(!this.signal.aborted)row.disabled=false;restore();}
   }
 }

@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {creationBackend, creationOverrides} from './new-task-choices.js';
 import {accountList,creationAccounts,creationAccount} from './new-task-account.js';
 import { $, node, button } from '../../shared/dom.js';
@@ -59,6 +60,7 @@ export class NewTaskView {
   get active() { return !this.panel.hidden; }
   open(project, restoreFocus) {
     if (this.active) this.close(false);
+    this.lifetime=new AbortController();
     this.project = project; this.restoreFocus = restoreFocus; this.composing = false;
     const draft = this.drafts.get(project) || {};
     this.projectField.value = project; this.name.value = draft.name || ''; this.prompt.value = draft.prompt || ''; this.backend.value = draft.backend || '';
@@ -78,6 +80,7 @@ export class NewTaskView {
     try {
       const results=await Promise.allSettled([this.api.json('/api/backends',{signal}),this.api.json('/api/accounts?project='+encodeURIComponent(project),{signal}),this.api.json('/api/settings',{signal}),this.api.json('/api/projects/full',{signal})]);
       if(abort.signal.aborted || !this.active || this.project!==project)return;
+      const restore=captureFocus(this.form,()=>this.prompt,{signal:abort.signal});
       const result=results[0].status==='fulfilled'?results[0].value:{};
       this.accounts=results[1].status==='fulfilled'?accountList(results[1].value):[];
       this.defaultBackend=results[2].status==='fulfilled'?results[2].value.defaults?.backend||'':'';
@@ -90,7 +93,7 @@ export class NewTaskView {
       }
       this.renderAccounts(); this.renderModels();
       if (creationBackend(this.backends, this.backend.value)) delete this.restoredModel;
-      this.render();
+      this.render();restore();
       for(const result of results)if(result.status==='rejected')log('new-task','optional choice read failed');
       log('new-task','choices loaded',{count:this.backends.length});
     }catch(error){if(!abort.signal.aborted)log('new-task','choices failed');}
@@ -132,7 +135,7 @@ export class NewTaskView {
       this.error.textContent = 'Task creation may have completed. Refresh tasks before retrying.';
       this.capture();
     } else if (!this.confirmed) this.capture();
-    this.generation++; this.abort?.abort(); this.backendAbort?.abort(); clearTimeout(this.timer); this.pending = false; this.confirmed = false;
+    this.generation++; this.abort?.abort();this.lifetime?.abort(); this.backendAbort?.abort(); clearTimeout(this.timer); this.pending = false; this.confirmed = false;
     this.panel.hidden = true; $('main').classList.remove('creating-task');
     for (const [child, inert] of this.background) child.inert = inert;
     this.onVisibility(false);
@@ -147,6 +150,7 @@ export class NewTaskView {
       this.error.textContent = error.message; this.error.hidden = false;
       log('new-task', 'model rejected'); return;
     }
+    const restore=captureFocus(this.form,()=>this.cancel,{signal:this.lifetime?.signal});
     this.capture(); this.pending = true; this.confirmed = false;
     const generation = ++this.generation, project = this.project;
     const account=creationAccount(this.usableAccounts||[],this.account.value);
@@ -173,6 +177,7 @@ export class NewTaskView {
       log('new-task', 'creation failed', { status: error.status || 0 });
     } finally {
       if (generation === this.generation) { clearTimeout(this.timer); this.pending = false; this.render(); }
+      restore();
     }
   }
   clear() {

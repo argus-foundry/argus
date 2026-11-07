@@ -26,7 +26,7 @@ test('archive marks pending immediately and still requests reconciliation',()=>{
 for(const retry of ['scheduled','manual'])test(`${retry} SSE recovery lets a successful snapshot clear a later warning`,async t=>{
  t.mock.timers.enable({apis:['setTimeout']});
  const original=globalThis.document;
- globalThis.document={addEventListener(){},createElement:()=>({setAttribute(){},addEventListener(){},append(){}}),querySelector:()=>({after(){}}),body:{classList:{toggle(){}}}};
+ globalThis.document={addEventListener(){},createElement:()=>({contains(){return false;},setAttribute(){},addEventListener(){},append(){}}),querySelector:()=>({after(){}}),body:{classList:{toggle(){}}}};
  let snapshots=0;
  const events=new WorkspaceEvents({request:async()=>new Response(new ReadableStream(),{headers:{'content-type':'text/event-stream'}})},{refresh:async()=>{snapshots++;events.healthy();}});
  t.after(()=>{events.stop();globalThis.document=original;});events.running=true;

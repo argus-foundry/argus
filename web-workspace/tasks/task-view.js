@@ -1,14 +1,17 @@
+import {captureFocus} from '../shared/focus-recovery.js';
 import { $ } from '../shared/dom.js';
 
 export class WorkspaceTaskView {
   constructor(composer, archive) { Object.assign(this, { composer, archive }); }
   state(state, task) {
+    const fallback=()=>$('draft')?.disabled?$('tab-agent'):$('draft');
+    const restoreFit=captureFocus($('fit-session'),fallback),restoreRetry=captureFocus($('reconnect-terminal'),fallback);
     $('terminal-state').textContent = state.message;
     $('terminal-state').dataset.kind = state.kind || 'normal';
     $('terminal-feedback').classList.toggle('has-feedback', ['error', 'warning'].includes(state.kind));
     $('fit-session').disabled = !state.interactive;
     $('reconnect-terminal').hidden = !task || !['error', 'warning'].includes(state.kind);
-    this.composer.setInteractive(state.interactive);
+    this.composer.setInteractive(state.interactive);restoreFit();restoreRetry();
   }
   fit({needed,size,current}) {
     const control = $('fit-session');

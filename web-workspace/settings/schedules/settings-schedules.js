@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {confirmDialog} from '../../shared/confirm-dialog.js';
 import {node,button,errorMessage} from '../../shared/dom.js';
 import {log} from '../../core/api.js';
@@ -21,24 +22,28 @@ export class ScheduleSettings {
     this.newButton.disabled=value || this.loading || !this.projects.length;
   }
   async load() {
-    this.read?.abort();this.read=new AbortController();const version=++this.version;this.loading=true;this.newButton.disabled=true;
-    const signal=settingsSignal(AbortSignal.any([this.abort.signal,this.read.signal]));
-    this.list.replaceChildren(node('p','settings-note','Loading schedules…'));
-    const results=await Promise.allSettled(['/api/schedules','/api/projects/full','/api/backends'].map(path=>this.api.json(path,{signal})));
-    if(this.abort.signal.aborted || version!==this.version){log('settings-schedules','obsolete read ignored',{stale:true});return;}
-    if(results[0].status==='rejected') {
-      this.list.replaceChildren(errorMessage(`Schedules unavailable. ${results[0].reason.message}`),button('Retry schedules',()=>this.load()));
-      log('settings-schedules','load failed',{status:results[0].reason.status});return;
-    }
-    this.rows=results[0].value.schedules || [];
-    if(results[1].status==='fulfilled')this.projects=results[1].value.projects || [];
-    if(results[2].status==='fulfilled')this.backends=results[2].value.backends || [];
-    if(results.slice(1).some(result=>result.status==='rejected')) {
-      this.status('Some project or backend choices could not load. Refresh schedules before creating a new one.',true);
-      log('settings-schedules','choices unavailable');
-    }
-    this.loading=false;this.newButton.disabled=this.pending || !this.projects.length;
-    this.renderList();log('settings-schedules','loaded',{count:this.rows.length});
+    this.read?.abort();this.read=new AbortController();const version=++this.version;
+    const restore=captureFocus(this.list,()=>this.newButton,{signal:this.read.signal});
+    try {
+      this.loading=true;this.newButton.disabled=true;
+      const signal=settingsSignal(AbortSignal.any([this.abort.signal,this.read.signal]));
+      this.list.replaceChildren(node('p','settings-note','Loading schedules…'));
+      const results=await Promise.allSettled(['/api/schedules','/api/projects/full','/api/backends'].map(path=>this.api.json(path,{signal})));
+      if(this.abort.signal.aborted || version!==this.version){log('settings-schedules','obsolete read ignored',{stale:true});return;}
+      if(results[0].status==='rejected') {
+        this.list.replaceChildren(errorMessage(`Schedules unavailable. ${results[0].reason.message}`),button('Retry schedules',()=>this.load()));
+        log('settings-schedules','load failed',{status:results[0].reason.status});return;
+      }
+      this.rows=results[0].value.schedules || [];
+      if(results[1].status==='fulfilled')this.projects=results[1].value.projects || [];
+      if(results[2].status==='fulfilled')this.backends=results[2].value.backends || [];
+      if(results.slice(1).some(result=>result.status==='rejected')) {
+        this.status('Some project or backend choices could not load. Refresh schedules before creating a new one.',true);
+        log('settings-schedules','choices unavailable');
+      }
+      this.loading=false;this.newButton.disabled=this.pending || !this.projects.length;
+      this.renderList();log('settings-schedules','loaded',{count:this.rows.length});
+    } finally { restore(); }
   }
   renderList() {
     this.list.replaceChildren();this.editControls=new Map();
@@ -47,7 +52,7 @@ export class ScheduleSettings {
       const row=node('article','settings-schedule'),heading=node('div','settings-section-heading');
       heading.append(node('h3','',schedule.name));
       for(const [label,operation] of [['Edit',()=>this.edit(schedule)],['Run',()=>this.run(schedule)],['Delete',()=>this.remove(schedule)]]) {
-        const control=button(label==='Run'?'Run now':label,operation);control.setAttribute('aria-label',label==='Run'?`Run ${schedule.name} now`:`${label} ${schedule.name}`);control.disabled=this.pending;heading.append(control);
+        const control=button(label==='Run'?'Run now':label,operation);control.dataset.focusKey=JSON.stringify([schedule.id,label]);control.setAttribute('aria-label',label==='Run'?`Run ${schedule.name} now`:`${label} ${schedule.name}`);control.disabled=this.pending;heading.append(control);
         if(label==='Edit')this.editControls.set(schedule.id,control);
       }
       const cadence=schedule.run_once_at?`Once ${when(schedule.run_once_at)}`:schedule.schedule;
@@ -75,15 +80,12 @@ export class ScheduleSettings {
   async save(values,original) {
     let body;
     try{body=schedulePayload(values,original || {});}catch(error){this.status(error.message,true);return;}
-    const ownedFocus=this.editor.contains(document.activeElement);
-    const saved=await this.mutate(async()=>{
+    const restore=captureFocus(this.editor,()=>this.editControls.get(original?.id)||this.newButton,{signal:this.abort.signal});
+    await this.mutate(async()=>{
       await this.api.json(original?`/api/schedules/${encodeURIComponent(original.id)}`:'/api/schedules',{method:original?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:settingsSignal(this.abort.signal)});
       return 'Saved schedule.';
     },'Save');
-    if(saved && ownedFocus && !this.abort.signal.aborted && (document.activeElement===document.body || this.editor.contains(document.activeElement))) {
-      (this.editControls.get(original?.id) || this.newButton).focus({preventScroll:true});
-      log('settings-schedules','saved editor focus restored');
-    }
+    restore();
   }
   async remove(schedule) {
     if(this.pending || !await confirmDialog({signal:this.abort.signal,message:`Delete schedule "${schedule.name}"? Tasks already created by this schedule are not affected.`}))return;
@@ -99,6 +101,7 @@ export class ScheduleSettings {
   }
   async mutate(operation,label) {
     if(this.pending || this.abort.signal.aborted)return;
+    const restore=captureFocus(this.list,()=>this.newButton,{signal:this.abort.signal});
     this.lock(true);this.status(`${label} in progress…`);
     try {
       const message=await operation();if(this.abort.signal.aborted)return;
@@ -106,7 +109,7 @@ export class ScheduleSettings {
     }catch(error){
       if(!this.abort.signal.aborted)this.status(`${label} was not confirmed. Your edits are kept. Check ${label==='Run'?'tasks':'schedules'} before retrying. ${error.message}`,true);
       log('settings-schedules','mutation failed',{status:error.status});
-    }finally{if(!this.abort.signal.aborted)this.lock(false);}
+    }finally{if(!this.abort.signal.aborted)this.lock(false);restore();}
   }
   destroy(){this.abort.abort();this.read?.abort();this.version++;this.busy(false);}
 }

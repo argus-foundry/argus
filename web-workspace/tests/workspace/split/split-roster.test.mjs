@@ -8,6 +8,8 @@ function fixture(t) {
   class Element {
     constructor(tag){this.tagName=tag;this.children=[];this.dataset={};this.attributes={};this.listeners={};this.value='';this.open=false;this.replacements=0;this.classList={toggle(){},add(){}};created++;}
     append(...items){for(const item of items){item.remove();item.parent=this;this.children.push(item);}}
+    get isConnected(){return !!this.parent;}
+    getClientRects(){return this.isConnected?[{}]:[];}
     get parentNode(){return this.parent;}
     before(){}
     insertBefore(item,before){item.remove();item.parent=this;this.children.splice(this.children.indexOf(before),0,item);}
@@ -27,7 +29,7 @@ function fixture(t) {
   t.mock.method(globalThis,'cancelAnimationFrame',id=>frames.delete(id));
   t.mock.method(console,'debug',()=>{});
   const saved=globalThis.document;
-  globalThis.document={activeElement:null,getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),createElementNS:(_,tag)=>new Element(tag)};
+  globalThis.document={addEventListener(){},removeEventListener(){},activeElement:null,getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),createElementNS:(_,tag)=>new Element(tag)};
   t.after(()=>{globalThis.document=saved;});
   const split=new SplitWorkspace(()=>({releaseSecondary(){},attachSecondary(){}}));split.enabled=true;
   const tasks=[{id:'c',name:'Coordinator'},{id:'w',name:'Worker',live:true}];

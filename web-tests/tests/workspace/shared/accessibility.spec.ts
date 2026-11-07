@@ -189,8 +189,8 @@ test('async directory error is announced without moving focus', async () => {
   });
   const row = page.locator('.file-row[data-file-path="directory/"]');
   await row.focus();
-  await page.keyboard.press('Enter');
   const before = await page.evaluateHandle(() => document.activeElement);
+  await page.keyboard.press('Enter');
   release();
   await announced(page.getByText('Directory unavailable.', {
     exact: false

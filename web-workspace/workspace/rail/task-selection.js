@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {$,node,button,notice} from '../../shared/dom.js';
 import {log} from '../../core/api.js';
 import {selectionIndex,subtreeScope} from './task-selection-policy.js';
@@ -52,11 +53,13 @@ export class TaskSelection {
  watchScope(callback){(this.scopeListeners??=new Set()).add(callback);return ()=>this.scopeListeners.delete(callback);}
  prune(){const available=this.membership().availableIds,removed=[];for(const id of this.ids)if(!available.has(id)){this.ids.delete(id);removed.push(id);}if(removed.length)this.version=(this.version||0)+1;this.header();if(removed.length)for(const callback of this.scopeListeners||[])callback(removed);}
  header(){
+  const restore=captureFocus(this.controls.parentElement,()=>$(this.navigation.filter==='archive'?'archive-filter':'active-filter'),{neighbors:false});
   this.start.hidden=this.active;this.all.hidden=!this.active;this.action.hidden=!this.active;this.cancel.hidden=!this.active;
   const deleting=this.navigation.filter==='archive';this.action.textContent=deleting?'Delete':'Archive';this.action.classList.toggle('danger',deleting);this.action.setAttribute('aria-label',`${deleting?'Delete':'Archive'} selected tasks`);
   this.action.disabled=!!this.busy||!this.ids.size;this.cancel.disabled=!!this.busy;this.all.disabled=!!this.busy||!this.scope().length;this.start.disabled=!this.scope().length;
   this.state(this.all,this.membership());
   if(this.active){const hidden=this.ids.size-this.membership().selected;$('task-count').textContent=`${this.ids.size} selected${hidden?`, ${hidden} not shown`:''}`;}
+  restore();
  }
  finish(result){
   this.busy=false;this.ids=new Set([...result.failed.map(item=>item.id),...result.notStarted]);this.version=(this.version||0)+1;

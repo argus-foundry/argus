@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import { node, button } from '../../shared/dom.js';
 import { log } from '../../core/api.js';
 
@@ -24,6 +25,7 @@ export class ClaudeSessions {
         const selected=session.id===result.current_session_id;
         const row=button('',async()=>{
           if(this.busy||!current())return;
+          const restore=captureFocus(dialog,()=>close,{signal:this.abort.signal});
           this.busy=true;close.disabled=true;for(const control of content.querySelectorAll('button'))control.disabled=true;
           status.textContent='Switching session…';
           try{
@@ -31,7 +33,7 @@ export class ClaudeSessions {
             if(!current())return;
             log('claude-sessions','switched');this.close();await this.changed(task,response.status);
           }catch(error){if(!current())return;status.textContent=`Switch was not confirmed. Check the task before retrying. ${error.message}`;log('claude-sessions','switch failed');}
-          finally{if(current()){this.busy=false;close.disabled=false;for(const control of content.querySelectorAll('button'))control.disabled=control.dataset.current==='true';}}
+          finally{if(current()){this.busy=false;close.disabled=false;for(const control of content.querySelectorAll('button'))control.disabled=control.dataset.current==='true';}restore();}
         },'file-row');
         row.dataset.current=String(selected);row.disabled=selected;
         const date=new Date(session.mod_time);

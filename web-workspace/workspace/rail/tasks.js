@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {TaskSelection} from './task-selection.js';
 import {coordinators} from './hera-kanban.js';
 import {KanbanDisclosure} from './kanban-group.js';
@@ -101,6 +102,7 @@ export class TaskNavigation {
     const coordinatorMap = this.coordinators();
     this.renderedKey = this.renderKey(coordinatorMap);
     log('rail', 'rendered', { count: this.tasks.length });
+    const restore=captureFocus($('task-groups'),()=>$(this.filter==='archive'?'archive-filter':'active-filter'),{selector:'.task-row,.task-archive,.task-more,.task-control'});
     const scrollTop = $('task-groups').scrollTop;
     const focusedKanban=document.activeElement?.dataset.kanbanKey;
     const focusedKey=document.activeElement?.dataset.rowKey;
@@ -139,6 +141,7 @@ export class TaskNavigation {
     if(this.selection?.active)this.selection.prune();else this.selection?.header();
     this.renderedKey=this.renderKey(coordinatorMap);
     if (!hasGroups) empty($('task-groups'), '', query ? 'No tasks match your search.' : 'No tasks match this view.');
+    if(focusedTaskAction)queueMicrotask(restore);else restore();
   }
   focusProject(project, action) {
     [...$('task-groups').querySelectorAll('.project-action')].find(control => control.dataset.project === project && control.dataset.projectAction === action)?.focus();

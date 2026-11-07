@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {confirmDialog} from '../../shared/confirm-dialog.js';
 import { node, button } from '../../shared/dom.js';
 import { settingsSignal } from '../settings-fields.js';
@@ -13,6 +14,7 @@ export class MaintenanceSettings {
   }
   async prune() {
     if (this.pending || !await confirmDialog({signal:this.abort.signal,message:'Delete every completed task and its sessions/logs, remove its worktrees and branches, and sweep orphaned worktree directories? This cannot be undone. Tasks still attached to a team are skipped.'})) return;
+    const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:this.abort.signal});
     this.pending = true; this.fields.disabled = true; this.busy(true); this.result.textContent = ''; this.status('Cleaning up completed tasks…');
     try {
       const result = await this.api.json('/api/maintenance/prune-completed', { method: 'POST', signal: settingsSignal(this.abort.signal) });
@@ -23,7 +25,7 @@ export class MaintenanceSettings {
     } catch (error) {
       if (!this.abort.signal.aborted) this.status(`Cleanup was not confirmed. Refresh tasks before retrying. ${error.message}`, true);
       log('settings-maintenance', 'cleanup failed', { status: error.status });
-    } finally { this.pending = false; this.fields.disabled = false; this.busy(false); }
+    } finally { this.pending = false; this.fields.disabled = false; this.busy(false); restore(); }
   }
   destroy() { this.abort.abort(); }
 }

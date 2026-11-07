@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {$,node,button,preference,savePreference,notice} from '../../shared/dom.js';
 import {coordinatorContext,secondaryTask} from './split-policy.js';
 import {compactTaskRow} from '../rail/task-row.js';
@@ -45,11 +46,12 @@ export class SplitWorkspace {
   }
   render(){
     const active=this.enabled&&!!this.task;
+    const restoreToggle=captureFocus(this.toggleButton,()=>$('tab-agent')),restorePane=captureFocus(this.pane,()=>active?this.picker:$('tab-agent'));
     this.toggleButton.disabled=!this.task;this.toggleButton.setAttribute('aria-pressed',String(this.enabled));
     this.toggleButton.dataset.tooltip=this.enabled?'Close split view':'Split view';
     this.toggleButton.dataset.tooltipShortcut='⌥⇧D';
     this.pane.hidden=!active;$('agent-panel').classList.toggle('split-open',active);
-    if(!active||!this.visible){this.cache()?.releaseSecondary();return;}
+    if(!active||!this.visible){this.cache()?.releaseSecondary();restoreToggle();restorePane();return;}
     const explicit=this.choices.has(this.task.id),chosen=this.choices.get(this.task.id);
     const id=explicit&&chosen===null?null:secondaryTask(this.task.id,this.tasks,this.roster,chosen,this.workers.get(this.task.id));
     const second=this.tasks.find(task=>task.id===id);
@@ -62,8 +64,9 @@ export class SplitWorkspace {
     }
     this.picker.dataset.tooltipOverflow='';this.picker.value=second?.id||'';if(second)this.picker.dataset.tooltip=this.picker.selectedOptions[0].textContent;else delete this.picker.dataset.tooltip;if(focus)this.picker.focus({preventScroll:true});
     this.scheduleRosterRender();this.empty.hidden=!!second;
-    if(!second){this.cache()?.releaseSecondary();this.host.replaceChildren();this.status.textContent='Choose another task';this.fit.disabled=true;this.reconnect.hidden=true;return;}
-    this.cache()?.attachSecondary(second,this.host,state=>{this.status.textContent=state.message;this.fit.disabled=!state.interactive;this.reconnect.hidden=!['error','warning'].includes(state.kind);});
+    if(!second){this.cache()?.releaseSecondary();this.host.replaceChildren();this.status.textContent='Choose another task';this.fit.disabled=true;this.reconnect.hidden=true;restoreToggle();restorePane();return;}
+    this.cache()?.attachSecondary(second,this.host,state=>{const restore=captureFocus(this.picker.parentElement,()=>this.picker);this.status.textContent=state.message;this.fit.disabled=!state.interactive;this.reconnect.hidden=!['error','warning'].includes(state.kind);restore();});
+    restoreToggle();restorePane();
   }
   rosterEntries(coordinator){
     return [...(coordinator?.roles||[]),...(this.roster.freelance||[]).filter(role=>role.orch_id===coordinator?.id)].map(role=>({role,task:role.live?this.tasks.find(task=>task.id===role.task_id):null}));
@@ -78,7 +81,7 @@ export class SplitWorkspace {
   }
   scheduleRosterRender(){
     const coordinator=coordinatorContext(this.task.id,this.roster);
-    if(!coordinator){this.rosterDetails.remove();this.rosterRenderedKey=null;return;}
+    if(!coordinator){const restore=captureFocus(this.pane,()=>this.picker);this.rosterDetails.remove();this.rosterRenderedKey=null;restore();return;}
     if(this.rosterDetails.parentNode!==this.pane)this.pane.insertBefore(this.rosterDetails,this.host);
     this.rosterSummary.textContent=coordinator.name?`${coordinator.name} tasks`:'Team tasks';
     this.rosterDirty=this.rosterRenderKey(coordinator)!==this.rosterRenderedKey;
@@ -93,13 +96,14 @@ export class SplitWorkspace {
     const key=this.rosterRenderKey(coordinator);
     if(key===this.rosterRenderedKey){this.rosterDirty=false;return;}
     this.rosterRenderedKey=key;this.rosterDirty=false;
-    const focused=this.rosterRows.contains(document.activeElement)?document.activeElement.dataset.roleId:null;
+    const restore=captureFocus(this.rosterRows,()=>this.rosterSummary);
     this.rosterRows.replaceChildren();
     const entries=this.rosterEntries(coordinator);
     for(const {role,task} of entries){
       const row=compactTaskRow({task,role,selected:this.picker.value,needsInput:!task?.archived&&(task?.needs_input||role.needs_input||role.status==='blocked'),select:selected=>{const current=this.tasks.find(task=>task.id===selected.id);if(current)this.choose(current.id);}});
-      if(task?.id===this.task.id)row.disabled=true;this.rosterRows.append(row);if(focused===String(role.role_id)&&!row.disabled)row.focus({preventScroll:true});
+      if(task?.id===this.task.id)row.disabled=true;row.dataset.focusKey=String(role.role_id);this.rosterRows.append(row);
     }
+    restore();
     log('split','roster rendered',{count:entries.length});
   }
   terminalFor(target){return this.cache()?.terminalFor(target);}

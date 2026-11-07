@@ -149,11 +149,11 @@ Changes has Flat and Tree presentations of the same changed/untracked paths. Bot
 
 Repositories in Settings navigation is the only project list. Add repository opens creation; a Configuration gear opens one editor directly. Resume starts or reattaches the task session through an endpoint that also guards a pending daemon rerender. All confirmations use the same cancelable modal and all explicit copies report clipboard success or failure.
 
-See `web-tests/tests/workspace/workspace/redundancy.spec.ts` for shared confirmation retry, cancellation, focus and clipboard feedback. The updated project/settings/information suites intentionally replace assertions for the removed overview, single-item menu, duplicate facts, Files tab and Restart action.
+See `web-tests/tests/workspace/workspace/redundancy.spec.ts` for shared confirmation retry, cancellation, focus and clipboard feedback. The project, Settings and task information suites cover focused editors, action menus, task facts, Changes and Resume.
 
 Task settings groups Stop, Resume and Switch Claude session for the captured task. Split and Fit stay on the agent screen. Workflow status is edited only in task settings. Task menus offer Pin or Unpin, task settings and copies. Archive/restore stays on the rail, in task settings and on its shortcut.
 
-The events banner is the connection Retry surface. The footer only shows status; the separate rail refresh button is removed. Terminal Reconnect still recovers that task's output session. Periodic task snapshots continue revalidating the project roster.
+The events banner is the connection Retry surface. The footer shows connection status. Terminal Reconnect still recovers that task's output session. Periodic task snapshots continue revalidating the project roster.
 
 See `web-tests/tests/workspace/tasks/consolidated-controls.spec.ts` for these control boundaries and pin-read behavior. `mac-session.spec.ts` verifies switching a captured task while another task stays selected, and attention/push suites verify that only Web Push owns desktop delivery.
 

@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {confirmDialog} from '../../shared/confirm-dialog.js';
 import { node, button } from '../../shared/dom.js';
 import { field, settingsSignal } from '../settings-fields.js';
@@ -15,24 +16,27 @@ export class UpdateSettings {
   }
   async load() {
     if (this.pending || this.restartRequested) return;
-    this.read?.abort(); const read = this.read = new AbortController(); this.fields.disabled = true;
+    this.read?.abort(); const read = this.read = new AbortController();
+    const lifetime=AbortSignal.any([read.signal,this.abort.signal]),restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:lifetime});
+    this.fields.disabled = true;
     try {
-      const result = await this.api.json('/api/source-path', { signal: settingsSignal(AbortSignal.any([read.signal, this.abort.signal])) });
+      const result = await this.api.json('/api/source-path', { signal: settingsSignal(lifetime) });
       if (read.signal.aborted || this.abort.signal.aborted) return;
       this.path.value = this.savedPath = result.path || ''; this.status(''); log('settings-update', 'source path loaded', { status: true });
     } catch (error) {
       if (!read.signal.aborted && !this.abort.signal.aborted) this.status(error.status === 403 ? 'A master token is required to read the source path.' : `Source path unavailable. Your edits are kept. ${error.message}`, true);
       log('settings-update', 'source path read failed', { status: error.status });
-    } finally { if (this.read === read && !this.abort.signal.aborted) this.fields.disabled = false; }
+    } finally { if (this.read === read && !this.abort.signal.aborted) this.fields.disabled = false; restore(); }
   }
   async run(operation, updating = false) {
     if (this.pending || this.restartRequested) return;
+    const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:this.abort.signal});
     this.pending = true; this.fields.disabled = true; this.busy(true);
     try { await operation(); }
     catch (error) {
       if (!this.abort.signal.aborted) this.status(error.status === 403 ? 'A master token is required for source-path changes and updates.' : updating ? `Update was not confirmed. The daemon may still be rebuilding or restarting. Check its connection before retrying. ${error.message}` : `Source path save was not confirmed. Your edits are kept. ${error.message}`, true);
       log('settings-update', 'operation failed', { status: error.status });
-    } finally { this.pending = false; this.fields.disabled = !!this.restartRequested; this.busy(false); }
+    } finally { this.pending = false; this.fields.disabled = !!this.restartRequested; this.busy(false); restore(); }
   }
   save() {
     const path = this.path.value.trim(), body = JSON.stringify({ path });

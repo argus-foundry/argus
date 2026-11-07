@@ -7,6 +7,7 @@ function setup(t) {
   function element(tagName) {
     return {
       tagName, children: [], attributes: {}, dataset: {}, listeners: {},
+      contains(target) { return this===target || this.children.some(child=>child.contains?.(target)); },
       append(...children) { this.children.push(...children); },
       replaceChildren(...children) { this.children = children; },
       setAttribute(name, value) { this.attributes[name] = String(value); },

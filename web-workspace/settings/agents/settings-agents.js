@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import { node, button, errorMessage } from '../../shared/dom.js';
 import { settingsSignal } from '../settings-fields.js';
 import { log } from '../../core/api.js';
@@ -5,10 +6,11 @@ import { log } from '../../core/api.js';
 export class AgentSettings {
   constructor(context) { Object.assign(this, context); this.abort = new AbortController(); this.load(); }
   async load() {
-    this.read?.abort(); const read = this.read = new AbortController(), signal = settingsSignal(AbortSignal.any([read.signal, this.abort.signal]));
+    this.read?.abort(); const read = this.read = new AbortController(), lifetime = AbortSignal.any([read.signal, this.abort.signal]), signal = settingsSignal(lifetime);
+    const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:lifetime});
     const header = node('div', 'settings-section-heading'); header.append(node('h2', '', 'Agents'), button('Refresh agents', () => this.load()));
     const backends = node('section'), accounts = node('section'); backends.append(node('h3', '', 'Backends')); accounts.append(node('h3', '', 'Accounts'));
-    this.host.replaceChildren(header, node('p', 'settings-note', 'Backend and account configuration is read-only here. Account creation and sign-in are managed on the host.'), backends, accounts);
+    this.host.replaceChildren(header, node('p', 'settings-note', 'Backend and account configuration is read-only here. Account creation and sign-in are managed on the host.'), backends, accounts);restore();
     await Promise.allSettled([
       this.list('/api/backends', backends, data => data.backends || [], backend => this.backend(backend), signal),
       this.list('/api/accounts', accounts, data => Array.isArray(data) ? data : [], account => this.account(account), signal),

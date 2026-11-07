@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {confirmDialog} from '../../shared/confirm-dialog.js';
 import { node, button, errorMessage } from '../../shared/dom.js';
 import { settingsSignal } from '../settings-fields.js';
@@ -6,15 +7,18 @@ import { log } from '../../core/api.js';
 export class BrowserPushSettings {
   constructor(context) {
     Object.assign(this, context); this.abort = new AbortController(); this.generation = 0; this.host.append(node('h3', '', 'Desktop alerts'));
-    this.controls = node('div'); this.devices = node('div'); this.host.append(node('p','settings-note','Desktop alerts use Web Push through this browser’s service worker. The workspace does not create a second desktop banner.'),this.controls, button('Refresh devices', () => this.loadDevices()), this.devices);
+    this.controls = node('div'); this.devices = node('div'); this.refreshDevices=button('Refresh devices', () => this.loadDevices()); this.host.append(node('p','settings-note','Desktop alerts use Web Push through this browser’s service worker. The workspace does not create a second desktop banner.'),this.controls, this.refreshDevices, this.devices);
     this.supported = typeof navigator.serviceWorker?.register === 'function' && typeof window.PushManager !== 'undefined' && typeof window.Notification?.requestPermission === 'function';
     this.render(); this.loadDevices(); this.loadBrowser();
   }
   render() {
+    const restore=captureFocus(this.controls,()=>this.controls.querySelector('button'),{signal:this.abort.signal});
     this.controls.replaceChildren();
     if (!this.supported) { this.controls.append(node('p', 'settings-note', 'Browser push is unavailable. A secure browser context with service worker and Push API support is required.')); return; }
     this.controls.append(node('p', 'settings-note', this.subscription ? 'This browser has a push subscription.' : 'Notifications are off for this browser.'), button(this.subscription ? 'Disable desktop alerts' : 'Enable desktop alerts', () => this.toggle()));
+    this.controls.querySelector('button').dataset.focusKey='desktop-alert-toggle';
     this.controls.append(button('Send test notification', async () => { if (await confirmDialog({signal:this.abort.signal,message:'Send a test notification to all registered devices?'})) this.test(); }));
+    restore();
   }
   async loadBrowser() {
     if (!this.supported) return;
@@ -26,23 +30,25 @@ export class BrowserPushSettings {
   }
   async loadDevices() {
     this.read?.abort(); const read = this.read = new AbortController();
+    let restore=()=>{};
     try {
       const { subscriptions = [] } = await this.api.json('/api/push/subscriptions', { signal: settingsSignal(AbortSignal.any([read.signal, this.abort.signal])) });
       if (read.signal.aborted || this.abort.signal.aborted) return;
+      restore=captureFocus(this.devices,()=>this.refreshDevices,{signal:read.signal});
       this.devices.replaceChildren(node('h4', '', 'Registered devices'));
       if (!subscriptions.length) this.devices.append(node('p', 'settings-note', 'No registered devices.'));
       for (const device of subscriptions) {
         const row = node('div', 'settings-record'); row.append(node('strong', '', device.label || 'Device'), node('p', 'settings-note', device.endpoint_masked || 'Endpoint unavailable'));
-        const remove = button('Remove device', () => this.remove(device)); remove.setAttribute('aria-label', `Remove device ${device.label || 'Device'}`); row.append(remove); this.devices.append(row);
+        const remove = button('Remove device', () => this.remove(device)); remove.dataset.focusKey=JSON.stringify([device.id,'remove']); remove.setAttribute('aria-label', `Remove device ${device.label || 'Device'}`); row.append(remove); this.devices.append(row);
       }
       log('settings-push', 'devices loaded', { count: subscriptions.length });
-    } catch (error) { if (!read.signal.aborted && !this.abort.signal.aborted) this.devices.replaceChildren(errorMessage(`Device list unavailable. ${error.message}`)); log('settings-push', 'device read failed', { status: error.status }); }
+    } catch (error) { if (!read.signal.aborted && !this.abort.signal.aborted) { restore=captureFocus(this.devices,()=>this.refreshDevices,{signal:read.signal}); this.devices.replaceChildren(errorMessage(`Device list unavailable. ${error.message}`)); } log('settings-push', 'device read failed', { status: error.status }); } finally { restore(); }
   }
   async operation(action, cancellable = false) {
-    if (this.pending) return; this.pending = true; this.generation++; this.busy(true, { cancellable });
+    if (this.pending) return; const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:this.abort.signal}); this.pending = true; this.generation++; this.busy(true, { cancellable });
     try { await action(); }
     catch (error) { if (!this.abort.signal.aborted) this.status(`Notification operation was not confirmed. ${error.message}`, true); log('settings-push', 'operation failed', { status: error.status }); }
-    finally { this.pending = false; this.busy(false); }
+    finally { this.pending = false; this.busy(false); restore(); }
   }
   toggle() {
     return this.operation(async () => {

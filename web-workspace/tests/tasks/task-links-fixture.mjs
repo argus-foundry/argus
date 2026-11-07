@@ -6,6 +6,7 @@ export function fixture(t, read) {
   constructor(tag){this.tagName=tag;this.children=[];this.dataset={};this.attributes={};}
   append(...items){this.children.push(...items);}
   replaceChildren(...items){this.children=items;this.textContent='';}
+  contains(target){return this===target||this.children.some(child=>child.contains?.(target));}
   after(){}
   addEventListener(){}
   setAttribute(key,value){this.attributes[key]=value;}

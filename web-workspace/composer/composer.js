@@ -1,3 +1,4 @@
+import {captureFocus} from '../shared/focus-recovery.js';
 import { $ } from '../shared/dom.js';
 import { log } from '../core/api.js';
 import { sendsMessage, insertPlaintext } from './composer-policy.js';
@@ -51,6 +52,7 @@ export class TaskComposer {
     log('composer', 'paste inserted', { status: 'ok' });
   }
   select(task) {
+    const restore=captureFocus($('composer'),()=>$('draft')?.disabled?$('tab-agent'):$('draft'),{neighbors:false});
     this.composing = false;
     this.task = task;
     this.identity.select(task);
@@ -58,10 +60,11 @@ export class TaskComposer {
     this.attachments.message = ''; this.attachments.drop.clear();
     $('draft').value = task ? this.drafts.get(task.id) || '' : '';
     this.interactive = false;
-    this.render();
+    this.render();restore();
   }
   setInteractive(value) { this.interactive = !!value; this.render(); }
   render() {
+    const restore=captureFocus($('composer'),()=>$('draft')?.disabled?$('tab-agent'):$('draft'),{neighbors:false});
     const task = this.task, pending = task && this.pending.has(task.id);
     if ($('draft').disabled !== !task) $('draft').disabled = !task;
     const attached = this.attachments.store.ready(task?.id);
@@ -81,7 +84,7 @@ export class TaskComposer {
     const error = task && this.errors.get(task.id);
     if ($('composer-status').classList.contains('error') !== !!error) $('composer-status').classList.toggle('error', !!error);
     text($('composer-status'), error || (pending ? 'Sending to this task. Your draft is kept until delivery succeeds.' : task && !this.interactive ? 'The session is not accepting messages. You can keep drafting.' : 'Enter to send · Shift+Enter for a new line'));
-    this.attachments.render();
+    this.attachments.render();restore();
   }
   async submit() {
     const task = this.task, text = $('draft').value;

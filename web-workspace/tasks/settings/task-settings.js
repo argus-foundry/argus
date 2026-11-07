@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {accountList} from '../create/new-task-account.js';
 import { $, node, button } from '../../shared/dom.js';
 import { log } from '../../core/api.js';
@@ -38,7 +39,9 @@ export class TaskSettingsView {
   async load() {
     const generation = this.generation, id = this.task.id, version = ++this.readVersion;
     this.readAbort?.abort(); this.readAbort = new AbortController();
-    const signal = AbortSignal.any([this.abort.signal, this.readAbort.signal, AbortSignal.timeout(15000)]);
+    const lifetime = AbortSignal.any([this.abort.signal, this.readAbort.signal]);
+    const signal = AbortSignal.any([lifetime, AbortSignal.timeout(15000)]);
+    const restore=captureFocus(this.host,()=>this.back,{signal:lifetime,neighbors:false});
     this.message('Loading task…');
     try {
       const base = '/api/tasks/' + encodeURIComponent(id);
@@ -56,7 +59,7 @@ export class TaskSettingsView {
       if (!this.active || generation !== this.generation || version !== this.readVersion || this.abort.signal.aborted) return;
       this.message(`Task settings unavailable. ${error.message}`, true);
       this.host.replaceChildren(button('Retry task settings', () => this.load())); log('task-settings', 'load failed', { status: error.status || 0 }); return false;
-    }
+    } finally { restore(); }
   }
   confirm(operation, body) {
     if (this.busy) return;
@@ -67,6 +70,7 @@ export class TaskSettingsView {
   async mutate(operation, body) {
     if (this.busy || !this.active) return;
     if(operation==='delete'){this.callbacks.deleteTask({...this.task},this.abort.signal);return;}
+    const restore=captureFocus(this.host,()=>this.back,{signal:this.abort.signal});
     this.busy = true; this.fields.disabled = true;
     const generation = this.generation, task = { ...this.task }, signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(120000)]);
     this.message('Saving…');
@@ -99,7 +103,7 @@ export class TaskSettingsView {
       if (!this.active || generation !== this.generation || this.abort.signal.aborted) return;
       this.message(`Change was not confirmed. Your edits are kept. Refresh the task before retrying. ${error.message}`, true);
       log('task-settings', 'update failed', { status: error.status || 0 });
-    } finally { if (generation === this.generation) { this.busy = false; if (this.fields) this.fields.disabled = false; } }
+    } finally { if (generation === this.generation) { this.busy = false; if (this.fields) this.fields.disabled = false; } restore(); }
   }
   close() {
     if (!this.active || this.closing) return;

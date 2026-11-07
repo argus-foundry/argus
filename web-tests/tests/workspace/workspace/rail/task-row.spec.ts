@@ -181,15 +181,19 @@ test('task rail uses one compact line with accessible status icons and truncated
       animations.forEach(animation => { animation.currentTime = time; });
       return {
         offsets: [...icon.querySelectorAll('.task-scribe-line')].map(line => Number.parseFloat(getComputedStyle(line).strokeDashoffset)),
+        opacities: [...icon.querySelectorAll('.task-scribe-line')].map(line => Number(getComputedStyle(line).opacity)),
         nib: getComputedStyle(icon.querySelector('.task-scribe-nib')).transform,
+        nibOpacity: Number(getComputedStyle(icon.querySelector('.task-scribe-nib')).opacity),
       };
     });
   });
   assert.deepEqual(samples[0].offsets, [10, 10, 10]);
   for (let line = 0; line < 3; line++) {
     assert.equal(samples[line + 1].offsets[line], 0, `Scribe line ${line + 1} must finish writing`);
+    assert.equal(samples[line + 1].opacities[line], 1, `Scribe line ${line + 1} must remain opaque after writing`);
     assert.notEqual(samples[0].offsets[line], samples[line + 1].offsets[line]);
   }
+  for (const sample of samples) assert.equal(sample.nibOpacity, 1, 'Scribe nib must remain opaque while writing');
   assert.equal(new Set(samples.map(sample => sample.nib)).size, samples.length, 'Scribe nib must move between writing positions');
 });
 test('reduced motion stops the task status spinner', async () => {

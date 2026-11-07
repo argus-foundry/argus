@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {confirmDialog} from '../../shared/confirm-dialog.js';
 import { node, button, errorMessage } from '../../shared/dom.js';
 import { field, actions, values, settingsSignal } from '../settings-fields.js';
@@ -8,6 +9,7 @@ const paths = text => text.split('\n').map(path => path.trim()).filter(Boolean);
 export class SandboxSettings {
   constructor(context) { Object.assign(this, context); this.abort = new AbortController(); this.load(); }
   async load() {
+    const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:this.abort.signal});
     this.proposals?.destroy();
     this.host.replaceChildren(node('p', 'settings-note', 'Loading Sandbox…'));
     try {
@@ -30,10 +32,11 @@ export class SandboxSettings {
       if (this.abort.signal.aborted) return;
       const retry = document.createElement('button'); retry.textContent = 'Retry Sandbox'; retry.addEventListener('click', () => this.load());
       this.host.replaceChildren(errorMessage(`Sandbox unavailable. ${error.message}`), retry); log('settings-sandbox', 'load failed', { status: error.status });
-    }
+    } finally { restore(); }
   }
   async save(input, fields) {
     if (this.grantsChanged) { this.status('Proposal grants changed. Reload Sandbox before saving global paths; your current edits are kept.', true); return; }
+    const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:this.abort.signal});
     fields.disabled = true; this.setBusy(true);
     try {
       await this.api.json('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sandbox: { enabled: input.enabled, deny_read: paths(input.denyRead), extra_write: paths(input.extraWrite) } }), signal: settingsSignal(this.abort.signal) });
@@ -42,7 +45,7 @@ export class SandboxSettings {
     } catch (error) {
       if (!this.abort.signal.aborted) this.status(error.status === 403 ? 'A master token is required to save Sandbox. Your edits are kept.' : `Save was not confirmed. Your edits are kept. ${error.message}`, true);
       log('settings-sandbox', 'save failed', { status: error.status });
-    } finally { fields.disabled = false; this.setBusy(false); }
+    } finally { fields.disabled = false; this.setBusy(false); restore(); }
   }
   setBusy(value) { for (const fields of this.host.querySelectorAll('fieldset')) fields.disabled = value; this.busy(value); }
   destroy() { this.abort.abort(); this.proposals?.destroy(); }

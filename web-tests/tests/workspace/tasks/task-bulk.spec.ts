@@ -56,7 +56,10 @@ test('Active batch archives explicitly, reports progress and retains open task d
 });
 test('Archived bulk Delete includes live/Hera tasks and confirms every identity',async({page})=>{
  const calls=await fixture(page,{archived:true});await select(page,'a','b');await page.getByRole('button',{name:'Delete selected tasks',exact:true}).click();
- const dialog=page.locator('#bulk-dialog');await expect(dialog).toHaveClass(/danger-dialog/);await expect(dialog).toContainText('Live session');await expect(dialog).toContainText('coord');await expect(dialog).toContainText('worker');
+ const dialog=page.locator('#bulk-dialog');await expect(dialog).toHaveClass(/danger-dialog/);await expect(dialog).toContainText('coord');await expect(dialog).toContainText('worker');
+ await expect(dialog.locator('[data-review-task-id="a"]').getByText('Live session',{exact:true})).toBeVisible();
+ await expect(dialog.locator('[data-review-task-id="b"]')).toBeVisible();
+ await expect(dialog.locator('[data-review-task-id="b"]').getByText('Live session',{exact:true})).toHaveCount(0);
  await expect(dialog.locator('input')).toHaveCount(0);await dialog.getByRole('button',{name:'Delete 2 tasks',exact:true}).click();await expect(dialog).toHaveCount(0);
  expect(calls.map(c=>c.slice(0,2))).toEqual([['a','DELETE'],['b','DELETE']]);await expect(page.locator('.task-row[data-task-id="c"]')).toBeFocused();
 });

@@ -1,3 +1,4 @@
+import {captureFocus} from '../../shared/focus-recovery.js';
 import {confirmDialog} from '../../shared/confirm-dialog.js';
 import { node, button, errorMessage } from '../../shared/dom.js';
 import { field, select, values, settingsSignal } from '../settings-fields.js';
@@ -6,6 +7,7 @@ import { log } from '../../core/api.js';
 export class SandboxProposals {
   constructor(context) { Object.assign(this, context); this.abort = new AbortController(); this.drafts = new Map(); this.load(); }
   async load() {
+    const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:this.abort.signal});
     this.host.replaceChildren(node('h2', '', 'Write-path proposals'));
     try {
       const result = await this.api.json('/api/sandbox/proposals?status=pending', { signal: settingsSignal(this.abort.signal) });
@@ -18,7 +20,7 @@ export class SandboxProposals {
     } catch (error) {
       if (!this.abort.signal.aborted) this.host.append(errorMessage(`Proposals unavailable. ${error.message}`), button('Retry proposals', () => this.load()));
       log('settings-proposals', 'load failed', { status: error.status });
-    }
+    } finally { restore(); }
   }
   render(proposal) {
     const draft = this.drafts.get(proposal.id) || { scope: proposal.project ? 'project' : 'global', entries: structuredClone(proposal.entries || []) }; this.drafts.set(proposal.id, draft);
@@ -46,13 +48,18 @@ export class SandboxProposals {
     const add = button('Add path', () => { draft.entries.push({ path: '' }); draw(); }); card.append(add);
     const scope = select(card, 'Grant scope', 'scope', [...(proposal.project ? [['project', `Project (${proposal.project})`]] : []), ['global', 'Global']], draft.scope);
     scope.addEventListener('change', () => { draft.scope = scope.value; });
-    card.append(button('Approve paths', () => this.decide(proposal, draft, card, 'approve'), 'primary'), button('Reject proposal', () => this.decide(proposal, draft, card, 'reject'))); this.host.append(card);
+    for(const [action,label] of [['approve','Approve paths'],['reject','Reject proposal']]) {
+      const control=button(label,()=>this.decide(proposal,draft,card,action),action==='approve'?'primary':'');
+      control.dataset.focusKey=JSON.stringify([proposal.id,action]);card.append(control);
+    }
+    this.host.append(card);
   }
   async decide(proposal, draft, card, action) {
     const paths = draft.entries.map(entry => entry.path.trim()).filter(Boolean);
     if (action === 'approve' && !paths.length) { this.status('Add at least one path to approve, or reject the proposal.', true); return; }
     const warnings = draft.entries.filter(entry => entry.warning).map(entry => entry.warning).join('\n');
     if (!await confirmDialog({signal:this.abort.signal,message:action === 'approve' ? `Grant ${draft.scope} write access to:\n${paths.join('\n')}${warnings ? '\nWarnings:\n' + warnings : ''}\nApplies to new sessions only.` : 'Reject this write-path proposal?'})) return;
+    const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:this.abort.signal});
     card.disabled = true; this.busy(true);
     try {
       const result = await this.api.json(`/api/sandbox/proposals/${encodeURIComponent(proposal.id)}/${action}`, { method: 'POST', ...(action === 'approve' ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: draft.scope, paths }) } : {}), signal: settingsSignal(this.abort.signal) });
@@ -63,7 +70,7 @@ export class SandboxProposals {
     } catch (error) {
       if (!this.abort.signal.aborted) this.status(error.status === 403 ? 'A master token is required to decide proposals. Your edits are kept.' : `Decision was not confirmed. Your edits are kept. Refresh before retrying. ${error.message}`, true);
       log('settings-proposals', 'decision failed', { status: error.status });
-    } finally { card.disabled = false; this.busy(false); }
+    } finally { card.disabled = false; this.busy(false); restore(); }
   }
   destroy() { this.abort.abort(); this.drafts.clear(); }
 }

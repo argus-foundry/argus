@@ -1,3 +1,4 @@
+import {captureFocus} from '../shared/focus-recovery.js';
 import { node, button, errorMessage } from '../shared/dom.js';
 import { field, select, actions, values, settingsSignal } from './settings-fields.js';
 import { generalPayload } from './settings-policy.js';
@@ -9,6 +10,7 @@ export class GeneralSettings {
     this.abort = new AbortController(); this.load();
   }
   async load() {
+    const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:this.abort.signal});
     this.host.replaceChildren(node('p', 'settings-note', 'Loading General settings…'));
     try {
       const signal = settingsSignal(this.abort.signal);
@@ -22,7 +24,7 @@ export class GeneralSettings {
       if (this.abort.signal.aborted) return;
       this.host.replaceChildren(errorMessage(`General settings unavailable. ${error.message}`), button('Retry General', () => this.load()));
       log('settings-general', 'load failed', { status: error.status || 'error' });
-    }
+    } finally { restore(); }
   }
   render(backends, projects) {
     const s = this.settings, form = node('form', 'settings-form'), fields = node('fieldset', 'settings-fields');
@@ -40,6 +42,7 @@ export class GeneralSettings {
     this.host.replaceChildren(form);
   }
   async save(form, fields) {
+    const restore=captureFocus(this.host,()=>document.querySelector('.settings-back'),{signal:this.abort.signal});
     const body = generalPayload(values(form)); fields.disabled = true; this.busy(true); this.status('Saving General…');
     try {
       const result = await this.api.json('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: settingsSignal(this.abort.signal) });
@@ -50,7 +53,7 @@ export class GeneralSettings {
     } catch (error) {
       if (!this.abort.signal.aborted) this.status(`Save was not confirmed. Your edits are kept. Refresh before retrying. ${error.message}`, true);
       log('settings-general', 'save failed', { status: error.status || 'error' });
-    } finally { fields.disabled = false; this.busy(false); }
+    } finally { fields.disabled = false; this.busy(false); restore(); }
   }
   destroy() { this.abort.abort(); }
 }
