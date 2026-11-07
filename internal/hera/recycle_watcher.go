@@ -65,6 +65,24 @@ type RecycleWatcher struct {
 	now          func() time.Time
 	waitLogAfter time.Duration
 	waits        map[string]recycleWait
+	onOutcome    func(roleID int64, err error)
+}
+
+// SetOutcomeHook registers a callback fired when a self-service recycle
+// restarts a role (err == nil) or fails.
+func (w *RecycleWatcher) SetOutcomeHook(f func(roleID int64, err error)) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.onOutcome = f
+}
+
+func (w *RecycleWatcher) notifyOutcome(roleID int64, err error) {
+	w.mu.Lock()
+	f := w.onOutcome
+	w.mu.Unlock()
+	if f != nil && roleID != 0 {
+		f(roleID, err)
+	}
 }
 
 // NewRecycleWatcher builds a RecycleWatcher. It does not tick until Start is
@@ -133,7 +151,10 @@ func (w *RecycleWatcher) Tick() {
 			continue
 		}
 		pending[taskID] = true
-		outcome, err := w.tickTask(taskID)
+		roleID, outcome, err := w.tickTask(taskID)
+		if outcome == recycleRestarted || err != nil {
+			w.notifyOutcome(roleID, err)
+		}
 		if err != nil {
 			delete(w.waits, taskID)
 			w.resetIdle(taskID)
@@ -189,19 +210,19 @@ func (w *RecycleWatcher) trackWait(taskID string) {
 // single-coordinator-per-task assumption the rest of this primitive already
 // makes); otherwise the first binding found is used, since a task with no
 // coordinator binding has at most one live binding to recycle anyway.
-func (w *RecycleWatcher) tickTask(taskID string) (recycleOutcome, error) {
+func (w *RecycleWatcher) tickTask(taskID string) (int64, recycleOutcome, error) {
 	bindings, err := w.store.ListHeraLiveBindingsByTask(taskID)
 	if err != nil {
-		return recycleNoop, fmt.Errorf("list bindings: %w", err)
+		return 0, recycleNoop, fmt.Errorf("list bindings: %w", err)
 	}
 	if len(bindings) == 0 {
-		return recycleNoop, nil
+		return 0, recycleNoop, nil
 	}
 	roleID := bindings[0].RoleID
 	for _, b := range bindings {
 		role, err := w.store.HeraRole(b.RoleID)
 		if err != nil {
-			return recycleNoop, fmt.Errorf("resolve role %d: %w", b.RoleID, err)
+			return roleID, recycleNoop, fmt.Errorf("resolve role %d: %w", b.RoleID, err)
 		}
 		if role.Kind == db.HeraKindCoordinator {
 			roleID = role.ID
@@ -210,7 +231,8 @@ func (w *RecycleWatcher) tickTask(taskID string) (recycleOutcome, error) {
 	}
 	task, err := w.store.Get(taskID)
 	if err != nil {
-		return recycleNoop, fmt.Errorf("resolve session id: %w", err)
+		return roleID, recycleNoop, fmt.Errorf("resolve session id: %w", err)
 	}
-	return recycleCoord(w.store, w.runner, roleID, task.SessionID, RecycleSelfService)
+	outcome, err := recycleCoord(w.store, w.runner, roleID, task.SessionID, RecycleSelfService)
+	return roleID, outcome, err
 }

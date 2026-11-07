@@ -2,6 +2,7 @@ package hera
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -250,4 +251,45 @@ func metaHasValue(t *testing.T, d *db.DB, taskID, key, value string) bool {
 		}
 	}
 	return false
+}
+
+func TestRecycleWatcher_OutcomeHook(t *testing.T) {
+	t.Run("fires on restart", func(t *testing.T) {
+		d, err := db.OpenInMemory()
+		testutil.NoError(t, err)
+		t.Cleanup(func() { _ = d.Close() })
+		task, _, role := seedRecycleRole(t, d, db.HeraKindWorker, "o", "w", "/wt/w", "b", "m")
+		testutil.NoError(t, d.SetMeta(task.ID, db.HeraMetaNamespace, db.HeraMetaKeyPendingRecycle, "true"))
+
+		var gotRole int64
+		var gotErr error
+		calls := 0
+		w := NewRecycleWatcher(d, &fakeRecycleRunner{idle: true})
+		w.SetOutcomeHook(func(id int64, err error) { gotRole, gotErr, calls = id, err, calls+1 })
+		w.Tick()
+		testutil.Equal(t, calls, 1)
+		testutil.Equal(t, gotRole, role.ID)
+		testutil.NoError(t, gotErr)
+	})
+
+	t.Run("silent while busy, reports failures", func(t *testing.T) {
+		d, err := db.OpenInMemory()
+		testutil.NoError(t, err)
+		t.Cleanup(func() { _ = d.Close() })
+		task, _, _ := seedRecycleRole(t, d, db.HeraKindWorker, "o", "w", "/wt/w", "b", "m")
+		testutil.NoError(t, d.SetMeta(task.ID, db.HeraMetaNamespace, db.HeraMetaKeyPendingRecycle, "true"))
+
+		var errs []error
+		runner := &fakeRecycleRunner{idle: false}
+		w := NewRecycleWatcher(d, runner)
+		w.SetOutcomeHook(func(_ int64, err error) { errs = append(errs, err) })
+		w.Tick()
+		testutil.Equal(t, len(errs), 0)
+
+		runner.idle = true
+		runner.restartErr = errors.New("boom")
+		w.Tick()
+		testutil.Equal(t, len(errs), 1)
+		testutil.True(t, errs[0] != nil)
+	})
 }

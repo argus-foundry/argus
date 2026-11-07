@@ -53,6 +53,11 @@ const (
 	// event types; consumed by SSE subscribers.
 	EventTypeSessionFocus = "session.focus"
 
+	// EventTypeHeraLifecycleChanged fires after each persisted state change of a
+	// hera role lifecycle operation (worker bounce, coordinator forced recycle).
+	// Payload: {"operation_id","role_id","task_id","kind","state","error"}.
+	EventTypeHeraLifecycleChanged = "hera.lifecycle_changed"
+
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.
 	// It is never persisted in the events table — clients seeing it should

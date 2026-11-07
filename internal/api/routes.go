@@ -48,6 +48,9 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/hera/orchestrators/{id}/nuke", s.handleHeraNukeOrch)
 	mux.HandleFunc("POST /api/hera/roles/{id}/nuke", s.handleHeraNukeRole)
 	mux.HandleFunc("POST /api/hera/roles/{id}/status", s.handleHeraRoleStatus)
+	mux.HandleFunc("POST /api/hera/roles/{id}/bounce", s.handleHeraBounce)
+	mux.HandleFunc("POST /api/hera/roles/{id}/recycle", s.handleHeraRecycle)
+	mux.HandleFunc("GET /api/hera/roles/{id}/lifecycle-operations/{op}", s.handleHeraLifecycleGet)
 	mux.HandleFunc("POST /api/hera/orchestrators/{id}/kanban", s.handleHeraKanban)
 	for _, k := range []struct {
 		seg  string

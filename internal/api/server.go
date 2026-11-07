@@ -18,6 +18,7 @@ import (
 	"github.com/drn/argus/internal/clipboard"
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/db"
+	"github.com/drn/argus/internal/hera"
 	"github.com/drn/argus/internal/hostsleep"
 	"github.com/drn/argus/internal/mcp"
 	"github.com/drn/argus/internal/mergesafety"
@@ -95,6 +96,9 @@ type Server struct {
 	// notifier is the reliable pane-delivery service. Optional: nil disables
 	// the /notify endpoints (returns 503). Set via SetNotifier before ListenAndServe.
 	notifier *notify.Notifier
+
+	// heraLifecycle backs the role bounce/recycle routes; nil returns 503.
+	heraLifecycle *hera.LifecycleService
 
 	// focusTracker is the daemon-level human-focus registry. Optional: nil
 	// disables focus-based gating (the notifier falls through to idle-only).
