@@ -70,6 +70,11 @@ const (
 	// Never carries item bodies; TaskID is the coordinator's bound task when known.
 	EventTypeHeraBoardChanged = "hera.board_changed"
 
+	// EventTypeTaskUsageChanged invites a GET /api/tasks/{id}/usage after a
+	// changed token observation. Payload: {"session_id":"s","turn_id":"t","measured_at":"RFC3339"};
+	// identity and timing only, never the counts themselves.
+	EventTypeTaskUsageChanged = "task.usage_changed"
+
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.
 	// It is never persisted in the events table — clients seeing it should
