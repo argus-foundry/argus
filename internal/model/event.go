@@ -24,13 +24,14 @@ type Event struct {
 // any value here is a breaking change to the plugin contract (would require
 // the X-Argus-Plugin-Version major bump described in docs/plugins.md).
 const (
-	EventTypeTaskCreated       = "task.created"
-	EventTypeTaskStatusChanged = "task.status_changed"
-	EventTypeTaskCompleted     = "task.completed"
-	EventTypeTaskArchived      = "task.archived"
-	EventTypeTaskDeleted       = "task.deleted"
-	EventTypeTaskRenamed       = "task.renamed"
-	EventTypeTaskUpdated       = "task.updated"
+	EventTypeTaskDeleteJobUpdated = "task_delete_job.updated"
+	EventTypeTaskCreated          = "task.created"
+	EventTypeTaskStatusChanged    = "task.status_changed"
+	EventTypeTaskCompleted        = "task.completed"
+	EventTypeTaskArchived         = "task.archived"
+	EventTypeTaskDeleted          = "task.deleted"
+	EventTypeTaskRenamed          = "task.renamed"
+	EventTypeTaskUpdated          = "task.updated"
 	// EventTypeTaskFailureChanged carries {"failure": null | TaskFailure}
 	// after a Result write changes the explicit-failure projection.
 	EventTypeTaskFailureChanged = "task.failure_changed"

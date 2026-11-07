@@ -43,6 +43,14 @@ type TaskCreator func(name, prompt, project, backend, taskModel, sandboxOverride
 // Server is the HTTP REST API server.
 type Server struct {
 	db *db.DB
+
+	deleteOps          deleteOps
+	deleteJobMu        sync.Mutex
+	deleteJobsActive   map[string]bool
+	deleteJobWG        sync.WaitGroup
+	deleteJobCtx       context.Context
+	deleteJobCancel    context.CancelFunc
+	deleteJobsStopping bool
 	// runner is the session backend, typed as agent.SessionRunner so the daemon
 	// can hand it either an in-process *agent.Runner (supervisor OFF) or a
 	// supervisor-client (supervisor ON) — the API server drives both identically.
@@ -89,7 +97,7 @@ type Server struct {
 	kickScreenMu sync.Mutex
 	kickScreen   agent.ScreenRenderer
 
-	// taskLocks serializes archive, input, resume and restart per task so an
+	// taskLocks serializes archive, input, resume, restart and delete per task so an
 	// archive success happens-before any later input or session start.
 	taskLocks taskLocker
 
@@ -244,6 +252,7 @@ func (s *Server) ListenAndServe(port int) (int, error) {
 	}
 
 	mux := s.routes()
+	s.resumeDeleteJobs()
 
 	// Auth middleware skips the dashboard route (GET /) and /vendor/ static
 	// assets so the page can load and prompt for the token. All /api/* routes
@@ -366,6 +375,7 @@ func (s *Server) rehydratePluginSections() {
 // Shutdown gracefully stops the HTTP server and signals background goroutines
 // (idle watcher) to exit.
 func (s *Server) Shutdown(ctx context.Context) error {
+	deleteErr := s.stopDeleteJobs(ctx)
 	// Signal goroutines first so they don't race with DB close downstream.
 	select {
 	case <-s.stopCh:
@@ -383,9 +393,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 	if s.httpSrv == nil {
-		return nil
+		return deleteErr
 	}
-	return s.httpSrv.Shutdown(ctx)
+	if err := s.httpSrv.Shutdown(ctx); err != nil {
+		return err
+	}
+	return deleteErr
 }
 
 // corsMiddleware adds CORS headers for cross-origin requests from mobile browsers.
