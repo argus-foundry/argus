@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/events"
@@ -56,7 +58,9 @@ func emitConfigChanged(payload map[string]string) {
 
 func (s *Server) accountView(name string) accountJSON {
 	cfg := s.db.Config()
-	return accountEntry(cfg, s.db.AccountsFromConfigToml(), name, cfg.ResolveAccount("", ""))
+	a := accountEntry(cfg, s.db.AccountsFromConfigToml(), name, cfg.ResolveAccount("", ""))
+	fillProviderUsage(cfg, &a, agent.AccountUsage(cfg), time.Now())
+	return a
 }
 
 func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {

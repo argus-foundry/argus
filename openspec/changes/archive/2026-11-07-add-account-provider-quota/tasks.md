@@ -1,0 +1,5 @@
+- [x] Usage projection + Codex per-home reader (`internal/backendtier/usageprojection.go`)
+- [x] `providers` block on `accountJSON`
+- [x] `account.usage_changed` event + daemon watcher
+- [x] Tests, gotcha, README endpoint/event rows
+- [x] Archive into `openspec/specs/rest-api`

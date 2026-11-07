@@ -410,3 +410,9 @@
 - **A regular rollout inode may still be a hard link to credentials.** Before transfer, require opened-fd Nlink=1 and native session_meta for the indexed thread with the move-specific 4 MiB budget (context readers retain 64 KiB); rewind that same descriptor before copying so validation does not truncate the conversation.
 
 - **`POST /api/tasks/{id}/reveal` validates on the symlink-resolved path right before `open`, and the launcher/GOOS are Server seams.** Worktree mode additionally rejects final symlinks/non-directories via Lstat and uses fixed `open -a Finder` arguments so a post-check swap cannot activate a bundle. Lexical pre-screen (absolute, `..`, NUL, `.git` segment case-insensitively) then `EvalSymlinks` + `filepath.Rel` containment + a second `.git` check on the resolved relative path (a symlink to `.git` would otherwise pass); only regular files in file mode. Tests must never run real `open`.
+
+## Account provider quota (add-account-provider-quota)
+
+- **Provider usage projection is `backendtier.ProviderUsage`; API and tier editor must reuse it, never re-derive windows.** Windows are `five_hour` (300 min) / `seven_day` (10080 min); a window exists only when measured, so `percent_used: 0` is a real zero and "no valid window" is `usage: null`.
+- **Codex quota is read per account from `<codex_home>/sessions`, never from the global routing snapshot** (`CodexHomeUsage`, cached by path+mtime+size, 2 MB tail). Codex email/organization stay null: they exist only in auth files, which are never read; plan comes from the rollout `rate_limits.plan_type` when present.
+- **`account.usage_changed` is fingerprint-driven (30s daemon watcher), first observation is a baseline.** Payload carries account, kind and `measured_at` only (omitted when usage became unavailable); the watcher is skipped under `.test` binaries so tests never read the real `~/.codex`.
