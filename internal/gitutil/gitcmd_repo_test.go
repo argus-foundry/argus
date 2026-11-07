@@ -56,7 +56,7 @@ func headSHA(t *testing.T, dir string) string {
 
 func TestFetchGitStatus(t *testing.T) {
 	t.Run("empty worktree returns empty msg", func(t *testing.T) {
-		got := FetchGitStatus("task-1", "")
+		got := FetchGitStatus("task-1", "", Options{})
 		testutil.Equal(t, got.TaskID, "task-1")
 		testutil.Equal(t, got.Status, "")
 		testutil.Equal(t, got.Diff, "")
@@ -65,7 +65,7 @@ func TestFetchGitStatus(t *testing.T) {
 
 	t.Run("clean repo", func(t *testing.T) {
 		dir := initRepo(t, t.TempDir())
-		got := FetchGitStatus("t-clean", dir)
+		got := FetchGitStatus("t-clean", dir, Options{})
 		testutil.Equal(t, got.TaskID, "t-clean")
 		testutil.Equal(t, got.Status, "")
 	})
@@ -81,7 +81,7 @@ func TestFetchGitStatus(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got := FetchGitStatus("t-dirty", dir)
+		got := FetchGitStatus("t-dirty", dir, Options{})
 		testutil.Equal(t, got.TaskID, "t-dirty")
 		testutil.Contains(t, got.Status, "README.md")
 		testutil.Contains(t, got.Status, "newfile.txt")
@@ -98,7 +98,7 @@ func TestFetchGitStatus(t *testing.T) {
 		gitRun(t, dir, "add", "feature.txt")
 		gitRun(t, dir, "commit", "-m", "add feature")
 
-		got := FetchGitStatus("t-branch", dir)
+		got := FetchGitStatus("t-branch", dir, Options{})
 		testutil.Contains(t, got.BranchDiff, "feature.txt")
 		testutil.Contains(t, got.BranchFiles, "feature.txt")
 	})
@@ -174,13 +174,13 @@ func TestFindMergeBase(t *testing.T) {
 
 func TestFetchFileDiff(t *testing.T) {
 	t.Run("empty worktree returns empty msg", func(t *testing.T) {
-		got := FetchFileDiff("tid", "", "file.txt")
+		got := FetchFileDiff("tid", "", "file.txt", Options{})
 		testutil.Equal(t, got.TaskID, "tid")
 		testutil.Equal(t, got.Diff, "")
 	})
 
 	t.Run("empty filePath returns empty msg", func(t *testing.T) {
-		got := FetchFileDiff("tid", "/some/dir", "")
+		got := FetchFileDiff("tid", "/some/dir", "", Options{})
 		testutil.Equal(t, got.Diff, "")
 	})
 
@@ -190,7 +190,7 @@ func TestFetchFileDiff(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got := FetchFileDiff("t1", dir, "README.md")
+		got := FetchFileDiff("t1", dir, "README.md", Options{})
 		testutil.Contains(t, got.Diff, "README.md")
 		testutil.Contains(t, got.Diff, "foo")
 	})
@@ -201,8 +201,11 @@ func TestFetchFileDiff(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got := FetchFileDiff("t2", dir, "untracked.txt")
+		got := FetchFileDiff("t2", dir, "untracked.txt", Options{})
 		testutil.Contains(t, got.Diff, "untracked.txt")
+		testutil.Contains(t, got.Diff, "new file mode")
+		testutil.Contains(t, got.Diff, "@@")
+		testutil.Contains(t, got.Diff, "+hello\n")
 	})
 
 	t.Run("branch-only commit produces diff via merge-base", func(t *testing.T) {
@@ -214,7 +217,7 @@ func TestFetchFileDiff(t *testing.T) {
 		gitRun(t, dir, "add", "added.txt")
 		gitRun(t, dir, "commit", "-m", "add file")
 
-		got := FetchFileDiff("t3", dir, "added.txt")
+		got := FetchFileDiff("t3", dir, "added.txt", Options{})
 		testutil.Contains(t, got.Diff, "added.txt")
 	})
 }

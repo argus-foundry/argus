@@ -1,0 +1,9 @@
+- [x] Options + Comparison types, resolveComparison, base-aware status/diff
+- [x] REST handlers pass BaseBranch, 500 on failure
+- [x] TUI call sites pass BaseBranch
+- [x] Tests: stacked repo, unrelated upstream, fallback metadata, local edits, API
+- [x] README REST table, gotcha, archive
+- [x] Review fixes for unborn staged diffs, invalid repositories, and contained literal no-index operands
+- [x] Origin-only base, patch payload, and HTTP comparison regression coverage; reconciled MODIFIED requirements
+- [x] Root-confined bounded snapshots close the validate/open race, preserve native patch formatting and attributes, and protect both swap boundaries
+- [x] Render final symlinks from private blobs and an isolated index so target type changes cannot redirect Git

@@ -377,7 +377,7 @@ func TestApp_FetchGitStatus(t *testing.T) {
 	// gitutil.FetchGitStatus on a non-repo dir returns whatever — function still needs to QueueUpdateDraw.
 	done := make(chan struct{})
 	go func() {
-		app.fetchGitStatus("nonexistent-task", dir)
+		app.fetchGitStatus("nonexistent-task", dir, "")
 		close(done)
 	}()
 	select {
@@ -397,7 +397,7 @@ func TestApp_FetchTaskGitStatus(t *testing.T) {
 	dir := t.TempDir()
 	done := make(chan struct{})
 	go func() {
-		app.fetchTaskGitStatus("any-task", dir)
+		app.fetchTaskGitStatus("any-task", dir, "")
 		close(done)
 	}()
 	select {

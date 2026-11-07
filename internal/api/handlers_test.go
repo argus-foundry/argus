@@ -4603,3 +4603,67 @@ func TestHandleRestartTask_RestoresAcceptedCoordinatorHat(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.True(t, g != nil)
 }
+
+func TestHandleGitComparison(t *testing.T) {
+	srv, d := testServer(t)
+	mux := srv.routes()
+
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q", "-b", "master")
+	runGit(t, repo, "config", "user.email", "t@t")
+	runGit(t, repo, "config", "user.name", "t")
+	runGit(t, repo, "config", "commit.gpgsign", "false")
+	commit := func(name string) {
+		testutil.NoError(t, os.WriteFile(filepath.Join(repo, name), []byte(name+"\n"), 0o600))
+		runGit(t, repo, "add", name)
+		runGit(t, repo, "commit", "-q", "-m", name)
+	}
+	commit("base.txt")
+	runGit(t, repo, "checkout", "-q", "-b", "parent")
+	commit("parent.txt")
+	runGit(t, repo, "checkout", "-q", "-b", "child")
+	commit("child.txt")
+
+	task := &model.Task{Name: "stacked", Status: model.StatusPending, Worktree: repo, BaseBranch: "parent"}
+	testutil.NoError(t, d.Add(task))
+
+	t.Run("status honors base and returns comparison", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, authedReq("GET", "/api/tasks/"+task.ID+"/git/status", ""))
+		testutil.Equal(t, w.Code, http.StatusOK)
+		var got struct {
+			BranchFiles string
+			Comparison  struct {
+				RequestedBase  string  `json:"requested_base"`
+				ResolvedBase   string  `json:"resolved_base"`
+				MergeBase      string  `json:"merge_base"`
+				FallbackReason *string `json:"fallback_reason"`
+			}
+		}
+		testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		testutil.Equal(t, got.Comparison.RequestedBase, "parent")
+		testutil.Equal(t, got.Comparison.ResolvedBase, "parent")
+		testutil.Nil(t, got.Comparison.FallbackReason)
+		testutil.Contains(t, got.BranchFiles, "child.txt")
+		if strings.Contains(got.BranchFiles, "parent.txt") {
+			t.Errorf("parent file leaked: %q", got.BranchFiles)
+		}
+	})
+
+	t.Run("diff of parent file is empty", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, authedReq("GET", "/api/tasks/"+task.ID+"/git/diff?path=parent.txt", ""))
+		testutil.Equal(t, w.Code, http.StatusOK)
+		var got struct{ Diff string }
+		testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		testutil.Equal(t, got.Diff, "")
+	})
+
+	t.Run("non-repo worktree returns 500", func(t *testing.T) {
+		bad := &model.Task{Name: "norepo", Status: model.StatusPending, Worktree: t.TempDir()}
+		testutil.NoError(t, d.Add(bad))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, authedReq("GET", "/api/tasks/"+bad.ID+"/git/status", ""))
+		testutil.Equal(t, w.Code, http.StatusInternalServerError)
+	})
+}
