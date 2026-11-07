@@ -39,6 +39,8 @@ func (s *prCommitSink) Emit(ev model.Event) {
 	case got := <-done:
 		var payload map[string]string
 		testutil.NoError(s.t, json.Unmarshal(ev.Payload, &payload))
+		testutil.Equal(s.t, payload["source"], string(model.PRSourceAutomatic))
+		delete(payload, "source")
 		testutil.DeepEqual(s.t, got, payload)
 	case <-time.After(time.Second):
 		s.t.Error("PR event sink cannot read committed cache during callback")
@@ -90,7 +92,7 @@ func TestPollPR_VerifiedCacheChangeEmits(t *testing.T) {
 			}
 			var payload map[string]string
 			testutil.NoError(t, json.Unmarshal(evs[0].Payload, &payload))
-			want := map[string]string{"state": res.State.String(), "url": res.URL, "lifecycle": string(res.Lifecycle())}
+			want := map[string]string{"state": res.State.String(), "url": res.URL, "lifecycle": string(res.Lifecycle()), "source": string(model.PRSourceAutomatic)}
 			testutil.DeepEqual(t, payload, want)
 			entries, err := d.db.ListMeta("qa", "pr")
 			testutil.NoError(t, err)
@@ -98,6 +100,7 @@ func TestPollPR_VerifiedCacheChangeEmits(t *testing.T) {
 			for _, e := range entries {
 				got[e.Key] = e.Value
 			}
+			delete(want, "source")
 			testutil.DeepEqual(t, got, want)
 			d.pollPRStatesOnce(context.Background())
 			testutil.Equal(t, len(sink.prChanged()), 1)

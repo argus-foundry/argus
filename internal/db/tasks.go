@@ -645,6 +645,9 @@ func (d *DB) Delete(id string) error {
 		if _, err := tx.Exec(`DELETE FROM task_usage_sessions WHERE task_id=?`, id); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(`DELETE FROM task_pr_links WHERE task_id=?`, id); err != nil {
+			return err
+		}
 		// End every live hera binding for the deleted task. Deletion is the only
 		// task lifecycle event that ends bindings — SetArchived deliberately
 		// leaves them intact because archive is resumable. There is no FK from

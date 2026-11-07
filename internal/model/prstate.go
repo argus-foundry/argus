@@ -142,4 +142,14 @@ type PRChangedPayload struct {
 	URL       string      `json:"url"`
 	State     string      `json:"state"`
 	Lifecycle PRLifecycle `json:"lifecycle"`
+	Source    PRSource    `json:"source"`
 }
+
+// PRSource says where a task's PR association came from: an explicit user
+// link (manual) or branch-derived polling (automatic).
+type PRSource string
+
+const (
+	PRSourceManual    PRSource = "manual"
+	PRSourceAutomatic PRSource = "automatic"
+)

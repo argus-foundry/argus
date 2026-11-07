@@ -36,8 +36,9 @@ const (
 	// after a Result write changes the explicit-failure projection.
 	EventTypeTaskFailureChanged = "task.failure_changed"
 	EventTypeTaskForked         = "task.forked"
-	// EventTypeTaskPRChanged carries PRChangedPayload {"url","state","lifecycle"},
-	// published after a changed PR cache commit by the daemon poller.
+	// EventTypeTaskPRChanged carries PRChangedPayload {"url","state","lifecycle","source"},
+	// published after a changed PR cache commit by the daemon poller or a
+	// manual PR link change.
 	EventTypeTaskPRChanged  = "task.pr_changed"
 	EventTypeMessageSent    = "message.sent"
 	EventTypeMessageAcked   = "message.acked"

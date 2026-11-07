@@ -89,7 +89,7 @@ func TestPollPR_PersistsLifecycleAndEmitsEvent(t *testing.T) {
 			var payload map[string]string
 			testutil.NoError(t, json.Unmarshal(evs[0].Payload, &payload))
 			testutil.DeepEqual(t, payload, map[string]string{
-				"url": tc.res.URL, "state": tc.res.State.String(), "lifecycle": tc.lifecycle,
+				"url": tc.res.URL, "state": tc.res.State.String(), "lifecycle": tc.lifecycle, "source": "automatic",
 			})
 
 			d.pollPRStatesOnce(context.Background())
