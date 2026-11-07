@@ -1,0 +1,13 @@
+.composer-attachments{margin-bottom:var(--space-2)}
+.attachment-list{display:flex;flex-wrap:wrap;gap:var(--space-2);max-height:160px;overflow:auto}
+.attachment-chip{display:flex;align-items:center;gap:var(--space-2);max-width:100%;padding:var(--space-2);background:var(--raised);border:1px solid var(--border);border-radius:var(--radius)}
+.attachment-chip img{width:40px;height:40px;object-fit:contain;border-radius:var(--radius);background:var(--background)}
+.attachment-info{display:flex;flex-direction:column;min-width:0}
+.attachment-name{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attachment-state,.attachment-status{font-size:10px;color:var(--secondary)}
+.attachment-chip[data-state="error"]{border-color:var(--error)}
+.attachment-chip[data-state="error"] .attachment-state{color:var(--error)}
+.attachment-chip button{font-size:11px;padding:var(--space-1)}
+.attachment-status{padding-top:var(--space-1)}
+.file-drag-over{outline:2px solid var(--accent);outline-offset:-2px;background:var(--accent-bg)}
+.file-drag-over.file-drop-disabled{outline-color:var(--warning)}

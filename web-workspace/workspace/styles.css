@@ -1,0 +1,44 @@
+@import url('../shared/tooltip.css');
+@import url('rail/rail-tooltips.css');
+@import url('layout.css');
+@import url('../terminal/terminal-viewport.css');
+@import url('views.css');
+@import url('../tasks/changes/task-changes.css');
+@import url('../composer/attachments/attachments.css');
+@import url('rail/task-hierarchy.css');
+@import url('rail/task-row.css');
+@import url('../settings/settings.css');
+@import url('../settings/settings-operations.css');
+@import url('../tasks/settings/task-settings.css');
+@import url('rail/project-row.css');
+@import url('../tasks/create/new-task.css');
+
+@import url('../composer/composer.css');
+:root {
+  --background:#151312; --surface:#1d1b19; --raised:#282522; --hover:#322d28; --border:#36322e;
+  --text:#efebe5; --secondary:#aaa299; --accent:#d9bca6; --success:#77c99b; --warning:#e5bd72; --error:#e69791; --focus:#a7c7ff;
+  --shadow:#0008; --added-bg:#25342b; --removed-bg:#3b2826; --accent-bg:#332b25;
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+  --body:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --mono:"SFMono-Regular",Consolas,monospace;
+  --radius:6px; --radius-card:10px; --radius-composer:14px; --nav-width:256px; --tools-width:340px;
+  --header-height:56px; --motion:120ms;
+}
+*{box-sizing:border-box} [hidden]{display:none!important}
+body{margin:0;background:var(--background);color:var(--text);font:14px/1.6 var(--body);height:100dvh;overflow:hidden}
+button,input,textarea{font:inherit;color:inherit} button{background:transparent;border:1px solid transparent;border-radius:var(--radius);padding:6px 10px;cursor:pointer;white-space:nowrap;transition:background var(--motion)}
+button:hover,a:hover{background:var(--hover)} button:disabled{opacity:.5;cursor:default}
+a{color:var(--accent);text-decoration:none;border-radius:var(--radius)}
+button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+input,textarea{background:transparent;border:0;outline:none} input::placeholder,textarea::placeholder{color:var(--secondary)}
+h1,h2,p{margin:0} h1{font-size:21px;line-height:1.4;letter-spacing:-.4px;font-weight:550} h2{font-size:18px;line-height:1.5;letter-spacing:-.25px;font-weight:500}
+.eyebrow{font-size:11px;letter-spacing:1.3px;color:var(--secondary);font-weight:600}
+.primary{background:var(--accent);color:var(--background);font-weight:600}.primary:hover{background:var(--text)}
+.error-text{color:var(--error)!important}.muted{color:var(--secondary)}
+.empty-state{padding:var(--space-5);color:var(--secondary)}.empty-state h2{color:var(--text);margin-bottom:var(--space-2)}.empty-state p{font-size:13px;line-height:1.8}.empty-state button{margin-top:var(--space-3);border-color:var(--border);color:var(--accent)}
+.projects-warning{padding:0 var(--space-4) var(--space-3);color:var(--warning);font-size:12px}
+.notice{position:fixed;bottom:var(--space-5);left:50%;transform:translateX(-50%);padding:var(--space-3) var(--space-4);background:var(--raised);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:0 4px 24px var(--shadow);z-index:40;max-width:calc(100vw - 32px);font-size:13px}
+dialog{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-composer);width:min(460px,calc(100vw - 32px));padding:var(--space-6);box-shadow:0 24px 80px var(--shadow)}dialog::backdrop{background:var(--shadow);backdrop-filter:blur(4px)}dialog h2{margin:var(--space-3) 0;font-size:25px}dialog p{font-size:14px;color:var(--secondary);margin-bottom:var(--space-5)}dialog label{display:block;font-size:12px;color:var(--secondary);margin-bottom:var(--space-2)}dialog input{width:100%;padding:var(--space-3);border:1px solid var(--border);background:var(--background);border-radius:var(--radius);margin-bottom:var(--space-5)}#connect-form>.primary{display:block;width:100%;padding:var(--space-3)}#connect-form>a{display:block;text-align:center;font-size:12px;margin-top:var(--space-4);padding:var(--space-2)}.dialog-actions{display:flex;justify-content:flex-end;gap:var(--space-2)}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+
+.remember-token{display:flex;align-items:center;gap:var(--space-2)}.remember-token input{width:auto;margin:0;padding:0}

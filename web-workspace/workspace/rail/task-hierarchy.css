@@ -1,0 +1,8 @@
+.task-family{position:relative;min-width:0}
+.task-disclosure{position:relative;cursor:pointer;list-style:none}
+.task-disclosure::-webkit-details-marker{display:none}
+.task-caret{position:absolute;z-index:1;left:-8px;top:17px;transform:translateY(-50%);pointer-events:auto;color:var(--secondary)}
+.task-family[open]>.task-disclosure>.task-caret{transform:translateY(-50%) rotate(90deg)}
+.task-disclosure:hover>.task-item>.task-row{background:var(--raised)}
+.task-children{margin-left:var(--rail-indent)}
+.rail-chevron{display:block;width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}

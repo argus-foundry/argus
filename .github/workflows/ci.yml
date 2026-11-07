@@ -103,6 +103,13 @@ jobs:
         run: |
           go run ./scripts/coverfilter -in coverage.out -min 88 -quiet >/dev/null
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Workspace Unit Tests
+        run: npm test --prefix web-workspace
+
       - name: Upload Coverage Artifact
         uses: actions/upload-artifact@v7
         with:

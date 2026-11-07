@@ -1,6 +1,6 @@
 ## CI Gate Troubleshooting (`make pre-pr`)
 
-`make pre-pr` mirrors `.github/workflows/ci.yml` step-for-step (build → vet → fmt-check → lint-pr → vuln → test-cover-gate). Steps run in sequence and the first failure short-circuits the rest, so a formatting miss hides downstream test/lint/coverage failures until fixed — always run the **full** `pre-pr` locally to surface everything in one pass. Per-gate failure recipes:
+`make pre-pr` mirrors `.github/workflows/ci.yml` step-for-step (build → vet → fmt-check → lint-pr → vuln → test-cover-gate → workspace-test). Steps run in sequence and the first failure short-circuits the rest, so a formatting miss hides downstream test/lint/coverage failures until fixed — always run the **full** `pre-pr` locally to surface everything in one pass. Per-gate failure recipes:
 
 - **`fmt-check`** — run `make fmt` first; goimports rewrites the tree. An unformatted file is the most common CI miss.
 - **`test-cover-gate`** — filtered coverage dropped below the 88% floor. Add tests for code you touched (or under-covered platform-agnostic code) until it clears; the floor ratchets up, never down. Do NOT lower `-min`. Filtered coverage drifts ~0.2% darwin↔linux from platform branches (e.g. `internal/agent/sandbox.go`) — target platform-agnostic code for reliable margin.

@@ -1,0 +1,116 @@
+import { $ } from '../shared/dom.js';
+import { log } from '../core/api.js';
+import { sendsMessage, insertPlaintext } from './composer-policy.js';
+import { ComposerAttachments } from './composer-attachments.js';
+import { ComposerContext } from './composer-context.js';
+import { ComposerIdentity } from './composer-identity.js';
+import { attachmentMessage, imageFile } from './attachments/attachment-policy.js';
+
+function text(element, value) {
+  if (element.textContent !== value) element.textContent = value;
+}
+
+export class TaskComposer {
+  constructor(send, api) {
+    this.send = send;
+    this.drafts = new Map();
+    this.pending = new Set();
+    this.errors = new Map();
+    this.generation = 0;
+    $('draft').addEventListener('input', () => this.captureDraft());
+    $('draft').addEventListener('compositionstart', () => { this.composing = true; });
+    $('draft').addEventListener('compositionend', () => { this.composing = false; });
+    $('composer').addEventListener('submit', event => { event.preventDefault(); this.submit(); });
+    $('draft').addEventListener('keydown', event => {
+      if (sendsMessage(event, this.composing)) { event.preventDefault(); this.submit(); }
+    });
+    document.addEventListener('paste', event => this.pasteIntoComposer(event));
+    this.context = new ComposerContext(api);
+    this.identity = new ComposerIdentity(api, () => { this.context.identity(this.identity.raw); this.render(); });
+    this.attachments = new ComposerAttachments(api, this);
+  }
+  captureDraft() { if (this.task) this.drafts.set(this.task.id, $('draft').value); this.render(); }
+  focus() {
+    const draft = $('draft');
+    if (draft.disabled || draft.closest('[inert]') || document.querySelector('dialog[open]')) return;
+    draft.focus({ preventScroll: true });
+  }
+  pasteIntoComposer(event) {
+    const draft = $('draft');
+    if (event.defaultPrevented || draft.readOnly || draft.closest('[inert]') || document.querySelector('dialog[open]')) return;
+    const active = document.activeElement;
+    if (active !== draft && active?.closest('input, textarea, select, [contenteditable], .xterm')) return;
+    if (this.attachments.paste(event)) return;
+    if (!this.task || draft.disabled) return;
+    const text = event.clipboardData?.getData('text/plain');
+    if (!text) return;
+    event.preventDefault();
+    this.focus();
+    insertPlaintext(draft, text);
+    this.captureDraft();
+    log('composer', 'paste inserted', { status: 'ok' });
+  }
+  select(task) {
+    this.composing = false;
+    this.task = task;
+    this.identity.select(task);
+    this.context.select(task);
+    this.attachments.message = ''; this.attachments.drop.clear();
+    $('draft').value = task ? this.drafts.get(task.id) || '' : '';
+    this.interactive = false;
+    this.render();
+  }
+  setInteractive(value) { this.interactive = !!value; this.render(); }
+  render() {
+    const task = this.task, pending = task && this.pending.has(task.id);
+    if ($('draft').disabled !== !task) $('draft').disabled = !task;
+    const attached = this.attachments.store.ready(task?.id);
+    const unavailable = !task || !this.interactive || !!pending || this.attachments.store.blocked(task.id) || (!$('draft').value.trim() && !attached.length);
+    if ($('send').disabled !== unavailable) $('send').disabled = unavailable;
+    const sending = String(!!pending);
+    if ($('send').dataset.sending !== sending) {
+      $('send').dataset.sending = sending;
+      $('send').innerHTML = pending
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg><span class="sr-only">Sending…</span>'
+        : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4m-7 7 7-7 7 7"/></svg>';
+    }
+    const sendLabel = pending ? 'Sending message' : 'Send message';
+    if ($('send').getAttribute('aria-label') !== sendLabel) $('send').setAttribute('aria-label', sendLabel);
+    if ($('send').dataset.tooltip !== sendLabel) $('send').dataset.tooltip = sendLabel;
+    text($('composer-label'), this.identity.label());
+    const error = task && this.errors.get(task.id);
+    if ($('composer-status').classList.contains('error') !== !!error) $('composer-status').classList.toggle('error', !!error);
+    text($('composer-status'), error || (pending ? 'Sending to this task. Your draft is kept until delivery succeeds.' : task && !this.interactive ? 'The session is not accepting messages. You can keep drafting.' : 'Enter to send · Shift+Enter for a new line'));
+    this.attachments.render();
+  }
+  async submit() {
+    const task = this.task, text = $('draft').value;
+    const attached = this.attachments.store.ready(task?.id);
+    if (!task || (!text.trim() && !attached.length) || !this.interactive || this.pending.has(task.id) || this.attachments.store.blocked(task.id)) return;
+    const generation = this.generation;
+    const fromComposer = [$('draft'), $('send')].includes(document.activeElement);
+    this.pending.add(task.id);
+    this.errors.delete(task.id);
+    this.drafts.set(task.id, text);
+    this.render();
+    try {
+      await this.send(attachmentMessage(text, attached.map(item => item.path)), task, {attachments:attached.length > 0,imagePaths:attached.filter(item=>imageFile(item.file)).map(item=>item.path)});
+      if (generation !== this.generation) return;
+      this.attachments.store.consume(attached);
+      if (this.drafts.get(task.id) === text) {
+        this.drafts.delete(task.id);
+        if (this.task?.id === task.id) $('draft').value = '';
+      }
+      log('composer', 'sent', { status: 'ok' });
+      if (this.task?.id === task.id && fromComposer &&
+          [$('draft'), $('send'), document.body].includes(document.activeElement)) this.focus();
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.errors.set(task.id, `Message was not confirmed. Your draft is kept. Check the terminal before resending. ${error.message}`);
+      log('composer', 'send failed', { status: error.status || 'error' });
+    } finally {
+      if (generation === this.generation) { this.pending.delete(task.id); this.render(); }
+    }
+  }
+  clear() { this.generation++; this.composing = false; this.task = null; this.identity.select(null); this.context.select(null); this.drafts.clear(); this.pending.clear(); this.errors.clear(); $('draft').value = ''; this.interactive = false; this.attachments.clear(); this.render(); }
+}

@@ -1,0 +1,10 @@
+#main{position:relative}
+#main.creating-task>:not(.new-task-view){visibility:hidden}
+.new-task-view{position:absolute;inset:0;overflow:auto;background:var(--background);padding:var(--space-6);z-index:4}
+.new-task-view h1{margin-bottom:var(--space-5)}
+.new-task-form{max-width:640px}
+.new-task-form label{display:block;color:var(--secondary);font-size:12px;margin-bottom:var(--space-2)}
+.new-task-form input,.new-task-form textarea{display:block;width:100%;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);padding:var(--space-3);margin-bottom:var(--space-5)}
+.new-task-form textarea{min-height:160px;resize:vertical;line-height:1.7}
+.new-task-form input[readonly]{color:var(--secondary)}
+.new-task-actions{display:flex;justify-content:flex-end;gap:var(--space-2);margin-top:var(--space-4)}
