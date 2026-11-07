@@ -1022,7 +1022,9 @@ Plugins authenticate with a **scope token** (`X-Argus-Auth: scope:<name>`), a th
 
 | Method | Endpoint                       | Token | Description                                                                                                                                                                                |
 | ------ | ------------------------------ | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/events/stream?since=<n>` | any   | SSE feed of `task.*`, `session.*`, `message.*`, `link.*` events. `since` is an exclusive cursor that replays missed events; a cursor older than the ring emits a synthetic `resync` so the client re-snapshots. 30 s keepalives. |
+| `GET`  | `/api/events/stream?since=<n>` | any   | SSE feed of `task.*`, `session.*`, `message.*`, `link.*` events. `task.updated` is a documented invalidation event (see below). `since` is an exclusive cursor that replays missed events; a cursor older than the ring emits a synthetic `resync` so the client re-snapshots. 30 s keepalives. |
+
+**`task.updated`** — emitted after a task mutation commits (REST, MCP, TUI and daemon paths alike) as `{"id":123,"type":"task.updated","at":"...","task_id":"t","payload":{"changed_fields":["archived","pinned"]}}`. `changed_fields` lists only fields that actually changed, from `name`, `status`, `archived`, `pinned`, `runtime` (backend/model/session id), `account`, `result`, `pr`, in that order. It carries no prompt or result content: re-read the task over REST. Existing `task.renamed` / `task.status_changed` / `task.archived` events are unchanged and still fire, so a mutation may produce a specific event plus one `task.updated`. No-op writes and failed writes emit nothing; hard delete keeps `task.deleted`. Emission is best-effort after commit, so keep a slow reconciliation fetch.
 
 ### Keep the host awake
 
