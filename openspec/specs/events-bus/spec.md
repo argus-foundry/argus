@@ -177,3 +177,12 @@ The system SHALL publish `task.failure_changed` with payload `{"failure":null}` 
 
 - **WHEN** a failed Result is replaced by a non-failure Result
 - **THEN** one event with `{"failure":null}` is published
+
+### Requirement: task.pr_changed event
+
+The system SHALL publish `task.pr_changed` with the task id and payload `{"url","state","lifecycle"}` after a changed PR cache commit. Consumers SHALL ignore payload keys they do not know.
+
+#### Scenario: Payload shape
+
+- **WHEN** a merged PR is first cached
+- **THEN** the payload is `{"url":"...","state":"merged-closed","lifecycle":"merged"}`

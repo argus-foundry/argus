@@ -35,11 +35,14 @@ const (
 	// after a Result write changes the explicit-failure projection.
 	EventTypeTaskFailureChanged = "task.failure_changed"
 	EventTypeTaskForked         = "task.forked"
-	EventTypeMessageSent        = "message.sent"
-	EventTypeMessageAcked       = "message.acked"
-	EventTypeSessionStarted     = "session.started"
-	EventTypeSessionExited      = "session.exited"
-	EventTypeSessionIdle        = "session.idle"
+	// EventTypeTaskPRChanged carries PRChangedPayload {"url","state","lifecycle"},
+	// published after a changed PR cache commit by the daemon poller.
+	EventTypeTaskPRChanged  = "task.pr_changed"
+	EventTypeMessageSent    = "message.sent"
+	EventTypeMessageAcked   = "message.acked"
+	EventTypeSessionStarted = "session.started"
+	EventTypeSessionExited  = "session.exited"
+	EventTypeSessionIdle    = "session.idle"
 
 	// EventTypeSessionNeedsInput fires when a session transitions into or out
 	// of the "blocked waiting on the user" state (the red ? in the TUI). One

@@ -115,8 +115,9 @@ func TestPollPRBatch_TerminalExcludedBeforeGrouping(t *testing.T) {
 	seedTask(t, d.db, "open", "argus/open", false)
 	seedTask(t, d.db, "merged", "argus/merged", false)
 	testutil.NoError(t, d.db.SetMetaBatch("merged", "pr", map[string]string{
-		"state": model.PRMergedClosed.String(),
-		"url":   "https://github.com/drn/argus/pull/9",
+		"state":     model.PRMergedClosed.String(),
+		"url":       "https://github.com/drn/argus/pull/9",
+		"lifecycle": "merged",
 	}))
 	seedURL(t, d, "open", "https://github.com/drn/argus/pull/8")
 
@@ -286,8 +287,9 @@ func TestPollPRBatch_LogsPerCycleSummary(t *testing.T) {
 	// Terminal task → excluded from the eligible set → counted as skipped.
 	seedTask(t, d.db, "merged", "argus/merged", false)
 	testutil.NoError(t, d.db.SetMetaBatch("merged", "pr", map[string]string{
-		"state": model.PRMergedClosed.String(),
-		"url":   "https://github.com/drn/argus/pull/9",
+		"state":     model.PRMergedClosed.String(),
+		"url":       "https://github.com/drn/argus/pull/9",
+		"lifecycle": "merged",
 	}))
 
 	// Two eligible tasks on drn/argus → group resolves cleanly → both written.

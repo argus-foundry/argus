@@ -712,7 +712,7 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 				state = st
 			}
 		}
-		if state.IsTerminal() {
+		if state.IsTerminal() && model.ParsePRLifecycle(prMeta[t.ID]["lifecycle"]) != model.PRLifecycleUnknown {
 			skipped++
 			uxlog.Log("[pr] poll: skip terminal %s (state=%s)", t.ID, state)
 			continue
@@ -829,14 +829,23 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 					// every TUI's Hera rail to rebuild (one commit per task per
 					// minute before this). The merge notifications below key off
 					// the fetched result, not off whether a write happened.
-					if _, werr := d.db.SetMetaBatchIfChanged(t.ID, "pr", map[string]string{
-						"state": res.State.String(),
-						"url":   res.URL,
-					}); werr != nil {
+					lifecycle := res.Lifecycle()
+					wrote, werr := d.db.SetMetaBatchIfChanged(t.ID, "pr", map[string]string{
+						"state":     res.State.String(),
+						"url":       res.URL,
+						"lifecycle": string(lifecycle),
+					})
+					if werr != nil {
 						uxlog.Log("[pr] poll: persist failed for %s: %v", t.ID, werr)
 						continue
 					}
 					written++
+					if wrote {
+						events.Emit(model.EventTypeTaskPRChanged, t.ID, model.PRChangedPayload{
+							URL: res.URL, State: res.State.String(), Lifecycle: lifecycle,
+						})
+						uxlog.Log("[pr] poll: %s changed state=%s lifecycle=%s", t.ID, res.State, lifecycle)
+					}
 					if res.Merged {
 						d.notifyCoordinatorOfMergedPR(t, res.URL)
 						d.notifyRoleOfMergedPR(t, res.URL)
