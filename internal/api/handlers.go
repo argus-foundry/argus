@@ -87,20 +87,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // taskJSON is the wire shape returned by /api/tasks*.
 //
 // Status is the persisted DB status. Idle is a runtime-derived flag that is
-// true only when Status == in_progress and the agent session is missing or
-// waiting for input. omitempty drops idle:false from the JSON; the SPA reads
-// missing fields as falsy, which matches the intended contract (no idle field
-// == not idle).
+// true only when a live session is waiting for input; an absent session is not
+// idle. omitempty drops idle:false from the JSON; the SPA reads missing fields
+// as falsy, which matches the intended contract (no idle field == not idle).
 type taskJSON struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Status string `json:"status"`
 	Idle   bool   `json:"idle,omitempty"`
-	// Live is true when Status == in_progress and the runner holds a real
-	// session for the task, including one parked idle at a prompt, and no
-	// kill+resume restart is pending. Idle alone cannot say whether input can
-	// reach a PTY, so clients use Live. Deliberately NOT omitempty: an absent
-	// field means an older daemon, and clients fall back to !idle.
+	// Live is true when the runner holds a real session for the task,
+	// including one parked idle at a prompt, and no kill+resume restart is
+	// pending, whatever the workflow status. Deliberately NOT omitempty: an
+	// absent field means an older daemon, and clients fall back to !idle.
 	Live bool `json:"live"`
 	// NeedsInput is a runtime-derived flag, true only when Status ==
 	// in_progress and the daemon's watcher detected the agent is blocked
@@ -122,6 +120,9 @@ type taskJSON struct {
 	// actionable values; the badge renderer ignores draft/merged-closed/
 	// unknown anyway.
 	PRState string `json:"pr_state,omitempty"`
+	// Failure is the explicit agent-reported failure parsed from Result, or
+	// null. Not omitempty so clients can tell "no failure" from an old daemon.
+	Failure *model.TaskFailure `json:"failure"`
 }
 
 // taskRuntimeState carries non-persisted, derived-at-request-time fields used
@@ -136,6 +137,8 @@ type taskRuntimeState struct {
 	// field via omitempty. Populated by the caller from a batch task_meta
 	// read — never by shelling out to gh.
 	PRState string
+	// Failure is the projection of the task's Result; nil when not failed.
+	Failure *model.TaskFailure
 }
 
 func taskToJSON(t *model.Task, rt taskRuntimeState) taskJSON {
@@ -155,6 +158,7 @@ func taskToJSON(t *model.Task, rt taskRuntimeState) taskJSON {
 		WorktreePath: t.Worktree,
 		Prompt:       t.Prompt,
 		PRState:      prDTOValue(rt.PRState),
+		Failure:      rt.Failure,
 	}
 }
 
@@ -169,18 +173,16 @@ func prDTOValue(state string) string {
 	return state
 }
 
-// computeRuntimeState derives the per-request runtime state for a task.
-// Mirrors the TUI's drawTaskRow rule: an InProgress task is idle when it has
-// no live session (running map miss) or its session is waiting for input
-// (idle map hit). Non-InProgress tasks are never idle.
+// computeRuntimeState derives the per-request runtime state for a task. Live
+// is session existence and is independent of workflow status; an absent
+// session is never idle. NeedsInput keeps its in_progress gate and requires a
+// live session.
 func computeRuntimeState(t *model.Task, runningSet, idleSet, needsInputSet map[string]bool) taskRuntimeState {
-	if t.Status != model.StatusInProgress {
-		return taskRuntimeState{}
-	}
+	live := runningSet[t.ID]
 	return taskRuntimeState{
-		Idle:       !runningSet[t.ID] || idleSet[t.ID],
-		Live:       runningSet[t.ID],
-		NeedsInput: needsInputSet[t.ID],
+		Idle:       live && idleSet[t.ID],
+		Live:       live,
+		NeedsInput: live && t.Status == model.StatusInProgress && needsInputSet[t.ID],
 	}
 }
 
@@ -191,7 +193,7 @@ func computeRuntimeState(t *model.Task, runningSet, idleSet, needsInputSet map[s
 func (s *Server) runtimeState(t *model.Task, runningSet, idleSet, needsInputSet map[string]bool) taskRuntimeState {
 	rt := computeRuntimeState(t, runningSet, idleSet, needsInputSet)
 	if rt.Live && s.runner.HasPendingRestart(t.ID) {
-		rt.Live = false
+		rt = taskRuntimeState{}
 	}
 	return rt
 }
@@ -268,6 +270,7 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		if kv := prMeta[t.ID]; kv != nil {
 			rt.PRState = kv["state"]
 		}
+		rt.Failure = model.FailureFromResult(t.Result, t.ResultAt)
 		result = append(result, taskToJSON(t, rt))
 	}
 
@@ -285,6 +288,7 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	}
 	runningSet, idleSet, needsInputSet := s.sessionStateMaps()
 	rt := s.runtimeState(task, runningSet, idleSet, needsInputSet)
+	rt.Failure = model.FailureFromResult(task.Result, task.ResultAt)
 	// Pure cache read of the daemon-written PR state; never shells out to gh.
 	if entries, merr := s.db.ListMeta(task.ID, "pr"); merr == nil {
 		for _, e := range entries {

@@ -124,11 +124,12 @@ func (s *Server) handlePushTest(w http.ResponseWriter, r *http.Request) {
 type idleWatcherState struct {
 	bridgeSource  map[string]bool
 	scraperNeeds  map[string]bool
-	idleNow       map[string]bool      // taskID -> last seen idle?
-	seenBefore    map[string]bool      // taskID -> have we observed this session on a prior tick?
-	pushedAt      map[string]time.Time // taskID -> wall-clock time we last fired an idle push
-	needsInputNow map[string]bool      // taskID -> last seen blocked-on-user-input?
-	contextAt     map[string]time.Time // taskID -> measured_at last announced via task.context_changed
+	idleNow       map[string]bool       // taskID -> last seen idle?
+	seenBefore    map[string]bool       // taskID -> have we observed this session on a prior tick?
+	pushedAt      map[string]time.Time  // taskID -> wall-clock time we last fired an idle push
+	needsInputNow map[string]bool       // taskID -> last seen blocked-on-user-input?
+	contextAt     map[string]time.Time  // taskID -> measured_at last announced via task.context_changed
+	runtimeNow    map[string]runtimeSig // taskID -> last published REST runtime flags (non-zero only)
 	// contentFP carries each prompt-showing session's content fingerprint from
 	// the previous tick (BUG-032). A session whose meaningful output is
 	// unchanged across ticks while it shows the prompt signature is blocked
@@ -577,6 +578,7 @@ func (s *Server) idleWatcherTick(state *idleWatcherState) {
 	// Resolve input from this tick's raw inference before idle events/pushes.
 	// Feeding the published runner verdict back here would latch exact dialogs.
 	s.detectNeedsInputTick(state, running, idle, tailOf)
+	s.emitRuntimeChanges(state)
 	if state.bridgeSource == nil {
 		state.bridgeSource = make(map[string]bool)
 	}
@@ -827,4 +829,41 @@ func (s *Server) autoClearBlockedHeraRoles(state *idleWatcherState, running []st
 		}
 	}
 	state.heraBlockedResume = next
+}
+
+type runtimeSig struct {
+	Live       bool `json:"live"`
+	Idle       bool `json:"idle"`
+	NeedsInput bool `json:"needs_input"`
+}
+
+// emitRuntimeChanges publishes session.runtime_changed for every task whose
+// REST runtime flags (live, idle, needs_input) differ from the last published
+// value, including changes driven only by a workflow-status transition. A task
+// with no previous entry is treated as all-false.
+func (s *Server) emitRuntimeChanges(state *idleWatcherState) {
+	if s.db == nil {
+		return
+	}
+	tasks, err := s.db.Tasks()
+	if err != nil {
+		uxlog.Log("[runtime] list tasks failed: %v", err)
+		return
+	}
+	next := make(map[string]runtimeSig, len(state.runtimeNow))
+	runningSet, idleSet, needsInputSet := s.sessionStateMaps()
+	for _, t := range tasks {
+		rt := s.runtimeState(t, runningSet, idleSet, needsInputSet)
+		cur := runtimeSig{Live: rt.Live, Idle: rt.Idle, NeedsInput: rt.NeedsInput}
+		if cur != (runtimeSig{}) {
+			next[t.ID] = cur
+		}
+		prev := state.runtimeNow[t.ID]
+		if cur == prev {
+			continue
+		}
+		uxlog.Log("[runtime] task=%s live=%t idle=%t needs_input=%t", t.ID, cur.Live, cur.Idle, cur.NeedsInput)
+		events.Emit(model.EventTypeSessionRuntimeChanged, t.ID, cur)
+	}
+	state.runtimeNow = next
 }

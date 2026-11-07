@@ -22,7 +22,7 @@ var ErrTaskNotFound = errors.New("task not found")
 
 // taskColumns is the canonical column list for task queries. Order MUST
 // match scanTask's Scan call and the INSERT/UPDATE statements below.
-const taskColumns = `id, name, status, project, branch, prompt, backend, model, worktree, agent_pid, session_id, sandboxed, archived, pinned, base_branch, result, archetype, profile, sandbox_override, account, account_routed, created_at, started_at, ended_at`
+const taskColumns = `id, name, status, project, branch, prompt, backend, model, worktree, agent_pid, session_id, sandboxed, archived, pinned, base_branch, result, archetype, profile, sandbox_override, account, account_routed, created_at, started_at, ended_at, result_at`
 
 // qualifyColumns prefixes each column in a comma-separated column list with
 // "alias." — needed when selecting taskColumns from a query that JOINs tasks
@@ -55,9 +55,9 @@ func scanTask(row scanner) (*model.Task, error) {
 // query, so the row is read exactly once.
 func scanTaskExtra(row scanner, extra ...any) (*model.Task, error) {
 	t := &model.Task{}
-	var status, createdAt, startedAt, endedAt string
+	var status, createdAt, startedAt, endedAt, resultAt string
 	var sandboxed, archived, pinned, accountRouted int
-	dest := []any{&t.ID, &t.Name, &status, &t.Project, &t.Branch, &t.Prompt, &t.Backend, &t.Model, &t.Worktree, &t.AgentPID, &t.SessionID, &sandboxed, &archived, &pinned, &t.BaseBranch, &t.Result, &t.Archetype, &t.Profile, &t.SandboxOverride, &t.Account, &accountRouted, &createdAt, &startedAt, &endedAt}
+	dest := []any{&t.ID, &t.Name, &status, &t.Project, &t.Branch, &t.Prompt, &t.Backend, &t.Model, &t.Worktree, &t.AgentPID, &t.SessionID, &sandboxed, &archived, &pinned, &t.BaseBranch, &t.Result, &t.Archetype, &t.Profile, &t.SandboxOverride, &t.Account, &accountRouted, &createdAt, &startedAt, &endedAt, &resultAt}
 	dest = append(dest, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return nil, err
@@ -70,6 +70,7 @@ func scanTaskExtra(row scanner, extra ...any) (*model.Task, error) {
 	t.CreatedAt = parseTime(createdAt)
 	t.StartedAt = parseTime(startedAt)
 	t.EndedAt = parseTime(endedAt)
+	t.ResultAt = parseTime(resultAt)
 	return t, nil
 }
 
@@ -157,14 +158,23 @@ func (d *DB) addLocked(t *model.Task) error {
 	if t.Pinned {
 		pinnedInt = 1
 	}
-	_, err := d.conn.Exec(`INSERT INTO tasks (id, name, status, project, branch, prompt, backend, model, worktree, agent_pid, session_id, sandboxed, archived, pinned, base_branch, result, archetype, profile, sandbox_override, account, account_routed, created_at, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	var resultAt time.Time
+	if t.Result != "" {
+		resultAt = time.Now()
+	}
+	_, err := d.conn.Exec(`INSERT INTO tasks (id, name, status, project, branch, prompt, backend, model, worktree, agent_pid, session_id, sandboxed, archived, pinned, base_branch, result, archetype, profile, sandbox_override, account, account_routed, created_at, started_at, ended_at, result_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.Name, t.Status.String(), t.Project, t.Branch, t.Prompt, t.Backend, t.Model, t.Worktree, t.AgentPID, t.SessionID, sandboxedInt, archivedInt, pinnedInt,
 		t.BaseBranch, t.Result, t.Archetype, t.Profile, t.SandboxOverride, t.Account, boolToInt(t.AccountRouted),
-		formatTime(t.CreatedAt), formatTime(t.StartedAt), formatTime(t.EndedAt))
+		formatTime(t.CreatedAt), formatTime(t.StartedAt), formatTime(t.EndedAt), formatTime(resultAt))
+	if err == nil {
+		t.ResultAt = resultAt
+	}
 	return err
 }
 
 func (d *DB) Update(t *model.Task) error {
+	d.resultMu.Lock()
+	defer d.resultMu.Unlock()
 	old, err := d.updateLocked(t)
 	if err != nil {
 		return err
@@ -191,8 +201,20 @@ func (d *DB) Update(t *model.Task) error {
 	}
 	if old != nil {
 		events.EmitTaskUpdated(t.ID, model.ChangedTaskFields(old, t)...)
+		if old.Result != t.Result {
+			emitFailureChanged(t.ID, old.Result, t.Result, t.ResultAt)
+		}
 	}
 	return nil
+}
+
+// ResultAt returns the persisted result observation time, zero when unset.
+func (d *DB) ResultAt(id string) time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var at string
+	_ = d.conn.QueryRow(`SELECT result_at FROM tasks WHERE id=?`, id).Scan(&at)
+	return parseTime(at)
 }
 
 func (d *DB) updateLocked(t *model.Task) (*model.Task, error) {
@@ -216,10 +238,17 @@ func (d *DB) updateLocked(t *model.Task) (*model.Task, error) {
 	if t.Pinned {
 		pinnedInt = 1
 	}
-	res, err := d.conn.Exec(`UPDATE tasks SET name=?, status=?, project=?, branch=?, prompt=?, backend=?, model=?, worktree=?, agent_pid=?, session_id=?, sandboxed=?, archived=?, pinned=?, base_branch=?, result=?, archetype=?, profile=?, sandbox_override=?, account=?, account_routed=?, created_at=?, started_at=?, ended_at=? WHERE id=?`,
+	var resultAt time.Time
+	if old != nil {
+		resultAt = old.ResultAt
+		if old.Result != t.Result {
+			resultAt = time.Now()
+		}
+	}
+	res, err := d.conn.Exec(`UPDATE tasks SET name=?, status=?, project=?, branch=?, prompt=?, backend=?, model=?, worktree=?, agent_pid=?, session_id=?, sandboxed=?, archived=?, pinned=?, base_branch=?, result=?, archetype=?, profile=?, sandbox_override=?, account=?, account_routed=?, created_at=?, started_at=?, ended_at=?, result_at=? WHERE id=?`,
 		t.Name, t.Status.String(), t.Project, t.Branch, t.Prompt, t.Backend, t.Model, t.Worktree, t.AgentPID, t.SessionID, sandboxedInt, archivedInt, pinnedInt,
 		t.BaseBranch, t.Result, t.Archetype, t.Profile, t.SandboxOverride, t.Account, boolToInt(t.AccountRouted),
-		formatTime(t.CreatedAt), formatTime(t.StartedAt), formatTime(t.EndedAt), t.ID)
+		formatTime(t.CreatedAt), formatTime(t.StartedAt), formatTime(t.EndedAt), formatTime(resultAt), t.ID)
 	if err != nil {
 		return old, err
 	}
@@ -227,6 +256,7 @@ func (d *DB) updateLocked(t *model.Task) (*model.Task, error) {
 	if n == 0 {
 		return old, fmt.Errorf("%w: %s", ErrTaskNotFound, t.ID)
 	}
+	t.ResultAt = resultAt
 	return old, nil
 }
 
@@ -312,35 +342,74 @@ func (d *DB) renameIfNameLocked(id, expected, newName string) (bool, error) {
 	return false, nil
 }
 
-// SetResult writes the opaque JSON result blob for a task. The daemon does
-// not parse the contents — it's the agent/orchestrator contract. Returns an
-// error if the row is missing. Idempotent: last write wins.
+// SetResult writes the result and projects explicit failures for REST/SSE.
+// Other contents stay opaque. Returns an error if the row is missing.
 func (d *DB) SetResult(id, result string) error {
-	changed, err := d.setResultLocked(id, result)
+	d.resultMu.Lock()
+	defer d.resultMu.Unlock()
+	changed, prev, at, err := d.setResultLocked(id, result)
 	if err != nil {
 		return err
 	}
 	if changed {
 		events.EmitTaskUpdated(id, model.TaskFieldResult)
+		emitFailureChanged(id, prev, result, at)
 	}
 	return nil
 }
 
-func (d *DB) setResultLocked(id, result string) (bool, error) {
+func (d *DB) setResultLocked(id, result string) (changed bool, prev string, at time.Time, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	var old string
-	if err := d.conn.QueryRow(`SELECT result FROM tasks WHERE id=?`, id).Scan(&old); err != nil {
+	if err := d.conn.QueryRow(`SELECT result FROM tasks WHERE id=?`, id).Scan(&prev); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+			return false, "", at, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
 		}
-		return false, err
+		return false, "", at, err
 	}
-	if _, err := d.conn.Exec(`UPDATE tasks SET result=? WHERE id=?`, result, id); err != nil {
-		return false, err
+	if prev == result {
+		return false, prev, at, nil
 	}
-	return old != result, nil
+	at = time.Now()
+	if _, err := d.conn.Exec(`UPDATE tasks SET result=?, result_at=? WHERE id=?`, result, formatTime(at), id); err != nil {
+		return false, prev, time.Time{}, err
+	}
+	return true, prev, at, nil
+}
+
+// emitFailureChanged publishes task.failure_changed when a result write moved
+// the explicit-failure projection (either side parses as a failure).
+func emitFailureChanged(id, prev, cur string, at time.Time) {
+	_, wasFailed := model.ParseTaskFailure(prev)
+	_, isFailed := model.ParseTaskFailure(cur)
+	if !wasFailed && !isFailed {
+		return
+	}
+	events.Emit(model.EventTypeTaskFailureChanged, id, map[string]*model.TaskFailure{
+		"failure": model.FailureFromResult(cur, at),
+	})
+}
+
+// ResultTimes returns the persisted result observation time per task id for
+// every task whose result has been written since result_at existed.
+func (d *DB) ResultTimes() (map[string]time.Time, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rows, err := d.conn.Query(`SELECT id, result_at FROM tasks WHERE result_at != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := make(map[string]time.Time)
+	for rows.Next() {
+		var id, at string
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, err
+		}
+		out[id] = parseTime(at)
+	}
+	return out, rows.Err()
 }
 
 // SetArchived writes only the archived column (plus the pinned-clearing leg

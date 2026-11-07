@@ -55,7 +55,9 @@ func TestTaskMutationsPersistentSink(t *testing.T) {
 		}},
 		{"result", []string{"result"}, func(d *db.DB, task *model.Task) error {
 			task.Result = "opaque result"
-			return d.SetResult(task.ID, task.Result)
+			err := d.SetResult(task.ID, task.Result)
+			task.ResultAt = d.ResultAt(task.ID)
+			return err
 		}},
 		{"archive", []string{"archived"}, func(d *db.DB, task *model.Task) error {
 			task.SetArchived(true)
