@@ -5,14 +5,14 @@ TBD - created by archiving change add-pr-poll-terminal-skip. Update Purpose afte
 ## Requirements
 ### Requirement: Cached, non-blocking polling
 
-The system SHALL poll PR review state from a daemon-side background loop, covering only non-archived tasks that have a branch AND whose last-known cached PR state is not terminal (`merged-closed`), and SHALL persist results in the `task_meta` sidecar under namespace `pr` (keys `state` and `url`). The per-task polling cadence within that loop is tiered by dormancy (see "Dormancy-tiered poll cadence") rather than a single fixed interval. Within a cycle the tasks selected for polling SHALL be grouped by their resolved PR repo and fetched with one batched GraphQL query per repo (see "Batched GraphQL PR-state fetch grouped by repo"), rather than one GitHub CLI invocation per task. A terminal PR state never changes, so once observed it sticks and that task is excluded from all future polls. The terminal-state check MUST read the same persisted `task_meta` cache the poller writes, so the exclusion survives a daemon restart. The UI MUST NOT invoke the GitHub CLI or GraphQL API on its own thread; it reads only the cached value. A transient fetch failure MUST NOT overwrite a previously cached value.
+The system SHALL poll PR review state from a daemon-side background loop, covering only non-archived tasks that have a branch AND whose last-known cached PR state is not terminal (`merged-closed`), and SHALL persist results in the `task_meta` sidecar under namespace `pr` (keys `state`, `url` and `lifecycle`). The per-task polling cadence within that loop is tiered by dormancy (see "Dormancy-tiered poll cadence") rather than a single fixed interval. Within a cycle the tasks selected for polling SHALL be grouped by their resolved PR repo and fetched with one batched GraphQL query per repo (see "Batched GraphQL PR-state fetch grouped by repo"), rather than one GitHub CLI invocation per task. A terminal PR state never changes, so once observed it sticks and that task is excluded from all future polls. The terminal-state check MUST read the same persisted `task_meta` cache the poller writes, so the exclusion survives a daemon restart. The UI MUST NOT invoke the GitHub CLI or GraphQL API on its own thread; it reads only the cached value. A transient fetch failure MUST NOT overwrite a previously cached value.
 
 #### Scenario: Skips ineligible tasks
 - **WHEN** the poller runs over the task set
 - **THEN** archived tasks and tasks without a branch are not polled
 
 #### Scenario: Skips tasks with a terminal cached PR state
-- **WHEN** the poller runs over the task set and a non-archived task with a branch has a cached `pr` namespace `state` of `merged-closed`
+- **WHEN** the poller runs over the task set and a non-archived task with a branch has a cached `pr` namespace `state` of `merged-closed` and a verified `lifecycle`
 - **THEN** that task is excluded from the eligible set and is never included in any batched query, and the skip is logged via uxlog
 
 #### Scenario: Still polls tasks with a non-terminal cached state
@@ -237,3 +237,47 @@ Derived from: `internal/daemon/daemon.go` (`pollPRStatesOnce`), `internal/db/tas
 - **WHEN** a poll resolves a task's PR as merged while the stored state is still open (`awaiting-review`), so the result differs and is written
 - **THEN** both merge notifications fire under the existing rules, exactly as before this change
 
+### Requirement: PR lifecycle persistence
+
+The poller SHALL persist `lifecycle` (`open`, `merged`, `closed` or `unknown`) under namespace `pr` alongside `state` and `url`, in the same transaction. `merged` SHALL require GitHub's raw MERGED state; a CLOSED PR SHALL yield `closed`; no PR SHALL yield `unknown`. A terminal cached `state` without a verified `lifecycle` (`merged`, `closed` or `open`) SHALL stay eligible for polling until a successful fetch stores one, after which it is skipped. A failed fetch SHALL leave the stored lifecycle untouched.
+
+#### Scenario: Closed is not merged
+
+- **WHEN** GitHub reports CLOSED for a task's PR
+- **THEN** `lifecycle` is stored as `closed` and no merge notification fires
+
+#### Scenario: Legacy terminal entry is refreshed once
+
+- **WHEN** a task's cached `state` is `merged-closed` with no `lifecycle`
+- **THEN** the next poll fetches it, stores the lifecycle, and later polls skip it
+
+### Requirement: PR change event
+
+After a PR cache commit that changed a stored value, the poller SHALL publish `task.pr_changed` with `{"url","state","lifecycle"}`. An unchanged result SHALL publish nothing.
+
+#### Scenario: Changed result publishes once
+
+- **WHEN** a poll changes a task's cached PR values
+- **THEN** exactly one `task.pr_changed` is published, and a repeat poll with the same result publishes none
+
+### Requirement: Manual PR association
+
+The system SHALL store a manually linked PR URL per task in `task_pr_links`, separate from the derived `pr` cache, surviving archive and daemon restart and removed only by clearing it or deleting the task. The branch poller SHALL NOT poll or write cache for a linked task, and its write SHALL be refused inside the write transaction. A manual pass SHALL verify the linked PR by URL through `gh`, storing `state`, `url` (the linked URL) and `lifecycle`; a lookup error SHALL keep the association and last verified cache. Setting or clearing a link SHALL delete the task's `pr` cache.
+
+#### Scenario: Link survives conflicting branch result
+
+- **WHEN** a linked task shares a branch whose lookup returns a different PR
+- **THEN** the linked task's cache and association still refer to the linked PR
+
+#### Scenario: Clearing restores discovery
+
+- **WHEN** the link is cleared
+- **THEN** the next branch poll caches the branch-derived PR
+
+### Requirement: Automatic PR lookup follows the live branch
+
+The automatic PR poller SHALL query the branch currently checked out in the task's worktree, not `Task.Branch`. A task whose HEAD is detached or unreadable SHALL be skipped with its cached PR state kept. Manually linked tasks remain skipped.
+
+#### Scenario: Checkout after creation
+- **WHEN** a task created on branch A has branch B checked out
+- **THEN** the poller queries branch B and A is not queried

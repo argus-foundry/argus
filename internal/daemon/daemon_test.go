@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/rpc"
 	"net/rpc/jsonrpc"
@@ -17,6 +18,7 @@ import (
 	"github.com/drn/argus/internal/agent"
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/db"
+	"github.com/drn/argus/internal/gitutil"
 	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/testutil"
 )
@@ -62,6 +64,18 @@ func testDaemon(t *testing.T) (*Daemon, string) {
 	// ~/.argus/pr-poller.disabled, which must never influence tests (and may exist
 	// on a dev machine that has paused the poller). Point it at an absent temp file.
 	d.prDisableFlagPath = filepath.Join(t.TempDir(), prPollDisableFlag)
+
+	// Fake worktrees are not repos: report each task's recorded branch as live HEAD.
+	d.prLiveHead = func(worktree string) (gitutil.Head, error) {
+		tasks, _ := database.Tasks()
+		for _, tk := range tasks {
+			if tk.Worktree == worktree && tk.Branch != "" {
+				b := tk.Branch
+				return gitutil.Head{Branch: &b}, nil
+			}
+		}
+		return gitutil.Head{}, errors.New("no task for worktree")
+	}
 
 	// Never run the real usage probes from a test: they spawn `claude` /
 	// read ~/.codex, and (fix-backend-usage-routing) the pollers now probe

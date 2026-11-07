@@ -270,3 +270,11 @@ The git status snapshot SHALL include one entry per changed path with `status`, 
 #### Scenario: Binary and rename
 - **WHEN** a binary file changes and a file is renamed
 - **THEN** the binary has null counts and the rename carries `original_path`
+
+### Requirement: Live HEAD resolution
+
+`gitutil.ReadHead` SHALL report the worktree's HEAD branch, commit oid and detached state, and `FetchGitStatus` SHALL include it in the snapshot. A failed read SHALL be an error, never a value derived from stored task state.
+
+#### Scenario: Unborn
+- **WHEN** a repo has no commits
+- **THEN** the branch is the unborn branch name and the oid is null

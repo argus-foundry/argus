@@ -196,6 +196,8 @@ type Daemon struct {
 	// swap it for a fake so the poller never spawns a real gh process. A non-nil
 	// error means keep-stale for the whole group (Decision 4).
 	prBatchFetch func(ctx context.Context, repo string, branches map[string]string) (map[string]gitutil.PRResult, int, error)
+	// prURLFetch resolves one manually linked PR by url; tests swap it.
+	prURLFetch func(ctx context.Context, url string) (gitutil.PRResult, error)
 
 	// prResolveRepo resolves a worktree's default GitHub repo ("owner/name") the
 	// way gh would target it — the fallback when a task has no cached pr/url to
@@ -203,6 +205,9 @@ type Daemon struct {
 	// gitutil.ResolveDefaultRepo; tests swap it. Runs off the UI thread (the
 	// poller goroutine), consistent with all other git ops.
 	prResolveRepo func(ctx context.Context, worktree string) (string, bool)
+	// prLiveHead reads a worktree's current HEAD; the poller looks up the PR
+	// for that branch, never the recorded Task.Branch. Seam for tests.
+	prLiveHead func(worktree string) (gitutil.Head, error)
 
 	// prAliasCap is the per-query alias cap that triggers chunking of an
 	// oversized repo group (Decision 5). Defaults to prDefaultAliasCap; tests
@@ -302,7 +307,9 @@ func New(database *db.DB) *Daemon {
 		prFetch:   gitutil.FetchPRState,
 
 		prBatchFetch:      gitutil.FetchPRStatesBatch,
+		prURLFetch:        gitutil.FetchPRByURL,
 		prResolveRepo:     gitutil.ResolveDefaultRepo,
+		prLiveHead:        gitutil.ReadHead,
 		prAliasCap:        prDefaultAliasCap,
 		prDisableFlagPath: filepath.Join(db.DataDir(), prPollDisableFlag),
 		usageBudgetProbe:  func(ctx context.Context) error { return usagebudget.ProbeConfiguredAccounts(ctx, database.Config()) },
@@ -697,10 +704,17 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 	//      stride instead (prPollCadenceStride). An open PR overrides the stride
 	//      and is always polled.
 	now := time.Now()
+	manualPRs, merr := d.db.ManualPRs()
+	if merr != nil {
+		uxlog.Log("[pr] poll: read manual links failed: %v", merr)
+	}
 	eligible := make([]*model.Task, 0, len(tasks))
 	var skipped int
 	for _, t := range tasks {
 		if t == nil || t.Archived || t.Branch == "" {
+			continue
+		}
+		if _, manual := manualPRs[t.ID]; manual {
 			continue
 		}
 		// Parse the cached PR state once: it drives both the terminal skip and the
@@ -712,7 +726,7 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 				state = st
 			}
 		}
-		if state.IsTerminal() {
+		if state.IsTerminal() && model.ParsePRLifecycle(prMeta[t.ID]["lifecycle"]) != model.PRLifecycleUnknown {
 			skipped++
 			uxlog.Log("[pr] poll: skip terminal %s (state=%s)", t.ID, state)
 			continue
@@ -737,13 +751,30 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 	// pr/url (when present) is authoritative for repo resolution, else the
 	// worktree's default GitHub repo via d.prResolveRepo.
 	aliasToTask := make(map[string]*model.Task, len(eligible))
+	liveBranch := make(map[string]string, len(eligible))
+	live := eligible[:0:0]
+	for _, t := range eligible {
+		h, herr := d.prLiveHead(t.Worktree)
+		if herr != nil || h.Branch == nil || *h.Branch == "" {
+			skipped++
+			uxlog.Log("[pr] poll: skip %s (live head unavailable or detached: %v)", t.ID, herr)
+			continue
+		}
+		liveBranch[t.ID] = *h.Branch
+		live = append(live, t)
+	}
+	eligible = live
+	if len(eligible) == 0 {
+		uxlog.Log("[pr] poll: eligible=0 skipped=%d", skipped)
+		return
+	}
 	inputs := make([]gitutil.BranchRepoInput, 0, len(eligible))
 	for _, t := range eligible {
 		alias := prAliasID(t.ID)
 		aliasToTask[alias] = t
 		inputs = append(inputs, gitutil.BranchRepoInput{
 			ID:        alias,
-			Branch:    t.Branch,
+			Branch:    liveBranch[t.ID],
 			Worktree:  t.Worktree,
 			CachedURL: prMeta[t.ID]["url"],
 		})
@@ -829,14 +860,24 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 					// every TUI's Hera rail to rebuild (one commit per task per
 					// minute before this). The merge notifications below key off
 					// the fetched result, not off whether a write happened.
-					if _, werr := d.db.SetMetaBatchIfChanged(t.ID, "pr", map[string]string{
-						"state": res.State.String(),
-						"url":   res.URL,
-					}); werr != nil {
+					lifecycle := res.Lifecycle()
+					wrote, werr := d.db.SetAutoPRMetaIfChanged(t.ID, map[string]string{
+						"state":     res.State.String(),
+						"url":       res.URL,
+						"lifecycle": string(lifecycle),
+					})
+					if werr != nil {
 						uxlog.Log("[pr] poll: persist failed for %s: %v", t.ID, werr)
 						continue
 					}
 					written++
+					if wrote {
+						events.Emit(model.EventTypeTaskPRChanged, t.ID, model.PRChangedPayload{
+							URL: res.URL, State: res.State.String(), Lifecycle: lifecycle,
+							Source: model.PRSourceAutomatic,
+						})
+						uxlog.Log("[pr] poll: %s changed state=%s lifecycle=%s", t.ID, res.State, lifecycle)
+					}
 					if res.Merged {
 						d.notifyCoordinatorOfMergedPR(t, res.URL)
 						d.notifyRoleOfMergedPR(t, res.URL)
@@ -1054,6 +1095,7 @@ func (d *Daemon) runPRPoller() {
 		case <-ticker.C:
 			d.pollCycle++
 			d.pollPRStatesOnce(ctx)
+			d.pollManualPRsOnce(ctx)
 		}
 	}
 }

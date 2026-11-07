@@ -151,22 +151,27 @@ The server SHALL create a task from a JSON body containing `prompt`, `project`, 
 
 ### Requirement: Task listing and retrieval with runtime idle state
 
-The server SHALL list tasks and SHALL support optional filtering by `status`, `project`, and `archived` (`0`/default excludes archived, `1` returns only archived, `all` returns both). For each task the server SHALL derive a runtime `idle` flag that is true only when the task is `in_progress` and either has no live session or its session is waiting for input; non-`in_progress` tasks SHALL never be reported idle. Retrieving a task that does not exist SHALL return 404.
+The server SHALL list tasks and SHALL support optional filtering by `status`, `project`, and `archived` (`0`/default excludes archived, `1` returns only archived, `all` returns both). For each task the server SHALL derive `live`, true whenever the runner holds an input-addressable session and no kill+resume restart is pending, regardless of workflow status, and `idle`, true only when the session is live and waiting for input; an absent session SHALL NOT be reported idle. A pending restart SHALL report `live`, `idle` and `needs_input` all false. `needs_input` SHALL require a live `in_progress` session. Retrieving a task that does not exist SHALL return 404.
 
 #### Scenario: Lists all non-archived tasks
 
 - **WHEN** a list request omits the archived filter
 - **THEN** the server returns the non-archived tasks
 
-#### Scenario: In-progress task without a live session reports idle
+#### Scenario: Live busy in_review task
 
-- **WHEN** a task is `in_progress` but has no live session
-- **THEN** its listed entry reports `idle: true`
+- **WHEN** an `in_review` task has a live, non-idle session
+- **THEN** its entry reports `live: true` and no `idle`
 
-#### Scenario: Non-in-progress task never idle
+#### Scenario: Absent session is not idle
 
-- **WHEN** a task is `pending`
-- **THEN** its listed entry reports idle false
+- **WHEN** a task of any status has no session
+- **THEN** its entry reports `live: false` and no `idle`
+
+#### Scenario: Pending restart never advertises input
+
+- **WHEN** a live task has a pending kill+resume restart
+- **THEN** its entry reports `live: false`, no `idle` and no `needs_input`
 
 #### Scenario: Filter by status and project
 
@@ -812,3 +817,66 @@ The API SHALL serve `GET /api/sandbox/proposals` (optional `status` filter) and 
 #### Scenario: Files alongside legacy fields
 - **WHEN** a worktree has a modified file
 - **THEN** the response has `Status` text and a `files` entry with its counts
+
+### Requirement: Targeted task pin action
+
+The system SHALL expose `POST /api/tasks/{id}/pin` accepting `{"pinned":<bool>}` and returning 200 `{"task_id","pinned","archived"}` reflecting the stored flags. It SHALL write only the pinned and archived columns using SetPinned semantics (pinning clears archived; unpinning leaves archived alone) and SHALL NOT overwrite any other task field or start or stop a session. A request that changes nothing SHALL succeed without emitting `task.updated`. The endpoint SHALL return 400 for malformed JSON, a missing, null or non-boolean `pinned`, unknown fields, or a body over 1 KiB; 404 for an unknown task; 500 for a store failure; and SHALL be open to any authenticated token.
+
+#### Scenario: Pin preserves concurrent edits
+
+- **WHEN** a task is renamed and its status changed, then pinned via the endpoint
+- **THEN** the stored name and status are the newer values and only pinned changed
+
+#### Scenario: Pin restores an archived task
+
+- **WHEN** an archived task is pinned
+- **THEN** the response has `pinned:true, archived:false` and the stored row matches
+
+#### Scenario: Invalid body
+
+- **WHEN** the body is `{"pinned":"yes"}` or `{}` or contains an unknown field
+- **THEN** the response is 400 and nothing is stored or emitted
+
+### Requirement: Task failure projection
+
+`GET /api/tasks` and `GET /api/tasks/{id}` SHALL include `failure`, `null` or `{"reason","source":"task_result","recorded_at"}`, derived from a Result object whose `failed` is boolean `true`. `recorded_at` SHALL be the persisted time the result last changed and SHALL be omitted when none was persisted. `reason` SHALL be bounded to 4 KiB. A malformed, non-object or unrelated Result SHALL yield `failure: null` and never an error. User stop, transport loss and nonzero exit SHALL NOT produce a failure. Standalone and Hera-bound tasks SHALL share the projection.
+
+#### Scenario: Explicit failed result
+
+- **WHEN** a task's Result is `{"failed":true,"reason":"validation failed"}`
+- **THEN** its entry reports that reason, source `task_result` and the persisted `recorded_at`
+
+#### Scenario: Malformed result
+
+- **WHEN** a task's Result is not valid JSON
+- **THEN** the request succeeds with `failure: null`
+
+### Requirement: Task PR lifecycle projection
+
+`GET /api/tasks` and `GET /api/tasks/{id}` SHALL include `pr_lifecycle` (`open|merged|closed|unknown`) from the cached `pr` namespace without invoking GitHub. A merged-closed `pr_state` with no verified lifecycle, a missing PR, or any unrecognized value SHALL project `unknown`. `pr_state` semantics are unchanged.
+
+#### Scenario: Closed and merged differ
+
+- **WHEN** two tasks have `pr_state` `merged-closed` with lifecycles `closed` and `merged`
+- **THEN** their entries report `pr_lifecycle` `closed` and `merged`
+
+### Requirement: Task PR link endpoints
+
+`GET /api/tasks/{id}/pr` SHALL return `{"source","url","state","lifecycle","checked_at"}` from stored state without invoking GitHub (`source` `manual|automatic`; `checked_at` RFC3339 or null). `PUT` with `{"url"}` SHALL accept only `https://github.com/<owner>/<repo>/pull/<n>`, canonicalize it, store it and return 200 with state and lifecycle `unknown` until verified; otherwise 400 with the association unchanged. `DELETE` SHALL clear the association and return 200 with `source` `automatic`. A missing task SHALL be 404 and a store failure 500. All three require authentication.
+
+#### Scenario: Invalid URL
+
+- **WHEN** PUT supplies a non-github.com or non-pull URL
+- **THEN** the response is 400 and the stored association is unchanged
+
+### Requirement: Live HEAD in git status
+
+`GET /api/tasks/{id}/git/status` SHALL include `head` as `{"branch":string|null,"oid":string|null,"detached":bool}` read from the worktree's current HEAD. Detached HEAD has `branch` null and `detached` true; an unborn branch has `oid` null. `Task.Branch` SHALL remain the recorded branch and SHALL NOT be rewritten or substituted. An unreadable HEAD SHALL return 500 `{"error","code":"git_head_unavailable"}`.
+
+#### Scenario: Checkout
+- **WHEN** a branch is checked out inside the worktree
+- **THEN** `head.branch` is that branch, `git_revision` changes, and `task.branch` is unchanged
+
+#### Scenario: Detached
+- **WHEN** HEAD is detached
+- **THEN** `head.branch` is null and `head.detached` is true

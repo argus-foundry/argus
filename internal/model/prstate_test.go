@@ -135,3 +135,21 @@ func boolStr(b bool) string {
 	}
 	return "ok"
 }
+
+func TestResolvePRLifecycle(t *testing.T) {
+	cases := []struct{ state, lifecycle, want string }{
+		{"merged-closed", "merged", "merged"},
+		{"merged-closed", "closed", "closed"},
+		{"merged-closed", "", "unknown"},
+		{"merged-closed", "bogus", "unknown"},
+		{"approved", "", "open"},
+		{"draft", "", "open"},
+		{"none", "", "unknown"},
+		{"", "", "unknown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.state+"/"+tc.lifecycle, func(t *testing.T) {
+			testutil.Equal(t, string(ResolvePRLifecycle(tc.state, tc.lifecycle)), tc.want)
+		})
+	}
+}

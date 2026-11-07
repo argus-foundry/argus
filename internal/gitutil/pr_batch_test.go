@@ -311,3 +311,22 @@ func TestGroupBranchesByRepo_UnresolvableDropped(t *testing.T) {
 	groups := GroupBranchesByRepo(context.Background(), inputs, resolveDefault)
 	testutil.Equal(t, len(groups), 0)
 }
+
+func TestPRResult_Lifecycle(t *testing.T) {
+	cases := []struct {
+		name string
+		res  PRResult
+		want model.PRLifecycle
+	}{
+		{"merged", PRResult{State: model.PRMergedClosed, Merged: true}, model.PRLifecycleMerged},
+		{"closed", PRResult{State: model.PRMergedClosed}, model.PRLifecycleClosed},
+		{"open", PRResult{State: model.PRDraft}, model.PRLifecycleOpen},
+		{"none", PRResult{State: model.PRNone}, model.PRLifecycleUnknown},
+		{"unknown", PRResult{State: model.PRUnknown}, model.PRLifecycleUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			testutil.Equal(t, tc.res.Lifecycle(), tc.want)
+		})
+	}
+}

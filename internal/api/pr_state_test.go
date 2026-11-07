@@ -115,3 +115,54 @@ func jsonHasKey(t *testing.T, body []byte, id, key string) bool {
 	t.Fatalf("task %s not found in body", id)
 	return false
 }
+
+func TestTaskDTO_PRLifecycle(t *testing.T) {
+	srv, d := testServer(t)
+	mux := srv.routes()
+
+	mk := func(name string, meta map[string]string) *model.Task {
+		tk := &model.Task{Name: name, Status: model.StatusComplete, Project: "p", Branch: "argus/" + name}
+		testutil.NoError(t, d.Add(tk))
+		if meta != nil {
+			testutil.NoError(t, d.SetMetaBatch(tk.ID, "pr", meta))
+		}
+		return tk
+	}
+	merged := mk("merged", map[string]string{"state": "merged-closed", "lifecycle": "merged"})
+	closed := mk("closed", map[string]string{"state": "merged-closed", "lifecycle": "closed"})
+	legacy := mk("legacy", map[string]string{"state": "merged-closed"})
+	open := mk("open", map[string]string{"state": "approved"})
+	bare := mk("bare", nil)
+	want := map[string]string{
+		merged.ID: "merged", closed.ID: "closed", legacy.ID: "unknown", open.ID: "open", bare.ID: "unknown",
+	}
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, authedReq("GET", "/api/tasks", ""))
+	testutil.Equal(t, w.Code, http.StatusOK)
+	var list struct {
+		Tasks []taskJSON `json:"tasks"`
+	}
+	testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &list))
+	for _, tk := range list.Tasks {
+		testutil.Equal(t, tk.PRLifecycle, want[tk.ID])
+		testutil.Equal(t, jsonHasKey(t, w.Body.Bytes(), tk.ID, "pr_lifecycle"), true)
+	}
+
+	for id, lc := range want {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, authedReq("GET", "/api/tasks/"+id, ""))
+		testutil.Equal(t, w.Code, http.StatusOK)
+		var one taskJSON
+		testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &one))
+		testutil.Equal(t, one.PRLifecycle, lc)
+	}
+
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, authedReq("GET", "/api/tasks/nope", ""))
+	testutil.Equal(t, w.Code, http.StatusNotFound)
+
+	w = httptest.NewRecorder()
+	authMiddleware("test-token", nil, nil, mux, "/public").ServeHTTP(w, httptest.NewRequest("GET", "/api/tasks", nil))
+	testutil.Equal(t, w.Code, http.StatusUnauthorized)
+}

@@ -1,0 +1,7 @@
+- [x] Add `model.PRLifecycle`, `ResolvePRLifecycle`, `PRChangedPayload`, `EventTypeTaskPRChanged`
+- [x] Add `gitutil.PRResult.Lifecycle()`
+- [x] Persist `lifecycle` in the poller, emit `task.pr_changed` on a changed commit
+- [x] Refresh terminal entries lacking a verified lifecycle before skipping
+- [x] Add `pr_lifecycle` to list and detail DTOs
+- [x] Tests: poll persistence and event frames, terminal refresh, fetch failure, DTO projection, 404, auth
+- [x] Document in specs, README and gotchas

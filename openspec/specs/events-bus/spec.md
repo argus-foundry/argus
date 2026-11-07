@@ -151,3 +151,59 @@ After a successful discard the daemon SHALL emit `worktree.changed` with reason 
 #### Scenario: Failure emits nothing
 - **WHEN** a discard is rejected
 - **THEN** no `worktree.changed` event with reason `discard` is emitted
+
+### Requirement: task.updated invalidation event
+
+The system SHALL publish a `task.updated` event after a task mutation commits, through a single shared helper that REST, MCP, TUI and daemon mutation paths all reach via the `internal/db` setters. The payload SHALL be `{"changed_fields":[...]}` listing only the fields that actually changed, drawn from `name`, `status`, `archived`, `pinned`, `runtime`, `account`, `result`, `pr`, in that canonical order, deduplicated. The payload SHALL carry no prompt, result or credential content. The event SHALL be emitted outside DB and runner locks and SHALL NOT be emitted for a failed write or a write that changed nothing. Existing specific events (`task.renamed`, `task.status_changed`, `task.archived`, `task.completed`, `task.deleted`) SHALL keep their payloads and still fire; a semantic mutation MAY therefore produce a specific event plus one `task.updated`. Event persistence failure SHALL NOT roll back or retry the mutation.
+
+#### Scenario: Archive and restore invalidate other clients
+
+- **WHEN** a client archives then restores a task over REST
+- **THEN** a second SSE client receives `task.updated` with `changed_fields` `["archived"]` for each
+
+#### Scenario: Pin restoring an archived task
+
+- **WHEN** an archived task is pinned
+- **THEN** one `task.updated` fires with `changed_fields` `["archived","pinned"]`
+
+#### Scenario: No-op write is silent
+
+- **WHEN** a setter or raw PUT writes values identical to the stored row
+- **THEN** no `task.updated` is emitted
+
+#### Scenario: Failed write publishes nothing
+
+- **WHEN** a mutation fails because the task does not exist
+- **THEN** no `task.updated` event is emitted
+
+### Requirement: session.runtime_changed event
+
+The system SHALL publish `session.runtime_changed` with payload `{"live":bool,"idle":bool,"needs_input":bool}` and the task id whenever the task's REST runtime flags change, including changes caused only by a workflow-status transition. A task without a previous value SHALL be treated as all-false, and unchanged flags SHALL emit nothing.
+
+#### Scenario: Pending restart clears live
+
+- **WHEN** a live task enters a pending restart
+- **THEN** one event with all flags false is published
+
+### Requirement: task.failure_changed event
+
+The system SHALL publish `task.failure_changed` with payload `{"failure":null}` or the complete failure object after a Result write changes the failure projection. Clearing or replacing a failed Result SHALL publish it; a write that neither starts from nor ends at a failure, and a no-op write, SHALL NOT.
+
+#### Scenario: Failure cleared
+
+- **WHEN** a failed Result is replaced by a non-failure Result
+- **THEN** one event with `{"failure":null}` is published
+
+### Requirement: task.pr_changed event
+
+The system SHALL publish `task.pr_changed` with the task id and payload `{"url","state","lifecycle","source"}` after a changed PR cache commit and after a manual link is set or cleared. `source` SHALL be `manual` or `automatic`. Setting a link SHALL publish `state` and `lifecycle` `unknown`. Consumers SHALL ignore payload keys they do not know.
+
+#### Scenario: Payload shape
+
+- **WHEN** a merged PR is first cached by the branch poller
+- **THEN** the payload is `{"url":"...","state":"merged-closed","lifecycle":"merged","source":"automatic"}`
+
+#### Scenario: Link set
+
+- **WHEN** a manual PR link is set
+- **THEN** the payload is `{"url":"<canonical>","state":"unknown","lifecycle":"unknown","source":"manual"}`

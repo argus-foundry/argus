@@ -120,6 +120,10 @@ func (d *DB) createTables() error {
 	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN base_branch TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
 	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN result      TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
 
+	// result_at is the observation time of the last result change (RFC3339, ''
+	// when never written); the failure projection reports it as recorded_at.
+	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN result_at   TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
+
 	// archetype (add-diligence-profiles): the authoritative model-resolution key
 	// read by agent.ResolveModel. Idempotent ADD for databases predating it;
 	// existing rows read empty (no archetype → no profile consulted).
@@ -378,6 +382,18 @@ func (d *DB) createTables() error {
 		return fmt.Errorf("creating task_meta table: %w", err)
 	}
 	d.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_task_meta_namespace ON task_meta(task_id, namespace)`) //nolint:errcheck
+
+	// Manual PR association intent, kept apart from the derived pr cache in
+	// task_meta (which archive wipes and polling rewrites). Removed by Delete only.
+	if _, err := d.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS task_pr_links (
+			task_id    TEXT PRIMARY KEY,
+			url        TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("creating task_pr_links table: %w", err)
+	}
 
 	// Events ring (PR 2 of the plugin substrate). Bounded — InsertEvent
 	// evicts the oldest rows once the row count exceeds MaxEventsRetained.

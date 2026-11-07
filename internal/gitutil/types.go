@@ -19,6 +19,8 @@ type GitStatusRefreshMsg struct {
 
 	Comparison Comparison   `json:"comparison"`
 	Files      []FileChange `json:"files"`
+	Head       *Head        `json:"head"`
+	HeadErr    error        `json:"-"`
 	Err        error        `json:"-"`
 }
 

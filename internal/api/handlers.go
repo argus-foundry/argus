@@ -87,20 +87,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // taskJSON is the wire shape returned by /api/tasks*.
 //
 // Status is the persisted DB status. Idle is a runtime-derived flag that is
-// true only when Status == in_progress and the agent session is missing or
-// waiting for input. omitempty drops idle:false from the JSON; the SPA reads
-// missing fields as falsy, which matches the intended contract (no idle field
-// == not idle).
+// true only when a live session is waiting for input; an absent session is not
+// idle. omitempty drops idle:false from the JSON; the SPA reads missing fields
+// as falsy, which matches the intended contract (no idle field == not idle).
 type taskJSON struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Status string `json:"status"`
 	Idle   bool   `json:"idle,omitempty"`
-	// Live is true when Status == in_progress and the runner holds a real
-	// session for the task, including one parked idle at a prompt, and no
-	// kill+resume restart is pending. Idle alone cannot say whether input can
-	// reach a PTY, so clients use Live. Deliberately NOT omitempty: an absent
-	// field means an older daemon, and clients fall back to !idle.
+	// Live is true when the runner holds a real session for the task,
+	// including one parked idle at a prompt, and no kill+resume restart is
+	// pending, whatever the workflow status. Deliberately NOT omitempty: an
+	// absent field means an older daemon, and clients fall back to !idle.
 	Live bool `json:"live"`
 	// NeedsInput is a runtime-derived flag, true only when Status ==
 	// in_progress and the daemon's watcher detected the agent is blocked
@@ -122,6 +120,12 @@ type taskJSON struct {
 	// actionable values; the badge renderer ignores draft/merged-closed/
 	// unknown anyway.
 	PRState string `json:"pr_state,omitempty"`
+	// PRLifecycle is open/merged/closed/unknown from the cached GitHub result;
+	// unknown until verified. Not omitempty so clients can tell an old daemon.
+	PRLifecycle string `json:"pr_lifecycle"`
+	// Failure is the explicit agent-reported failure parsed from Result, or
+	// null. Not omitempty so clients can tell "no failure" from an old daemon.
+	Failure *model.TaskFailure `json:"failure"`
 }
 
 // taskRuntimeState carries non-persisted, derived-at-request-time fields used
@@ -136,6 +140,11 @@ type taskRuntimeState struct {
 	// field via omitempty. Populated by the caller from a batch task_meta
 	// read — never by shelling out to gh.
 	PRState string
+	// PRLifecycle is the cached lifecycle string; resolved via
+	// model.ResolvePRLifecycle with PRState.
+	PRLifecycle string
+	// Failure is the projection of the task's Result; nil when not failed.
+	Failure *model.TaskFailure
 }
 
 func taskToJSON(t *model.Task, rt taskRuntimeState) taskJSON {
@@ -155,6 +164,8 @@ func taskToJSON(t *model.Task, rt taskRuntimeState) taskJSON {
 		WorktreePath: t.Worktree,
 		Prompt:       t.Prompt,
 		PRState:      prDTOValue(rt.PRState),
+		PRLifecycle:  string(model.ResolvePRLifecycle(rt.PRState, rt.PRLifecycle)),
+		Failure:      rt.Failure,
 	}
 }
 
@@ -169,18 +180,16 @@ func prDTOValue(state string) string {
 	return state
 }
 
-// computeRuntimeState derives the per-request runtime state for a task.
-// Mirrors the TUI's drawTaskRow rule: an InProgress task is idle when it has
-// no live session (running map miss) or its session is waiting for input
-// (idle map hit). Non-InProgress tasks are never idle.
+// computeRuntimeState derives the per-request runtime state for a task. Live
+// is session existence and is independent of workflow status; an absent
+// session is never idle. NeedsInput keeps its in_progress gate and requires a
+// live session.
 func computeRuntimeState(t *model.Task, runningSet, idleSet, needsInputSet map[string]bool) taskRuntimeState {
-	if t.Status != model.StatusInProgress {
-		return taskRuntimeState{}
-	}
+	live := runningSet[t.ID]
 	return taskRuntimeState{
-		Idle:       !runningSet[t.ID] || idleSet[t.ID],
-		Live:       runningSet[t.ID],
-		NeedsInput: needsInputSet[t.ID],
+		Idle:       live && idleSet[t.ID],
+		Live:       live,
+		NeedsInput: live && t.Status == model.StatusInProgress && needsInputSet[t.ID],
 	}
 }
 
@@ -191,7 +200,7 @@ func computeRuntimeState(t *model.Task, runningSet, idleSet, needsInputSet map[s
 func (s *Server) runtimeState(t *model.Task, runningSet, idleSet, needsInputSet map[string]bool) taskRuntimeState {
 	rt := computeRuntimeState(t, runningSet, idleSet, needsInputSet)
 	if rt.Live && s.runner.HasPendingRestart(t.ID) {
-		rt.Live = false
+		rt = taskRuntimeState{}
 	}
 	return rt
 }
@@ -244,6 +253,12 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		prMeta = nil
 	}
 
+	resultTimes, err := s.db.ResultTimes()
+	if err != nil {
+		uxlog.Log("[failure] api: list result times failed: %v", err)
+		resultTimes = nil
+	}
+
 	result := make([]taskJSON, 0)
 	for _, t := range tasks {
 		switch archivedFilter {
@@ -267,7 +282,9 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		rt := s.runtimeState(t, runningSet, idleSet, needsInputSet)
 		if kv := prMeta[t.ID]; kv != nil {
 			rt.PRState = kv["state"]
+			rt.PRLifecycle = kv["lifecycle"]
 		}
+		rt.Failure = model.FailureFromResult(t.Result, resultTimes[t.ID])
 		result = append(result, taskToJSON(t, rt))
 	}
 
@@ -285,12 +302,15 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	}
 	runningSet, idleSet, needsInputSet := s.sessionStateMaps()
 	rt := s.runtimeState(task, runningSet, idleSet, needsInputSet)
+	rt.Failure = model.FailureFromResult(task.Result, s.db.ResultAt(task.ID))
 	// Pure cache read of the daemon-written PR state; never shells out to gh.
 	if entries, merr := s.db.ListMeta(task.ID, "pr"); merr == nil {
 		for _, e := range entries {
-			if e.Key == "state" {
+			switch e.Key {
+			case "state":
 				rt.PRState = e.Value
-				break
+			case "lifecycle":
+				rt.PRLifecycle = e.Value
 			}
 		}
 	} else {
@@ -782,6 +802,47 @@ func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived boo
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"archived": archived})
+}
+
+// --- Pin ---
+
+type pinReq struct {
+	Pinned *bool `json:"pinned"`
+}
+
+// handlePinTask flips only the pinned/archived section flags via the targeted
+// db.SetPinned write, so concurrent edits to other columns survive. Pinning an
+// archived task restores it (model.Task.SetPinned semantics). It never starts
+// or stops a session.
+func (s *Server) handlePinTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	var req pinReq
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON", err)
+		return
+	}
+	if req.Pinned == nil {
+		writeErr(w, http.StatusBadRequest, "pinned is required", nil)
+		return
+	}
+	if err := s.db.SetPinned(id, *req.Pinned); err != nil {
+		if errors.Is(err, db.ErrTaskNotFound) {
+			writeErr(w, http.StatusNotFound, "task not found", nil)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "", err)
+		return
+	}
+	task, err := s.db.Get(id)
+	if err != nil || task == nil {
+		writeErr(w, http.StatusNotFound, "task not found", nil)
+		return
+	}
+	uxlog.Log("[api] pin: task=%s pinned=%t archived=%t", id, task.Pinned, task.Archived)
+	writeJSON(w, http.StatusOK, map[string]any{"task_id": id, "pinned": task.Pinned, "archived": task.Archived})
 }
 
 // --- Rename ---
@@ -1898,6 +1959,11 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msg := snap.msg
+	if msg.HeadErr != nil || msg.Head == nil {
+		uxlog.Log("[api] git head unavailable task=%s: %v", task.ID, msg.HeadErr)
+		writeCodeErr(w, http.StatusInternalServerError, "git_head_unavailable", "git head unavailable")
+		return
+	}
 	uxlog.Log("[api] git status task=%s base=%q resolved=%q revision=%s stale=%v", task.ID, msg.Comparison.RequestedBase, msg.Comparison.ResolvedBase, snap.revision, snap.stale)
 	writeJSON(w, http.StatusOK, gitStatusResponse{GitStatusRefreshMsg: msg, GitRevision: snap.revision, Stale: snap.stale})
 }
