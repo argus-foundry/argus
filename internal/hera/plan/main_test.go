@@ -1,0 +1,12 @@
+package plan
+
+import (
+	"os"
+	"testing"
+
+	"github.com/drn/argus/internal/testenv"
+)
+
+func TestMain(m *testing.M) { os.Exit(testenv.Main(m)) }
+
+func TestEnvScrubbed(t *testing.T) { testenv.AssertScrubbed(t) }

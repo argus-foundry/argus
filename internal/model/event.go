@@ -74,6 +74,11 @@ const (
 	// changed token observation. Payload: {"session_id":"s","turn_id":"t","measured_at":"RFC3339"};
 	// identity and timing only, never the counts themselves.
 	EventTypeTaskUsageChanged = "task.usage_changed"
+	// EventTypeHeraPlanChanged fires after a committed change to an
+	// orchestrator's plan graph (planned node, blocking edge, binding, role
+	// status, or bound task status). Payload: {"orchestrator_id":N}. It is an
+	// invalidation signal: consumers re-fetch GET /api/hera/orchestrators/{id}/plan.
+	EventTypeHeraPlanChanged = "hera.plan_changed"
 
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.

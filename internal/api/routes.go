@@ -46,6 +46,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("PUT /api/hera/roles/{role_id}/board/{item_id}/read-state", s.handleHeraBoardReadState)
 	mux.HandleFunc("POST /api/hera/roles/{role_id}/board/{item_id}/dismiss", s.handleHeraBoardDismiss)
 	mux.HandleFunc("GET /api/tasks/{id}/hera-messages", s.handleTaskHeraMessages)
+	mux.HandleFunc("GET /api/hera/orchestrators/{id}/plan", s.handleHeraPlan)
 	// Hera mutations; nuke is master-gated inside its handlers.
 	mux.HandleFunc("GET /api/hera/orchestrators/{id}/nuke-preview", s.handleHeraNukePreview)
 	mux.HandleFunc("POST /api/hera/orchestrators/{id}/nuke", s.handleHeraNukeOrch)

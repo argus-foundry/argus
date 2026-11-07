@@ -1,7 +1,6 @@
 package hera
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -9,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	heramodel "github.com/drn/argus/internal/hera/model"
+	heraplan "github.com/drn/argus/internal/hera/plan"
 
 	"github.com/drn/argus/internal/db"
 	"github.com/drn/argus/internal/model"
@@ -684,15 +684,4 @@ func coordTaskStatusLabel(r *heramodel.RoleView) string {
 // coordTaskFailed reports whether the agent-supplied result blob set
 // `failed: true`. A malformed/empty blob is tolerated as not-failed. Mirrors
 // dagview.parseFailed (unexported there, so re-stated rather than imported).
-func coordTaskFailed(raw string) bool {
-	if raw == "" {
-		return false
-	}
-	var v struct {
-		Failed bool `json:"failed"`
-	}
-	if err := json.Unmarshal([]byte(raw), &v); err != nil {
-		return false
-	}
-	return v.Failed
-}
+func coordTaskFailed(raw string) bool { return heraplan.TaskFailed(raw) }

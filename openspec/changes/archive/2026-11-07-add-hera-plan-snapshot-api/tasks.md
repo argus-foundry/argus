@@ -1,0 +1,5 @@
+- [x] Extract `internal/hera/plan` and delegate the TUI projection to it
+- [x] `hera.plan_changed` event constant and DB mutator emission
+- [x] `GET /api/hera/orchestrators/{id}/plan`
+- [x] Go tests: states, edges, authored, nesting, size errors, wire-id stability, cross-wiring, emission after commit
+- [x] README Reference rows, gotchas, archive
