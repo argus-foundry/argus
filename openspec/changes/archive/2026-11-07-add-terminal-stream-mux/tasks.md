@@ -1,0 +1,5 @@
+- [x] Optional `AddWriterFromAt` on Session and RemoteSession
+- [x] Terminal stream manager, handlers and routes
+- [x] Handler tests (shape, status codes, auth, gap/reset/exit, backpressure, cleanup)
+- [x] README REST table, gotchas
+- [x] Archive change into openspec/specs/rest-api

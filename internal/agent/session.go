@@ -359,32 +359,36 @@ func (s *Session) AddWriter(w io.Writer) {
 // Safe to call concurrently. If w.Write returns an error, the writer is
 // not registered.
 func (s *Session) AddWriterFrom(w io.Writer, offset uint64) {
+	s.AddWriterFromAt(w, offset)
+}
+
+// AddWriterFromAt is AddWriterFrom that also returns the offset of the first
+// byte w will receive: the replay start, or the live attach point when there
+// is no replay. ok is false when the initial replay write failed and w was
+// not registered.
+func (s *Session) AddWriterFromAt(w io.Writer, offset uint64) (start uint64, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	currentTotal := s.buf.TotalWritten()
+	start = currentTotal
 	if offset < currentTotal {
 		gap := currentTotal - offset
 		var replay []byte
-		// Len() returns int but is always >= 0; the conversion is safe and
-		// gap is bounded above by ringSize in the else branch (256KB by
-		// default), well within int range on every supported platform.
 		if gap > uint64(s.buf.Len()) { //nolint:gosec // Len() is non-negative
-			// Caller's offset predates the ring's earliest retained byte.
-			// Best effort: replay the full ring. The caller will have a
-			// gap of (gap - ringLen) bytes between their prior data and
-			// this replay, but missing bytes are preferable to stalling.
 			replay = s.buf.Bytes()
 		} else {
 			replay = s.buf.Tail(int(gap)) //nolint:gosec // gap <= Len() per branch guard
 		}
+		start = currentTotal - uint64(len(replay))
 		if len(replay) > 0 {
 			if _, err := w.Write(replay); err != nil {
-				return
+				return start, false
 			}
 		}
 	}
 	s.writers = append(s.writers, w)
+	return start, true
 }
 
 // AddWriterFromTolerant is the offset-aware analog of AddWriter — it replays
