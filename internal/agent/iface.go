@@ -190,7 +190,17 @@ type SessionHandle interface {
 	RemoveWriter(w io.Writer)
 }
 
+// OffsetWriterAdder is implemented by handles that can report where an
+// AddWriterFrom attach begins. start is the offset, in the handle's own byte
+// space, of the first byte the writer will see; it exceeds `offset` when the
+// ring no longer holds the requested bytes. ok is false when the initial replay
+// write failed and the writer was not registered.
+type OffsetWriterAdder interface {
+	AddWriterFromAt(w io.Writer, offset uint64) (start uint64, ok bool)
+}
+
 // Compile-time assertions.
+var _ OffsetWriterAdder = (*Session)(nil)
 var _ SessionProvider = (*Runner)(nil)
 var _ SessionRunner = (*Runner)(nil)
 var _ SessionHandle = (*Session)(nil)

@@ -1497,3 +1497,30 @@ func TestSession_RecentOutputTailWithTotal(t *testing.T) {
 		t.Errorf("tail length = %d, want <= 5", len(tail))
 	}
 }
+
+func TestSession_AddWriterFromAt(t *testing.T) {
+	sess := &Session{buf: NewRingBuffer(8)}
+	sess.buf.Write([]byte("0123456789abcdef"))
+
+	t.Run("within the ring starts at the requested offset", func(t *testing.T) {
+		var w syncBuffer
+		start, ok := sess.AddWriterFromAt(&w, 12)
+		testutil.True(t, ok)
+		testutil.Equal(t, start, uint64(12))
+		testutil.Equal(t, w.String(), "cdef")
+	})
+	t.Run("evicted offset starts at the oldest retained byte", func(t *testing.T) {
+		var w syncBuffer
+		start, ok := sess.AddWriterFromAt(&w, 2)
+		testutil.True(t, ok)
+		testutil.Equal(t, start, uint64(8))
+		testutil.Equal(t, w.String(), "89abcdef")
+	})
+	t.Run("ahead of the ring attaches live at the current total", func(t *testing.T) {
+		var w syncBuffer
+		start, ok := sess.AddWriterFromAt(&w, 99)
+		testutil.True(t, ok)
+		testutil.Equal(t, start, uint64(16))
+		testutil.Equal(t, w.String(), "")
+	})
+}

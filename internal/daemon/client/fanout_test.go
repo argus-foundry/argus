@@ -75,6 +75,20 @@ func TestRSReplay(t *testing.T) {
 		testutil.Equal(t, w.String(), "world")
 	})
 
+	t.Run("AddWriterFromAt reports the first byte the writer sees", func(t *testing.T) {
+		var w syncWriter
+		start, ok := rs.AddWriterFromAt(&w, 6)
+		testutil.True(t, ok)
+		testutil.Equal(t, start, uint64(6))
+		testutil.Equal(t, w.String(), "world")
+
+		var ahead syncWriter
+		start, ok = rs.AddWriterFromAt(&ahead, 500)
+		testutil.True(t, ok)
+		testutil.Equal(t, start, uint64(11))
+		testutil.Equal(t, ahead.String(), "")
+	})
+
 	t.Run("offset at or beyond total replays nothing", func(t *testing.T) {
 		var w syncWriter
 		rs.AddWriterFromTolerant(&w, 11)

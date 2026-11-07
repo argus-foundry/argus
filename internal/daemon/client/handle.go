@@ -341,10 +341,18 @@ func (rs *RemoteSession) AddWriter(w io.Writer) {
 // is held through replay and the stream reader takes the same lock). Mirrors
 // Session.AddWriterFrom; used by the daemon API server's SSE /stream channelWriter.
 func (rs *RemoteSession) AddWriterFrom(w io.Writer, offset uint64) {
+	rs.AddWriterFromAt(w, offset)
+}
+
+// AddWriterFromAt is AddWriterFrom that also returns the offset of the first
+// byte w will receive, in this handle's byte space. ok is false when the
+// initial replay write failed and w was not registered.
+func (rs *RemoteSession) AddWriterFromAt(w io.Writer, offset uint64) (start uint64, ok bool) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
 	currentTotal := rs.buf.TotalWritten()
+	start = currentTotal
 	if offset < currentTotal {
 		gap := currentTotal - offset
 		var replay []byte
@@ -353,13 +361,15 @@ func (rs *RemoteSession) AddWriterFrom(w io.Writer, offset uint64) {
 		} else {
 			replay = rs.buf.Tail(int(gap)) //nolint:gosec // gap <= Len() per branch guard
 		}
+		start = currentTotal - uint64(len(replay))
 		if len(replay) > 0 {
 			if _, err := w.Write(replay); err != nil {
-				return
+				return start, false
 			}
 		}
 	}
 	rs.writers = append(rs.writers, w)
+	return start, true
 }
 
 // AddWriterFromTolerant replays [offset..currentTotal) OUTSIDE the lock, then

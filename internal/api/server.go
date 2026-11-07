@@ -47,7 +47,11 @@ type Server struct {
 	// can hand it either an in-process *agent.Runner (supervisor OFF) or a
 	// supervisor-client (supervisor ON) — the API server drives both identically.
 	runner agent.SessionRunner
-	token  string
+
+	termMu      sync.Mutex
+	termStreams map[string]*termStream
+	termIdents  map[string]termIdent
+	token       string
 
 	// roMux is the router ReadOnlyGet dispatches through, built once on first use.
 	roOnce      sync.Once
