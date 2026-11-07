@@ -1,8 +1,12 @@
 package agent
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/argus-foundry/argus/internal/backendtier"
 	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
@@ -120,4 +124,52 @@ func concreteDefaultBackend(cfg config.Config) string {
 		return ""
 	}
 	return backend
+}
+
+// Preview failure sentinels, mapped to 404/422 by the REST layer.
+var (
+	ErrPreviewProjectNotFound    = errors.New("project not found")
+	ErrPreviewBackendUnavailable = errors.New("backend unavailable")
+)
+
+// RoutingPreview is the advisory, side-effect-free routing outcome.
+type RoutingPreview struct {
+	Backend      string
+	Kind         string
+	Models       []string
+	ModelPolicy  string
+	DefaultModel string
+	Reason       string
+}
+
+// PreviewRouting reports what task creation would resolve for the inputs,
+// through the same ResolveTaskRouting and ResolveModel code. It reserves no
+// burst-ledger spawn, creates no worktree or task, and never returns account
+// identities.
+func PreviewRouting(cfg config.Config, project, backend, archetype, profile string) (RoutingPreview, error) {
+	if _, ok := cfg.Projects[project]; !ok {
+		return RoutingPreview{}, fmt.Errorf("%w: %q", ErrPreviewProjectNotFound, project)
+	}
+	routing, err := ResolveTaskRouting(CreateInput{Project: project, Backend: backend}, cfg, false)
+	if err != nil {
+		return RoutingPreview{}, fmt.Errorf("%w: %w", ErrPreviewBackendUnavailable, err)
+	}
+	b, ok := cfg.Backends[routing.Backend]
+	if !ok {
+		return RoutingPreview{}, fmt.Errorf("%w: backend %q not configured", ErrPreviewBackendUnavailable, routing.Backend)
+	}
+	task := &model.Task{Project: project, Backend: routing.Backend, Archetype: archetype, Profile: profile}
+	def, _ := ResolveModel(task, b, cfg)
+	models := BackendModels(b)
+	if models == nil {
+		models = []string{}
+	}
+	return RoutingPreview{
+		Backend:      routing.Backend,
+		Kind:         string(FamilyOf(b.Command).Kind),
+		Models:       models,
+		ModelPolicy:  ModelPolicy(b),
+		DefaultModel: def,
+		Reason:       routing.Reason,
+	}, nil
 }
