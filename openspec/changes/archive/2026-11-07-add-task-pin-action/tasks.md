@@ -1,0 +1,3 @@
+- [x] Add `POST /api/tasks/{id}/pin` handler and route
+- [x] Tests: shape, errors, auth, concurrent-edit preservation, both pin/archive orders, no-op silence, SSE
+- [x] README Reference row and gotcha
