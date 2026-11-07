@@ -82,3 +82,13 @@ test('suggestion invalidation reaches the composer while task snapshots buffer e
  assert.deepEqual(delivered,[event]);
  assert.equal(patchEvent([{id:'a'}],event).resnapshot,false);
 });
+
+
+test('task.updated wire events request an authoritative task snapshot',()=>{
+ const tasks=[{id:'a',pinned:false,archived:true}];
+ const [event]=new SSEFrames().feed('event: task.updated\ndata: {"type":"task.updated","task_id":"a","payload":{"changed_fields":["archived","pinned"]}}\n\n');
+ assert.equal(event.type,'task.updated');
+ const result=patchEvent(tasks,event);
+ assert.equal(result.resnapshot,true);
+ assert.deepEqual(result.tasks,tasks);
+});
