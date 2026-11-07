@@ -1032,6 +1032,76 @@ func (d *DB) setTaskBackendMoveLocked(id string, m TaskBackendMove) (TaskBackend
 	return prev, nil
 }
 
+// ErrTaskRuntimeChanged means a concurrent edit invalidated the runtime snapshot.
+var ErrTaskRuntimeChanged = errors.New("task runtime revision changed")
+
+// TaskRuntimeUpdate is the runtime-settings projection SetTaskRuntime writes.
+type TaskRuntimeUpdate struct {
+	Expected        *model.Task
+	SessionID       *string
+	Backend         string
+	Model           string
+	SandboxOverride string
+	Sandboxed       bool
+	Prompt          string
+}
+
+// SetTaskRuntime conditionally writes runtime settings and an optional discovered
+// session ID while preserving unrelated columns.
+// It returns the row as it was before the write.
+func (d *DB) SetTaskRuntime(id string, u TaskRuntimeUpdate) (*model.Task, error) {
+	old, err := d.setTaskRuntimeLocked(id, u)
+	if err != nil {
+		return nil, err
+	}
+	cur := *old
+	if u.SessionID != nil {
+		cur.SessionID = *u.SessionID
+	}
+	cur.Backend, cur.Model, cur.SandboxOverride, cur.Sandboxed, cur.Prompt = u.Backend, u.Model, u.SandboxOverride, u.Sandboxed, u.Prompt
+	fields := model.ChangedTaskFields(old, &cur)
+	if old.Prompt != cur.Prompt {
+		fields = append(fields, model.TaskFieldRuntime)
+	}
+	events.EmitTaskUpdated(id, fields...)
+	return old, nil
+}
+
+func (d *DB) setTaskRuntimeLocked(id string, u TaskRuntimeUpdate) (*model.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	row := d.conn.QueryRow(`SELECT `+taskColumns+` FROM tasks WHERE id=?`, id)
+	old, err := scanTask(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+		}
+		return nil, err
+	}
+	var sessionID any
+	if u.SessionID != nil {
+		sessionID = *u.SessionID
+	}
+	query := `UPDATE tasks SET backend=?, model=?, sandbox_override=?, sandboxed=?, prompt=?, session_id=COALESCE(?, session_id) WHERE id=?`
+	args := []any{u.Backend, u.Model, u.SandboxOverride, boolToInt(u.Sandboxed), u.Prompt, sessionID, id}
+	if expected := u.Expected; expected != nil {
+		query += ` AND backend=? AND model=? AND sandbox_override=? AND prompt=? AND session_id=?`
+		args = append(args, expected.Backend, expected.Model, expected.SandboxOverride, expected.Prompt, expected.SessionID)
+	}
+	result, err := d.conn.Exec(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, ErrTaskRuntimeChanged
+	}
+	return old, nil
+}
+
 // TaskWorktreeRow is the minimal task projection `argus doctor` needs to map a
 // running dev-stack process back to its task.
 type TaskWorktreeRow struct {

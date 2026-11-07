@@ -39,12 +39,16 @@ const (
 	// EventTypeTaskPRChanged carries PRChangedPayload {"url","state","lifecycle","source"},
 	// published after a changed PR cache commit by the daemon poller or a
 	// manual PR link change.
-	EventTypeTaskPRChanged  = "task.pr_changed"
-	EventTypeMessageSent    = "message.sent"
-	EventTypeMessageAcked   = "message.acked"
-	EventTypeSessionStarted = "session.started"
-	EventTypeSessionExited  = "session.exited"
-	EventTypeSessionIdle    = "session.idle"
+	EventTypeTaskPRChanged = "task.pr_changed"
+	// EventTypeTaskRuntimeChanged fires after a PATCH /api/tasks/{id}/runtime
+	// settles. Payload: {"apply":"next_resume"|"restart","changed_fields":[...],
+	// "started":bool}. Never carries prompt text.
+	EventTypeTaskRuntimeChanged = "task.runtime_changed"
+	EventTypeMessageSent        = "message.sent"
+	EventTypeMessageAcked       = "message.acked"
+	EventTypeSessionStarted     = "session.started"
+	EventTypeSessionExited      = "session.exited"
+	EventTypeSessionIdle        = "session.idle"
 
 	// EventTypeSessionNeedsInput fires when a session transitions into or out
 	// of the "blocked waiting on the user" state (the red ? in the TUI). One
@@ -127,7 +131,7 @@ var TaskUpdatedFields = []string{
 }
 
 // ChangedTaskFields reports which task.updated fields differ between two task
-// snapshots. runtime covers backend, model, and session identity.
+// snapshots. runtime covers backend, model, sandbox override, and session identity.
 func ChangedTaskFields(old, cur *Task) []string {
 	if old == nil || cur == nil {
 		return nil
@@ -142,7 +146,8 @@ func ChangedTaskFields(old, cur *Task) []string {
 	add(old.Status != cur.Status, TaskFieldStatus)
 	add(old.Archived != cur.Archived, TaskFieldArchived)
 	add(old.Pinned != cur.Pinned, TaskFieldPinned)
-	add(old.Backend != cur.Backend || old.Model != cur.Model || old.SessionID != cur.SessionID, TaskFieldRuntime)
+	add(old.Backend != cur.Backend || old.Model != cur.Model || old.SessionID != cur.SessionID ||
+		old.SandboxOverride != cur.SandboxOverride, TaskFieldRuntime)
 	add(old.Account != cur.Account || old.AccountRouted != cur.AccountRouted, TaskFieldAccount)
 	add(old.Result != cur.Result, TaskFieldResult)
 	return out
