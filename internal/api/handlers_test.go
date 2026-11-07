@@ -111,7 +111,7 @@ func TestHandleListTasks(t *testing.T) {
 		testutil.Equal(t, len(resp["tasks"]), 2)
 	})
 
-	t.Run("in_progress without session reports idle", func(t *testing.T) {
+	t.Run("in_progress without session is neither live nor idle", func(t *testing.T) {
 		req := authedReq("GET", "/api/tasks?status=in_progress", "")
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
@@ -121,7 +121,8 @@ func TestHandleListTasks(t *testing.T) {
 		testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		testutil.Equal(t, len(resp["tasks"]), 1)
 		testutil.Equal(t, resp["tasks"][0].Name, "task-b")
-		testutil.True(t, resp["tasks"][0].Idle)
+		testutil.Equal(t, resp["tasks"][0].Idle, false)
+		testutil.Equal(t, resp["tasks"][0].Live, false)
 	})
 
 	t.Run("non-in_progress task is never idle", func(t *testing.T) {
@@ -194,10 +195,15 @@ func TestComputeRuntimeState(t *testing.T) {
 		wantIdle bool
 		wantLive bool
 	}{
-		{"pending never idle", model.StatusPending, false, false, false, false},
-		{"in_review never idle", model.StatusInReview, false, false, false, false},
-		{"complete never idle", model.StatusComplete, false, false, false, false},
-		{"in_progress no session is idle", model.StatusInProgress, false, false, true, false},
+		{"pending no session", model.StatusPending, false, false, false, false},
+		{"in_review no session", model.StatusInReview, false, false, false, false},
+		{"complete no session", model.StatusComplete, false, false, false, false},
+		{"in_progress no session is not idle", model.StatusInProgress, false, false, false, false},
+		{"in_review busy session is live", model.StatusInReview, true, false, false, true},
+		{"in_review idle session is idle and live", model.StatusInReview, true, true, true, true},
+		{"complete busy session is live", model.StatusComplete, true, false, false, true},
+		{"pending idle session is idle and live", model.StatusPending, true, true, true, true},
+		{"idle flag without session is ignored", model.StatusInReview, false, true, false, false},
 		{"in_progress active session not idle", model.StatusInProgress, true, false, false, true},
 		{"in_progress idle session is idle but live", model.StatusInProgress, true, true, true, true},
 	}

@@ -1,0 +1,5 @@
+- [x] `model.ParseTaskFailure` / `FailureFromResult`
+- [x] `result_at` column stamped by `SetResult`, `Update`, `Add`
+- [x] `failure` field on list and get; `task.failure_changed` event
+- [x] Tests: projection, malformed/unrelated, stop is not failure, clear/replace, 404, auth
+- [x] Document in rest-api and events-bus specs, README, gotchas

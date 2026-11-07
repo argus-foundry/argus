@@ -297,3 +297,33 @@ func TestChangedTaskFields(t *testing.T) {
 		testutil.Equal(t, len(ChangedTaskFields(nil, base())), 0)
 	})
 }
+
+func TestParseTaskFailure(t *testing.T) {
+	tests := []struct {
+		name, in, reason string
+		ok               bool
+	}{
+		{"explicit", `{"failed":true,"reason":"boom"}`, "boom", true},
+		{"no reason", `{"failed":true}`, "", true},
+		{"false", `{"failed":false}`, "", false},
+		{"string flag", `{"failed":"true"}`, "", false},
+		{"malformed", `{`, "", false},
+		{"array", `[]`, "", false},
+		{"empty", ``, "", false},
+		{"non-string reason", `{"failed":true,"reason":3}`, "", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, ok := ParseTaskFailure(tc.in)
+			testutil.Equal(t, ok, tc.ok)
+			testutil.Equal(t, r, tc.reason)
+		})
+	}
+}
+
+func TestFailureFromResult_ZeroTimeOmitsRecordedAt(t *testing.T) {
+	f := FailureFromResult(`{"failed":true,"reason":"x"}`, time.Time{})
+	testutil.Equal(t, f.RecordedAt, "")
+	testutil.Equal(t, f.Source, FailureSourceTaskResult)
+	testutil.Equal(t, FailureFromResult(`{}`, time.Now()) == nil, true)
+}

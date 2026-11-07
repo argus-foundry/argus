@@ -161,6 +161,9 @@ func (d *DB) addLocked(t *model.Task) error {
 		t.ID, t.Name, t.Status.String(), t.Project, t.Branch, t.Prompt, t.Backend, t.Model, t.Worktree, t.AgentPID, t.SessionID, sandboxedInt, archivedInt, pinnedInt,
 		t.BaseBranch, t.Result, t.Archetype, t.Profile, t.SandboxOverride, t.Account, boolToInt(t.AccountRouted),
 		formatTime(t.CreatedAt), formatTime(t.StartedAt), formatTime(t.EndedAt))
+	if err == nil && t.Result != "" {
+		_, err = d.conn.Exec(`UPDATE tasks SET result_at=? WHERE id=?`, formatTime(time.Now()), t.ID)
+	}
 	return err
 }
 
@@ -191,8 +194,20 @@ func (d *DB) Update(t *model.Task) error {
 	}
 	if old != nil {
 		events.EmitTaskUpdated(t.ID, model.ChangedTaskFields(old, t)...)
+		if old.Result != t.Result {
+			emitFailureChanged(t.ID, old.Result, t.Result, d.ResultAt(t.ID))
+		}
 	}
 	return nil
+}
+
+// ResultAt returns the persisted result observation time, zero when unset.
+func (d *DB) ResultAt(id string) time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var at string
+	_ = d.conn.QueryRow(`SELECT result_at FROM tasks WHERE id=?`, id).Scan(&at)
+	return parseTime(at)
 }
 
 func (d *DB) updateLocked(t *model.Task) (*model.Task, error) {
@@ -226,6 +241,11 @@ func (d *DB) updateLocked(t *model.Task) (*model.Task, error) {
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return old, fmt.Errorf("%w: %s", ErrTaskNotFound, t.ID)
+	}
+	if old != nil && old.Result != t.Result {
+		if _, err := d.conn.Exec(`UPDATE tasks SET result_at=? WHERE id=?`, formatTime(time.Now()), t.ID); err != nil {
+			return old, err
+		}
 	}
 	return old, nil
 }
@@ -316,31 +336,69 @@ func (d *DB) renameIfNameLocked(id, expected, newName string) (bool, error) {
 // not parse the contents — it's the agent/orchestrator contract. Returns an
 // error if the row is missing. Idempotent: last write wins.
 func (d *DB) SetResult(id, result string) error {
-	changed, err := d.setResultLocked(id, result)
+	changed, prev, at, err := d.setResultLocked(id, result)
 	if err != nil {
 		return err
 	}
 	if changed {
 		events.EmitTaskUpdated(id, model.TaskFieldResult)
+		emitFailureChanged(id, prev, result, at)
 	}
 	return nil
 }
 
-func (d *DB) setResultLocked(id, result string) (bool, error) {
+func (d *DB) setResultLocked(id, result string) (changed bool, prev string, at time.Time, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	var old string
-	if err := d.conn.QueryRow(`SELECT result FROM tasks WHERE id=?`, id).Scan(&old); err != nil {
+	if err := d.conn.QueryRow(`SELECT result FROM tasks WHERE id=?`, id).Scan(&prev); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+			return false, "", at, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
 		}
-		return false, err
+		return false, "", at, err
 	}
-	if _, err := d.conn.Exec(`UPDATE tasks SET result=? WHERE id=?`, result, id); err != nil {
-		return false, err
+	if prev == result {
+		return false, prev, at, nil
 	}
-	return old != result, nil
+	at = time.Now()
+	if _, err := d.conn.Exec(`UPDATE tasks SET result=?, result_at=? WHERE id=?`, result, formatTime(at), id); err != nil {
+		return false, prev, time.Time{}, err
+	}
+	return true, prev, at, nil
+}
+
+// emitFailureChanged publishes task.failure_changed when a result write moved
+// the explicit-failure projection (either side parses as a failure).
+func emitFailureChanged(id, prev, cur string, at time.Time) {
+	_, wasFailed := model.ParseTaskFailure(prev)
+	_, isFailed := model.ParseTaskFailure(cur)
+	if !wasFailed && !isFailed {
+		return
+	}
+	events.Emit(model.EventTypeTaskFailureChanged, id, map[string]*model.TaskFailure{
+		"failure": model.FailureFromResult(cur, at),
+	})
+}
+
+// ResultTimes returns the persisted result observation time per task id for
+// every task whose result has been written since result_at existed.
+func (d *DB) ResultTimes() (map[string]time.Time, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rows, err := d.conn.Query(`SELECT id, result_at FROM tasks WHERE result_at != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := make(map[string]time.Time)
+	for rows.Next() {
+		var id, at string
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, err
+		}
+		out[id] = parseTime(at)
+	}
+	return out, rows.Err()
 }
 
 // SetArchived writes only the archived column (plus the pinned-clearing leg

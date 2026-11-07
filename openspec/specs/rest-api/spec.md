@@ -151,22 +151,27 @@ The server SHALL create a task from a JSON body containing `prompt`, `project`, 
 
 ### Requirement: Task listing and retrieval with runtime idle state
 
-The server SHALL list tasks and SHALL support optional filtering by `status`, `project`, and `archived` (`0`/default excludes archived, `1` returns only archived, `all` returns both). For each task the server SHALL derive a runtime `idle` flag that is true only when the task is `in_progress` and either has no live session or its session is waiting for input; non-`in_progress` tasks SHALL never be reported idle. Retrieving a task that does not exist SHALL return 404.
+The server SHALL list tasks and SHALL support optional filtering by `status`, `project`, and `archived` (`0`/default excludes archived, `1` returns only archived, `all` returns both). For each task the server SHALL derive `live`, true whenever the runner holds an input-addressable session and no kill+resume restart is pending, regardless of workflow status, and `idle`, true only when the session is live and waiting for input; an absent session SHALL NOT be reported idle. A pending restart SHALL report `live`, `idle` and `needs_input` all false. `needs_input` SHALL require a live `in_progress` session. Retrieving a task that does not exist SHALL return 404.
 
 #### Scenario: Lists all non-archived tasks
 
 - **WHEN** a list request omits the archived filter
 - **THEN** the server returns the non-archived tasks
 
-#### Scenario: In-progress task without a live session reports idle
+#### Scenario: Live busy in_review task
 
-- **WHEN** a task is `in_progress` but has no live session
-- **THEN** its listed entry reports `idle: true`
+- **WHEN** an `in_review` task has a live, non-idle session
+- **THEN** its entry reports `live: true` and no `idle`
 
-#### Scenario: Non-in-progress task never idle
+#### Scenario: Absent session is not idle
 
-- **WHEN** a task is `pending`
-- **THEN** its listed entry reports idle false
+- **WHEN** a task of any status has no session
+- **THEN** its entry reports `live: false` and no `idle`
+
+#### Scenario: Pending restart never advertises input
+
+- **WHEN** a live task has a pending kill+resume restart
+- **THEN** its entry reports `live: false`, no `idle` and no `needs_input`
 
 #### Scenario: Filter by status and project
 
@@ -791,3 +796,17 @@ The system SHALL expose `POST /api/tasks/{id}/pin` accepting `{"pinned":<bool>}`
 
 - **WHEN** the body is `{"pinned":"yes"}` or `{}` or contains an unknown field
 - **THEN** the response is 400 and nothing is stored or emitted
+
+### Requirement: Task failure projection
+
+`GET /api/tasks` and `GET /api/tasks/{id}` SHALL include `failure`, `null` or `{"reason","source":"task_result","recorded_at"}`, derived from a Result object whose `failed` is boolean `true`. `recorded_at` SHALL be the persisted time the result last changed and SHALL be omitted when none was persisted. `reason` SHALL be bounded to 4 KiB. A malformed, non-object or unrelated Result SHALL yield `failure: null` and never an error. User stop, transport loss and nonzero exit SHALL NOT produce a failure. Standalone and Hera-bound tasks SHALL share the projection.
+
+#### Scenario: Explicit failed result
+
+- **WHEN** a task's Result is `{"failed":true,"reason":"validation failed"}`
+- **THEN** its entry reports that reason, source `task_result` and the persisted `recorded_at`
+
+#### Scenario: Malformed result
+
+- **WHEN** a task's Result is not valid JSON
+- **THEN** the request succeeds with `failure: null`
