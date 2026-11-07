@@ -383,6 +383,18 @@ func (d *DB) createTables() error {
 	}
 	d.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_task_meta_namespace ON task_meta(task_id, namespace)`) //nolint:errcheck
 
+	// Manual PR association intent, kept apart from the derived pr cache in
+	// task_meta (which archive wipes and polling rewrites). Removed by Delete only.
+	if _, err := d.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS task_pr_links (
+			task_id    TEXT PRIMARY KEY,
+			url        TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("creating task_pr_links table: %w", err)
+	}
+
 	// Events ring (PR 2 of the plugin substrate). Bounded — InsertEvent
 	// evicts the oldest rows once the row count exceeds MaxEventsRetained.
 	// id is INTEGER PRIMARY KEY AUTOINCREMENT so the cursor is monotonic
