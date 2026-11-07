@@ -895,7 +895,7 @@ Every authenticated token has the same permissions **except** a small master-onl
 
 | Method | Endpoint                               | Description                                             |
 | ------ | -------------------------------------- | ------------------------------------------------------- |
-| `GET`  | `/api/tasks/{id}/git/status`           | git status output + branch diff for the task's worktree, plus `comparison`, `git_revision` (opaque) and `stale`; 503 `git_status_unavailable` on a cold-read timeout |
+| `GET`  | `/api/tasks/{id}/git/status`           | git status output + branch diff for the task's worktree, plus `comparison`, per-file `files` (`path`, `status`, `additions`/`deletions` null unless `kind` is `text`, `kind`, optional `original_path`), `git_revision` (opaque) and `stale`; 503 `git_status_unavailable` on a cold-read timeout |
 | `POST` | `/api/tasks/{id}/git/discard`          | Restore one file to HEAD: `{path, scope:"local", delete_untracked}`; 400 `invalid_path`, 409 `untracked_requires_delete`/`rename_requires_explicit_paths`/`conflict_state`/`no_changes`; publishes `worktree.changed` |
 | `GET`  | `/api/tasks/{id}/git/diff?path=<file>` | Unified diff for a single file, plus `comparison`       |
 | `GET`  | `/api/tasks/{id}/files?dir=<rel>`      | Worktree file listing                                   |

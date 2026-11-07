@@ -804,3 +804,11 @@ The API SHALL serve `GET /api/sandbox/proposals` (optional `status` filter) and 
 #### Scenario: Untracked requires flag
 - **WHEN** an untracked file is discarded without `delete_untracked`
 - **THEN** the response is 409 `untracked_requires_delete` and the file remains
+
+### Requirement: Git status file counts
+
+`GET /api/tasks/{id}/git/status` SHALL include `files` from the same snapshot and comparison base as the legacy `Status`, `Diff`, `BranchDiff` and `BranchFiles` fields, which remain populated. Status collection failures keep returning 500.
+
+#### Scenario: Files alongside legacy fields
+- **WHEN** a worktree has a modified file
+- **THEN** the response has `Status` text and a `files` entry with its counts

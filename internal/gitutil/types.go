@@ -17,8 +17,9 @@ type GitStatusRefreshMsg struct {
 	BranchDiff  string // git diff --stat against merge-base (committed changes)
 	BranchFiles string // git diff --name-status against merge-base (for file list)
 
-	Comparison Comparison `json:"comparison"`
-	Err        error      `json:"-"`
+	Comparison Comparison   `json:"comparison"`
+	Files      []FileChange `json:"files"`
+	Err        error        `json:"-"`
 }
 
 // Comparison describes which base a status or diff was computed against.
