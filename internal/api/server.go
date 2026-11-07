@@ -64,6 +64,10 @@ type Server struct {
 	// events.SetSink to the same broker that serves /api/events/stream.
 	eventBus *eventBus
 
+	// spawnCoordinator is the coordinator-creation seam; nil uses
+	// agent.SpawnHeraCoordinator. Tests inject failures here.
+	spawnCoordinator func(*db.DB, agent.SessionProvider, agent.HeraCoordinatorSpawnInput) (*agent.HeraCoordinatorSpawnResult, error)
+
 	// stopCh is closed by Shutdown to signal background goroutines (idle
 	// watcher, push fan-out housekeeping) to terminate. Range over <-stopCh
 	// in select-loops to honour shutdown.

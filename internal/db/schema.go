@@ -772,6 +772,18 @@ func (d *DB) createHeraTables() error {
 			PRIMARY KEY (blocked_role_id, blocker_role_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_hera_blocks_blocker ON hera_blocks(blocker_role_id);
+
+		-- Idempotency receipts for REST coordinator creation. Deliberately no
+		-- FK to the created rows: the receipt must outlive a later nuke so a
+		-- replayed request_id still answers 409/replay rather than re-spawning.
+		CREATE TABLE IF NOT EXISTS hera_coordinator_requests (
+			request_id TEXT PRIMARY KEY,
+			body_hash  TEXT NOT NULL,
+			state      TEXT NOT NULL,
+			response   TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
 	`
 	if _, err := d.conn.Exec(ddl); err != nil {
 		return fmt.Errorf("creating hera tables: %w", err)

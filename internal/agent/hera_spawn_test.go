@@ -879,3 +879,61 @@ func TestSpawnHeraCoordinator_ExplicitBackendHonored(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, got.Backend, "claude-fast")
 }
+
+func TestSpawnHeraCoordinator_ProfileArchetypeBranchReachTask(t *testing.T) {
+	repo := initGitRepo(t)
+	d := createTestDB(t, repo)
+	fr := &fakeRunner{sessionPID: 1}
+
+	res, err := SpawnHeraCoordinator(d, fr, HeraCoordinatorSpawnInput{
+		OrchestratorBaseName: "lean-team",
+		TaskPrompt:           "body",
+		RolePrompt:           "body",
+		Project:              "proj",
+		Branch:               "HEAD",
+		Profile:              "lean",
+		Archetype:            "brainstorm",
+	})
+	testutil.NoError(t, err)
+
+	got, err := d.Get(res.Task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Profile, "lean")
+	testutil.Equal(t, got.Archetype, "brainstorm")
+	testutil.Equal(t, res.Role.Archetype, "brainstorm")
+}
+
+func TestSpawnHeraCoordinator_EmptyProfileLeavesTaskProfileEmpty(t *testing.T) {
+	repo := initGitRepo(t)
+	d := createTestDB(t, repo)
+	fr := &fakeRunner{sessionPID: 1}
+
+	res, err := SpawnHeraCoordinator(d, fr, HeraCoordinatorSpawnInput{
+		OrchestratorBaseName: "inherit-team",
+		TaskPrompt:           "body",
+		Project:              "proj",
+	})
+	testutil.NoError(t, err)
+	got, err := d.Get(res.Task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Profile, "")
+	testutil.Equal(t, got.Archetype, "orchestrator")
+}
+
+func TestSpawnHeraCoordinator_WorktreeFailureUnwinds(t *testing.T) {
+	repo := initGitRepo(t)
+	d := createTestDB(t, repo)
+	fr := &fakeRunner{sessionPID: 1}
+
+	_, err := SpawnHeraCoordinator(d, fr, HeraCoordinatorSpawnInput{
+		OrchestratorBaseName: "no-branch", TaskPrompt: "b", Project: "proj", Branch: "origin/does-not-exist",
+	})
+	if err == nil {
+		t.Fatal("expected spawn to fail for an unresolvable base branch")
+	}
+	testutil.Equal(t, fr.startCalls, 0)
+	tasks, _ := d.Tasks()
+	testutil.Equal(t, len(tasks), 0)
+	orchs, _ := d.ListHeraOrchestrators(true)
+	testutil.Equal(t, len(orchs), 0)
+}

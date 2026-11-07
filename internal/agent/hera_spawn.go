@@ -42,7 +42,7 @@ type HeraWorkerSpawnInput struct {
 // a born-bound worker is a code_slice unit, a born-bound coordinator orchestrates.
 const (
 	defaultWorkerArchetype      = "code_slice"
-	defaultCoordinatorArchetype = "orchestrator"
+	DefaultCoordinatorArchetype = "orchestrator"
 )
 
 // resolveCoordinatorBackend restricts automatic coordinator selection to
@@ -613,6 +613,7 @@ type HeraCoordinatorSpawnInput struct {
 	Backend              string // optional backend override
 	Model                string // optional model override (empty = backend default)
 	Archetype            string // optional diligence archetype; defaults to orchestrator when empty
+	Profile              string // optional per-spawn profile override; empty = use project binding
 }
 
 // HeraCoordinatorSpawnResult is the success payload from SpawnHeraCoordinator.
@@ -670,7 +671,7 @@ func SpawnHeraCoordinator(database *db.DB, runner SessionProvider, in HeraCoordi
 	// born-bound coordinator orchestrates unless told otherwise.
 	archetype := strings.TrimSpace(in.Archetype)
 	if archetype == "" {
-		archetype = defaultCoordinatorArchetype
+		archetype = DefaultCoordinatorArchetype
 	}
 
 	var role *db.HeraRole
@@ -684,6 +685,7 @@ func SpawnHeraCoordinator(database *db.DB, runner SessionProvider, in HeraCoordi
 		Backend:         resolveCoordinatorBackend(in.Backend, in.Project, database.Config()),
 		Model:           in.Model,
 		Archetype:       archetype,
+		Profile:         in.Profile,
 		BaseBranch:      in.Branch,
 		BranchNamespace: orchName,
 		AutoName:        false, // name is the orchestrator slug — no Haiku rename
