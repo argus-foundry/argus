@@ -19,6 +19,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v6
         with:
@@ -44,7 +46,9 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: "v2.11.4"
-          only-new-issues: true
+          # A new branch push has no previous SHA; lint its latest commit.
+          args: >-
+            --new-from-rev=${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'HEAD~1' }} ./...
 
       # Advisory only: govulncheck flags both module CVEs and stdlib CVEs in
       # the active Go toolchain. Stdlib findings can only be fixed by bumping
