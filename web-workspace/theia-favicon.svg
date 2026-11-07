@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="192" height="192" role="img" aria-label="Theia Spectrum eye"><defs>
+<linearGradient id="spectrum" x1="0" y1="0" x2="1" y2=".7" gradientUnits="objectBoundingBox"><stop stop-color="#3b82f6"/><stop offset=".28" stop-color="#22d3ee"/><stop offset=".5" stop-color="#79e5c6"/><stop offset=".7" stop-color="#facc15"/><stop offset="1" stop-color="#fb7185"/></linearGradient>
+<linearGradient id="sky" x1="0" y1="0" x2=".8" y2="1"><stop stop-color="#6366f1"/><stop offset=".42" stop-color="#0ea5e9"/><stop offset=".72" stop-color="#67e8f9"/><stop offset="1" stop-color="#fef3c7"/></linearGradient>
+
+
+</defs><rect x=".5" y=".5" width="31" height="31" rx="7" fill="#10213b" stroke="#6885a8" stroke-width="1"/><g transform="translate(2 2) scale(.875)"><path d="M2 16Q16-4 30 16Q16 36 2 16Z" fill="url(#spectrum)"/><path d="M7 16Q16 4 25 16Q16 28 7 16Z" fill="#10213b"/><circle cx="16" cy="16" r="6" fill="url(#sky)"/><circle cx="16" cy="16" r="3.2" fill="#f8ffff"/><circle cx="18" cy="13.5" r="1.5" fill="#fff"/></g></svg>

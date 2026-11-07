@@ -5,14 +5,14 @@ import {AttentionTab} from '../../../workspace/attention/attention-tab.js';
 function fixture(t){
  t.mock.method(console,'debug',()=>{});
  const writes=[],labels=[],encodings=[],titles=[],images=[];
- const icon={getAttribute:()=>'/icon.png',set href(value){writes.push(value);}};
- globalThis.document={querySelector:()=>icon,set title(value){titles.push(value);},createElement:()=>({
+ const icon={getAttribute:name=>name==='href'?'/theia-favicon.svg':null,setAttribute(){},removeAttribute(){},set href(value){writes.push(value);}};
+ globalThis.document={querySelectorAll:()=>[icon],set title(value){titles.push(value);},createElement:()=>({
   getContext:()=>({drawImage(){},beginPath(){},arc(){},fill(){},fillText:value=>labels.push(value)}),
   toDataURL:type=>{encodings.push(type);return 'data:image/png,badge';},
  })};
  globalThis.Image=class {constructor(){this.naturalWidth=0;images.push(this);}};
  const tab=new AttentionTab();
- return {tab,writes,labels,encodings,titles,load:()=>{images[0].naturalWidth=192;images[0].onload();}};
+ return {tab,writes,labels,encodings,titles,images,load:()=>{images[0].naturalWidth=192;images[0].onload();}};
 }
 test('unchanged attention events skip title, favicon writes and PNG encoding',t=>{
  const {tab,writes,encodings,titles,load}=fixture(t);tab.update(1);load();
@@ -24,12 +24,12 @@ test('image load draws the latest count and zero restores the original icon once
  const {tab,writes,labels,encodings,load}=fixture(t);
  tab.update(1);tab.update(3);tab.update(3);assert.equal(encodings.length,0);
  load();assert.deepEqual(labels,['3']);assert.equal(encodings.length,1);
- tab.update(0);assert.equal(writes.at(-1),'/icon.png');
+ tab.update(0);assert.equal(writes.at(-1),'/theia-favicon.svg');
  const count=writes.length;tab.update(0);assert.equal(writes.length,count);
 });
 test('clearing attention before image load never draws a stale badge',t=>{
  const {tab,writes,encodings,load}=fixture(t);tab.update(2);tab.update(0);load();
- assert.equal(encodings.length,0);assert.equal(writes.at(-1),'/icon.png');
+ assert.equal(encodings.length,0);assert.equal(writes.at(-1),'/theia-favicon.svg');
 });
 test('counts above the badge cap update the title without re-encoding the same badge',t=>{
  const {tab,labels,encodings,titles,load}=fixture(t);tab.update(100);load();tab.update(101);
@@ -38,5 +38,12 @@ test('counts above the badge cap update the title without re-encoding the same b
 });
 test('initial zero count restores the title and keeps subsequent draws idle',t=>{
  const {tab,writes,titles}=fixture(t);tab.update(0);tab.update(0);tab.draw();
- assert.deepEqual(titles,['Theia']);assert.deepEqual(writes,['/icon.png']);
+ assert.deepEqual(titles,['Theia']);assert.deepEqual(writes,['/theia-favicon.svg']);
+});
+
+test('attention loads the Theia raster source while restoring the SVG favicon',t=>{
+ const {tab,images,writes,load}=fixture(t);
+ tab.update(5);assert.equal(images[0].src,'/theia-icon-192.png');
+ load();assert.equal(writes.at(-1),'data:image/png,badge');
+ tab.update(0);assert.equal(writes.at(-1),'/theia-favicon.svg');
 });

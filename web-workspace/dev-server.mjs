@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 const clientRoot = path.dirname(fileURLToPath(import.meta.url));
 const staticRoot = path.resolve(clientRoot, '../internal/api/static');
 const vendorRoot = path.join(staticRoot, 'vendor');
-const appIcons = new Set(['/icon-192.png', '/apple-touch-icon.png']);
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
 const hopHeaders = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
@@ -66,7 +65,7 @@ async function serve(request, response) {
   try { pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname); }
   catch { return end(response, 400, 'Invalid path.'); }
   const vendor = pathname.startsWith('/vendor/');
-  const root = vendor ? vendorRoot : appIcons.has(pathname) ? staticRoot : clientRoot;
+  const root = vendor ? vendorRoot : clientRoot;
   const relative = vendor ? pathname.slice('/vendor/'.length) : pathname === '/' ? 'index.html' : pathname.slice(1);
   if (vendor && !['xterm.js', 'xterm.css', 'xterm-addon-fit.js'].includes(relative)) {
     return end(response, 404, 'Not found.');

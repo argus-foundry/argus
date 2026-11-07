@@ -14,14 +14,17 @@ test('client branding fits the existing responsive header', async ({ page }) => 
   const brand = page.locator('.workspace-header .brand');
   assert.equal(await brand.getAttribute('aria-label'), 'Theia');
   assert.equal(await brand.locator('strong').textContent(), 'Theia');
+  assert.equal(await brand.locator('.brand-mark').getAttribute('src'), '/theia-mark.svg');
+  assert.equal(await brand.locator('.brand-mark').getAttribute('aria-hidden'), 'true');
+  assert.deepEqual(await brand.locator('.brand-mark').evaluate(mark => ({width: mark.clientWidth, height: mark.clientHeight, loaded: mark.complete && mark.naturalWidth > 0})), {width: 25, height: 25, loaded: true});
   for (const width of [1440, 1100, 1099, 601, 600, 390, 361, 360, 320]) {
     await page.setViewportSize({ width, height: 900 });
     assert.equal(await brand.isVisible(), width > 360);
     assert.equal(await brand.locator('strong').isVisible(), width > 600);
-    assert.equal(await brand.locator('.edition').isVisible(), width > 1099);
+    assert.equal(await brand.locator('.edition').count(), 0);
     const fits = await page.locator('.workspace-header').evaluate(header => {
       const bounds = header.getBoundingClientRect();
-      return [...header.querySelectorAll('.brand, .brand strong, .edition, button')]
+      return [...header.querySelectorAll('.brand, .brand strong, .brand-mark, button')]
         .filter(element => element.getClientRects().length)
         .every(element => {
           const rect = element.getBoundingClientRect();

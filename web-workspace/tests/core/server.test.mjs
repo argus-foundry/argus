@@ -157,7 +157,7 @@ test('rejects cross-site proxy requests and preserves upstream failures', async 
   assert.equal(await result.text(), 'denied');
 });
 
-test('uses the Theia tab title and serves the original app icons read only', async t => {
+test('uses the Theia title and decorative Spectrum eye without an edition label', async t => {
   const { url } = await withProxy(t, (_request, response) => { response.writeHead(500); response.end(); });
   const html = await (await fetch(url)).text();
   assert.match(html, /<title>Theia<\/title>/);
@@ -165,12 +165,11 @@ test('uses the Theia tab title and serves the original app icons read only', asy
   assert.match(html, /<strong>Theia<\/strong>/);
   const diagnostic = await (await fetch(`${url}/diagnostics/wispr-check.html`)).text();
   assert.match(diagnostic, /<title>Theia dictation check<\/title>/);
-  for (const [rel, asset] of [['icon', 'icon-192.png'], ['apple-touch-icon', 'apple-touch-icon.png']]) {
-    assert.match(html, new RegExp(`rel="${rel}" href="/${asset}"`));
-    const response = await fetch(`${url}/${asset}`);
-    assert.equal(response.status, 200); assert.equal(response.headers.get('content-type').split(';')[0], 'image/png');
-    assert.deepEqual(Buffer.from(await response.arrayBuffer()), await (await import('node:fs/promises')).readFile(new URL(`../../../internal/api/static/${asset}`, import.meta.url)));
-    assert.equal((await fetch(`${url}/${asset}`, { method: 'POST', body: 'no' })).status, 405);
+  assert.match(html, /<img class="brand-mark" src="\/theia-mark.svg"[^>]+aria-hidden="true">/);
+  assert.doesNotMatch(html, /class="edition"/);
+  assert.match(html, /rel="apple-touch-icon" href="\/theia-apple-touch-icon.png"/);
+  for (const asset of ['theia-icon-32.png', 'theia-icon-192.png', 'theia-favicon.svg']) {
+    assert.ok(html.includes(`rel="icon" href="/${asset}"`));
   }
 });
 
@@ -246,4 +245,23 @@ test('sandbox headers do not change multipart attachment uploads', async t => {
   assert.match(received.headers['content-type'], /^multipart\/form-data; boundary=/);
   assert.match(received.body, /filename="security-fixture.txt"/);
   assert.match(received.body, /synthetic upload bytes/);
+});
+
+test('serves Theia-owned icon paths read only with correct content types and dimensions', async t => {
+  const {url} = await withProxy(t, (_request, response) => { response.writeHead(500); response.end(); });
+  for (const [asset, size] of [['theia-mark.svg', 0], ['theia-favicon.svg', 0],
+    ['theia-icon-32.png', 32], ['theia-icon-192.png', 192], ['theia-apple-touch-icon.png', 180]]) {
+    await t.test(asset, async () => {
+      const response = await fetch(`${url}/${asset}`);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('content-type').split(';')[0], size ? 'image/png' : 'image/svg+xml');
+      const bytes = Buffer.from(await response.arrayBuffer());
+      assert.deepEqual(bytes, await (await import('node:fs/promises')).readFile(new URL(`../../${asset}`, import.meta.url)));
+      if (size) {
+        assert.equal(bytes.readUInt32BE(16), size);
+        assert.equal(bytes.readUInt32BE(20), size);
+      } else assert.match(bytes.toString(), /Theia Spectrum eye/);
+      assert.equal((await fetch(`${url}/${asset}`, {method: 'POST', body: 'no'})).status, 405);
+    });
+  }
 });
