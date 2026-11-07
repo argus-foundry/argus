@@ -1,0 +1,14 @@
+.terminal-host{width:100%;height:100%;min-width:0;min-height:0}
+#fit-session[data-fit-needed="true"]{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+#fit-session[data-fit-needed="true"]::before{content:'';display:inline-block;width:5px;height:5px;border-radius:50%;background:currentColor;margin-right:6px;vertical-align:middle}
+
+.cached-terminal { width:100%;height:100%;min-width:0;min-height:0;overflow:auto; }
+/* xterm owns vertical scrollback; the cache only scrolls wider authoritative output horizontally. */
+#agent-panel{overflow:hidden}#terminal{overflow:hidden}.cached-terminal{overflow-x:auto;overflow-y:hidden}.terminal-host{overflow:visible}.terminal-host .xterm{width:100%}
+/* Historical accessibility rows may retain wider text; preserve their AX content without expanding visual scroll space. */
+.terminal-host .xterm-accessibility:not(.debug){contain:paint}
+
+/* DOM text runs accumulate subpixel spacing beyond the logical cell box. */
+.terminal-host .xterm-rows>div{min-width:calc(100% + var(--terminal-glyph-gutter,4px))}
+
+.secondary-terminal{overflow:hidden}

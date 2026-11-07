@@ -1,0 +1,17 @@
+:root{--rail-indent:12px}
+.project-group{position:relative}
+.project-group>.project-header{display:flex;align-items:center;gap:var(--space-2);position:relative;padding:var(--space-2);min-height:38px;font-size:13px;font-weight:600;list-style:none;border-radius:var(--radius)}
+.project-group>.project-header::before,.project-group>.project-header::-webkit-details-marker{display:none}
+.project-header:hover{background:var(--raised)}
+.project-caret{display:grid;place-items:center;flex:0 0 var(--rail-indent);width:var(--rail-indent);color:var(--secondary)}
+.project-group[open]>.project-header .project-chevron{transform:rotate(90deg)}
+section.project-group>.project-header::before{display:block;content:'';flex:0 0 var(--rail-indent)}
+.project-avatar{display:grid;place-items:center;flex:0 0 16px;width:16px;height:16px;background:var(--background);border-radius:var(--radius);color:var(--secondary);font-size:11px;font-weight:500}
+.project-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.project-action{display:grid;place-items:center;padding:0;width:24px;height:24px;color:var(--secondary);flex-shrink:0}
+.project-action svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.project-configuration{opacity:0}
+.project-header:hover .project-configuration,.project-header:focus-within .project-configuration{opacity:1}
+@media(hover:none){.project-configuration{opacity:1}}
+
+.project-children{margin-left:calc(var(--space-2) + var(--rail-indent));min-width:0}

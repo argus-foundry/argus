@@ -1,0 +1,4 @@
+.workspace-tooltip{position:fixed;z-index:10000;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:hidden;overflow-wrap:anywhere;padding:5px 9px;background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:6px;box-shadow:0 3px 12px var(--shadow);font:12px/1.5 var(--body);pointer-events:auto;animation:tooltip-appear var(--motion) ease-out}
+.workspace-tooltip span{min-width:0}.workspace-tooltip kbd{flex-shrink:0;color:var(--secondary);font:inherit}
+@keyframes tooltip-appear{from{opacity:0}to{opacity:1}}
+@media(prefers-reduced-motion:reduce){.workspace-tooltip{animation:none}}

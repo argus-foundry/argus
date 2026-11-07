@@ -1,0 +1,4 @@
+- [x] 1.1 Add failing unit and browser coverage for grouping, remembered disclosure and coordinator menu mutations.
+- [x] 1.2 Implement kanban grouping and pinned ordering inside project groups without changing row geometry.
+- [x] 1.3 Reuse shared menus and existing authenticated REST with optimistic rollback, feedback and logging.
+- [x] 1.4 Verify regressions, document gotchas and archive the specification.

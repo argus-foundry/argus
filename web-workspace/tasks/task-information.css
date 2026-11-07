@@ -1,0 +1,4 @@
+.task-header-links a { margin-right:var(--space-2); }
+.task-header-links { display:flex;flex-wrap:wrap;gap:var(--space-1);min-width:0;max-width:100%; }
+.task-header-links > span { display:flex;flex-wrap:wrap;min-width:0;max-width:100%; }
+.task-header-links button,.task-header-links a { display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
