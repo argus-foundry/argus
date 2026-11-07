@@ -34,6 +34,25 @@ export function categoriesFromBreakdown(rows: ReadonlyArray<BreakdownRow> | unde
   return Object.keys(out).length ? out : undefined
 }
 
+const MAX_SUGGESTION_BYTES = 4096
+
+/** The wire fields of a suggestion.changed event, or undefined when the text must not be reported. */
+export function suggestionFields(text: string): { text: string } | undefined {
+  if (typeof text !== 'string' || text.trim() === '' || text.includes('\0')) return undefined
+  let bytes = 0
+  for (const ch of text) {
+    const c = ch.codePointAt(0) as number
+    bytes += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4
+    if (bytes > MAX_SUGGESTION_BYTES) return undefined
+  }
+  return { text }
+}
+
+/** Only text the engine itself proposed and the prompt box can show is the provider's suggestion. */
+export function suggestionToReport(origin: { kind: string }, isShown: boolean, text: string): { text: string } | undefined {
+  return origin.kind === 'suggestion' && isShown ? suggestionFields(text) : undefined
+}
+
 export function measureFields(m: MeasureInput, categories?: Record<string, number>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   if (m.context) {

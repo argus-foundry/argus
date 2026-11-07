@@ -199,7 +199,10 @@ const (
 	//     in background single-flight work with a deadline. A stale supervisor
 	//     spawns sessions with the older mod, whose measurements carry no
 	//     categories.
-	SupervisorSpawnSurface = 36
+	// 37: the bridge mod hooks prompt.suggest and reports the engine's suggested
+	//     next prompt. A stale supervisor spawns sessions with the older mod,
+	//     which never reports a suggestion.
+	SupervisorSpawnSurface = 37
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -492,7 +495,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "0584805393c7b2a1bfe699003479be53eebbbd0a2135ebc9c90dbcca5536e8e7"
+	SpawnSurfaceDigest  = "a23f32a30556e499907a825efe533baf5135c7207b4db87633cd04d1add941f2"
 	StreamSurfaceDigest = "4db586fb7dcaf62899cb2ebc82bbaa7fcc325d7cf99611f5f7942c44f9bc9467"
 )
 

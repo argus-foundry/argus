@@ -43,7 +43,14 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body", err)
 		return
 	}
-
+	for _, ev := range batch.Events {
+		if err := ev.ValidateSuggestion(); err != nil {
+			uxlog.Log("[bridge] invalid suggestion task=%s: %v", id, err)
+			slog.Warn("[bridge] invalid suggestion", "task", task.ID, "err", err) //nolint:gosec // G706: task.ID is a DB lookup result; slog encodes attributes.
+			writeErr(w, http.StatusBadRequest, "invalid suggestion", err)
+			return
+		}
+	}
 	s.bridgeIngestMu.Lock()
 	accepted := 0
 	invalid := 0
@@ -64,8 +71,15 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
+		if ev.Type == bridge.TypeSuggestionChanged && ev.Generation == "" {
+			continue
+		}
+		before := s.bridgeSuggestion(id)
 		n := s.bridgeHub.Ingest(id, []bridge.Event{ev}, time.Now())
 		accepted += n
+		if n > 0 {
+			s.emitSuggestionChange(id, before, s.bridgeSuggestion(id))
+		}
 		if n > 0 && ev.Type == bridge.TypeMeasure {
 			if st, live := s.bridgeState(id, time.Now()); live {
 				s.stampBridgeMeasurement(id, st)
@@ -106,6 +120,9 @@ func (s *Server) handleBridgeState(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no bridge state for task", nil)
 		return
+	}
+	if !live {
+		st.Suggestion = nil
 	}
 	writeJSON(w, http.StatusOK, struct {
 		bridge.State

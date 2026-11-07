@@ -8,6 +8,9 @@ package bridge
 import (
 	"errors"
 	"math"
+	"strings"
+	"time"
+	"unicode/utf8"
 )
 
 // Event types the mod posts (internal/bridgemod/mod/argus-bridge).
@@ -19,7 +22,13 @@ const (
 	TypeCleared      = "cleared"
 	TypeMeasure      = "session.measure"
 	TypeHeartbeat    = "heartbeat"
+
+	TypeSuggestionChanged = "suggestion.changed"
+	TypeSuggestionCleared = "suggestion.cleared"
 )
+
+// MaxSuggestionBytes caps a suggested prompt's text.
+const MaxSuggestionBytes = 4096
 
 // Confidence values carried by a needs_input event. A question/plan dialog is
 // bracketed exactly by its tool call, so it is exact. A permission ask is
@@ -151,10 +160,39 @@ type Event struct {
 	Tool       string `json:"tool,omitempty"`
 	ToolUseID  string `json:"tool_use_id,omitempty"`
 
+	// suggestion.changed
+	Text string `json:"text,omitempty"`
+
 	// session.measure
 	Context    *Context    `json:"context,omitempty"`
 	CostUSD    *float64    `json:"cost_usd,omitempty"`
 	RateLimits []RateLimit `json:"rate_limits,omitempty"`
+}
+
+// Suggestion is the provider's current suggested next prompt: shown to the
+// person, never written to the session.
+type Suggestion struct {
+	Text       string    `json:"text"`
+	SessionID  string    `json:"session_id"`
+	Generation string    `json:"generation"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+// ValidateSuggestion rejects a suggestion.changed event whose text is blank,
+// oversized, not valid UTF-8 or carries a NUL.
+func (e Event) ValidateSuggestion() error {
+	if e.Type != TypeSuggestionChanged {
+		return nil
+	}
+	switch {
+	case strings.TrimSpace(e.Text) == "":
+		return errors.New("suggestion text must not be blank")
+	case len(e.Text) > MaxSuggestionBytes:
+		return errors.New("suggestion text exceeds 4 KiB")
+	case !utf8.ValidString(e.Text) || strings.ContainsRune(e.Text, 0):
+		return errors.New("suggestion text must be plain UTF-8 text")
+	}
+	return nil
 }
 
 // Batch is the request body of POST /api/tasks/{id}/bridge/events.
@@ -165,7 +203,7 @@ type Batch struct {
 func knownType(t string) bool {
 	switch t {
 	case TypeSessionStart, TypeTurnStart, TypeTurnComplete, TypeNeedsInput,
-		TypeCleared, TypeMeasure, TypeHeartbeat:
+		TypeCleared, TypeMeasure, TypeHeartbeat, TypeSuggestionChanged, TypeSuggestionCleared:
 		return true
 	}
 	return false
