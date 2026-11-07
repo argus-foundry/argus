@@ -363,6 +363,53 @@ func backendAllowsModel(m string, backend config.Backend) bool {
 	return false
 }
 
+// Model policies reported by ModelPolicy and GET /api/backends.
+const (
+	ModelPolicyConfigured = "configured"
+	ModelPolicyCurated    = "curated"
+	ModelPolicyFreeform   = "freeform"
+)
+
+// ModelPolicy classifies how a backend validates an explicit model: a
+// configured Models list wins, then the family's curated list, otherwise any
+// identifier is accepted.
+func ModelPolicy(b config.Backend) string {
+	switch {
+	case len(b.Models) > 0:
+		return ModelPolicyConfigured
+	case len(FamilyOf(b.Command).KnownModels) > 0:
+		return ModelPolicyCurated
+	default:
+		return ModelPolicyFreeform
+	}
+}
+
+// ErrModelNotAllowed is the sentinel wrapped by *ModelNotAllowedError.
+var ErrModelNotAllowed = errors.New("model is not allowed for resolved backend")
+
+// ModelNotAllowedError reports an explicit model the resolved backend rejects.
+type ModelNotAllowedError struct {
+	Backend        string
+	RequestedModel string
+	AllowedModels  []string
+}
+
+func (e *ModelNotAllowedError) Error() string {
+	return fmt.Sprintf("%s: backend %q does not allow model %q", ErrModelNotAllowed.Error(), e.Backend, e.RequestedModel)
+}
+
+func (e *ModelNotAllowedError) Unwrap() error { return ErrModelNotAllowed }
+
+// ValidateExplicitModel rejects a non-empty model the backend does not allow.
+// An empty model always passes (the backend default applies).
+func ValidateExplicitModel(backendName string, backend config.Backend, m string) error {
+	m = strings.TrimSpace(m)
+	if m == "" || backendAllowsModel(m, backend) {
+		return nil
+	}
+	return &ModelNotAllowedError{Backend: backendName, RequestedModel: m, AllowedModels: BackendModels(backend)}
+}
+
 // KnownModels returns the curated list of selectable model identifiers for a
 // backend command (its family's KnownModels), used to populate the new-task
 // model selector. Claude's entries are stable CLI aliases; Codex's churn per

@@ -1,0 +1,5 @@
+- [x] agent: ModelPolicy, ValidateExplicit Model, ModelNotAllowedError
+- [x] CreateAndStart validates before worktree/DB/session
+- [x] REST: 422 body for JSON and multipart; model_policy on GET /api/backends
+- [x] Tests (agent + api), gotchas, README reference
+- [x] Archive into base specs
