@@ -1,0 +1,5 @@
+- [x] Options + Comparison types, resolveComparison, base-aware status/diff
+- [x] REST handlers pass BaseBranch, 500 on failure
+- [x] TUI call sites pass BaseBranch
+- [x] Tests: stacked repo, unrelated upstream, fallback metadata, local edits, API
+- [x] README REST table, gotcha, archive

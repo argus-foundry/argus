@@ -895,8 +895,8 @@ Every authenticated token has the same permissions **except** a small master-onl
 
 | Method | Endpoint                               | Description                                             |
 | ------ | -------------------------------------- | ------------------------------------------------------- |
-| `GET`  | `/api/tasks/{id}/git/status`           | git status output + branch diff for the task's worktree |
-| `GET`  | `/api/tasks/{id}/git/diff?path=<file>` | Unified diff for a single file                          |
+| `GET`  | `/api/tasks/{id}/git/status`           | git status output + branch diff for the task's worktree, plus `comparison` (base the task is compared against) |
+| `GET`  | `/api/tasks/{id}/git/diff?path=<file>` | Unified diff for a single file, plus `comparison`       |
 | `GET`  | `/api/tasks/{id}/files?dir=<rel>`      | Worktree file listing                                   |
 
 #### Session artifacts

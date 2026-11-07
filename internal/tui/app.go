@@ -370,6 +370,7 @@ type App struct {
 	// needs-input fleet-batching staleness window.
 	visibleActiveSpinner bool
 	worktreeDir          string // resolved worktree dir for current agent view task
+	worktreeBase         string // stored base branch of the agent view task
 	lastGitRefresh       time.Time
 	lastTaskGitRefresh   time.Time
 	lastPreviewTW        uint64 // TotalWritten when preview was last refreshed
@@ -1788,7 +1789,7 @@ func (a *App) onTick() {
 			// lastTaskGitRefresh is only accessed on the tview goroutine.
 			if sel := a.tasklist.SelectedTask(); sel != nil && sel.Worktree != "" && time.Since(a.lastTaskGitRefresh) > 3*time.Second {
 				a.lastTaskGitRefresh = time.Now()
-				go a.fetchTaskGitStatus(sel.ID, sel.Worktree)
+				go a.fetchTaskGitStatus(sel.ID, sel.Worktree, sel.BaseBranch)
 			}
 		}
 
@@ -1822,7 +1823,7 @@ func (a *App) onTick() {
 			// Refresh git status periodically.
 			// lastGitRefresh is only accessed on the tview goroutine.
 			if a.worktreeDir != "" && time.Since(a.lastGitRefresh) > 3*time.Second {
-				go a.fetchGitStatus(taskID, a.worktreeDir)
+				go a.fetchGitStatus(taskID, a.worktreeDir, a.worktreeBase)
 			}
 		}
 
@@ -4997,8 +4998,8 @@ func (a *App) handleDiffKey(event *tcell.EventKey) *tcell.EventKey {
 }
 
 // fetchGitStatus runs git status asynchronously and updates the panels.
-func (a *App) fetchGitStatus(taskID, dir string) {
-	msg := gitutil.FetchGitStatus(taskID, dir)
+func (a *App) fetchGitStatus(taskID, dir, base string) {
+	msg := gitutil.FetchGitStatus(taskID, dir, gitutil.Options{BaseBranch: base})
 	a.tapp.QueueUpdateDraw(func() {
 		if taskID != a.agentState.TaskID {
 			return
@@ -5038,8 +5039,9 @@ func (a *App) openFileDiff() {
 	}
 	filePath := f.Path
 	dir := a.worktreeDir
+	opts := gitutil.Options{BaseBranch: a.worktreeBase}
 	go func() {
-		msg := gitutil.FetchFileDiff(a.agentState.TaskID, dir, filePath)
+		msg := gitutil.FetchFileDiff(a.agentState.TaskID, dir, filePath, opts)
 		a.tapp.QueueUpdateDraw(func() {
 			if msg.TaskID != a.agentState.TaskID {
 				return
@@ -5353,15 +5355,15 @@ func (a *App) onTaskCursorChange(task *model.Task) {
 	}()
 	if task.Worktree != "" {
 		a.taskGitPanel.Clear()
-		go a.fetchTaskGitStatus(task.ID, task.Worktree)
+		go a.fetchTaskGitStatus(task.ID, task.Worktree, task.BaseBranch)
 	} else {
 		a.taskGitPanel.Clear()
 	}
 }
 
 // fetchTaskGitStatus runs git status for a task's worktree and updates the task git panel.
-func (a *App) fetchTaskGitStatus(taskID, dir string) {
-	msg := gitutil.FetchGitStatus(taskID, dir)
+func (a *App) fetchTaskGitStatus(taskID, dir, base string) {
+	msg := gitutil.FetchGitStatus(taskID, dir, gitutil.Options{BaseBranch: base})
 	a.tapp.QueueUpdateDraw(func() {
 		// Only update if we're still viewing this task.
 		sel := a.tasklist.SelectedTask()
@@ -5598,6 +5600,7 @@ func (a *App) bindTaskAgent(task *model.Task, autoStart, focus bool) {
 
 	// Resolve worktree dir
 	a.worktreeDir = task.Worktree
+	a.worktreeBase = task.BaseBranch
 	a.lastGitRefresh = time.Time{}
 	a.gitPanel.Clear()
 	a.filePanel.Clear()
@@ -5637,7 +5640,7 @@ func (a *App) bindTaskAgent(task *model.Task, autoStart, focus bool) {
 
 	// Kick off initial git status
 	if a.worktreeDir != "" {
-		go a.fetchGitStatus(task.ID, a.worktreeDir)
+		go a.fetchGitStatus(task.ID, a.worktreeDir, a.worktreeBase)
 	}
 
 	// Keep PTY dimensions in sync for existing running sessions.
@@ -8261,6 +8264,7 @@ func (a *App) exitAgentView() {
 	a.agentPane.ExitDiffMode()
 	a.agentPane.ResetVT()
 	a.worktreeDir = ""
+	a.worktreeBase = ""
 	// Restore the tab header when returning to root views.
 	a.root.ResizeItem(a.header, 1, 0)
 	a.header.SetTab(widget.TabTasks)
