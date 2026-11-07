@@ -958,7 +958,8 @@ Every authenticated token has the same permissions **except** a small master-onl
 
 | Method | Endpoint                               | Description                                             |
 | ------ | -------------------------------------- | ------------------------------------------------------- |
-| `GET`  | `/api/tasks/{id}/git/status`           | git status output + branch diff for the task's worktree, plus `comparison` (base the task is compared against) |
+| `GET`  | `/api/tasks/{id}/git/status`           | git status output + branch diff for the task's worktree, plus `comparison`, `git_revision` (opaque), `stale`, and `watch_degraded` (polling fallback); 503 `git_status_unavailable` on a cold-read timeout |
+| `POST` | `/api/tasks/{id}/git/discard`          | Restore one file to HEAD: `{path, scope:"local", delete_untracked}`; 400 `invalid_path`, 409 `untracked_requires_delete`/`rename_requires_explicit_paths`/`conflict_state`/`no_changes`/`task_archived`; publishes `worktree.changed` |
 | `GET`  | `/api/tasks/{id}/git/diff?path=<file>` | Unified file diff and `comparison`. Untracked capture is capped at 16 MiB.       |
 | `GET`  | `/api/tasks/{id}/files?dir=<rel>`      | Worktree file listing                                   |
 | `POST` | `/api/tasks/{id}/reveal`               | Master-only. Reveal the worktree (`{}`) or one contained file (`{"path":"rel"}`) in Finder on the daemon host; 400 `invalid_path`, 404, 501 `unsupported_host`, 500 `reveal_failed` |
@@ -1097,7 +1098,7 @@ Plugins authenticate with a **scope token** (`X-Argus-Auth: scope:<name>`), a th
 
 | Method | Endpoint                       | Token | Description                                                                                                                                                                                |
 | ------ | ------------------------------ | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/events/stream?since=<n>` | any   | SSE feed of `task.*`, `session.*`, `message.*`, `link.*`, `hera.board_changed` events. `task.updated` is a documented invalidation event (see below). `since` is an exclusive cursor that replays missed events; a cursor older than the ring emits a synthetic `resync` so the client re-snapshots. 30 s keepalives. |
+| `GET`  | `/api/events/stream?since=<n>` | any   | SSE feed of `task.*`, `session.*`, `message.*`, `link.*`, `hera.board_changed`, `worktree.changed` events (`{revision?,reason:filesystem|git|discard,paths?}`; no revision ⇒ refetch git status). `task.updated` is a documented invalidation event (see below). `since` is an exclusive cursor that replays missed events; a cursor older than the ring emits a synthetic `resync` so the client re-snapshots. 30 s keepalives. |
 
 **`task.updated`** — emitted after a task mutation commits (REST, MCP, TUI and daemon paths alike) as `{"id":123,"type":"task.updated","at":"...","task_id":"t","payload":{"changed_fields":["archived","pinned"]}}`. `changed_fields` lists only fields that actually changed, from `name`, `status`, `archived`, `pinned`, `runtime` (backend/model/sandbox override/session id), `account`, `result`, `pr`, in that order. It carries no prompt or result content: re-read the task over REST. Existing `task.renamed` / `task.status_changed` / `task.archived` events are unchanged and still fire, so a mutation may produce a specific event plus one `task.updated`. No-op writes and failed writes emit nothing; hard delete keeps `task.deleted`. Emission is best-effort after commit, so keep a slow reconciliation fetch.
 

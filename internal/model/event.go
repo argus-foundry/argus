@@ -164,3 +164,9 @@ func ChangedTaskFields(old, cur *Task) []string {
 	add(old.Result != cur.Result, TaskFieldResult)
 	return out
 }
+
+// EventTypeWorktreeChanged fires when a task worktree's observable git state
+// changed. Payload: {"revision":"<opaque>","reason":"filesystem|git|discard",
+// "paths":["rel/file"]} — revision and paths are optional; a consumer seeing
+// no revision must treat the event as an invalidation and refetch status.
+const EventTypeWorktreeChanged = "worktree.changed"
