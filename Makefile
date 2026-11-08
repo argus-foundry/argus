@@ -31,6 +31,12 @@ build:
 #      rebuild runs unattended (e.g. an iris deploy), an un-answered prompt
 #      hangs it. "Always Allow" grants codesign standing access so future
 #      signs are silent.
+#      The logic lives in scripts/install-signed.sh: it builds + signs a TEMP
+#      file and atomically renames it over ~/go/bin/argus only on success, so
+#      the live binary is never half-deployed. If the login keychain is locked
+#      (or codesign stalls past ARGUS_SIGN_TIMEOUT, default 30s) it exits
+#      non-zero with a clear message instead of hanging; ARGUS_SKIP_SIGN=1
+#      installs unsigned on purpose.
 #   3. The binary is now stably signed. The next time the macOS privacy prompt
 #      ("argus would like to access data from other apps") appears in normal
 #      use, approve it once — OR grant the binary Full Disk Access (System
@@ -42,15 +48,7 @@ build:
 ARGUS_SIGN_IDENTITY ?= Argus Code Signing
 
 install-signed:
-	go install ./cmd/argus
-	@bin="$$(go env GOBIN)"; [ -n "$$bin" ] || bin="$$(go env GOPATH)/bin"; bin="$$bin/argus"; \
-	id=$$(security find-identity -p codesigning 2>/dev/null | grep -F "$(ARGUS_SIGN_IDENTITY)" | head -1 | awk '{print $$2}'); \
-	if [ -n "$$id" ]; then \
-		codesign --force --identifier com.drn.argus --sign "$$id" "$$bin" \
-			&& echo "[install-signed] signed $$bin with stable identity '$(ARGUS_SIGN_IDENTITY)' ($$id) — TCC grant will persist"; \
-	else \
-		echo "[install-signed] no '$(ARGUS_SIGN_IDENTITY)' code-signing identity found — left ad-hoc (macOS may re-prompt for file access). To opt in, see the install-signed comment in the Makefile."; \
-	fi
+	@scripts/install-signed.sh
 
 # Full pre-PR gate — mirrors .github/workflows/ci.yml in order. Run this
 # (and get a clean pass) before opening or updating a PR. test-cover-gate

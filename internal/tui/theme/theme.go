@@ -7,7 +7,12 @@ import (
 	"github.com/drn/argus/internal/model"
 )
 
+// RailCaret is the gutter marker for a rail's selected row, shared by the
+// Hera rail and the Tasks rail so their selection style cannot drift.
+const RailCaret = '›'
+
 // Color constants for the 256-color palette theme.
+
 var (
 	ColorTitle      = tcell.Color87                    // cyan — titles, focused borders
 	ColorStatusBG   = tcell.Color235                   // dark gray — status bar background
@@ -87,9 +92,10 @@ const (
 
 // Styles for common UI elements.
 var (
-	StyleDefault       = tcell.StyleDefault
-	StyleTitle         = tcell.StyleDefault.Foreground(ColorTitle).Bold(true)
-	StyleStatusBar     = tcell.StyleDefault.Background(ColorStatusBG).Foreground(ColorStatusFG)
+	StyleDefault   = tcell.StyleDefault
+	StyleTitle     = tcell.StyleDefault.Foreground(ColorTitle).Bold(true)
+	StyleStatusBar = tcell.StyleDefault.Background(ColorStatusBG).Foreground(ColorStatusFG)
+
 	StyleSelected      = tcell.StyleDefault.Foreground(ColorSelected).Bold(true)
 	StyleNormal        = tcell.StyleDefault.Foreground(ColorNormal)
 	StyleDimmed        = tcell.StyleDefault.Foreground(ColorDimmed)

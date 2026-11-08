@@ -202,7 +202,11 @@ const (
 	// 37: the bridge mod hooks prompt.suggest and reports the engine's suggested
 	//     next prompt. A stale supervisor spawns sessions with the older mod,
 	//     which never reports a suggestion.
-	SupervisorSpawnSurface = 37
+	// 38: the argus-bridge mod reports the Claude composer draft and puts a
+	//     handed-back draft into a resumed session's box (kick-timing-keep-place).
+	//     A stale supervisor's sessions never report drafts, so the TUI falls
+	//     back to its typed-since-submit signal and a kick restores nothing.
+	SupervisorSpawnSurface = 38
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -428,6 +432,7 @@ var SupervisorSpawnPaths = []string{
 	"internal/bridgemod/mod/argus-bridge/.claude-plugin/plugin.json", // the mod the spawned session loads
 	"internal/bridgemod/mod/argus-bridge/hooks/hooks.json",
 	"internal/bridgemod/mod/argus-bridge/hooks/delivery.ts",
+	"internal/bridgemod/mod/argus-bridge/hooks/draft.ts",
 	"internal/bridgemod/mod/argus-bridge/hooks/measure.ts",
 	"internal/bridgemod/mod/argus-bridge/hooks/register.ts",
 	"internal/bridgemod/mod/argus-bridge/hooks/reporter.ts",
@@ -500,7 +505,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "07ad1fbbea9f4ebd0adcb9f7f7afcac89ebd1b99505effff735ca2e9cbc25b7d"
+	SpawnSurfaceDigest  = "befe62c725d1e72e68bbe23b1d17316a8e1166749914da376665e599c7366f00"
 	StreamSurfaceDigest = "11024ea57e1c40147b4c52d778af95da81fd73b07eccf004cf014df871efd1be"
 )
 
