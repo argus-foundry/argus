@@ -342,6 +342,16 @@ func (c *Client) Get(taskID string) agent.SessionHandle {
 	return rs
 }
 
+// ProbeSession asks the server about one session and surfaces an RPC failure
+// as an error (Get folds it into nil). The daemon's SessionStatus uses it so a
+// supervisor probe that failed right after a daemon restart is never published
+// as "session is dead" (fix-bounce-false-complete).
+func (c *Client) ProbeSession(taskID string) (daemon.SessionInfo, error) {
+	var info daemon.SessionInfo
+	err := c.call("Daemon.SessionStatus", &daemon.TaskIDReq{TaskID: taskID}, &info)
+	return info, err
+}
+
 // Stop stops a session via RPC (full tree stop).
 func (c *Client) Stop(taskID string) error { return c.StopScoped(taskID, agent.StopTree) }
 
@@ -828,6 +838,14 @@ func (c *Client) removeSession(taskID string) {
 			// (violating "Complete only on an observed clean exit"). Force
 			// StreamLost so HandleSessionExit treats it as "process maybe alive,
 			// status unchanged" — the tick reconciler later lands it InReview.
+			info.StreamLost = true
+		} else if info.NoEvidenceOfExit() {
+			// An older server (daemon or supervisor not yet restarted) answers
+			// "nothing recorded" with a zero ExitInfo, which reads as a clean
+			// exit. Right after a daemon restart a status probe can wrongly say
+			// a live session died; trusting that would complete a live
+			// coordinator (fix-bounce-false-complete). Treat it as unconfirmed.
+			uxlog.Log("client.removeSession: task=%s exit info carries no evidence of an exit, treating as stream lost", taskID)
 			info.StreamLost = true
 		}
 		uxlog.Log("client.removeSession: task=%s exitInfo err=%v rpcErr=%v stopped=%v streamLost=%v lastOutput=%d bytes",

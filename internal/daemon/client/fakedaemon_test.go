@@ -16,6 +16,8 @@ import (
 	"github.com/drn/argus/internal/backendtier"
 	"github.com/drn/argus/internal/buildid"
 	"github.com/drn/argus/internal/daemon"
+	"github.com/drn/argus/internal/db"
+	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/testutil"
 	"github.com/drn/argus/internal/usagebudget"
 )
@@ -27,6 +29,7 @@ type fakeDaemon struct {
 	mu        sync.Mutex
 	sock      string
 	ln        net.Listener
+	zeroExit  bool   // GetExitInfo answers an all-zero ExitInfo (old server, nothing recorded)
 	alive     bool   // SessionStatus.Alive value
 	dropAfter int    // how many bytes to send before dropping the stream
 	streamMsg []byte // bytes to send on stream before drop
@@ -102,7 +105,14 @@ func (s *FakeRPCService) Hello(_ *daemon.Empty, resp *daemon.HelloResp) error {
 // RPC-FAILURE branch of removeSession close the client transport instead, which
 // makes the call error out without reaching this handler.
 func (s *FakeRPCService) GetExitInfo(_ *daemon.TaskIDReq, resp *daemon.ExitInfo) error {
-	resp.StreamLost = false
+	s.fd.mu.Lock()
+	defer s.fd.mu.Unlock()
+	if s.fd.zeroExit { // old server: "nothing recorded" as an empty record
+		*resp = daemon.ExitInfo{}
+		return nil
+	}
+	// A genuine exit always carries the PTY's final output tail.
+	*resp = daemon.ExitInfo{LastOutput: []byte("bye\r\n")}
 	return nil
 }
 
@@ -543,4 +553,94 @@ func TestStream_BytesExit(t *testing.T) {
 	// Verify the bytes landed in the local ring buffer.
 	got := string(rs.RecentOutput())
 	testutil.Contains(t, got, "hello-stream-payload")
+}
+
+// TestRmSessZeroExit: an old server answers "nothing recorded" with an
+// all-zero ExitInfo. The daemon-side client must read that as stream lost, not
+// a clean exit — the daemon-only-restart path of fix-bounce-false-complete.
+func TestRmSessZeroExit(t *testing.T) {
+	fd := newFakeDaemon(t)
+	fd.mu.Lock()
+	fd.zeroExit = true
+	fd.mu.Unlock()
+	c := fakeClient(t, fd)
+
+	exitCh := make(chan daemon.ExitInfo, 1)
+	c.OnSessionExit(func(_ string, info daemon.ExitInfo) { exitCh <- info })
+	c.mu.Lock()
+	c.sessions["t"] = newRemoteSession("t", c)
+	c.mu.Unlock()
+
+	c.removeSession("t")
+
+	select {
+	case info := <-exitCh:
+		testutil.True(t, info.StreamLost)
+		testutil.False(t, info.CleanExit())
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected exit callback")
+	}
+}
+
+// TestRmSessRealExit: an exit with captured output is still a clean exit.
+func TestRmSessRealExit(t *testing.T) {
+	fd := newFakeDaemon(t)
+	c := fakeClient(t, fd)
+	exitCh := make(chan daemon.ExitInfo, 1)
+	c.OnSessionExit(func(_ string, info daemon.ExitInfo) { exitCh <- info })
+	c.mu.Lock()
+	c.sessions["t"] = newRemoteSession("t", c)
+	c.mu.Unlock()
+
+	c.removeSession("t")
+
+	select {
+	case info := <-exitCh:
+		testutil.False(t, info.StreamLost)
+		testutil.True(t, info.CleanExit())
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected exit callback")
+	}
+}
+
+// TestDaemonOnlyBounce is the configuration run right after deploy: a NEW
+// daemon in front of an OLD supervisor that answers "nothing recorded" with an
+// empty ExitInfo, after a post-restart probe wrongly reported a live
+// coordinator dead. The coordinator's status must be left alone.
+func TestDaemonOnlyBounce(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	database, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { database.Close() }) //nolint:errcheck
+
+	task := &model.Task{Name: "coord", Status: model.StatusInProgress}
+	testutil.NoError(t, database.Add(task))
+	bindHeraCoordinator(t, database, task.ID)
+
+	fd := newFakeDaemon(t)
+	fd.mu.Lock()
+	fd.zeroExit = true // old supervisor behavior
+	fd.mu.Unlock()
+	c := fakeClient(t, fd)
+	d := daemon.New(database)
+	d.UseSupervisorRunner(c) // wires c.OnSessionExit to the daemon's exit sink
+	c.mu.Lock()
+	c.sessions[task.ID] = newRemoteSession(task.ID, c)
+	c.mu.Unlock()
+
+	c.removeSession(task.ID) // the stream-retry "alive=false" path
+
+	got, err := database.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Status, model.StatusInProgress)
+}
+
+func bindHeraCoordinator(t *testing.T, database *db.DB, taskID string) {
+	t.Helper()
+	o, err := database.CreateHeraOrchestrator("oc-"+taskID, "")
+	testutil.NoError(t, err)
+	r, err := database.CreateHeraRole(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "coord", Kind: db.HeraKindCoordinator, ArgusProject: "proj"})
+	testutil.NoError(t, err)
+	_, err = database.CreateHeraBinding(db.CreateHeraBindingInput{RoleID: r.ID, ArgusTaskID: taskID, WorktreePath: "/wt/" + taskID})
+	testutil.NoError(t, err)
 }
