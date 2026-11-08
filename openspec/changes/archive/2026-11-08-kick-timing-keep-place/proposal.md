@@ -13,7 +13,7 @@ Aaron can live with history not re-wrapping; he cannot live with losing his plac
 - **Never kick while the pane is scrolled up.** The kick stays pending; once the pane is back at the bottom it re-arms through the existing `KickDebounce`. Covers the Tasks agent view and both Hera panes.
 - **Never kick over unsent composer text.** Claude sessions with a live bridge report the draft; other sessions use a conservative TUI-local "typed since last submit" signal. A deferred kick re-arms when the draft clears.
 - **Save-and-restore for Claude (safety net).** The argus-bridge mod reports the composer draft (`$.prompt.read`, on `prompt.change`) to the daemon. A resumed session's mod pulls any fresh pending draft once and puts it back with `$.prompt.fill`, only if the box is still empty. Covers a draft that appears between the gate check and the kill, and kicks forced by another surface.
-- **Off switch.** A Settings toggle `bridge.keep_place` (default on) disables all of the above and restores today's behavior.
+- **Off switch.** A Settings toggle `ui.rerender_keep_place` (default on) disables all of the above and restores today's behavior.
 - uxlog line for every kick, deferral, save and restore outcome.
 
 ## Capabilities
@@ -27,7 +27,7 @@ None.
 - `argus-bridge`: the mod reports the composer draft; the daemon holds a fresh pending draft and hands it back exactly once to the next mod boot.
 - `agent-view`: the size-drift kick gates on scroll position and unsent text, retrying when they clear.
 - `hera-view`: the same gates for both Hera panes.
-- `settings-view`: the `keep_place` toggle.
+- `settings-view`: the `ui.rerender_keep_place` toggle.
 
 ## Impact
 

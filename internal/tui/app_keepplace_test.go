@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,7 +89,7 @@ func TestKeepPlace_KickMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newKeepPlaceRig(t, "kp")
 			if tc.setOff {
-				testutil.NoError(t, r.app.db.SetConfigValue("bridge.keep_place", "false"))
+				testutil.NoError(t, r.app.db.SetConfigValue("ui.rerender_keep_place", "false"))
 			}
 			base := &fakeKickSession{pid: 101, alive: true, idle: true, initCols: 80}
 			sess := dirtyKickSession{base, tc.dirty}
@@ -159,11 +160,13 @@ func TestKeepPlace_RetryDeferredKick(t *testing.T) {
 		r.app.agentPane.SetTaskID(r.task.ID)
 		r.app.kickWait[r.task.ID] = time.Time{}
 
-		// Still has a draft: stays armed with no dwell started.
+		// The mod reports a draft: stays armed with no dwell started.
+		r.app.bridgeStates = map[string]bridge.State{r.task.ID: {DraftAware: true, HasDraft: true}}
 		r.app.retryDeferredKick(r.task.ID)
 		testutil.True(t, r.app.kickWait[r.task.ID].IsZero())
 
 		// Clear: the first clear tick only starts the dwell.
+		r.app.bridgeStates = map[string]bridge.State{r.task.ID: {DraftAware: true}}
 		dirty.dirty = false
 		r.app.runner = getRunner{Runner: agent.NewRunner(nil), sess: dirty}
 		r.app.retryDeferredKick(r.task.ID)
@@ -189,15 +192,15 @@ func TestKeepPlace_RetryDeferredKick(t *testing.T) {
 	waitRerender(t, base.stopCalled.Load)
 }
 
-// The Hera page's scroll hold must follow the live bridge.keep_place setting;
+// The Hera page's scroll hold must follow the live ui.rerender_keep_place setting;
 // an unwired page would keep holding with the setting off.
 func TestKeepPlace_HeraPageFollowsSetting(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	app := New(testDB(t), agent.NewRunner(nil), false)
 	testutil.True(t, app.heraPage.KeepPlaceOn())
-	testutil.NoError(t, app.db.SetConfigValue("bridge.keep_place", "false"))
+	testutil.NoError(t, app.db.SetConfigValue("ui.rerender_keep_place", "false"))
 	testutil.False(t, app.heraPage.KeepPlaceOn())
-	testutil.NoError(t, app.db.SetConfigValue("bridge.keep_place", "true"))
+	testutil.NoError(t, app.db.SetConfigValue("ui.rerender_keep_place", "true"))
 	testutil.True(t, app.heraPage.KeepPlaceOn())
 }
 
@@ -233,5 +236,182 @@ func TestKeepPlace_TickDrivesRetryForViewedTask(t *testing.T) {
 		var started bool
 		readUI(t, r.app.tapp, func() { started = !r.app.kickWait[r.task.ID].IsZero() })
 		return started
+	})
+}
+
+// screenKickSession serves a fixed output tail so the kick path can read the
+// rendered Claude composer, plus the optional typed-since-submit flag.
+type screenKickSession struct {
+	*fakeKickSession
+	tail  []byte
+	dirty bool
+}
+
+func (s screenKickSession) RecentOutputTail(int) []byte { return s.tail }
+func (s screenKickSession) PTYSize() (int, int)         { return 80, 24 }
+func (s screenKickSession) ComposerDirty() bool         { return s.dirty }
+
+// composerFrame paints a Claude-style composer; the prompt marker is "❯" + NBSP.
+func composerFrame(body string) []byte {
+	return []byte("\x1b[?1049h\x1b[2J\x1b[7;1H❯\u00a0" + body + "\x1b[7;20H")
+}
+
+// Draft-source order for a Claude session with no draft-aware bridge: the
+// rendered composer answers when it finds the composer (so a stale typed flag
+// cannot hold the kick); an unknown screen falls through to the flag.
+func TestKeepPlace_ScreenProbeOrder(t *testing.T) {
+	tests := []struct {
+		name     string
+		tail     []byte
+		dirty    bool
+		wantKick bool
+	}{
+		{"screen shows typed text, flag clear: defers", composerFrame("fix the bug"), false, false},
+		{"screen shows empty composer, stale flag: kicks", composerFrame(""), true, true},
+		{"composer not found falls through to flag: defers", []byte("no composer here"), true, false},
+		{"composer not found, no flag: kicks", nil, false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newKeepPlaceRig(t, "probe")
+			base := &fakeKickSession{pid: 101, alive: true, idle: true, initCols: 80}
+			sess := screenKickSession{base, tc.tail, tc.dirty}
+			r.kick(t, sess, base.stopCalled.Load, func() bool { return false }, nil)
+			testutil.Equal(t, base.stopCalled.Load(), tc.wantKick)
+		})
+	}
+}
+
+// A draft-aware bridge is asked instead of re-emulating the output: its empty
+// report kicks even though the screen shows text.
+func TestKeepPlace_BridgeOutranksScreen(t *testing.T) {
+	r := newKeepPlaceRig(t, "bridgefirst")
+	base := &fakeKickSession{pid: 101, alive: true, idle: true, initCols: 80}
+	sess := screenKickSession{base, composerFrame("fix the bug"), true}
+	readUI(t, r.app.tapp, func() {
+		r.app.bridgeStates = map[string]bridge.State{r.task.ID: {DraftAware: true}}
+	})
+	r.kick(t, sess, base.stopCalled.Load, func() bool { return false }, nil)
+	testutil.True(t, base.stopCalled.Load())
+}
+
+// The typed-since-submit flag cannot see Backspace emptying the box, so it
+// releases the kick after agent.KickDeferCap at one width; a younger deferral,
+// or one recorded at another width, still holds.
+func TestKeepPlace_TypedFlagDeferralCap(t *testing.T) {
+	tests := []struct {
+		name     string
+		since    time.Duration
+		cols     uint16
+		wantKick bool
+	}{
+		{"just under the cap holds", agent.KickDeferCap - time.Minute, 100, false},
+		{"past the cap releases", agent.KickDeferCap + time.Minute, 100, true},
+		{"a deferral at another width does not count", agent.KickDeferCap + time.Minute, 90, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newKeepPlaceRig(t, "cap")
+			base := &fakeKickSession{pid: 101, alive: true, idle: true, initCols: 80}
+			sess := dirtyKickSession{base, true}
+			readUI(t, r.app.tapp, func() {
+				r.app.kickDeferSince[r.task.ID] = kickDefer{cols: tc.cols, at: time.Now().Add(-tc.since)}
+			})
+			r.kick(t, sess, base.stopCalled.Load, func() bool { return false }, nil)
+			testutil.Equal(t, base.stopCalled.Load(), tc.wantKick)
+			if tc.wantKick {
+				testutil.True(t, strings.Contains(r.logged(), "typed-flag deferral cap reached"))
+				readUI(t, r.app.tapp, func() {
+					_, held := r.app.kickDeferSince[r.task.ID]
+					testutil.False(t, held) // a kick clears the deferral clock
+				})
+			}
+		})
+	}
+}
+
+// A first deferral starts the per-width clock and a draft deferral spaces the
+// next full evaluation by KickRetryInterval.
+func TestKeepPlace_DeferralStartsClockAndSpacesRetry(t *testing.T) {
+	r := newKeepPlaceRig(t, "clock")
+	base := &fakeKickSession{pid: 101, alive: true, idle: true, initCols: 80}
+	sess := dirtyKickSession{base, true}
+	r.kick(t, sess, base.stopCalled.Load, func() bool { return false }, nil)
+	readUI(t, r.app.tapp, func() {
+		d, ok := r.app.kickDeferSince[r.task.ID]
+		testutil.True(t, ok)
+		testutil.Equal(t, d.cols, uint16(100))
+		testutil.True(t, r.app.kickRetryAfter[r.task.ID].After(time.Now().Add(hera.KickRetryInterval/2)))
+	})
+}
+
+// During a tick-driven retry only the cheap local signals hold the dwell; the
+// typed flag does not (the full evaluation weighs it), and the retry interval
+// after a draft deferral postpones that evaluation.
+func TestKeepPlace_RetryUsesCheapSignalsAndSpacing(t *testing.T) {
+	r := newKeepPlaceRig(t, "cheap")
+	base := &fakeKickSession{pid: 101, alive: true, idle: true, initCols: 120}
+	sess := dirtyKickSession{base, true} // stale typed flag
+	readUI(t, r.app.tapp, func() {
+		r.app.runner = getRunner{Runner: agent.NewRunner(nil), sess: sess}
+		r.app.agentPane.SetTaskID(r.task.ID)
+		r.app.kickWait[r.task.ID] = time.Time{}
+		r.app.retryDeferredKick(r.task.ID)
+		testutil.False(t, r.app.kickWait[r.task.ID].IsZero()) // flag alone did not hold the dwell
+
+		// Dwell elapsed but the post-deferral spacing has not: still waiting.
+		r.app.kickWait[r.task.ID] = time.Now().Add(-2 * hera.KickDebounce)
+		r.app.kickRetryAfter[r.task.ID] = time.Now().Add(time.Minute)
+		r.app.retryDeferredKick(r.task.ID)
+		_, waiting := r.app.kickWait[r.task.ID]
+		testutil.True(t, waiting)
+		testutil.False(t, strings.Contains(r.logged(), "retrying deferred kick"))
+	})
+}
+
+// countingRunner counts Get calls so a test can prove a code path never asked
+// the runner for a session.
+type countingRunner struct {
+	*agent.Runner
+	gets atomic.Int64
+}
+
+func (c *countingRunner) Get(id string) agent.SessionHandle {
+	c.gets.Add(1)
+	return c.Runner.Get(id)
+}
+
+// The 1s tick calls retryDeferredKick for the viewed task. With no kick armed
+// it must do nothing: no session lookup, no state, no log.
+func TestKeepPlace_IdleTickDoesNothing(t *testing.T) {
+	r := newKeepPlaceRig(t, "idle")
+	cr := &countingRunner{Runner: agent.NewRunner(nil)}
+	var before string
+	readUI(t, r.app.tapp, func() {
+		r.app.runner = cr
+		before = r.logged()
+		for i := 0; i < 500; i++ {
+			r.app.retryDeferredKick(r.task.ID)
+		}
+		testutil.Equal(t, cr.gets.Load(), int64(0))
+		testutil.Equal(t, len(r.app.kickWait), 0)
+		testutil.Equal(t, len(r.app.kickDeferSince), 0)
+		testutil.Equal(t, len(r.app.kickRetryAfter), 0)
+		testutil.Equal(t, r.logged(), before)
+	})
+}
+
+// Dropping a vanished session's wait also forgets its deferral clock.
+func TestKeepPlace_DropKickWaitClearsAllState(t *testing.T) {
+	r := newKeepPlaceRig(t, "drop")
+	readUI(t, r.app.tapp, func() {
+		id := r.task.ID
+		r.app.kickWait[id] = time.Time{}
+		r.app.kickDeferSince[id] = kickDefer{cols: 100, at: time.Now()}
+		r.app.kickRetryAfter[id] = time.Now()
+		r.app.retryDeferredKick(id) // runner has no session: drops everything
+		testutil.Equal(t, len(r.app.kickWait), 0)
+		testutil.Equal(t, len(r.app.kickDeferSince), 0)
+		testutil.Equal(t, len(r.app.kickRetryAfter), 0)
 	})
 }

@@ -18,7 +18,7 @@ func (sv *SettingsView) bridgeRows() []settingsRow {
 		{"bridge.delivery", "Message delivery", cfg.Delivery},
 		{"bridge.band", "Hera band", cfg.Band},
 		{"bridge.toasts", "Message toasts", cfg.Toasts},
-		{"bridge.keep_place", "Keep place on re-render", cfg.KeepPlace},
+		{"ui.rerender_keep_place", "Keep place on re-render", sv.database.Config().UI.RerenderKeepPlace},
 	} {
 		state := "OFF"
 		if item.enabled {
@@ -41,8 +41,8 @@ func (sv *SettingsView) toggleBridge(key string) bool {
 	if key == "bridge.toasts" {
 		value = cfg.Toasts
 	}
-	if key == "bridge.keep_place" {
-		value = cfg.KeepPlace
+	if key == "ui.rerender_keep_place" {
+		value = sv.database.Config().UI.RerenderKeepPlace
 	}
 	if err := sv.database.SetConfigValue(key, strconv.FormatBool(!value)); err != nil {
 		uxlog.Log("[bridge] settings persist failed key=%s error=%v", key, err)

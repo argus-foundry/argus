@@ -571,7 +571,7 @@ Settings → Appearance SHALL expose a boolean “Persistent task rail” row ba
 
 ### Requirement: Keep-place setting
 
-Settings SHALL expose a Bridge toggle "Keep place on re-render" (`bridge.keep_place`, default on, config.toml overridable) that gates the scroll and unsent-text kick deferral and the draft save-and-restore.
+Settings SHALL expose, in the Bridge category, a toggle "Keep place on re-render" (`ui.rerender_keep_place` in the `[ui]` config section, default on, config.toml overridable) that gates the scroll and unsent-text kick deferral and the draft save-and-restore.
 
 #### Scenario: Toggle off
 

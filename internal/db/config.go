@@ -110,6 +110,7 @@ func (d *DB) Config() config.Config {
 		{"ui.show_elapsed", &cfg.UI.ShowElapsed},
 		{"ui.show_icons", &cfg.UI.ShowIcons},
 		{"ui.default_agent_zoom", &cfg.UI.DefaultAgentZoom},
+		{"ui.rerender_keep_place", &cfg.UI.RerenderKeepPlace},
 		{"ui.cross_tab_arrows", &cfg.UI.CrossTabArrows},
 		{"ui.tasks_rail", &cfg.UI.TasksRail},
 		{"ui.project_first", &cfg.UI.ProjectFirst},
@@ -207,9 +208,6 @@ func (d *DB) Config() config.Config {
 	}
 	if v, ok := kv["bridge.toasts"]; ok {
 		cfg.Bridge.Toasts = v == "true"
-	}
-	if v, ok := kv["bridge.keep_place"]; ok {
-		cfg.Bridge.KeepPlace = v == "true"
 	}
 
 	// Argus self-update config.

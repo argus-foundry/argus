@@ -417,7 +417,7 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 	})
 }
 
-// SetKeepPlace wires the live bridge.keep_place setting (kick-timing-keep-place).
+// SetKeepPlace wires the live ui.rerender_keep_place setting (kick-timing-keep-place).
 // Left nil (tests, remote mode), the keep-place hold is ON.
 func (p *HeraPage) SetKeepPlace(fn func() bool) { p.keepPlace = fn }
 

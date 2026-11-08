@@ -1,6 +1,9 @@
 package agent
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // ErrResumeUnavailable leaves a rerender eligible for a later retry.
 var ErrResumeUnavailable = errors.New("resumable transcript unavailable")
@@ -137,7 +140,7 @@ func ShouldKickRerender(hasSessionID bool, initCols, committedCols, panelCols in
 // (scrolledUp) or the composer holds unsent text (hasDraft). Busy and prompt
 // deferrals and Skip keep their precedence, and an unsent draft outranks a
 // scrolled pane because losing text is the worse outcome. Callers pass false
-// for both when the bridge.keep_place setting is off.
+// for both when the ui.rerender_keep_place setting is off.
 func ShouldKickRerenderKeepPlace(hasSessionID bool, initCols, committedCols, panelCols int, idle, alreadyPending, needsInput, scrolledUp, hasDraft bool) RerenderDecision {
 	d := ShouldKickRerender(hasSessionID, initCols, committedCols, panelCols, idle, alreadyPending, needsInput)
 	if d != RerenderKick {
@@ -150,4 +153,54 @@ func ShouldKickRerenderKeepPlace(hasSessionID bool, initCols, committedCols, pan
 		return RerenderDeferScrolled
 	}
 	return RerenderKick
+}
+
+// KickDeferCap bounds how long the heuristic typed-since-submit flag may hold a
+// size-drift kick at one width. The flag cannot see Backspace emptying the box,
+// so without a cap a stale bit would defer the re-wrap forever.
+const KickDeferCap = 10 * time.Minute
+
+// DraftSource names which signal answered the composer-draft question.
+type DraftSource int
+
+const (
+	DraftNone DraftSource = iota
+	DraftFromBridge
+	DraftFromScreen
+	DraftFromFlag
+)
+
+// ComposerDraftInput carries every available composer-draft signal.
+type ComposerDraftInput struct {
+	// BridgeAware: a live bridge with a draft-aware mod reported; BridgeHas is
+	// its answer.
+	BridgeAware, BridgeHas bool
+	// ScreenFound: ScreenRenderer.InputDraft located the Claude composer;
+	// ScreenHas is whether it holds text. ScreenFound=false means "unknown".
+	ScreenFound, ScreenHas bool
+	// TypedFlag is the TUI-local typed-since-submit heuristic.
+	TypedFlag bool
+	// DeferredFor is how long kicks at this width have already been deferred.
+	DeferredFor time.Duration
+}
+
+// ComposerDraft resolves whether the composer holds unsent text, in order: the
+// mod's report, then the rendered Claude composer, then the typed flag. An
+// unknown source (screen not found) falls through — it never reads as empty.
+// Only the flag is subject to KickDeferCap; capped reports that it was
+// ignored for that reason.
+func ComposerDraft(in ComposerDraftInput) (has bool, src DraftSource, capped bool) {
+	if in.BridgeAware {
+		return in.BridgeHas, DraftFromBridge, false
+	}
+	if in.ScreenFound {
+		return in.ScreenHas, DraftFromScreen, false
+	}
+	if in.TypedFlag {
+		if in.DeferredFor >= KickDeferCap {
+			return false, DraftNone, true
+		}
+		return true, DraftFromFlag, false
+	}
+	return false, DraftNone, false
 }

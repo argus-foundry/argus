@@ -32,13 +32,13 @@ Local-only limits: input typed in the web app or another TUI is invisible to (2)
 The mod lives in the process the kick kills, so the draft travels through the daemon continuously rather than at kill time:
 
 - **Save.** Typing and pasting arrive as `prompt.edit` (observed via `next(e)`'s resulting box); history recall, a submit's clear, undo and fills arrive as `prompt.change`. Both feed one `DraftSync`, debounced 300 ms (empties flush immediately, since a submit arrives as `origin: clear`) → `draft` event `{text, cursor}` over the existing events POST. Hub stores `Draft{Text, Cursor, At}` per task and exposes `HasDraft`.
-- **Restore.** On `session.start`, if `bridge.keep_place`, the new mod POSTs `bridge/draft` `{generation, boot}`. The daemon returns the draft only if: the request's boot differs from the draft's boot (new process), the draft is non-empty, younger than 2 minutes, and not already taken; taking marks it consumed. The mod calls `$.prompt.read()`; only if the box is still empty does it `$.prompt.fill({text, mode:'replace', cursor})`, and reports `restored|skipped_nonempty|refused:<reason>` back for uxlog.
+- **Restore.** On `session.start`, if `ui.rerender_keep_place`, the new mod POSTs `bridge/draft` `{generation, boot}`. The daemon returns the draft only if: the request's boot differs from the draft's boot (new process), the draft is non-empty, younger than 2 minutes, and not already taken; taking marks it consumed. The mod calls `$.prompt.read()`; only if the box is still empty does it `$.prompt.fill({text, mode:'replace', cursor})`, and reports `restored|skipped_nonempty|refused:<reason>` back for uxlog.
 - **Fail open.** Any error leaves the session untouched. Old mod → no draft events → daemon holds none. Old daemon → pull 404s → mod does nothing.
 - Attachments/image chips are not in `text`; a draft with an attachment restores as text only (documented limitation).
 
 ### D6. Off switch
 
-`BridgeConfig.KeepPlace` (`bridge.keep_place`, default true), Settings → Bridge row, config.toml override like its siblings. Read live: gates D1–D3 in the TUI, the API handler gate, mod draft reporting (daemon rejects `draft` events when off) and the restore pull.
+`UIConfig.RerenderKeepPlace` (`ui.rerender_keep_place`, default true), Settings → Bridge row, config.toml override like its siblings. Read live: gates D1–D3 in the TUI, the API handler gate, mod draft reporting (daemon rejects `draft` events when off) and the restore pull.
 
 ## Risks
 

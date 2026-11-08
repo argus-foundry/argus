@@ -85,7 +85,7 @@ type HeraPage struct {
 	// (agent.ShouldKickRerender, via the App) for a freshly bound pane. Nil
 	// in remote mode, matching resolve — see SetRerenderKicker.
 	kickRerender RerenderKicker
-	// keepPlace is the live bridge.keep_place setting; nil means on.
+	// keepPlace is the live ui.rerender_keep_place setting; nil means on.
 	keepPlace func() bool
 	prMeta    map[string]map[string]string
 	// needsInput is the authoritative per-task needs-input set the App pushes each

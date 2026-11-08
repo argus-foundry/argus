@@ -195,11 +195,6 @@ type BridgeConfig struct {
 	// Band and Toasts control visible mod UI and are read live by sessions.
 	Band   bool `toml:"band"`
 	Toasts bool `toml:"toasts"`
-	// KeepPlace (default true) gates the kick-timing-keep-place behavior: the
-	// size-drift kick is deferred while the pane is scrolled up or the composer
-	// holds unsent text, and the mod saves/restores the Claude composer draft
-	// across a kick. false restores the pre-feature kick timing. Read live.
-	KeepPlace bool `toml:"keep_place"`
 }
 
 // DevStackConfig controls the daemon's finished-task dev-stack sweeper
@@ -454,6 +449,12 @@ type UIConfig struct {
 	// default) opens single-pane/zoomed with the side panels collapsed; false
 	// opens the 1:3:1 three-pane layout. Ctrl+Z still toggles at runtime.
 	DefaultAgentZoom bool `toml:"default_agent_zoom"`
+	// RerenderKeepPlace (default true) gates the kick-timing-keep-place
+	// behavior: the size-drift kill+resume is deferred while the pane is scrolled
+	// up or the composer holds unsent text, and the bridge mod saves/restores
+	// the Claude composer draft across a kick. false restores the pre-feature
+	// kick timing exactly. Read live.
+	RerenderKeepPlace bool `toml:"rerender_keep_place"`
 	// CrossTabArrows lets modified (Cmd) Left/Right traverse the whole TUI as one
 	// chain: Tasks ⇄ Hera rail ⇄ coord pane ⇄ agent pane ⇄ Settings left ⇄
 	// Settings right. Defaults off; opt in from Settings → Appearance.
@@ -543,12 +544,13 @@ func DefaultConfig() Config {
 		Projects:    make(map[string]Project),
 		Keybindings: DefaultKeybindings(),
 		UI: UIConfig{
-			Theme:            "default",
-			ShowElapsed:      true,
-			ShowIcons:        true,
-			CoordinatorBoard: true,
-			SpinnerStyle:     "progress",
-			DefaultAgentZoom: true,
+			Theme:             "default",
+			ShowElapsed:       true,
+			ShowIcons:         true,
+			CoordinatorBoard:  true,
+			SpinnerStyle:      "progress",
+			DefaultAgentZoom:  true,
+			RerenderKeepPlace: true,
 		},
 		KB: KBConfig{
 			HTTPPort: 7742,
@@ -563,7 +565,7 @@ func DefaultConfig() Config {
 			WorkerContextWindow:       1000000,
 		},
 		DevStack: DevStackConfig{StopFinished: true},
-		Bridge:   BridgeConfig{Enabled: true, Delivery: true, Band: true, Toasts: true, KeepPlace: true},
+		Bridge:   BridgeConfig{Enabled: true, Delivery: true, Band: true, Toasts: true},
 		Supervisor: SupervisorConfig{
 			// Default ON as of P4: agents run under the out-of-process
 			// session-supervisor so the daemon can bounce without interrupting

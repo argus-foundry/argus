@@ -7,7 +7,7 @@ import (
 )
 
 func TestSettingsBridgeToggle(t *testing.T) {
-	for _, key := range []string{"bridge.enabled", "bridge.delivery", "bridge.band", "bridge.toasts", "bridge.keep_place"} {
+	for _, key := range []string{"bridge.enabled", "bridge.delivery", "bridge.band", "bridge.toasts"} {
 		t.Run(key, func(t *testing.T) {
 			sv := testSettingsView(t)
 			selectRowInCategory(t, sv, catBridge, srBridge, key)
@@ -24,9 +24,6 @@ func TestSettingsBridgeToggle(t *testing.T) {
 			case "bridge.band":
 				testutil.False(t, cfg.Bridge.Band)
 				testutil.True(t, cfg.Bridge.Toasts)
-			case "bridge.keep_place":
-				testutil.False(t, cfg.Bridge.KeepPlace)
-				testutil.True(t, cfg.Bridge.Toasts)
 			default:
 				testutil.False(t, cfg.Bridge.Toasts)
 				testutil.True(t, cfg.Bridge.Band)
@@ -39,7 +36,22 @@ func TestSettingsBridgeToggle(t *testing.T) {
 			testutil.True(t, sv.database.Config().Bridge.Delivery)
 			testutil.True(t, sv.database.Config().Bridge.Band)
 			testutil.True(t, sv.database.Config().Bridge.Toasts)
-			testutil.True(t, sv.database.Config().Bridge.KeepPlace)
 		})
 	}
+}
+
+func TestSettingsRerenderKeepPlaceToggle(t *testing.T) {
+	sv := testSettingsView(t)
+	key := "ui.rerender_keep_place"
+	selectRowInCategory(t, sv, catBridge, srBridge, key)
+	testutil.Contains(t, sv.SelectedRow().label, "ON")
+	testutil.True(t, sv.handleEnter())
+	sv.Refresh()
+	testutil.False(t, sv.database.Config().UI.RerenderKeepPlace)
+	testutil.True(t, sv.database.Config().Bridge.Toasts)
+	selectRowInCategory(t, sv, catBridge, srBridge, key)
+	testutil.Contains(t, sv.SelectedRow().label, "OFF")
+	testutil.True(t, sv.handleEnter())
+	sv.Refresh()
+	testutil.True(t, sv.database.Config().UI.RerenderKeepPlace)
 }

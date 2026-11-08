@@ -2,7 +2,7 @@
 
 ### Requirement: The mod reports the composer draft
 
-When `bridge.keep_place` is on, the mod SHALL report the Claude prompt-box draft to the daemon as a `draft` event carrying text and cursor, debounced to 300 ms, with an emptied box reported immediately. The daemon SHALL expose only a boolean `has_draft` in REST/state JSON and SHALL NOT serialize the draft text.
+When `ui.rerender_keep_place` is on, the mod SHALL report the Claude prompt-box draft to the daemon as a `draft` event carrying text and cursor, debounced to 300 ms, with an emptied box reported immediately. The daemon SHALL expose only a boolean `has_draft` in REST/state JSON and SHALL NOT serialize the draft text.
 
 #### Scenario: Typing is reported
 
@@ -45,5 +45,5 @@ On `session.start` the mod SHALL ask the daemon for a pending draft. The daemon 
 
 #### Scenario: Setting off
 
-- **WHEN** `bridge.keep_place` is off
+- **WHEN** `ui.rerender_keep_place` is off
 - **THEN** the daemon ignores `draft` events and returns no draft

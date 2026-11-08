@@ -41,7 +41,7 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body", err)
 		return
 	}
-	keepPlace := s.db.Config().Bridge.KeepPlace
+	keepPlace := s.db.Config().UI.RerenderKeepPlace
 	s.bridgeIngestMu.Lock()
 	accepted := 0
 	for _, ev := range batch.Events {
@@ -279,7 +279,7 @@ type bridgeDraftRequest struct {
 // handleBridgeDraft hands a freshly booted mod the composer draft its
 // predecessor process reported before a kick killed it (kick-timing-keep-place).
 // One-shot: the draft is removed when returned. Only the CURRENT launch of a
-// live session may ask, and nothing is returned while bridge.keep_place is off.
+// live session may ask, and nothing is returned while ui.rerender_keep_place is off.
 func (s *Server) handleBridgeDraft(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	task, err := s.db.Get(id)
@@ -293,7 +293,7 @@ func (s *Server) handleBridgeDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	none := map[string]any{"draft": nil}
-	if !s.db.Config().Bridge.KeepPlace || s.runner == nil {
+	if !s.db.Config().UI.RerenderKeepPlace || s.runner == nil {
 		writeJSON(w, http.StatusOK, none)
 		return
 	}
@@ -315,7 +315,7 @@ func (s *Server) handleBridgeDraft(w http.ResponseWriter, r *http.Request) {
 // bridgeDraftPending reports whether the task's live bridge says the composer
 // holds unsent text and the keep-place setting is on.
 func (s *Server) bridgeDraftPending(id string) bool {
-	if !s.db.Config().Bridge.KeepPlace {
+	if !s.db.Config().UI.RerenderKeepPlace {
 		return false
 	}
 	st, live := s.bridgeState(id, time.Now())

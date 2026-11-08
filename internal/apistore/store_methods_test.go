@@ -295,7 +295,7 @@ func TestStore_SetConfigValue_KeyMapping(t *testing.T) {
 		{"bridge.delivery", "false"},
 		{"bridge.band", "false"},
 		{"bridge.toasts", "false"},
-		{"bridge.keep_place", "false"},
+		{"ui.rerender_keep_place", "false"},
 		{"defaults.backend", "claude"},
 		{"default_backend", "codex"},
 		{"defaults.share_project", "argus"},
@@ -329,7 +329,7 @@ func TestStore_SetConfigValue_KeyMapping(t *testing.T) {
 }
 
 func TestStore_BridgeToggleRefreshesEffectiveCache(t *testing.T) {
-	for _, key := range []string{"bridge.enabled", "bridge.delivery", "bridge.band", "bridge.toasts", "bridge.keep_place"} {
+	for _, key := range []string{"bridge.enabled", "bridge.delivery", "bridge.band", "bridge.toasts"} {
 		t.Run(key, func(t *testing.T) {
 			s, _ := newStore(t, func(mux *http.ServeMux) {
 				mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
@@ -337,7 +337,7 @@ func TestStore_BridgeToggleRefreshesEffectiveCache(t *testing.T) {
 					testutil.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 					testutil.NotNil(t, body.Bridge)
 					b := body.Bridge
-					for name, field := range map[string]*bool{"bridge.enabled": b.Enabled, "bridge.delivery": b.Delivery, "bridge.band": b.Band, "bridge.toasts": b.Toasts, "bridge.keep_place": b.KeepPlace} {
+					for name, field := range map[string]*bool{"bridge.enabled": b.Enabled, "bridge.delivery": b.Delivery, "bridge.band": b.Band, "bridge.toasts": b.Toasts} {
 						if name == key {
 							testutil.NotNil(t, field)
 							testutil.False(t, *field)
@@ -347,7 +347,7 @@ func TestStore_BridgeToggleRefreshesEffectiveCache(t *testing.T) {
 					}
 					// The effective response can differ from the requested value
 					// because config.toml overrides DB. Cache this, not the request.
-					_, _ = w.Write([]byte(`{"bridge":{"enabled":true,"delivery":false,"band":false,"toasts":true,"keep_place":false}}`))
+					_, _ = w.Write([]byte(`{"bridge":{"enabled":true,"delivery":false,"band":false,"toasts":true}}`))
 				})
 			})
 			s.cachedConfig = config.DefaultConfig()
@@ -357,9 +357,27 @@ func TestStore_BridgeToggleRefreshesEffectiveCache(t *testing.T) {
 			testutil.False(t, cfg.Delivery)
 			testutil.False(t, cfg.Band)
 			testutil.True(t, cfg.Toasts)
-			testutil.False(t, cfg.KeepPlace)
 		})
 	}
+}
+
+func TestStore_RerenderKeepPlaceRefreshesEffectiveCache(t *testing.T) {
+	s, _ := newStore(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
+			var body apiclient.SettingsUpdate
+			testutil.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			testutil.Nil(t, body.Bridge)
+			testutil.NotNil(t, body.UI)
+			testutil.NotNil(t, body.UI.RerenderKeepPlace)
+			testutil.False(t, *body.UI.RerenderKeepPlace)
+			// config.toml can override the DB value; the cache must follow the
+			// daemon's effective answer, not the request.
+			_, _ = w.Write([]byte(`{"ui":{"rerender_keep_place":true}}`))
+		})
+	})
+	s.cachedConfig = config.DefaultConfig()
+	testutil.NoError(t, s.SetConfigValue("ui.rerender_keep_place", "false"))
+	testutil.True(t, s.Config().UI.RerenderKeepPlace)
 }
 
 func TestStore_SetArchived(t *testing.T) {

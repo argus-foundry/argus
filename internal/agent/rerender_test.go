@@ -2,6 +2,7 @@ package agent
 
 import (
 	"testing"
+	"time"
 
 	"github.com/drn/argus/internal/testutil"
 )
@@ -199,6 +200,35 @@ func TestShouldKickRerenderKeepPlace(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := ShouldKickRerenderKeepPlace(true, 80, 0, tc.panelCols, tc.idle, false, tc.needsInput, tc.scrolledUp, tc.hasDraft)
 			testutil.Equal(t, got, tc.want)
+		})
+	}
+}
+
+func TestComposerDraft(t *testing.T) {
+	cases := []struct {
+		name       string
+		in         ComposerDraftInput
+		want       bool
+		wantSrc    DraftSource
+		wantCapped bool
+	}{
+		{"bridge empty beats a typed flag", ComposerDraftInput{BridgeAware: true, BridgeHas: false, ScreenFound: true, ScreenHas: true, TypedFlag: true}, false, DraftFromBridge, false},
+		{"bridge draft", ComposerDraftInput{BridgeAware: true, BridgeHas: true}, true, DraftFromBridge, false},
+		{"screen text beats empty flag", ComposerDraftInput{ScreenFound: true, ScreenHas: true}, true, DraftFromScreen, false},
+		{"screen empty beats a stale typed flag", ComposerDraftInput{ScreenFound: true, ScreenHas: false, TypedFlag: true}, false, DraftFromScreen, false},
+		{"screen not found falls through to the flag", ComposerDraftInput{ScreenFound: false, ScreenHas: false, TypedFlag: true}, true, DraftFromFlag, false},
+		{"screen not found and no flag is empty", ComposerDraftInput{}, false, DraftNone, false},
+		{"flag just under the cap holds", ComposerDraftInput{TypedFlag: true, DeferredFor: KickDeferCap - time.Second}, true, DraftFromFlag, false},
+		{"flag at the cap stops holding", ComposerDraftInput{TypedFlag: true, DeferredFor: KickDeferCap}, false, DraftNone, true},
+		{"cap does not apply to a screen-confirmed draft", ComposerDraftInput{ScreenFound: true, ScreenHas: true, TypedFlag: true, DeferredFor: 2 * KickDeferCap}, true, DraftFromScreen, false},
+		{"cap does not apply to a bridge-reported draft", ComposerDraftInput{BridgeAware: true, BridgeHas: true, DeferredFor: 2 * KickDeferCap}, true, DraftFromBridge, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, src, capped := ComposerDraft(tc.in)
+			testutil.Equal(t, got, tc.want)
+			testutil.Equal(t, src, tc.wantSrc)
+			testutil.Equal(t, capped, tc.wantCapped)
 		})
 	}
 }

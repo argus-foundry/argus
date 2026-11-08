@@ -79,7 +79,7 @@ func TestBridgeDraftPull(t *testing.T) {
 
 func TestBridgeDraftKeepPlaceOff(t *testing.T) {
 	s, _, task := bridgeAuthorityServer(t)
-	testutil.NoError(t, s.db.SetConfigValue("bridge.keep_place", "false"))
+	testutil.NoError(t, s.db.SetConfigValue("ui.rerender_keep_place", "false"))
 	w := httptest.NewRecorder()
 	s.routes().ServeHTTP(w, authedReq("POST", "/api/tasks/"+task.ID+"/bridge/events", draftEventBody))
 	testutil.Equal(t, w.Code, 200)
@@ -89,9 +89,9 @@ func TestBridgeDraftKeepPlaceOff(t *testing.T) {
 	}
 
 	// A draft stored while the setting was on is not handed back once it is off.
-	testutil.NoError(t, s.db.SetConfigValue("bridge.keep_place", "true"))
+	testutil.NoError(t, s.db.SetConfigValue("ui.rerender_keep_place", "true"))
 	s.routes().ServeHTTP(httptest.NewRecorder(), authedReq("POST", "/api/tasks/"+task.ID+"/bridge/events", draftEventBody))
-	testutil.NoError(t, s.db.SetConfigValue("bridge.keep_place", "false"))
+	testutil.NoError(t, s.db.SetConfigValue("ui.rerender_keep_place", "false"))
 	_, out := postDraftPull(s, task.ID, "launch", "new")
 	testutil.Nil(t, out["draft"])
 }
@@ -127,7 +127,7 @@ func TestMaybeKickRerender_DefersOnBridgeDraft(t *testing.T) {
 
 	// With the setting off the draft gate is skipped entirely.
 	before := strings.Count(logged(), "unsent composer draft")
-	testutil.NoError(t, s.db.SetConfigValue("bridge.keep_place", "false"))
+	testutil.NoError(t, s.db.SetConfigValue("ui.rerender_keep_place", "false"))
 	s.maybeKickRerender(task.ID, 24, 130)
 	testutil.Equal(t, strings.Count(logged(), "unsent composer draft"), before)
 }
