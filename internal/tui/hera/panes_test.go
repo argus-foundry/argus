@@ -481,8 +481,8 @@ func TestPanes_KickRetriesAfterDeferred(t *testing.T) {
 	advance(KickRetryInterval)
 	p.Draw(sim)
 	testutil.Equal(t, len(kicksFor(*kicks, "t-wkr")), 2)
-	// Further deferrals back off without giving up, capped at one minute.
-	for _, interval := range []time.Duration{20 * time.Second, 40 * time.Second, 60 * time.Second, 60 * time.Second} {
+	// Further deferrals back off without giving up, capped at kickRetryMax (15s).
+	for _, interval := range []time.Duration{15 * time.Second, 15 * time.Second, 15 * time.Second, 15 * time.Second} {
 		count := len(kicksFor(*kicks, "t-wkr"))
 		advance(interval - time.Millisecond)
 		p.Draw(sim)
@@ -1464,14 +1464,14 @@ func TestPanes_FullscreenToggleRearmsKick(t *testing.T) {
 	// the final width.
 	p.Machine().ToggleFullscreen()
 	p.Draw(sim)
-	advance(KickDebounce / 3)
+	advance(ZoomKickDebounce / 3)
 	p.Machine().ToggleFullscreen()
 	p.Draw(sim)
-	advance(KickDebounce / 3)
+	advance(ZoomKickDebounce / 3)
 	p.Machine().ToggleFullscreen()
 	p.Draw(sim)
 	testutil.Equal(t, len(*kicks), 0)
-	advance(KickDebounce)
+	advance(ZoomKickDebounce)
 	p.Draw(sim)
 	final := kicksFor(*kicks, "t-coord")
 	testutil.Equal(t, len(final), 1)
@@ -1616,4 +1616,51 @@ func TestHeraPage_TaskScrolledUp(t *testing.T) {
 	testutil.Equal(t, p.TaskScrolledUp(""), false)
 	p.CoordPane().ScrollUp(2)
 	testutil.Equal(t, p.TaskScrolledUp("t-coord"), true)
+}
+
+// TestPanes_ZoomToggleSkipsDragDebounceAndResetsBackoff (9a): Ctrl+Z is a
+// discrete toggle, so it evaluates after only ZoomKickDebounce (not the 300ms
+// rail-traversal KickDebounce), and a coordinator that was deferring busy with
+// a long backoff must get a FRESH first retry interval, not inherit the stale
+// doubled delay (the 20s-60s waits seen live).
+func TestPanes_ZoomToggleSkipsDragDebounceAndResetsBackoff(t *testing.T) {
+	d := memDB(t)
+	orch := seedOrch(t, d, "orch")
+	seedBoundRole(t, d, orch, "coord", db.HeraKindCoordinator, "t-coord")
+	seedBoundRole(t, d, orch, "wkr", db.HeraKindWorker, "t-wkr")
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{
+		"t-coord": {id: "t-coord", alive: true},
+		"t-wkr":   {id: "t-wkr", alive: true},
+	}))
+	kicks, advance := newDeferringKickRecorder(p)
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "wkr"), true)
+	p.Machine().SetRegion(FocusCoord)
+
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	defer sim.Fini()
+	sim.SetSize(160, 30)
+	p.SetRect(0, 0, 160, 30)
+
+	p.Draw(sim)
+	advance(KickDebounce)
+	p.Draw(sim) // initial kick, deferred busy
+	// Burn the backoff up to the cap.
+	for range 4 {
+		advance(kickRetryMax)
+		p.Draw(sim)
+	}
+	testutil.Equal(t, p.coordKickPending.retryDelay, kickRetryMax)
+
+	*kicks = nil
+	p.Machine().ToggleFullscreen()
+	p.Draw(sim) // layout shift re-arms
+	testutil.Equal(t, len(kicksFor(*kicks, "t-coord")), 0)
+	advance(ZoomKickDebounce) // well under KickDebounce
+	p.Draw(sim)
+	testutil.Equal(t, len(kicksFor(*kicks, "t-coord")), 1)
+	// Deferred again: the retry delay restarted at KickRetryInterval.
+	testutil.Equal(t, p.coordKickPending.deadline.Sub(p.kickClockNow()), KickRetryInterval)
 }

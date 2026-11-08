@@ -1359,6 +1359,20 @@ func replayEmuDims(sess agentview.TerminalAdapter, taskID string, paneCols, pane
 			ac, ar = c, r
 		}
 	}
+	// The live PTY size FOLLOWS resizes (a Ctrl+Z shrink moves it to the pane
+	// width at once), but the committed history stays baked at the width the
+	// session started — and the agent re-emitted its transcript — at. Never
+	// emulate narrower than that: a narrower emulator autowraps every long
+	// line into left-edge fragments plus a right-edge letter column (9a, the
+	// "Re-render pending" garbling). Every real handle exposes
+	// InitialPTYSize; fakes without it keep the live-size behaviour.
+	if sess != nil && sess.Alive() {
+		if is, ok := sess.(interface{ InitialPTYSize() (int, int) }); ok {
+			if ic, ir := is.InitialPTYSize(); ic > ac && ir > 0 {
+				ac, ar = ic, max(ar, ir)
+			}
+		}
+	}
 	if ac <= 0 || ar <= 0 {
 		if c, r, ok := agent.LoadSessionSize(taskID); ok {
 			ac, ar = c, r
