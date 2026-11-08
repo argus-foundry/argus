@@ -29,27 +29,22 @@ TAG="[install-signed]"
 
 die() { echo "$TAG ERROR: $*" >&2; exit 1; }
 
-# run_timeout SECS CMD... — run CMD, kill it after SECS. Returns 124 on timeout.
-# (macOS ships no `timeout`.)
+# run_timeout SECS CMD... — run CMD, SIGALRM-kill it after SECS. Returns 124 on
+# timeout. (macOS ships no `timeout`.) The alarm is armed inside the child
+# itself (perl `alarm` survives `exec`), so there is NO separate watchdog
+# process: the previous background `sleep`-watchdog design could outlive the
+# command, and `wait`ing on it stalled an instantly-finished command for the
+# full TIMEOUT+2s and then misreported it as a timeout (exit 124) — seen on CI
+# as a 62s `security show-keychain-info` "locked keychain" failure.
+# $cpid is the (exec'd) command pid so cleanup() can kill it on a signal.
 run_timeout() {
 	secs=$1; shift
-	flag="$(mktemp "${TMPDIR:-/tmp}/argus-timeout.XXXXXX")" || return 1
-	rm -f "$flag"
-	"$@" &
+	perl -e 'alarm shift; exec @ARGV or exit 127' "$secs" "$@" &
 	cpid=$!
-	(
-		sleep "$secs"
-		: >"$flag"
-		kill -TERM "$cpid" 2>/dev/null
-		sleep 2
-		kill -KILL "$cpid" 2>/dev/null
-	) >/dev/null 2>&1 &
-	wpid=$!
 	wait "$cpid"
 	rc=$?
-	kill "$wpid" 2>/dev/null
-	wait "$wpid" 2>/dev/null
-	if [ -e "$flag" ]; then rm -f "$flag"; return 124; fi
+	cpid=
+	[ "$rc" -eq 142 ] && return 124 # 128 + SIGALRM
 	return $rc
 }
 
@@ -68,7 +63,6 @@ tmp="$dest.new.$$"
 # that only cleans would let the script resume after the signal.
 cleanup() {
 	[ -n "${cpid:-}" ] && kill "$cpid" 2>/dev/null
-	[ -n "${wpid:-}" ] && kill "$wpid" 2>/dev/null
 	rm -f "$tmp" "$tmp".*
 }
 trap cleanup EXIT
@@ -92,6 +86,10 @@ if [ "${ARGUS_SKIP_SIGN:-}" = "1" ]; then
 	echo "$TAG ARGUS_SKIP_SIGN=1 — installed $dest UNSIGNED (macOS may re-prompt for file access)"
 	exit 0
 fi
+
+# run_timeout needs perl. Check at top level: die() inside the $(...) below
+# would only exit the substitution and silently fall through to "no identity".
+command -v perl >/dev/null 2>&1 || die "perl is required to bound codesign/security with a timeout, and was not found on PATH (ARGUS_SKIP_SIGN=1 installs unsigned without it)"
 
 out=$(run_timeout "$TIMEOUT" security find-identity -p codesigning 2>/dev/null)
 id=$(printf '%s\n' "$out" | grep -F "$IDENT_NAME" | head -1 | awk '{print $2}')
