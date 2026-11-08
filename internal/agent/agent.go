@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/drn/argus/internal/backendkind"
 	"github.com/drn/argus/internal/claudeenv"
 	"github.com/drn/argus/internal/claudesession"
+	"github.com/drn/argus/internal/codexctx"
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/db"
 	"github.com/drn/argus/internal/mcplimits"
@@ -553,16 +555,16 @@ func CaptureCodexSessionIDIn(sqliteHome, worktreePath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("CaptureCodexSessionID: %w", err)
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := codexctx.OpenThreadIndex(dbPath)
 	if err != nil {
 		return "", fmt.Errorf("CaptureCodexSessionID: open db: %w", err)
 	}
 	defer db.Close()
 
 	var id string
-	err = db.QueryRow(
-		`SELECT id FROM threads WHERE cwd = ? ORDER BY updated_at DESC LIMIT 1`,
-		worktreePath,
+	err = db.QueryRowContext(context.Background(),
+		`SELECT id FROM threads WHERE cwd = ? AND source = ? ORDER BY updated_at DESC, id LIMIT 1`,
+		worktreePath, codexctx.MainThreadSource,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("CaptureCodexSessionID: query: %w", err)

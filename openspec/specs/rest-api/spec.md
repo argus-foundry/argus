@@ -774,7 +774,7 @@ The API SHALL serve `GET /api/sandbox/proposals` (optional `status` filter) and 
 - **THEN** the response is 409 and config is unchanged
 
 ### Requirement: Task context endpoint
-`GET /api/tasks/{id}/context` SHALL return `{task_id, session_id, provider, live, measured_at, source, context}` where `context` is `{used_tokens, window_tokens, percent, categories}` and `categories` always lists `messages`, `memory`, `tools`, `agents`, `skills`, `system`, `compaction` with `null` for unmeasured values. It SHALL return 404 for a missing task and 200 with `live=false` and `context=null` for a task without a measurement or whose recorded measurement belongs to a replaced launch. The `live` flag SHALL reflect current process authority and bridge health, not measurement age. Unchanged context is deduplicated, so an old measurement with fresh heartbeats from the current launch SHALL remain `live=true`. Clients MAY use `measured_at` to display age. Replacing the session, process generation or account launch SHALL invalidate the old context. When the bridge is no longer live without a known replacement, recorded data SHALL return with `live=false`. It SHALL require authentication and expose aggregate counts only. After a live measurement the daemon SHALL emit `task.context_changed` with `{session_id, measured_at}` and no counts.
+`GET /api/tasks/{id}/context` SHALL return `{task_id, session_id, provider, live, measured_at, source, context}` where `context` is `{used_tokens, window_tokens, percent, categories}` and `categories` always lists `messages`, `memory`, `tools`, `agents`, `skills`, `system`, `compaction` with `null` for unmeasured values. It SHALL return 404 for a missing task and 200 with `live=false` and `context=null` for a task without a measurement or whose recorded measurement belongs to a replaced launch. The `live` flag SHALL reflect current process authority and bridge health, not measurement age. Unchanged context is deduplicated, so an old measurement with fresh heartbeats from the current launch SHALL remain `live=true`. Clients MAY use `measured_at` to display age. Replacing the session, process generation or account launch SHALL invalidate the old context. When the bridge is no longer live without a known replacement, recorded data SHALL return with `live=false`. It SHALL require authentication and expose aggregate counts only. After a live measurement the daemon SHALL emit `task.context_changed` with `{session_id, measured_at}` and no counts. For a Codex task the daemon SHALL read the recorded session's rollout (`provider` `openai`, `source` `codex_rollout`), report the latest `last_token_usage.total_tokens` (including compaction estimates) with `categories` all `null`, and leave window and percent `null` when no window was recorded. An absent, null, negative or malformed last total SHALL be unmeasured rather than manufactured zero. The read SHALL be bounded and read-only and SHALL NOT launch a Codex CLI or model turn. The daemon SHALL emit `task.context_changed` when a running reader-backed task's measurement time advances, with the same identity-only payload. Unpinned selection SHALL exclude subagents and reject conversations created before the current process launch. Rollouts SHALL be regular files in the task account's source-home or exact derived Argus overlay session storage and their session metadata SHALL match the selected session ID and worktree.
 
 #### Scenario: Live measurement
 - **WHEN** the current launch reports a measurement
@@ -791,6 +791,20 @@ The API SHALL serve `GET /api/sandbox/proposals` (optional `status` filter) and 
 #### Scenario: Account replacement invalidates old context
 - **WHEN** a task moves from account A to account B with a replacement process generation
 - **THEN** GET hides A's context until B reports its own measurement, then returns B's session identity and category counts
+
+#### Scenario: Codex measured context
+- **WHEN** a Codex task's recorded rollout holds a token_count event with a window
+- **THEN** GET returns `provider=openai`, `source=codex_rollout`, `used_tokens` from the last call, the window and a derived percent
+
+#### Scenario: Codex session replaced or unmeasured
+- **WHEN** the task's recorded session id has no thread in its worktree, or the rollout has no usable event
+- **THEN** GET returns 200 with `context=null`
+
+#### Scenario: Codex compaction estimate
+- **WHEN** the latest last-token usage has zero input and output with `total_tokens=200000`
+- **THEN** GET reports `used_tokens=200000`, matching Codex's context meter
+
+Codex meter semantics are pinned to [upstream TokenUsage and TokenUsageInfo](https://github.com/openai/codex/blob/748ab55ca7de0b647d9a7a9d9a8e70e00f28666d/codex-rs/protocol/src/protocol.rs#L2493-L2625) and [context history](https://github.com/openai/codex/blob/748ab55ca7de0b647d9a7a9d9a8e70e00f28666d/codex-rs/core/src/context_manager/history.rs#L1143-L1158).
 
 ### Requirement: Bridge state carries the suggested next prompt
 `GET /api/tasks/{id}/bridge` SHALL include `suggestion`, either `null` or `{text, session_id, generation, recorded_at}`. It SHALL be `null` when the provider offered none, the provider has no suggestion support, the suggestion was cleared or replaced, or the bridge is not live authority for the running launch. The existing 404 without bridge state SHALL be preserved. When the stored suggestion appears, changes or clears the daemon SHALL emit `task.suggestion_changed` with `{session_id, available, recorded_at}` and no text.
