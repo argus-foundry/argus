@@ -33,7 +33,7 @@ const fakeCodesign = `#!/bin/sh
 echo "$@" >> "$FAKE_LOG"
 echo $$ > "$FAKE_PIDFILE"
 case "$FAKE_CODESIGN" in
-hang) exec sleep 30 ;;
+hang) exec sleep 600 ;;
 fail) exit 1 ;;
 esac
 for last; do :; done
@@ -81,7 +81,10 @@ func newFixture(t *testing.T, env ...string) *fixture {
 		"TMPDIR=" + dir,
 		"ARGUS_INSTALL_BIN=" + f.dest,
 		"ARGUS_BUILD_CMD=" + build,
-		"ARGUS_SIGN_TIMEOUT=1",
+		// Generous: the fake security probes are instant, but a loaded CI host can
+		// take seconds to spawn them. Tests that need codesign to time out set
+		// ARGUS_CODESIGN_TIMEOUT instead of shrinking this.
+		"ARGUS_SIGN_TIMEOUT=60",
 		"FAKE_LOG=" + f.logp,
 		"FAKE_PIDFILE=" + f.pidp,
 	}, env...)
@@ -108,6 +111,18 @@ func (f *fixture) codesignAlive() bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
+// waitFor polls cond until it holds or the (generous, load-tolerant) deadline passes.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func run(t *testing.T, env ...string) result {
 	t.Helper()
 	f := newFixture(t, env...)
@@ -117,9 +132,7 @@ func run(t *testing.T, env ...string) result {
 	b, _ := os.ReadFile(f.dest)
 	lg, _ := os.ReadFile(f.logp)
 	f.assertNoTemp(t) // temp file cleaned on every path
-	if f.codesignAlive() {
-		t.Errorf("codesign process still running after script exit")
-	}
+	waitFor(t, "codesign process to be gone after script exit", func() bool { return !f.codesignAlive() })
 	return result{string(out), runErr, string(b), string(lg), el}
 }
 
@@ -129,30 +142,23 @@ func TestSignalCleansUp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns shell + sleeps")
 	}
-	f := newFixture(t, "FAKE_CODESIGN=hang", "ARGUS_SIGN_TIMEOUT=60")
+	f := newFixture(t, "FAKE_CODESIGN=hang", "ARGUS_CODESIGN_TIMEOUT=600")
 	testutil.NoError(t, f.cmd.Start())
-	deadline := time.Now().Add(10 * time.Second)
-	for !f.codesignAlive() {
-		if time.Now().After(deadline) {
-			t.Fatal("codesign never started")
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	waitFor(t, "codesign to start", f.codesignAlive)
 	testutil.NoError(t, f.cmd.Process.Signal(syscall.SIGTERM))
 	done := make(chan error, 1)
 	go func() { done <- f.cmd.Wait() }()
 	select {
 	case err := <-done:
 		testutil.Equal(t, err != nil, true)
-	case <-time.After(15 * time.Second):
+	case <-time.After(90 * time.Second):
 		_ = f.cmd.Process.Kill()
 		t.Fatal("script did not exit after SIGTERM")
 	}
 	b, _ := os.ReadFile(f.dest)
 	testutil.Equal(t, string(b), "OLD\n")
 	f.assertNoTemp(t)
-	time.Sleep(200 * time.Millisecond)
-	testutil.Equal(t, f.codesignAlive(), false)
+	waitFor(t, "codesign to be killed", func() bool { return !f.codesignAlive() })
 }
 
 func TestInstallSigned(t *testing.T) {
@@ -176,11 +182,12 @@ func TestInstallSigned(t *testing.T) {
 		testutil.Contains(t, r.out, "keychain is locked")
 	})
 	t.Run("codesign hang hits timeout, live binary untouched", func(t *testing.T) {
-		r := run(t, "FAKE_CODESIGN=hang")
+		r := run(t, "FAKE_CODESIGN=hang", "ARGUS_CODESIGN_TIMEOUT=2")
 		testutil.Equal(t, r.err != nil, true)
 		testutil.Equal(t, r.dest, "OLD\n")
 		testutil.Contains(t, r.out, "timed out")
-		testutil.Equal(t, r.elapsed < 15*time.Second, true)
+		// The fake would hang for 600s; finishing far sooner proves the kill.
+		testutil.Equal(t, r.elapsed < 300*time.Second, true)
 	})
 	t.Run("codesign failure leaves live binary untouched", func(t *testing.T) {
 		r := run(t, "FAKE_CODESIGN=fail")

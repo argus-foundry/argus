@@ -16,6 +16,7 @@
 # Env:
 #   ARGUS_SIGN_IDENTITY  identity name to look up   (default "Argus Code Signing")
 #   ARGUS_SIGN_TIMEOUT   seconds for codesign/security probes (default 30)
+#   ARGUS_CODESIGN_TIMEOUT  seconds for codesign alone (default: ARGUS_SIGN_TIMEOUT)
 #   ARGUS_SKIP_SIGN=1    deliberately install unsigned (escape hatch)
 #   ARGUS_INSTALL_BIN    destination path (default $(go env GOBIN|GOPATH/bin)/argus)
 #   ARGUS_BUILD_CMD      test seam: command run as `$ARGUS_BUILD_CMD <out-path>`
@@ -23,6 +24,7 @@ set -u
 
 IDENT_NAME="${ARGUS_SIGN_IDENTITY:-Argus Code Signing}"
 TIMEOUT="${ARGUS_SIGN_TIMEOUT:-30}"
+CS_TIMEOUT="${ARGUS_CODESIGN_TIMEOUT:-$TIMEOUT}"
 TAG="[install-signed]"
 
 die() { echo "$TAG ERROR: $*" >&2; exit 1; }
@@ -108,10 +110,10 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 # 4. Sign the TEMP file under a hard timeout.
-run_timeout "$TIMEOUT" codesign --force --identifier com.drn.argus --sign "$id" "$tmp"
+run_timeout "$CS_TIMEOUT" codesign --force --identifier com.drn.argus --sign "$id" "$tmp"
 rc=$?
 if [ "$rc" -eq 124 ]; then
-	die "codesign timed out after ${TIMEOUT}s waiting on Keychain access for '$IDENT_NAME' — unlock the Mac / click \"Always Allow\" on the Keychain prompt and re-run; the live binary $dest was NOT modified"
+	die "codesign timed out after ${CS_TIMEOUT}s waiting on Keychain access for '$IDENT_NAME' — unlock the Mac / click \"Always Allow\" on the Keychain prompt and re-run; the live binary $dest was NOT modified"
 elif [ "$rc" -ne 0 ]; then
 	die "codesign failed (exit $rc) for '$IDENT_NAME'; the live binary $dest was NOT modified"
 fi
