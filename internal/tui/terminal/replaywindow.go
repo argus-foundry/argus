@@ -146,11 +146,45 @@ func scrollbackCells(emu *xvt.SafeEmulator) int {
 // the offset fed through and the checkpoint table, which starts with a
 // {start,0} sentinel.
 func feedReplayChunks(emu *xvt.SafeEmulator, src io.ReaderAt, start, limit, origin int64, cols, rows, budgetCells int, align bool) (int64, []replayCheckpoint) {
+	return feedReplayChunksSized(emu, src, start, limit, origin, cols, rows, budgetCells, align, nil)
+}
+
+// feedReplayChunksSized is feedReplayChunks with the session's width index
+// (agent.LoadSessionSizes; offsets in the same space as origin+pos). Each
+// segment is emulated at the PTY size it was authored for: the emulator is
+// resized to the size in force at start, and again at every mark, so cursor
+// math that depends on wrap counts (an agent's relative cursor-up redraw)
+// lands where it did on the real PTY. emu is built at (cols, rows) — the
+// widest size, which every caller's paint/anchor math assumes — and is
+// resized back to exactly that after the last chunk. x/vt Resize crops the
+// visible rows on narrowing and keeps scrollback lines at their full width,
+// the same as the live emulator saw. nil/empty marks is a plain single-width
+// feed.
+func feedReplayChunksSized(emu *xvt.SafeEmulator, src io.ReaderAt, start, limit, origin int64, cols, rows, budgetCells int, align bool, marks []agent.SizeMark) (int64, []replayCheckpoint) {
 	cps := []replayCheckpoint{{off: origin + start, lines: 0}}
 	var osc oscfilter.Filter
 	pos := start
 	buf := make([]byte, replayFeedChunk)
 	first := true
+	curCols, curRows := cols, rows
+	nextMark := 0
+	resizes := 0
+	apply := func(m agent.SizeMark) {
+		if m.Cols == curCols && m.Rows == curRows {
+			return
+		}
+		curCols, curRows = m.Cols, m.Rows
+		emu.Resize(curCols, curRows)
+		resizes++
+	}
+	if len(marks) > 0 {
+		if m, ok := agent.SizeMarkAt(marks, origin+start); ok {
+			apply(m)
+		}
+		for nextMark < len(marks) && marks[nextMark].Off <= origin+start {
+			nextMark++
+		}
+	}
 	for pos < limit {
 		n := int64(len(buf))
 		if limit-pos < n {
@@ -166,13 +200,24 @@ func feedReplayChunks(emu *xvt.SafeEmulator, src io.ReaderAt, start, limit, orig
 				chunk = chunk[:cut]
 			}
 		}
+		// Never let a chunk straddle a width change: cut exactly at the next
+		// mark (the parser is stateful, so even a mid-sequence cut is safe).
+		if nextMark < len(marks) {
+			if rel := marks[nextMark].Off - (origin + pos); rel > 0 && rel < int64(len(chunk)) {
+				chunk = chunk[:rel]
+			}
+		}
 		fed := chunk
 		if first && align {
 			fed = AlignToEscBoundary(fed)
 		}
 		first = false
-		_, _ = SafeEmuWrite(emu, osc.Filter(ClampScrollRegion(fed, cols, rows)))
+		_, _ = SafeEmuWrite(emu, osc.Filter(ClampScrollRegion(fed, curCols, curRows)))
 		pos += int64(len(chunk))
+		for nextMark < len(marks) && marks[nextMark].Off <= origin+pos {
+			apply(marks[nextMark])
+			nextMark++
+		}
 		cps = append(cps, replayCheckpoint{off: origin + pos, lines: emu.ScrollbackLen()})
 		if err != nil && err != io.EOF {
 			break
@@ -183,6 +228,12 @@ func feedReplayChunks(emu *xvt.SafeEmulator, src io.ReaderAt, start, limit, orig
 	}
 	if tail := osc.Flush(); len(tail) > 0 {
 		_, _ = SafeEmuWrite(emu, tail)
+	}
+	if len(marks) > 0 {
+		if curCols != cols || curRows != rows {
+			emu.Resize(cols, rows)
+		}
+		uxlog.Log("[terminalpane] replay segments: marks=%d resizes=%d fed=[%d,%d) final=%dx%d", len(marks), resizes, origin+start, origin+pos, cols, rows)
 	}
 	return origin + pos, cps
 }
@@ -444,7 +495,7 @@ func buildWindow(emu *xvt.SafeEmulator, taskID string, req *replayWindowReq, col
 	if lim <= req.start {
 		return 0, 0, 0, nil, false
 	}
-	end, cps = feedReplayChunks(emu, f, req.start, lim, 0, cols, rows, replayScrollbackCellBudget, req.start > 0)
+	end, cps = feedReplayChunksSized(emu, f, req.start, lim, 0, cols, rows, replayScrollbackCellBudget, req.start > 0, agent.LoadSessionSizes(taskID))
 	uxlog.Log("[terminalpane] replay window %s: start=%d end=%d of %d (file %d, forward=%v, lines=%d, cells=%d)",
 		taskID, req.start, end, lim, fileSize, req.forward, emu.ScrollbackLen(), scrollbackCells(emu))
 	return end, fileSize, lim, cps, true

@@ -266,7 +266,12 @@ const (
 	//     SessionStatus surfaces a failed supervisor probe as an error instead
 	//     of Alive=false — a post-restart probe can no longer manufacture a
 	//     clean exit that completes a live coordinator.
-	SupervisorStreamSurface = 15
+	//   - v16: Session.Resize records each PTY size change in the append-only
+	//     <task>.sizes index (log-offset, cols, rows) beside the session log, and
+	//     the log is truncated together with it at session start
+	//     (add-session-width-index). A supervisor that predates this writes no
+	//     index and the replay falls back to a single width. No wire change.
+	SupervisorStreamSurface = 16
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -506,7 +511,7 @@ var SupervisorStreamPaths = []string{
 // message prints the computed digest to paste back here.
 const (
 	SpawnSurfaceDigest  = "983bcdf3c032e68533a51da7f2b3fc46e6cff8d85eceb426c94cc0d7f634d930"
-	StreamSurfaceDigest = "b9f594956c180bcbc961311b610ed96c9dbd53daeaba8855212b30c62959b495"
+	StreamSurfaceDigest = "95dd058d100f7e25ba981d95f13040b89363f4d53f545444cf2caad4683ca021"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,
