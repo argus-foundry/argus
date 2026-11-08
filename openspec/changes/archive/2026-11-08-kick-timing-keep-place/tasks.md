@@ -26,4 +26,4 @@
 
 - [x] 5.1 `BridgeConfig.KeepPlace`, DB key, Settings row, REST/apistore wire, tests
 - [x] 5.2 Gotchas (`hera-view.md`, `pty-terminal.md`, `bridge.md`, `ci-gates.md` if needed), knowledge index, README Reference
-- [ ] 5.3 `make pre-pr`, `/hera-review`, `/hera-review-test-adversary`, archive, PR
+- [x] 5.3 `make pre-pr`, `/hera-review`, `/hera-review-test-adversary`, archive, PR
