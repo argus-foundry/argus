@@ -282,3 +282,22 @@ func TestCreateAndStartReservesAndSpreadsBurst(t *testing.T) {
 	testutil.Equal(t, counts[""], 2)
 	testutil.Equal(t, counts["work"], 2)
 }
+
+func TestCreateAndStartFreshensUsageOnlyWhenTiersConfigured(t *testing.T) {
+	calls := 0
+	defer backendtier.SetFreshener(func() { calls++ })()
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo) // no tiers
+	_, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "nofresh", Project: "proj", Backend: "test"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, calls, 0)
+
+	repo2 := initGitRepo(t)
+	d2 := accountFileDB(t, repo2, "[backend_routing]\nstrategy=\"headroom\"\n[[backend_routing.tier]]\nbackend=\"test\"\nprobe=\"none\"\n")
+	_, _, err = CreateAndStart(d2, &fakeRunner{sessionPID: 1}, CreateInput{Name: "fresh", Project: "proj", Backend: "test"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, calls, 1)
+}

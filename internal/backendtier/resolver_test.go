@@ -14,7 +14,8 @@ func withCachedPct(t *testing.T, claude, codex func() (float64, bool)) {
 	t.Helper()
 	origClaude, origCodex := claudeCachedPct, codexCachedPct
 	claudeCachedPct, codexCachedPct = claude, codex
-	t.Cleanup(func() { claudeCachedPct, codexCachedPct = origClaude, origCodex })
+	ResetLastKnown()
+	t.Cleanup(func() { claudeCachedPct, codexCachedPct = origClaude, origCodex; ResetLastKnown() })
 }
 
 func known(pct float64) func() (float64, bool) {

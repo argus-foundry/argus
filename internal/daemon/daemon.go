@@ -64,7 +64,18 @@ const prDefaultAliasCap = 100
 // pause, remove it to resume; toggling never requires a daemon bounce.
 const prPollDisableFlag = "pr-poller.disabled"
 
-const usageBudgetProbeInterval = 30 * time.Minute
+// usageBudgetProbeInterval is the usage poll cadence. 5 min keeps routing
+// readings close to reality; a spawn additionally forces a fresh read
+// (freshenUsage) so a burst never routes on a stale snapshot.
+const usageBudgetProbeInterval = 5 * time.Minute
+
+const (
+	// usageFreshenMinGap debounces fresh-before-spawn probes: a burst of spawns
+	// shares one probe round instead of running one each.
+	usageFreshenMinGap = 30 * time.Second
+	// usageFreshenTimeout bounds the wait a spawn pays for a fresh read.
+	usageFreshenTimeout = 20 * time.Second
+)
 
 // heraReclaimSweepInterval is the cadence of the periodic hera-reclaim sweep
 // (runHeraReclaimSweeper) — the sibling of the once-per-boot sweep already run
@@ -72,7 +83,7 @@ const usageBudgetProbeInterval = 30 * time.Minute
 // cascade-nuke teardown (worktree/branch removal, row pruning), not a
 // user-facing responsiveness path, so it errs toward the long end of the
 // existing pollers' order of magnitude (prPollInterval's 60s tick vs.
-// usageBudgetProbeInterval's 30m) rather than the short end.
+// usageBudgetProbeInterval's 5m) rather than the short end.
 const heraReclaimSweepInterval = 30 * time.Minute
 
 // codexCostSweepInterval is the cadence of the Codex rollout cost sweeper
@@ -243,6 +254,10 @@ type Daemon struct {
 	// usageBudgetProbe is the external /usage probe seam. Defaults to
 	// usagebudget.Probe; tests swap it so daemon startup never shells out.
 	usageBudgetProbe func(context.Context) error
+
+	// freshenMu/lastFreshen serialize and debounce freshenUsage.
+	freshenMu   sync.Mutex
+	lastFreshen time.Time
 
 	// codexProbe is the external Codex rollout/PTY probe seam (add-tiered
 	// -backend-routing). Defaults to backendtier.Probe; tests swap it so
@@ -1081,6 +1096,30 @@ func (d *Daemon) runUsageBudgetPoller() {
 	}
 }
 
+// freshenUsage runs the Claude and Codex probes now (in parallel) so the spawn
+// that called it routes on current readings. Serialized, so concurrent spawns
+// wait for one round, and debounced by usageFreshenMinGap. Bounded by
+// usageFreshenTimeout; failures are fail-open (the cached/last-known readings
+// stand) and logged by the probes themselves.
+func (d *Daemon) freshenUsage() {
+	d.freshenMu.Lock()
+	defer d.freshenMu.Unlock()
+	if since := time.Since(d.lastFreshen); !d.lastFreshen.IsZero() && since < usageFreshenMinGap {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), usageFreshenTimeout)
+	defer cancel()
+	start := time.Now()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); d.probeUsageBudgetOnce(ctx) }()
+	go func() { defer wg.Done(); d.probeCodexOnce(ctx) }()
+	wg.Wait()
+	d.lastFreshen = time.Now()
+	uxlog.Log("[routing] fresh usage read before spawn took %s", time.Since(start).Round(time.Millisecond))
+	slog.Info("[routing] fresh usage read before spawn", "took", time.Since(start).Round(time.Millisecond))
+}
+
 func (d *Daemon) probeUsageBudgetOnce(ctx context.Context) {
 	if d.usageBudgetProbe == nil {
 		return
@@ -1387,6 +1426,11 @@ func (d *Daemon) Serve(sockPath string) error {
 	// Probe failures are fail-open inside internal/usagebudget; this loop only
 	// owns cadence and shutdown cancellation.
 	go d.runUsageBudgetPoller()
+
+	// Fresh read before spawn: tasks created in this process (hera, MCP, REST,
+	// schedules) probe usage first; see freshenUsage.
+	restoreFreshener := backendtier.SetFreshener(d.freshenUsage)
+	go func() { <-d.done; restoreFreshener() }()
 
 	// Periodic hera-reclaim sweep (fix-hera-nuke-cleanup Stage 6). Sibling of
 	// the once-per-boot sweep already run inside ReconcileOnStartup above —

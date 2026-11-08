@@ -294,3 +294,22 @@ When no account is pinned, the account SHALL be resolved in this order, first ma
 - **WHEN** a coordinator spawns while a Codex tier has the most headroom overall
 - **THEN** the coordinator uses a Claude-capable backend
 
+
+### Requirement: Spawns route on fresh readings, never unknown-to-first-tier
+
+Usage readings SHALL be polled every 5 minutes. Before resolving a spawn's backend/account with a tier list configured, task creation SHALL force a fresh usage read (debounced to one probe round per 30 seconds, bounded to 20 seconds, fail-open to cached readings on error); a TUI process SHALL obtain it through a daemon RPC and re-dial the daemon once if its connection is dead. When a tier's reading is unavailable, routing SHALL score its last known reading if younger than 6 hours instead of treating it as unknown, and SHALL log that it did. Only a tier never read, or last read more than 6 hours ago, is unknown, and unknown tiers SHALL rotate by fewest recent spawns rather than resolving to the first tier in list order every time.
+
+#### Scenario: Spawn probes first
+
+- **WHEN** a task is created with tiers configured
+- **THEN** a fresh usage read runs before the account is resolved, and a burst of spawns within 30 seconds shares one probe round
+
+#### Scenario: Probe failure keeps the last known reading
+
+- **WHEN** `default` was last read at 78% and `personal` at 8%, and both probes now fail
+- **THEN** the spawn routes to `personal`
+
+#### Scenario: Dead TUI connection
+
+- **WHEN** the TUI's daemon connection was lost to a daemon restart
+- **THEN** routing re-dials once and uses the daemon's readings instead of treating every tier as unknown

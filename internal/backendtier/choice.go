@@ -72,6 +72,13 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 		default:
 			continue
 		}
+		if tier.Probe == config.ProbeClaudeUsage || tier.Probe == config.ProbeCodexUsage {
+			if known {
+				rememberReading(string(tier.Probe), selected, pct)
+			} else if stale, _, ok := recallReading(string(tier.Probe), selected); ok {
+				pct, known = stale, true
+			}
+		}
 		if known {
 			adj, n := penalized(tier.Backend, selected, pct, readingAt)
 			if n > 0 {

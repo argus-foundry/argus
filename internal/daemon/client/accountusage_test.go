@@ -86,3 +86,24 @@ func TestCliRouteRedial(t *testing.T) {
 	_, err = live.RoutingUsageResilient()
 	testutil.NoError(t, err)
 }
+
+func TestCliRouteFresh(t *testing.T) {
+	fd := newFakeDaemon(t)
+	fd.mu.Lock()
+	fd.routing = backendtier.Usage{Claude: map[string]usagebudget.Reading{"personal": {Percentage: 9}}}
+	fd.mu.Unlock()
+	c := fakeClient(t, fd)
+	got, err := c.RoutingUsageFresh()
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Claude["personal"].Percentage, 9.0)
+
+	// After a bounce the resilient variant re-dials and still probes.
+	testutil.NoError(t, c.rpc.Close())
+	got, err = c.RoutingUsageFreshResilient()
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Claude["personal"].Percentage, 9.0)
+	fd.mu.Lock()
+	calls := fd.freshCalls
+	fd.mu.Unlock()
+	testutil.Equal(t, calls, 2)
+}

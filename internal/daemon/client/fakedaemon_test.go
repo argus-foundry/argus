@@ -36,6 +36,7 @@ type fakeDaemon struct {
 	usage        map[string]usagebudget.Reading // AccountUsage reply
 	usageMissing bool                           // simulate an older daemon
 	routing      backendtier.Usage              // RoutingUsage reply
+	freshCalls   int                            // RoutingUsageFresh invocations
 }
 
 func newFakeDaemon(t *testing.T) *fakeDaemon {
@@ -70,6 +71,17 @@ func (s *FakeRPCService) RoutingUsage(_ *daemon.Empty, resp *backendtier.Usage) 
 	if s.fd.usageMissing {
 		return errors.New("rpc: can't find method Daemon.RoutingUsage")
 	}
+	*resp = s.fd.routing
+	return nil
+}
+
+func (s *FakeRPCService) RoutingUsageFresh(_ *daemon.Empty, resp *backendtier.Usage) error {
+	s.fd.mu.Lock()
+	defer s.fd.mu.Unlock()
+	if s.fd.usageMissing {
+		return errors.New("rpc: can't find method Daemon.RoutingUsageFresh")
+	}
+	s.fd.freshCalls++
 	*resp = s.fd.routing
 	return nil
 }

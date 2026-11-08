@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drn/argus/internal/backendtier"
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/db"
 	"github.com/drn/argus/internal/model"
@@ -195,6 +196,10 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	explicitDefault := input.Account == config.DefaultAccountName
 	projectAccount := cfg.ProjectAccounts[input.Project]
 	unpinned := input.Account == "" && (projectAccount == "" || cfg.ValidateAccount(projectAccount) != nil)
+	if len(cfg.BackendRouting.Tiers) > 0 {
+		// Fresh read before spawn: never route on a snapshot older than the burst.
+		backendtier.FreshenBeforeSpawn()
+	}
 	choice := resolveTaskChoice(input.Backend, input.Project, cfg, input.Account, true)
 	backend := choice.Backend
 	if unpinned && choice.Account != "" && cfg.AccountSupports(choice.Account, cfg.Backends[backend].Command) {

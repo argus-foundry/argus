@@ -109,6 +109,7 @@ func penalized(backend, account string, pct float64, readingAt time.Time) (float
 // process-global, so tests that assert routing outcomes clear it first.
 func ResetSpawnLedger() {
 	ledger.mu.Lock()
-	defer ledger.mu.Unlock()
 	ledger.spawns = nil
+	ledger.mu.Unlock()
+	ResetLastKnown()
 }
