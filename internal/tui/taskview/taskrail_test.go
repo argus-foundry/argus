@@ -257,13 +257,12 @@ func rowRunes(row []tcell.SimCell) []rune {
 	return out
 }
 
-// The expanded-project reset in buildRows is shared with the classic list: an
-// expanded project that loses all active tasks falls back to the first project.
-func TestTaskListClassicExpandedProjectResetsWhenEmptied(t *testing.T) {
+// The emptied-project reset is rail-only: the classic list keeps its original
+// "expand the first project only when none is expanded" behavior.
+func TestTaskListClassicKeepsExpandedProjectWhenEmptied(t *testing.T) {
 	tl := NewTaskListView()
 	tl.SetTasks([]*model.Task{{ID: "a", Project: "A"}, {ID: "b", Project: "B"}})
 	tl.SetExpanded("B")
 	tl.SetTasks([]*model.Task{{ID: "a", Project: "A"}})
-	testutil.Equal(t, tl.expanded, "A")
-	testutil.Equal(t, tl.SelectedTask().ID, "a")
+	testutil.Equal(t, tl.expanded, "B")
 }

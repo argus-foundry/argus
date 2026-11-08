@@ -483,8 +483,10 @@ func (tl *TaskListView) buildRows() {
 	// Group active tasks by project
 	projectOrder, projectTasks := groupByProject(active)
 
-	// Keep an admitted project expanded, including after deletion or filtering.
-	if len(projectOrder) > 0 && len(projectTasks[tl.expanded]) == 0 {
+	// Classic list: auto-expand the first project only when none is expanded.
+	// Rail: keep an admitted project expanded, including after deletion or
+	// filtering, so the selection always lands on a task row.
+	if len(projectOrder) > 0 && (tl.expanded == "" || (tl.railMode && len(projectTasks[tl.expanded]) == 0)) {
 		tl.expanded = projectOrder[0]
 	}
 
