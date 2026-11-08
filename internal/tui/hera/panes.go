@@ -380,7 +380,7 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 		*pending = kickPending{taskID: bound, deadline: now.Add(KickDebounce)}
 	}
 	pending.cols = cols
-	if scrolledUp && p.keepPlaceOn() {
+	if scrolledUp && p.KeepPlaceOn() {
 		if !pending.held {
 			uxlog.Log("[hera-view] size-drift kick held task=%s: pane scrolled up — waiting for the bottom", bound)
 		}
@@ -421,7 +421,8 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 // Left nil (tests, remote mode), the keep-place hold is ON.
 func (p *HeraPage) SetKeepPlace(fn func() bool) { p.keepPlace = fn }
 
-func (p *HeraPage) keepPlaceOn() bool { return p.keepPlace == nil || p.keepPlace() }
+// KeepPlaceOn reports whether the keep-place scroll hold is active.
+func (p *HeraPage) KeepPlaceOn() bool { return p.keepPlace == nil || p.keepPlace() }
 
 // TaskScrolledUp reports whether a pane currently bound to taskID is scrolled
 // above the bottom of its scrollback. The App's kick decision re-reads it on

@@ -1063,6 +1063,7 @@ func (a *App) buildUI() {
 		// Size-drift kill+resume seam (see heraKickRerender) — same runner/db
 		// access as the resolver above, wired unconditionally alongside it.
 		a.heraPage.SetRerenderKicker(a.heraKickRerender)
+		a.heraPage.SetKeepPlace(func() bool { return a.db.Config().Bridge.KeepPlace })
 	}
 	// Focus-aware status bar: update heraFocus whenever the Hera focus machine
 	// changes state (keyboard or mouse). The statusbar renders different hint

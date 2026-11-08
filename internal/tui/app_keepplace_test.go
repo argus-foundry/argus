@@ -151,7 +151,8 @@ func (g getRunner) Get(string) agent.SessionHandle { return g.sess }
 // clear, then for a KickDebounce dwell, before re-running the decision.
 func TestKeepPlace_RetryDeferredKick(t *testing.T) {
 	r := newKeepPlaceRig(t, "retry")
-	base := &fakeKickSession{pid: 101, alive: true, idle: true, initCols: 80}
+	// The test pane is 80 columns wide, so a session started at 120 has drifted.
+	base := &fakeKickSession{pid: 101, alive: true, idle: true, initCols: 120}
 	dirty := dirtyKickSession{base, true}
 	readUI(t, r.app.tapp, func() {
 		r.app.runner = getRunner{Runner: agent.NewRunner(nil), sess: dirty}
@@ -174,10 +175,8 @@ func TestKeepPlace_RetryDeferredKick(t *testing.T) {
 		_, waiting := r.app.kickWait[r.task.ID]
 		testutil.True(t, waiting)
 
-		// After it: the entry is consumed and the decision re-runs (committed
-		// cols are seeded so the kick has drift to act on).
+		// After it: the entry is consumed and the decision re-runs.
 		r.app.kickWait[r.task.ID] = time.Now().Add(-2 * hera.KickDebounce)
-		r.app.committedCols[r.task.ID] = 0
 		r.app.retryDeferredKick(r.task.ID)
 		_, waiting = r.app.kickWait[r.task.ID]
 		testutil.False(t, waiting)
@@ -185,6 +184,21 @@ func TestKeepPlace_RetryDeferredKick(t *testing.T) {
 	waitRerender(t, func() bool {
 		return strings.Contains(r.logged(), "retrying deferred kick task="+r.task.ID)
 	})
+	// The decision genuinely re-ran and, with the pane at the bottom and the
+	// composer clear, kicked: a retry that only logged would leave this unset.
+	waitRerender(t, base.stopCalled.Load)
+}
+
+// The Hera page's scroll hold must follow the live bridge.keep_place setting;
+// an unwired page would keep holding with the setting off.
+func TestKeepPlace_HeraPageFollowsSetting(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := New(testDB(t), agent.NewRunner(nil), false)
+	testutil.True(t, app.heraPage.KeepPlaceOn())
+	testutil.NoError(t, app.db.SetConfigValue("bridge.keep_place", "false"))
+	testutil.False(t, app.heraPage.KeepPlaceOn())
+	testutil.NoError(t, app.db.SetConfigValue("bridge.keep_place", "true"))
+	testutil.True(t, app.heraPage.KeepPlaceOn())
 }
 
 func TestKeepPlace_RetryDropsEntryWhenSessionGone(t *testing.T) {
