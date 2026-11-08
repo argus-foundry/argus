@@ -141,7 +141,13 @@ func drawSettled(t *testing.T, tp *TerminalPane, screen tcell.SimulationScreen) 
 // asserts content continuity at every step (including across window seams),
 // that the cursor stays on the same content line when a window slides, that
 // the very first and last lines are reachable, and that memory plateaus.
-func TestReplayWindow_FullTraversal(t *testing.T) {
+func TestReplayWindow_FullTraversal(t *testing.T) { traverseLog(t, true) }
+
+// A DEAD session's replay is bounded to its final alt-screen exit and slides
+// within [0, exit) exactly like a live one — it used to be one fixed window.
+func TestReplayWindow_DeadSessionTraversal(t *testing.T) { traverseLog(t, false) }
+
+func traverseLog(t *testing.T, alive bool) {
 	oldBudget, oldChunk := replayScrollbackCellBudget, replayFeedChunk
 	replayScrollbackCellBudget, replayFeedChunk = 30_000, 4096
 	defer func() { replayScrollbackCellBudget, replayFeedChunk = oldBudget, oldChunk }()
@@ -154,6 +160,11 @@ func TestReplayWindow_FullTraversal(t *testing.T) {
 	for i := 0; i < total; i++ {
 		fmt.Fprintf(&b, "L%06d %s\r\n", i, strings.Repeat("w", 60))
 	}
+	if !alive {
+		// Teardown: leave the alternate screen, then the resume hint a real
+		// terminal would print. The dead replay must stop BEFORE the exit.
+		b.WriteString("\x1b[?1049lRESUMEHINT claude --resume abc\r\n")
+	}
 	testutil.NoError(t, os.WriteFile(agent.SessionLogPath(taskID), []byte(b.String()), 0o600))
 
 	tp := NewTerminalPane()
@@ -161,7 +172,7 @@ func TestReplayWindow_FullTraversal(t *testing.T) {
 	screen := tcell.NewSimulationScreen("UTF-8")
 	testutil.NoError(t, screen.Init())
 	screen.SetSize(cols+2, rows+2)
-	sess := &mockAdapter{alive: true, ptyCols: cols, ptyRows: rows}
+	sess := &mockAdapter{alive: alive, ptyCols: cols, ptyRows: rows}
 	tp.SetSession(sess)
 	tp.SetTaskID(taskID)
 	tp.Draw(screen)
@@ -185,6 +196,14 @@ func TestReplayWindow_FullTraversal(t *testing.T) {
 		return nums
 	}
 
+	if !alive {
+		drawSettled(t, tp, screen)
+		if strings.Contains(winScreenText(screen), "RESUMEHINT") {
+			t.Fatal("dead replay shows the post-exit resume hint")
+		}
+		first := checkWindow("dead initial")
+		testutil.Equal(t, first[len(first)-1] >= total-3, true)
+	}
 	tp.ScrollUp(step)
 	drawSettled(t, tp, screen)
 	top := checkWindow("first scroll")[0]
@@ -247,6 +266,9 @@ func TestReplayWindow_FullTraversal(t *testing.T) {
 	drawSettled(t, tp, screen)
 	nums := checkWindow("tail")
 	testutil.Equal(t, nums[len(nums)-1] >= total-3, true)
+	if strings.Contains(winScreenText(screen), "RESUMEHINT") {
+		t.Fatal("resume hint leaked into the replay tail")
+	}
 	if now := testHeapBytes(); now > heapAfterFirst && now-heapAfterFirst > 24<<20 {
 		t.Fatalf("heap grew %d bytes over the full round trip", now-heapAfterFirst)
 	}
@@ -316,4 +338,80 @@ func TestWindowRebuild_UnreadableLogKeepsWindow(t *testing.T) {
 	testutil.Equal(t, tp.replayRebuildPending, false)
 	testutil.Equal(t, tp.replayNoDataUntil.After(time.Now()), true)
 	testutil.Equal(t, tp.replayEmuSpare != nil, true) // acquired emulator parked, not leaked
+}
+
+func winScreenText(screen tcell.SimulationScreen) string {
+	w, h := screen.Size()
+	cells, _, _ := screen.GetContents()
+	var sb strings.Builder
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if c := cells[y*w+x]; len(c.Runes) > 0 {
+				sb.WriteRune(c.Runes[0])
+			} else {
+				sb.WriteByte(' ')
+			}
+		}
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
+func TestLastIndexInFile(t *testing.T) {
+	old := replayFeedChunk
+	replayFeedChunk = 16
+	defer func() { replayFeedChunk = old }()
+	seq := []byte("\x1b[?1049l")
+	build := func(parts ...string) *strings.Reader { return strings.NewReader(strings.Join(parts, "")) }
+	pad := func(n int) string { return strings.Repeat("z", n) }
+	cases := []struct {
+		name string
+		data string
+		want int64
+	}{
+		{"none", pad(100), -1},
+		{"at zero", string(seq) + pad(50), 0},
+		{"last of several", string(seq) + pad(40) + string(seq) + pad(7), 48},
+		{"straddles a block boundary", pad(10) + string(seq) + pad(30), 10},
+		{"straddles at every phase", pad(13) + string(seq) + pad(2), 13},
+		{"shorter than seq", "abc", -1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := build(c.data)
+			testutil.Equal(t, lastIndexInFile(r, int64(len(c.data)), seq), c.want)
+		})
+	}
+}
+
+func TestDeadLogEnd(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	testutil.NoError(t, os.MkdirAll(agent.SessionsDir(), 0o755))
+	write := func(task, data string) {
+		testutil.NoError(t, os.WriteFile(agent.SessionLogPath(task), []byte(data), 0o600))
+	}
+	exit := "\x1b[?1049l"
+	tp := NewTerminalPane()
+
+	write("exit", strings.Repeat("a", 500)+exit+"hint")
+	testutil.Equal(t, tp.deadLogEnd("exit"), int64(500))
+
+	write("none", strings.Repeat("a", 300))
+	testutil.Equal(t, tp.deadLogEnd("none"), int64(300))
+
+	write("zero", exit+"tail")
+	testutil.Equal(t, tp.deadLogEnd("zero"), int64(len(exit)+4)) // exit at 0: trimming would blank it
+
+	testutil.Equal(t, tp.deadLogEnd("missing"), int64(0))
+
+	t.Run("cached per (task, size) and invalidated by growth", func(t *testing.T) {
+		write("grow", strings.Repeat("a", 100)+exit)
+		testutil.Equal(t, tp.deadLogEnd("grow"), int64(100))
+		// Same size, different content: served from cache.
+		write("grow", strings.Repeat("b", 100)+exit)
+		testutil.Equal(t, tp.deadLogEnd("grow"), int64(100))
+		// Grown log (session restarted): rescanned.
+		write("grow", strings.Repeat("a", 100)+exit+strings.Repeat("c", 50)+exit)
+		testutil.Equal(t, tp.deadLogEnd("grow"), int64(150+len(exit)))
+	})
 }

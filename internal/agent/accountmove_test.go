@@ -257,6 +257,27 @@ func TestMoveTaskAccount_AutoPicksAnotherAccount(t *testing.T) {
 	testutil.Equal(t, res.To, "work")
 }
 
+func TestMoveTaskAccount_AutoLeavesTaskRoutable(t *testing.T) {
+	f := newMoveFixture(t, true)
+	stubAccountUsage(t, map[string]usagebudget.Reading{"default": {Percentage: 100}})
+	_, _, err := MoveTaskAccount(f.d, &moveRunner{}, AccountMoveInput{TaskID: "mv", Account: "auto"})
+	testutil.NoError(t, err)
+	got, _ := f.d.Get("mv")
+	testutil.Equal(t, got.Account, "work")
+	testutil.True(t, got.AccountRouted)
+}
+
+func TestMoveTaskAccount_ExplicitDefaultStaysPinned(t *testing.T) {
+	f := newMoveFixture(t, true)
+	f.task.Account = "work"
+	f.task.AccountRouted = true
+	testutil.NoError(t, f.d.Update(f.task))
+	_, _, err := MoveTaskAccount(f.d, &moveRunner{}, AccountMoveInput{TaskID: "mv", Account: "default"})
+	testutil.NoError(t, err)
+	got, _ := f.d.Get("mv")
+	testutil.False(t, got.AccountRouted)
+}
+
 func TestMoveTaskAccount_MoveBackKeepsNewerHistory(t *testing.T) {
 	f := newMoveFixture(t, true)
 	r := &moveRunner{sess: &moveSession{idle: true, alive: true}}

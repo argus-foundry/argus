@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"strings"
@@ -52,6 +53,12 @@ type replayCheckpoint struct {
 	lines int
 }
 
+// deadEndCache memoizes deadLogEnd for one (task, log size).
+type deadEndCache struct {
+	taskID    string
+	size, end int64
+}
+
 type replayKick int
 
 const (
@@ -86,8 +93,8 @@ type replayWindowReq struct {
 
 // replayKickLocked decides what rebuild, if any, the current scroll position
 // needs. Callers hold tp.mu.
-func (tp *TerminalPane) replayKickLocked(alive bool, cols, rows, offset, viewport int) replayKick {
-	if !alive || tp.replayEmu == nil || tp.replayEmuCols != cols || tp.replayEmuRows != rows || offset <= 0 {
+func (tp *TerminalPane) replayKickLocked(cols, rows, offset, viewport int) replayKick {
+	if tp.replayEmu == nil || tp.replayEmuCols != cols || tp.replayEmuRows != rows || offset <= 0 {
 		return kickNone
 	}
 	if tp.replayEmuFirstByte > 0 {
@@ -466,20 +473,101 @@ func (tp *TerminalPane) planWindowLocked(kick replayKick, cols, rows, offset, h 
 }
 
 // buildWindow feeds req's window into emu from the session log and returns the
-// result. ok=false when the log can't be read.
-func buildWindow(emu *xvt.SafeEmulator, taskID string, req *replayWindowReq, cols, rows int) (end, limit int64, cps []replayCheckpoint, ok bool) {
+// result. limit (0 = the log's end) bounds the window for a dead session whose
+// replay stops at its final alt-screen exit. fileSize is the on-disk size, lim
+// the effective upper bound the window may reach. ok=false when the log can't
+// be read or req.start is already at/after the bound.
+func buildWindow(emu *xvt.SafeEmulator, taskID string, req *replayWindowReq, cols, rows int, limit int64) (end, fileSize, lim int64, cps []replayCheckpoint, ok bool) {
 	f, err := os.Open(agent.SessionLogPath(taskID))
 	if err != nil {
-		return 0, 0, nil, false
+		return 0, 0, 0, nil, false
 	}
 	defer f.Close()
 	fi, err := f.Stat()
-	if err != nil || fi.Size() <= req.start {
-		return 0, 0, nil, false
+	if err != nil {
+		return 0, 0, 0, nil, false
 	}
-	limit = fi.Size()
-	end, cps = feedReplayChunksSized(emu, f, req.start, limit, 0, cols, rows, replayScrollbackCellBudget, req.start > 0, agent.LoadSessionSizes(taskID))
-	uxlog.Log("[terminalpane] replay window %s: start=%d end=%d of %d (forward=%v, lines=%d, cells=%d)",
-		taskID, req.start, end, limit, req.forward, emu.ScrollbackLen(), scrollbackCells(emu))
-	return end, limit, cps, true
+	fileSize = fi.Size()
+	lim = fileSize
+	if limit > 0 && limit < lim {
+		lim = limit
+	}
+	if lim <= req.start {
+		return 0, 0, 0, nil, false
+	}
+	end, cps = feedReplayChunksSized(emu, f, req.start, lim, 0, cols, rows, replayScrollbackCellBudget, req.start > 0, agent.LoadSessionSizes(taskID))
+	uxlog.Log("[terminalpane] replay window %s: start=%d end=%d of %d (file %d, forward=%v, lines=%d, cells=%d)",
+		taskID, req.start, end, lim, fileSize, req.forward, emu.ScrollbackLen(), scrollbackCells(emu))
+	return end, fileSize, lim, cps, true
+}
+
+// deadLogEnd returns the log offset a dead session's replay ends at: the start
+// of the LAST alt-screen exit (CSI ?1049l), so the replay freezes on the final
+// alt-screen frame instead of the post-teardown resume hint (see
+// truncateAtFinalAltScreenExit). It is the whole-log equivalent of that
+// function, computed by scanning backward from EOF and cached per
+// (task, log size) because a dead session's log no longer changes. No exit, or
+// an exit at offset 0 (trimming would discard everything), yields the log size.
+// Safe from any goroutine.
+func (tp *TerminalPane) deadLogEnd(taskID string) int64 {
+	fi, err := os.Stat(agent.SessionLogPath(taskID))
+	if err != nil || fi.Size() == 0 {
+		return 0
+	}
+	size := fi.Size()
+	tp.mu.Lock()
+	if c := tp.deadEnd; c.taskID == taskID && c.size == size {
+		tp.mu.Unlock()
+		return c.end
+	}
+	tp.mu.Unlock()
+
+	end := size
+	if f, err := os.Open(agent.SessionLogPath(taskID)); err == nil {
+		if idx := lastIndexInFile(f, size, altScreenExitSeq); idx > 0 {
+			end = idx
+		}
+		f.Close()
+	}
+	tp.mu.Lock()
+	tp.deadEnd = deadEndCache{taskID: taskID, size: size, end: end}
+	tp.mu.Unlock()
+	uxlog.Log("[terminalpane] dead-session replay bound for %s: end=%d of %d", taskID, end, size)
+	return end
+}
+
+// lastIndexInFile returns the offset of the last occurrence of seq in
+// f[0:size), or -1. It scans backward in replayFeedChunk-sized blocks that
+// overlap by len(seq)-1 so a match straddling a block boundary is found.
+func lastIndexInFile(f io.ReaderAt, size int64, seq []byte) int64 {
+	if len(seq) == 0 || size < int64(len(seq)) {
+		return -1
+	}
+	overlap := int64(len(seq) - 1)
+	block := int64(replayFeedChunk)
+	if block <= overlap {
+		block = overlap + 1
+	}
+	buf := make([]byte, block+overlap)
+	for hi := size; hi > 0; {
+		lo := hi - block
+		if lo < 0 {
+			lo = 0
+		}
+		readHi := hi + overlap
+		if readHi > size {
+			readHi = size
+		}
+		n, err := f.ReadAt(buf[:readHi-lo], lo)
+		if n > 0 {
+			if idx := bytes.LastIndex(buf[:n], seq); idx >= 0 {
+				return lo + int64(idx)
+			}
+		}
+		if err != nil && err != io.EOF {
+			return -1
+		}
+		hi = lo
+	}
+	return -1
 }

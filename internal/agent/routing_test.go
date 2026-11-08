@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -383,4 +384,44 @@ func TestCreateAndStartSpreadsBurstOnKnownReadings(t *testing.T) {
 		got = append(got, task.Account)
 	}
 	testutil.DeepEqual(t, got, []string{"work", "", "work", ""})
+}
+
+func TestCreateAndStartRollsBackReservationOnStartFailure(t *testing.T) {
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+	repo := initGitRepo(t)
+	extra := "[backend_routing]\nstrategy=\"headroom\"\n[[backend_routing.tier]]\nbackend=\"test\"\naccount=\"work\"\nprobe=\"none\"\n"
+	d := accountFileDB(t, repo, extra)
+	_, _, err := CreateAndStart(d, &fakeRunner{startErr: errors.New("boom")}, CreateInput{Name: "fail", Project: "proj", Backend: "test"})
+	testutil.Error(t, err)
+	testutil.Equal(t, backendtier.PendingSpawns("test", "work"), 0)
+
+	_, _, err = CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "ok", Project: "proj", Backend: "test"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, backendtier.PendingSpawns("test", "work"), 1)
+}
+
+func TestCreateAndStartRollsBackReservationOnAccountError(t *testing.T) {
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo, "[[backend_routing.tier]]\nbackend=\"test\"\naccount=\"work\"\nprobe=\"none\"\n")
+	_, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "bad", Project: "proj", Backend: "test", Account: "cx"})
+	testutil.Error(t, err)
+	testutil.Equal(t, backendtier.PendingSpawns("test", "work"), 0)
+	testutil.Equal(t, backendtier.PendingSpawns("test", "cx"), 0)
+}
+
+func TestCreateAndStartChargesAccountTheTaskRunsOn(t *testing.T) {
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+	repo := initGitRepo(t)
+	// The only tier names the codex-only account "cx", which cannot run the
+	// claude-command "test" backend, so the task falls back to default.
+	d := accountFileDB(t, repo, "[[backend_routing.tier]]\nbackend=\"test\"\naccount=\"cx\"\nprobe=\"none\"\n")
+	task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "fb", Project: "proj", Backend: "test"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, task.Account, "")
+	testutil.Equal(t, backendtier.PendingSpawns("test", "cx"), 0)
+	testutil.Equal(t, backendtier.PendingSpawns("test", "default"), 1)
 }

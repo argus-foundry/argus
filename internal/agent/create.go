@@ -165,6 +165,14 @@ func resolveTaskAccount(cfg config.Config, input CreateInput, backend string) (s
 	return account, nil
 }
 
+// accountLedgerName normalizes a stored account ("" = default) for comparison.
+func accountLedgerName(a string) string {
+	if a == "" {
+		return config.DefaultAccountName
+	}
+	return a
+}
+
 // CreateAndStart is the single entry point for fully-transactional task
 // creation. It performs, in order: resolve project config, create worktree,
 // run OnWorktreeCreated hook, persist task row, generate session ID, and
@@ -202,6 +210,17 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	}
 	choice := resolveTaskChoice(input.Backend, input.Project, cfg, input.Account, true)
 	backend := choice.Backend
+	// The burst ledger was charged to choice.Account; roll it back if the spawn
+	// fails, and move it if the task ends up running on a different account.
+	reservedAccount := choice.Account
+	reserved := choice.Backend != ""
+	spawned := false
+	defer func() {
+		if reserved && !spawned {
+			backendtier.ReleaseSpawn(backend, reservedAccount)
+			uxlog.Log("[routing] spawn failed; rolled back reservation backend=%q account=%q", backend, reservedAccount)
+		}
+	}()
 	if unpinned && choice.Account != "" && cfg.AccountSupports(choice.Account, cfg.Backends[backend].Command) {
 		input.Account = choice.Account
 	}
@@ -211,6 +230,12 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	}
 	if account == config.DefaultAccountName && !explicitDefault {
 		account = ""
+	}
+	if reserved && !strings.EqualFold(accountLedgerName(account), accountLedgerName(reservedAccount)) {
+		uxlog.Log("[routing] reservation moved backend=%q %q→%q (task runs on %q)", backend, reservedAccount, account, account)
+		backendtier.ReleaseSpawn(backend, reservedAccount)
+		backendtier.RecordSpawn(backend, account)
+		reservedAccount = account
 	}
 	routed := unpinned
 	mode := "pinned"
@@ -397,12 +422,15 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 		// retry; see the fix-ambiguous-start-timeout-unwind openspec change
 		// and its daemon-rpc.md gotcha for the disclosed follow-up.
 		if errors.Is(err, ErrStartAmbiguous) {
+			spawned = true // the daemon may still start it; keep the reservation
 			slog.Warn("CreateAndStart: start RPC ambiguous, preserving task/worktree", "id", taskID, "err", err)
 			return nil, nil, fmt.Errorf("start session: daemon has not confirmed yet — task and worktree preserved, retry manually once the daemon responds: %w", err)
 		}
 		unwind("runner.Start", err)
 		return nil, nil, fmt.Errorf("start session: %w", err)
 	}
+
+	spawned = true
 
 	// Step 6: flip to InProgress and record PID. Happens after AfterStart so
 	// startGen is already post-bumped by the time any tick can observe the

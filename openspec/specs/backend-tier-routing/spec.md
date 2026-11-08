@@ -299,7 +299,6 @@ When no account is pinned, the account SHALL be resolved in this order, first ma
 - **WHEN** a coordinator spawns while a Codex tier has the most headroom overall
 - **THEN** the coordinator uses a Claude-capable backend
 
-
 ### Requirement: Spawns route on fresh readings, never unknown-to-first-tier
 
 Usage readings SHALL be polled every 5 minutes. Before resolving a spawn's backend/account with a tier list configured, task creation SHALL force a fresh usage read (debounced to one probe round per 30 seconds, fail-open to cached readings on error); the spawn SHALL wait at most 5 seconds for it, even when a probe is queued behind an in-flight poll probe, and a round abandoned at the cap SHALL still count for the debounce; a TUI process SHALL obtain it through a daemon RPC and re-dial the daemon once if its connection is dead. When a tier's reading is unavailable, routing SHALL score its last known reading if it was last available to routing at most 6 hours ago, instead of treating it as unknown, and SHALL log that it did; each of that reading's quota windows is remembered with its own reset, and the recall scores the fullest window that has not reset yet. Only a tier never read, last available more than 6 hours ago, or whose remembered windows have all since reset is unknown, and unknown tiers SHALL rotate by fewest recent spawns rather than resolving to the first tier in list order every time.
@@ -333,3 +332,32 @@ Usage readings SHALL be polled every 5 minutes. Before resolving a spawn's backe
 
 - **WHEN** the TUI's daemon connection was lost to a daemon restart
 - **THEN** routing re-dials once and uses the daemon's readings instead of treating every tier as unknown
+
+### Requirement: Auto account moves leave the task routable
+
+Moving a task's account with the `auto` target SHALL store the picked account with `account_routed=true`, so workers and children of the task route rather than inherit the pick. A move to a named account or explicit `default` SHALL store `account_routed=false` (a pin). This applies to every move entry point (REST, MCP, TUI) because they share one implementation.
+
+#### Scenario: Auto move stays routable
+
+- **WHEN** a task is moved with target `auto` and the picker chooses `work`
+- **THEN** the task is stored on `work` with `account_routed=true`
+
+#### Scenario: Named move pins
+
+- **WHEN** a task is moved to `work` or to `default` by name
+- **THEN** the task is stored with `account_routed=false`
+
+### Requirement: Burst reservations track the spawn that made them
+
+A burst reservation SHALL be rolled back when the spawn fails after reserving (including account validation, worktree, persistence and session-start failures), except when the session start is ambiguous and may still complete. When the task runs on a different account than the routed choice (for example the routed account cannot run the backend and the task falls back to `default`), the reservation SHALL be charged to the account the task actually runs on. Rollbacks and moves SHALL be logged with a `[routing]` prefix.
+
+#### Scenario: Failed start releases the reservation
+
+- **WHEN** a routed spawn reserves `work` and the session start fails
+- **THEN** the ledger holds no reservation for `work`
+
+#### Scenario: Fallback charges the real account
+
+- **WHEN** routing picks an account that cannot run the backend and the task falls back to `default`
+- **THEN** the reservation is charged to `default`, not to the picked account
+
