@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/drn/argus/internal/config"
@@ -11,6 +12,14 @@ import (
 
 // migrate checks if the database has been initialized. If not, it seeds defaults.
 func (d *DB) migrate() error {
+	// Idempotent backlog cleanup for pre-coalescing system notes; a no-op once
+	// clean, so it runs every start rather than behind a schema version bump.
+	// Best-effort: a failed cleanup must never block opening the database.
+	if n, err := d.CollapseSystemNotices(); err != nil {
+		slog.Warn("db: collapse legacy system notices failed", "err", err)
+	} else if n > 0 {
+		slog.Info("db: collapsed legacy system notices", "removed", n)
+	}
 	var version int
 	err := d.conn.QueryRow(`SELECT version FROM schema_version LIMIT 1`).Scan(&version)
 	if err == nil {
