@@ -9,8 +9,8 @@ The optional web workspace is the client we converge on. This specification is t
 
 ### Client convergence
 
-- `native-workspace-rebuild` rebuilds the Mac client from this specification, covering the unified nested project rail, arbitrary task split, compact header, retained terminals, composer and attachments, measured context, archive context retention, Changes and split diffs, registered artifacts, full Settings breadth, live tools, attention and accessibility. Native credentials, notifications, Finder and window integration remain platform choices.
-- `tui-workspace-interaction-parity` evaluates the unified task hierarchy, arbitrary split, per-task draft and attachment composer, measured context, archive viewer retention, resize policy, surgical Ctrl+Z handling, attention rollups, live review updates and corresponding accessible controls for the TUI. Each difference receives an implementation or explicit terminal-specific disposition.
+- `native-workspace-rebuild` rebuilds the Mac client from this specification, covering the unified nested project rail, arbitrary task split, compact header, retained terminals, composer and attachments, provider suggestion hints, measured context, archive context retention, Changes and split diffs, registered artifacts, full Settings breadth, live tools, attention and accessibility. Native credentials, notifications, Finder and window integration remain platform choices.
+- `tui-workspace-interaction-parity` evaluates the unified task hierarchy, arbitrary split, per-task draft and attachment composer, provider suggestion hints, measured context, archive viewer retention, resize policy, surgical Ctrl+Z handling, attention rollups, live review updates and corresponding accessible controls for the TUI. Each difference receives an implementation or explicit terminal-specific disposition.
 - `legacy-spa-workspace-convergence` decides replacement or selective porting of workspace navigation/history, layout, composer and submission behavior, review controls, retained terminals, attention, settings navigation and accessibility into the original SPA. The original SPA remains available during this transition.
 - `workspace-plugin-settings` evaluates existing plugin forms and bridge-budget editing through supported operations.
 - `workspace-backend-management` evaluates existing master-only backend CRUD and permission defaults. Agents and accounts remain read-only in this change.
@@ -29,7 +29,7 @@ Browser drawers, DOM tooltips and their pixel geometry do not require literal na
 
 ### Backend contracts deferred
 
-The numbered references identify the existing 20-item backend tally. They record scope, not completed fixes.
+The numbered references retain the original backend tally identifiers and record remaining scope.
 
 1. `task-runtime-state-all-statuses` exposes live/idle state for every task with a session. Until then, activity outside in_progress is incomplete.
 2. `task-failure-state` exposes task failure independently of workflow status. Until then, only failed Hera roles support a failure indicator.
@@ -38,7 +38,6 @@ The numbered references identify the existing 20-item backend tally. They record
 5. `rest-account-management` defines authenticated account CRUD. Existing account selection does not imply account management.
 6. `safe-runtime-model-switch` defines model changes for running tasks. The composer model label remains read-only.
 7. `provider-context-usage-contract` exposes remaining provider identity, Codex quota/account details and per-session/turn telemetry beyond the measured Claude category endpoint. Unknown fields remain omitted and historical totals stay separate.
-8. `agent-prompt-suggestions` exposes verified provider suggestions before adding suggested composer text.
 9. `targeted-task-runtime-edits` defines safe backend, model, sandbox and prompt transitions. Generic full-record PUT is not a runtime editor.
 10. `cross-backend-account-move` defines account movement beyond Claude. Existing movement remains Claude-only.
 11. `durable-task-pr-association` defines manual PR links that coexist with the branch poller. This client reads existing PR links only.
@@ -327,7 +326,7 @@ Task rows SHALL display a single compact line with a status icon, task name and 
 - **AND** an idle task in review without cached PR state SHALL remain gray and labeled In review, since workflow status alone does not establish a PR
 
 ### Requirement: Conductor composer layout
-The optional workspace SHALL show a large rounded draft box with no placeholder text above a bottom bar. Backend/model identity SHALL be read-only; context, attach and send controls SHALL be aligned on the right. A file picker SHALL reuse the existing upload path and attachment constraints. Attachment instructions SHALL appear only for errors, while chips and existing paste/drop behavior remain.
+The optional workspace SHALL show a large rounded draft box with no default placeholder text, except a verified provider suggestion while the draft is empty under Empty composer suggestion. Backend/model identity SHALL be read-only; context, attach and send controls SHALL be aligned on the right. A file picker SHALL reuse the existing upload path and attachment constraints. Attachment instructions SHALL appear only for errors, while chips and existing paste/drop behavior remain.
 
 #### Scenario: Native composer actions
 - **WHEN** a task is selected and files are chosen with the attach button
@@ -1165,3 +1164,28 @@ Context measurement reads SHALL publish independently of auxiliary account, back
 - **WHEN** ten same-session context events arrive twenty milliseconds apart
 - **THEN** they coalesce into a bounded context-only refresh without blanking displayed categories
 - **AND** overlapping open and poll refreshes share in-flight reads
+
+### Requirement: Empty composer suggestion
+
+The workspace SHALL read the selected task's suggestion from GET /api/tasks/{id}/bridge and display it as a plain-text textarea placeholder only while the draft is empty and the bridge is live authority for that session and generation. Suggestions SHALL never replace typed or restored drafts, fill the draft automatically or send input. Unsupported providers and unavailable bridge state SHALL retain the normal empty hint.
+
+#### Scenario: Suggestion and draft preservation
+- **WHEN** a live suggestion arrives while a draft is empty or contains typed or restored text
+- **THEN** only the empty draft shows the suggestion, the draft value remains unchanged and nothing is sent
+
+#### Scenario: Suggestion invalidation
+- **WHEN** the provider clears the suggestion, a new turn starts, the session changes or bridge authority expires or becomes unavailable
+- **THEN** the suggestion placeholder clears and the normal empty hint returns
+
+#### Scenario: Refresh from events
+- **WHEN** task.suggestion_changed arrives for the selected task
+- **THEN** the client refreshes GET /bridge without reading suggestion text from the event or terminal
+
+#### Scenario: Selection and disconnect fencing
+- **WHEN** task selection, disconnect or a newer refresh supersedes an in-flight bridge read
+- **THEN** the prior hint clears synchronously, the request is canceled and late results cannot populate the current composer
+
+#### Scenario: Bounded authority checks and accessibility
+- **WHEN** a suggestion is visible in an empty draft and the page is visible
+- **THEN** authority checks run at approximately 15-second intervals with one request in flight and a bounded read deadline
+- **AND** no polling runs without a visible suggestion, event bursts are debounced, the existing textarea label remains and no aria-live region is added

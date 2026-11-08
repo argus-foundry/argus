@@ -3,6 +3,8 @@ import { $ } from '../shared/dom.js';
 import { log } from '../core/api.js';
 import { sendsMessage, insertPlaintext } from './composer-policy.js';
 import { ComposerAttachments } from './composer-attachments.js';
+import { ComposerBridge } from './composer-bridge.js';
+import { ComposerSuggestion } from './composer-suggestion.js';
 import { ComposerContext } from './composer-context.js';
 import { ComposerIdentity } from './composer-identity.js';
 import { attachmentMessage, imageFile } from './attachments/attachment-policy.js';
@@ -26,7 +28,9 @@ export class TaskComposer {
       if (sendsMessage(event, this.composing)) { event.preventDefault(); this.submit(); }
     });
     document.addEventListener('paste', event => this.pasteIntoComposer(event));
-    this.context = new ComposerContext(api);
+    this.bridge = api ? new ComposerBridge(api) : null;
+    this.suggestion = new ComposerSuggestion(this.bridge, $('draft'));
+    this.context = new ComposerContext(this.bridge);
     this.identity = new ComposerIdentity(api, () => { this.context.identity(this.identity.raw); this.render(); });
     this.attachments = new ComposerAttachments(api, this);
   }
@@ -55,8 +59,10 @@ export class TaskComposer {
     const restore=captureFocus($('composer'),()=>$('draft')?.disabled?$('tab-agent'):$('draft'),{neighbors:false});
     this.composing = false;
     this.task = task;
+    this.bridge?.invalidate();
     this.identity.select(task);
     this.context.select(task);
+    this.suggestion.select(task);
     this.attachments.message = ''; this.attachments.drop.clear();
     $('draft').value = task ? this.drafts.get(task.id) || '' : '';
     this.interactive = false;
@@ -84,7 +90,7 @@ export class TaskComposer {
     const error = task && this.errors.get(task.id);
     if ($('composer-status').classList.contains('error') !== !!error) $('composer-status').classList.toggle('error', !!error);
     text($('composer-status'), error || (pending ? 'Sending to this task. Your draft is kept until delivery succeeds.' : task && !this.interactive ? 'The session is not accepting messages. You can keep drafting.' : 'Enter to send · Shift+Enter for a new line'));
-    this.attachments.render();restore();
+    this.suggestion.render(); this.attachments.render();restore();
   }
   async submit() {
     const task = this.task, text = $('draft').value;
@@ -92,6 +98,7 @@ export class TaskComposer {
     if (!task || (!text.trim() && !attached.length) || !this.interactive || this.pending.has(task.id) || this.attachments.store.blocked(task.id)) return;
     const generation = this.generation;
     const fromComposer = [$('draft'), $('send')].includes(document.activeElement);
+    this.suggestion.newTurn();
     this.pending.add(task.id);
     this.errors.delete(task.id);
     this.drafts.set(task.id, text);
@@ -115,5 +122,5 @@ export class TaskComposer {
       if (generation === this.generation) { this.pending.delete(task.id); this.render(); }
     }
   }
-  clear() { this.generation++; this.composing = false; this.task = null; this.identity.select(null); this.context.select(null); this.drafts.clear(); this.pending.clear(); this.errors.clear(); $('draft').value = ''; this.interactive = false; this.attachments.clear(); this.render(); }
+  clear() { this.generation++; this.composing = false; this.task = null; this.bridge?.invalidate(); this.identity.select(null); this.context.select(null); this.suggestion.select(null); this.drafts.clear(); this.pending.clear(); this.errors.clear(); $('draft').value = ''; this.interactive = false; this.attachments.clear(); this.render(); }
 }
