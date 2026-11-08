@@ -223,7 +223,10 @@ func TestTaskRailSelectedRowMatchesHeraStyle(t *testing.T) {
 					gx = x
 				}
 			}
-			testutil.Equal(t, gx >= 0, true)
+			// Pin the gutter column: task rows are drawn one cell in from the
+			// list's inner edge, and the caret must stay left of the name.
+			testutil.Equal(t, gx, 1)
+			testutil.Equal(t, gx < i, true)
 			wantCaret := theme.StyleSelected
 			wantName := theme.StyleSelected
 			if dimmed {
@@ -252,4 +255,15 @@ func rowRunes(row []tcell.SimCell) []rune {
 		out = append(out, c.Runes[0])
 	}
 	return out
+}
+
+// The expanded-project reset in buildRows is shared with the classic list: an
+// expanded project that loses all active tasks falls back to the first project.
+func TestTaskListClassicExpandedProjectResetsWhenEmptied(t *testing.T) {
+	tl := NewTaskListView()
+	tl.SetTasks([]*model.Task{{ID: "a", Project: "A"}, {ID: "b", Project: "B"}})
+	tl.SetExpanded("B")
+	tl.SetTasks([]*model.Task{{ID: "a", Project: "A"}})
+	testutil.Equal(t, tl.expanded, "A")
+	testutil.Equal(t, tl.SelectedTask().ID, "a")
 }
