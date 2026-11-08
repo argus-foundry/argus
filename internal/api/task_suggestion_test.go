@@ -96,6 +96,31 @@ func suggestionOf(t *testing.T, s *Server, id string) any {
 	return v
 }
 
+func TestTaskSuggestion_ReplacementEmitsEvent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s, _, task := bridgeAuthorityServer(t)
+	sink := suggestionSink(t)
+	for _, text := range []string{"first prompt", "replacement prompt"} {
+		code, _ := postBridgeEvent(t, s, task.ID, suggestEv("suggestion.changed", map[string]any{"text": text}))
+		testutil.Equal(t, code, 200)
+	}
+	evs := sink.ofType(model.EventTypeTaskSuggestionChanged)
+	testutil.Equal(t, len(evs), 2)
+	if len(evs) != 2 {
+		t.FailNow()
+	}
+	var payload map[string]any
+	testutil.NoError(t, json.Unmarshal(evs[1].Payload, &payload))
+	testutil.Equal(t, evs[1].TaskID, task.ID)
+	testutil.Equal(t, len(payload), 3)
+	eqAny(t, payload["available"], true)
+	eqAny(t, payload["session_id"], "session")
+	suggestion := suggestionOf(t, s, task.ID).(map[string]any)
+	eqAny(t, suggestion["text"], "replacement prompt")
+	eqAny(t, payload["recorded_at"], suggestion["recorded_at"])
+	testutil.False(t, strings.Contains(string(evs[1].Payload), "prompt"))
+}
+
 func TestTaskSuggestion_ClearsAndInvalidates(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -116,11 +141,14 @@ func TestTaskSuggestion_ClearsAndInvalidates(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
 			s, r, task := bridgeAuthorityServer(t)
 			sink := suggestionSink(t)
 			code, _ := postBridgeEvent(t, s, task.ID, suggestEv("suggestion.changed", map[string]any{"text": "next"}))
 			testutil.Equal(t, code, 200)
+			clearStarted := time.Now()
 			tt.clear(t, s, r, task.ID)
+			clearFinished := time.Now()
 
 			testutil.True(t, suggestionOf(t, s, task.ID) == nil)
 			st, _ := s.bridgeHub.Get(task.ID)
@@ -130,8 +158,13 @@ func TestTaskSuggestion_ClearsAndInvalidates(t *testing.T) {
 			testutil.Equal(t, len(evs), 2)
 			var payload map[string]any
 			testutil.NoError(t, json.Unmarshal(evs[1].Payload, &payload))
+			testutil.Equal(t, evs[1].TaskID, task.ID)
+			eqAny(t, payload["session_id"], "session")
 			eqAny(t, payload["available"], false)
 			testutil.Equal(t, len(payload), 3)
+			recordedAt, err := time.Parse(time.RFC3339Nano, payload["recorded_at"].(string))
+			testutil.NoError(t, err)
+			testutil.True(t, !recordedAt.Before(clearStarted) && !recordedAt.After(clearFinished))
 		})
 	}
 }
@@ -195,6 +228,60 @@ func TestTaskSuggestion_LostAuthorityReadsNull(t *testing.T) {
 	testutil.Equal(t, code, 200)
 	eqAny(t, body["live"], false)
 	testutil.True(t, body["suggestion"] == nil)
+}
+
+func TestTaskSuggestion_WireUnicode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want string
+	}{
+		{"invalid UTF-8", "\"a\xffb\"", ""},
+		{"lone high surrogate", `"a\ud800b"`, ""},
+		{"lone low surrogate", `"a\udc00b"`, ""},
+		{"reversed surrogates", `"\udc00\ud800"`, ""},
+		{"high surrogate before escape", `"\ud800\n"`, ""},
+		{"high surrogate before BMP", `"\ud800\u0061"`, ""},
+		{"double high surrogate", `"\ud800\ud800"`, ""},
+		{"surrogate pair", `"a\ud83d\ude80b"`, "a🚀b"},
+		{"first surrogate pair", `"\ud800\udc00"`, "\U00010000"},
+		{"first surrogate pair raw", "\"\U00010000\"", "\U00010000"},
+		{"last surrogate pair", `"\udbff\udfff"`, "\U0010ffff"},
+		{"last surrogate pair raw", "\"\U0010ffff\"", "\U0010ffff"},
+		{"emoji modifier upper low surrogate", `"\ud83c\udfff"`, "\U0001f3ff"},
+		{"emoji modifier raw", "\"\U0001f3ff\"", "\U0001f3ff"},
+		{"literal replacement rune", `"a�b"`, "a�b"},
+		{"escaped replacement rune", `"a\ufffdb"`, "a�b"},
+		{"escaped backslash", `"a\\ud800b"`, `a\ud800b`},
+		{"escaped slash", `"a\/b"`, "a/b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			s, _, task := bridgeAuthorityServer(t)
+			sink := suggestionSink(t)
+			code, _ := postBridgeEvent(t, s, task.ID, suggestEv("suggestion.changed", map[string]any{"text": "valid"}))
+			testutil.Equal(t, code, 200)
+			before, ok := s.bridgeHub.Get(task.ID)
+			testutil.True(t, ok)
+			body := `{"events":[{"type":"turn.start","generation":"launch","session_id":"session","boot":"b","seq":1000000},` +
+				`{"type":"suggestion.changed","generation":"launch","session_id":"session","boot":"b","seq":1000001,"text":` + tc.text + `}]}`
+			w := httptest.NewRecorder()
+			s.routes().ServeHTTP(w, authedReq("POST", "/api/tasks/"+task.ID+"/bridge/events", body))
+			after, ok := s.bridgeHub.Get(task.ID)
+			testutil.True(t, ok)
+			if tc.want == "" {
+				testutil.Equal(t, w.Code, 400)
+				testutil.DeepEqual(t, after, before)
+				testutil.Equal(t, len(sink.ofType(model.EventTypeTaskSuggestionChanged)), 1)
+				_, got := getBridge(t, s, task.ID)
+				eqAny(t, got["suggestion"].(map[string]any)["text"], "valid")
+			} else {
+				testutil.Equal(t, w.Code, 200)
+				testutil.Equal(t, after.Suggestion.Text, tc.want)
+				testutil.True(t, after.Busy)
+			}
+		})
+	}
 }
 
 func TestTaskSuggestion_BoundariesAndBatch(t *testing.T) {

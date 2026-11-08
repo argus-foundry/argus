@@ -5,6 +5,7 @@ state + comparator) and the `internal/api` bridge endpoints.
 
 ## Source of truth
 
+- **Validate the original JSON Unicode before applying bridge events.** `encoding/json` replaces malformed UTF-8 and unpaired surrogate escapes with U+FFFD, so decoded suggestion validation cannot detect them; reject the whole batch before a neighboring lifecycle event clears valid state.
 - **A transcript id is not a process identity.** BuildCmd exports a new `ARGUS_BRIDGE_GENERATION` per launch; the mod echoes it, and supervisor SessionInfo relays it. Resume can reuse a transcript id; recycle/rerender/restart must stay scraper-sourced until that launch's mod reports. A failed generation RPC returns empty, never the cached old generation.
 - **A heartbeat must reconstruct busy and dialog state after a daemon bounce.** Event freshness alone cannot make an empty Hub's default `busy=false` authoritative while an existing turn is running; heartbeat snapshots carry busy, needs-input, kind and confidence. Retired boot ids cannot regain authority through late buffered posts.
 - **Corroborate only uncertain permission input, never the whole live bridge verdict.** Resolve pending-or-running (or missing-confidence) permission input as bridge AND raw scraper input; bridge busy remains authoritative, and quiescence uses the resolved input. Keep raw scraper state apart from published verdicts to avoid feeding an earlier exact dialog back into a later permission; source logs change only with real liveness/authority changes.

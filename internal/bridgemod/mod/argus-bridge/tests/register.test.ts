@@ -417,3 +417,16 @@ test('the engine suggestion is reported once shown; plugin-origin and hidden one
   expect(sent[0]?.text).toBe('Run the focused tests')
   expect(sent[0]?.session_id).toBe('sess-1')
 })
+
+test('suggestion hooks preserve shown and hidden engine results', async ($, on) => {
+  const w = world(on, { task: 'T1' })
+  let shown = true
+  on('prompt.suggest', () => ({ isShown: shown }))
+  await $.session.start(START)
+  const visible = await $.prompt.suggest({ text: 'next prompt', origin: { kind: 'suggestion' } })
+  expect(visible).toEqual({ isShown: true })
+  shown = false
+  const hidden = await $.prompt.suggest({ text: 'hidden prompt', origin: { kind: 'suggestion' } })
+  expect(hidden).toEqual({ isShown: false })
+  await w.delivered()
+})

@@ -43,6 +43,12 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body", err)
 		return
 	}
+	if !validBridgeUnicode(body) {
+		uxlog.Log("[bridge] invalid Unicode task=%s", id)
+		slog.Warn("[bridge] invalid Unicode", "task", task.ID) //nolint:gosec // G706: task.ID is DB-derived; slog encodes attributes.
+		writeErr(w, http.StatusBadRequest, "invalid Unicode in JSON body", nil)
+		return
+	}
 	for _, ev := range batch.Events {
 		if err := ev.ValidateSuggestion(); err != nil {
 			uxlog.Log("[bridge] invalid suggestion task=%s: %v", id, err)
