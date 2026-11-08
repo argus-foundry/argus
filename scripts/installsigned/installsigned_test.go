@@ -4,6 +4,7 @@
 package installsigned
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,6 +56,7 @@ type result struct {
 type fixture struct {
 	dir, dest, logp, pidp string
 	cmd                   *exec.Cmd
+	out                   bytes.Buffer // script stdout+stderr (signal test only)
 }
 
 func newFixture(t *testing.T, env ...string) *fixture {
@@ -112,11 +114,14 @@ func (f *fixture) codesignAlive() bool {
 }
 
 // waitFor polls cond until it holds or the (generous, load-tolerant) deadline passes.
-func waitFor(t *testing.T, what string, cond func() bool) {
+func waitFor(t *testing.T, what string, cond func() bool, diag ...func()) {
 	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
 	for !cond() {
 		if time.Now().After(deadline) {
+			for _, d := range diag {
+				d()
+			}
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -131,6 +136,7 @@ func run(t *testing.T, env ...string) result {
 	el := time.Since(start)
 	b, _ := os.ReadFile(f.dest)
 	lg, _ := os.ReadFile(f.logp)
+	t.Logf("script output: %q", out)
 	f.assertNoTemp(t) // temp file cleaned on every path
 	waitFor(t, "codesign process to be gone after script exit", func() bool { return !f.codesignAlive() })
 	return result{string(out), runErr, string(b), string(lg), el}
@@ -143,8 +149,15 @@ func TestSignalCleansUp(t *testing.T) {
 		t.Skip("spawns shell + sleeps")
 	}
 	f := newFixture(t, "FAKE_CODESIGN=hang", "ARGUS_CODESIGN_TIMEOUT=600")
+	f.cmd.Stdout, f.cmd.Stderr = &f.out, &f.out
 	testutil.NoError(t, f.cmd.Start())
-	waitFor(t, "codesign to start", f.codesignAlive)
+	// On timeout, kill the script and surface what it printed, so a hang before
+	// codesign is self-diagnosing (CI previously showed only the bare timeout).
+	waitFor(t, "codesign to start", f.codesignAlive, func() {
+		_ = f.cmd.Process.Kill()
+		_ = f.cmd.Wait()
+		t.Logf("script output before timeout: %q", f.out.String())
+	})
 	testutil.NoError(t, f.cmd.Process.Signal(syscall.SIGTERM))
 	done := make(chan error, 1)
 	go func() { done <- f.cmd.Wait() }()
@@ -173,6 +186,9 @@ func TestInstallSigned(t *testing.T) {
 		// codesign must target the temp file, never the live destination.
 		testutil.Contains(t, r.log, "argus.new.")
 		testutil.Contains(t, r.out, "signed")
+		// Instant stubs must never wait out their (60s) timeout: that stall was the
+		// CI hang (watchdog outliving the command => 62s + bogus exit 124).
+		testutil.Equal(t, r.elapsed < 30*time.Second, true)
 	})
 	t.Run("locked keychain fails fast, live binary untouched", func(t *testing.T) {
 		r := run(t, "FAKE_KEYCHAIN=locked")
