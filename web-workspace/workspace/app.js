@@ -42,7 +42,7 @@ const taskTabs = new Map();
 const taskLinks = new TaskHeaderLinks(api);
 const railActions = new RailActions(api, async () => { navigation.pinned = railActions.pinned; await refreshTasks(); }, () => { navigation.pinned=railActions.pinned; navigation.render(); });
 const heraKanban = new HeraKanban(api,()=>navigation.render(),()=>refreshTasks());
-const sessions = new ClaudeSessions(api, async (task, status) => { if(status !== 'unchanged')tools.invalidateIdentity(task.id); if (currentTask?.id === task.id && status !== 'unchanged') terminal?.reconnect(); await refreshTasks();if(taskSettings?.active&&taskSettings.task?.id===task.id)await taskSettings.load(); });
+const sessions = new ClaudeSessions(api, async (task, status) => { if(status !== 'unchanged')tools.invalidateIdentity(task.id); if (currentTask?.id === task.id && status !== 'unchanged') { composer.context.invalidate(); terminal?.reconnect(); } await refreshTasks();if(taskSettings?.active&&taskSettings.task?.id===task.id)await taskSettings.load(); });
 const composer = new TaskComposer((text, task, options) => terminal.send(text, task, options), api);
 const stagedClipboard = new TaskClipboard(api, $('terminal-actions'), () => {if($('draft').disabled){const filter=$(navigation.filter==='archive'?'archive-filter':'active-filter');(filter.getClientRects().length?filter:$('toggle-nav')).focus({preventScroll:true});}else composer.focus();});
 function showAgent(){const visible=!taskSettings?.active&&!settings?.active&&!newTask?.active&&!$('agent-panel').hidden;terminal?.show(visible);split?.setVisible(visible);}
@@ -225,6 +225,7 @@ taskSettings = new TaskSettingsView(api, {
   restore: () => historyState.restore(), archive: task => archive.open(task), created: createdTask, switchSession:task=>sessions.open(task),
   changed: async () => {
     tools.invalidateIdentity(taskSettings.task?.id);
+    if (currentTask?.id === taskSettings.task?.id) composer.context.invalidate();
     await refreshTasks();
   },
 });
@@ -252,7 +253,7 @@ $('fit-session').addEventListener('click', async () => {
   catch (error) { notice(`Could not fit the session. ${error.message}`); }
 });
 window.addEventListener('pagehide', () => { attention?.destroy(); sessions.clear(); taskLinks.clear(); stagedClipboard.select(null); railActions.clear(); heraKanban.clear(); rosterWatch?.stop(); split?.clear(); newTask.clear(); refreshAbort?.abort(); terminal?.destroy(); composer.clear(); review.clear(); tools.clear(); archive.clear(); taskDelete.clear(); taskBatch.clear(); settings.clear(); taskSettings.dismiss(); });
-events = new WorkspaceEvents(api, { refresh: refreshTasks, event: event => {
+events = new WorkspaceEvents(api, { refresh: refreshTasks, context: event => composer.context.event(event), event: event => {
   if (!connection.connected) return;
   tools.event(event);
   if(event.type==='task.deleted')removeDeletedTask({id:event.task_id});

@@ -22,6 +22,27 @@ function measuredContext(bridge, meta) {
   return {used,limit:null,percent:pct,recorded:true,at:stamp(size?.updated_at || fill?.updated_at)};
 }
 
+function taskContext(task, measurement, now) {
+  if (!measurement?.context || measurement.task_id !== task.id ||
+      task.session_id && measurement.session_id !== task.session_id) return null;
+  const value = measurement.context;
+  const categories = ['messages','memory','tools','agents','skills','system','compaction']
+    .filter(key => count(value.categories?.[key]) !== null)
+    .map(key => [key[0].toUpperCase()+key.slice(1),value.categories[key]]);
+  const at = stamp(measurement.measured_at);
+  return {used:count(value.used_tokens),limit:count(value.window_tokens) > 0 ? value.window_tokens : null,
+    percent:percent(value.percent),categories,recorded:measurement.live !== true,at,age:measurementAge(at,now)};
+}
+
+export function measurementAge(at, now = Date.now()) {
+  if (!at) return null;
+  const seconds = Math.max(0,Math.floor((now-Date.parse(at))/1000));
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds/60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds/3600)}h ago`;
+  return `${Math.floor(seconds/86400)}d ago`;
+}
+
 function accountWindows(account, now) {
   const windows = [];
   for (const [key, reset, label] of [['five_hour_pct','five_hour_resets_at','5h limit'],['weekly_pct','weekly_resets_at','7d limit']]) {
@@ -61,5 +82,5 @@ export function contextSnapshot(task, data = {}, now = Date.now()) {
   if (kind === 'claude') for (const window of bridgeWindows(data.bridge,now)) {
     if (!windows.some(item => item.label === window.label)) windows.push(window);
   }
-  return {context:measuredContext(data.bridge,data.meta),kind,windows,identity};
+  return {context:Object.hasOwn(data,'measurement') ? taskContext(task,data.measurement,now) : measuredContext(data.bridge,data.meta),kind,windows,identity};
 }

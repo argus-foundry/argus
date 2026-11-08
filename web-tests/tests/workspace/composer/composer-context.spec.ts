@@ -3,7 +3,7 @@ import { resetServer } from '../../_helpers';
 import assert from 'node:assert/strict';
 let browser;
 const cleanup = [];
-async function fixture() {
+async function fixture(contextRoute = 'missing') {
   const page = await browser.newPage({
     viewport: {
       width: 900,
@@ -19,7 +19,13 @@ async function fixture() {
   const raw={id:'a',backend:'custom-claude',model:'opus',account:'work'};
   const reads={raw,bridge:{live:true,context:{tokens:421200,window:1000000,percent:42.12},last_measure_at:new Date().toISOString()},meta:{entries:[]},accounts:[{name:'work',label:'Work',plan:'Team',org:'Fixture organization',email:'fixture@example.invalid',usage:{five_hour_pct:8,five_hour_resets_at:new Date(Date.now()+3600000).toISOString(),weekly_pct:83,weekly_resets_at:new Date(Date.now()+86400000).toISOString()}}],backends:{backends:[{name:'custom-claude',kind:'claude'},{name:'custom-codex',kind:'codex'}]},hera:{orchestrators:[{roles:[{live:true,task_id:'a',tokens_input:234300,tokens_cache_read:232100,tokens_output:33}]}]}};
   window.paths=[];window.held=[];window.block=false;window.reads=reads;
-  const api={json:async(path,options)=>{window.paths.push(path);const key=path.split('/').pop().split('?')[0];if(window.block) return new Promise(resolve=>window.held.push(()=>resolve(reads[key])));return reads[key];}};
+  window.contextMode=${JSON.stringify(contextRoute)};
+  window.measurement={task_id:'a',session_id:'s1',provider:'anthropic',source:'bridge',live:true,measured_at:new Date(Date.now()-7200000).toISOString(),context:{used_tokens:5000,window_tokens:200000,percent:2.5,categories:{messages:3000,memory:null,tools:0,agents:100,skills:100,system:1800,compaction:null}}};
+  const api={request:async(path,options)=>{
+    window.paths.push(path);
+    const response=window.contextMode==='missing'?new Response('',{status:404}):window.contextMode==='html'?new Response('<!doctype html><html>old daemon</html>',{headers:{'content-type':'text/html'}}):window.contextMode==='error'?new Response('',{status:500}):Response.json(window.measurement);
+    if(window.block)return new Promise(resolve=>window.held.push(()=>resolve(response)));return response;
+  },json:async(path,options)=>{window.paths.push(path);const key=path.split('/').pop().split('?')[0];if(window.block) return new Promise(resolve=>window.held.push(()=>resolve(reads[key])));return reads[key];}};
   window.composer=new TaskComposer(async()=>{},api);window.composer.select({id:'a',backend:'custom-claude'});window.composer.setInteractive(true);window.composer.focus();window.ready=true;
   </script>`;
   await page.route('**/context-fixture', route => route.fulfill({
@@ -149,4 +155,96 @@ test.afterEach(async ({
   browser
 }) => {
   await Promise.all(browser.contexts().map(context => context.close()));
+});
+
+test('measured categories keep zeros, omit unknowns and show old measurement age without staleness', async () => {
+  const page = await fixture('supported');
+  await page.locator('#context-toggle').click();
+  const panel=page.locator('#composer-context');
+  await page.waitForFunction(()=>document.querySelector('#composer-context').textContent.includes('Messages'));
+  const rows=await panel.locator('.context-row').allTextContents();
+  for(const row of ['Messages3,000 tokens','Tools0 tokens','Agents100 tokens','Skills100 tokens','System1,800 tokens'])assert.ok(rows.includes(row),row);
+  const content=await panel.textContent();
+  assert.ok(content.includes('Measured 2h ago'));assert.equal(content.includes('Last recorded'),false);
+  for(const name of ['Memory','Compaction','Role token totals'])assert.equal(content.includes(name),false);
+  await page.setViewportSize({width:320,height:600});
+  await page.waitForFunction(()=>{const r=document.querySelector('#composer-context').getBoundingClientRect();return r.x>=0&&r.right<=innerWidth&&r.y>=0&&r.bottom<=innerHeight;});
+  await page.screenshot({path:'.context/context-categories.png'});
+});
+for(const mode of ['missing','html'])test(`old daemon ${mode} quietly retains bridge behavior`,async()=>{
+  const page=await fixture(mode);await page.locator('#context-toggle').click();
+  await page.waitForFunction(()=>document.querySelector('#composer-context').textContent.includes('421,200 / 1,000,000'));
+  assert.equal(await page.locator('#composer-context').getByText('Messages',{exact:true}).count(),0);
+});
+test('supported empty and failed context never revive older bridge readings',async()=>{
+  const page=await fixture('supported');
+  await page.evaluate(async()=>{window.measurement.context=null;window.measurement.live=false;await window.composer.context.refresh();});
+  assert.equal(await page.locator('.context-ring').getAttribute('data-known'),'false');
+  await page.evaluate(async()=>{window.contextMode='error';await window.composer.context.refresh();});
+  assert.equal(await page.locator('.context-ring').getAttribute('data-known'),'false');
+});
+test('same-task session event rejects held reads and fetches replacement categories',async()=>{
+  const page=await fixture('supported');
+  await page.evaluate(async()=>{
+    window.block=true;window.composer.context.refresh();const old=window.held.splice(0);
+    window.block=false;window.measurement={...window.measurement,session_id:'s2',context:{...window.measurement.context,categories:{messages:9876}}};
+    window.composer.context.event({type:'task.context_changed',task_id:'a',payload:{session_id:'s2'}});
+    old.forEach(resolve=>resolve());
+  });
+  await page.locator('#context-toggle').click();
+  await page.waitForFunction(()=>document.querySelector('#composer-context').textContent.includes('9,876 tokens'));
+  assert.equal(await page.locator('#composer-context').textContent().then(text=>text.includes('3,000 tokens')),false);
+});
+
+test('overflowing context region supports keyboard scroll, refresh and Escape',async()=>{
+  const page=await fixture('supported');
+  await page.setViewportSize({width:320,height:600});
+  await page.evaluate(async()=>{
+    window.measurement.context.categories={messages:3000,memory:10,tools:0,agents:100,skills:100,system:1800,compaction:20};
+    await window.composer.context.refresh();
+  });
+  const trigger=page.locator('#context-toggle'),panel=page.getByRole('region',{name:'Context and usage',exact:true});
+  await trigger.focus();await page.keyboard.press('Enter');
+  await page.locator('#composer-context:popover-open').waitFor();
+  assert.ok(await panel.evaluate(element=>element.scrollHeight>element.clientHeight),'Fixture must overflow');
+  assert.equal(await panel.evaluate(element=>document.activeElement===element),true,'Keyboard opening must focus the scroll region');
+  await page.keyboard.press('PageDown');
+  await page.waitForFunction(()=>document.querySelector('#composer-context').scrollTop>0);
+  await page.keyboard.press('End');
+  await page.waitForFunction(()=>{const panel=document.querySelector('#composer-context');return panel.scrollTop>0&&panel.scrollTop+panel.clientHeight>=panel.scrollHeight;});
+  const scroll=await panel.evaluate(element=>element.scrollTop);
+  await page.evaluate(async()=>{window.measurement.context.categories.tools=123;await window.composer.context.refresh();});
+  assert.equal(await panel.evaluate(element=>document.activeElement===element),true);
+  assert.ok(Math.abs(await panel.evaluate(element=>element.scrollTop)-scroll)<=1,'Refresh must retain the scroll position');
+  await page.keyboard.press('Escape');
+  assert.equal(await panel.isVisible(),false);
+  assert.equal(await trigger.evaluate(element=>document.activeElement===element),true);
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.locator('#attach-files').evaluate(element=>document.activeElement===element),true,'The nonmodal panel must allow normal Tab navigation');
+});
+
+test('context event bursts publish independently of a held account refresh',async()=>{
+  const page=await fixture('supported');await page.clock.install();
+  await page.locator('#context-toggle').click();
+  await page.waitForFunction(()=>!window.composer.context.contextRead&&!window.composer.context.usageRead);
+  await page.evaluate(()=>{
+    const api=window.composer.context.api,read=api.json.bind(api);
+    window.heldAccounts=[];
+    api.json=(path,options)=>path==='/api/accounts'?new Promise(resolve=>window.heldAccounts.push(()=>resolve(window.reads.accounts))):read(path,options);
+    window.composer.context.refresh();
+  });
+  await page.waitForFunction(()=>window.heldAccounts.length===1&&!window.composer.context.contextRead);
+  const before=await page.evaluate(()=>window.paths.length);
+  await page.evaluate(()=>{window.measurement.context.categories.messages=9876;});
+  for(let i=0;i<10;i++){
+    await page.evaluate(()=>window.composer.context.event({type:'task.context_changed',task_id:'a',payload:{session_id:'s1'}}));
+    assert.ok((await page.locator('#composer-context').textContent()).includes('3,000 tokens'),'Valid categories stay displayed during refetch');
+    await page.clock.runFor(20);
+  }
+  await page.clock.runFor(101);
+  await page.waitForFunction(()=>document.querySelector('#composer-context').textContent.includes('9,876 tokens'));
+  assert.deepEqual(await page.evaluate(before=>window.paths.slice(before),before),['/api/tasks/a/context']);
+  assert.equal(await page.evaluate(()=>window.heldAccounts.length),1);
+  await page.evaluate(()=>window.heldAccounts.splice(0).forEach(release=>release()));
 });

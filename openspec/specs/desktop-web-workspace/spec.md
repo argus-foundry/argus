@@ -37,7 +37,7 @@ The numbered references identify the existing 20-item backend tally. They record
 4. `preserve-project-diligence-profile` preserves profile assignment on REST project edits. The current editor warns about the inherited loss.
 5. `rest-account-management` defines authenticated account CRUD. Existing account selection does not imply account management.
 6. `safe-runtime-model-switch` defines model changes for running tasks. The composer model label remains read-only.
-7. `provider-context-usage-contract` exposes scoped context categories, provider identity, Codex quota/account details and per-session/turn telemetry. Unknown fields remain omitted and historical totals stay separate.
+7. `provider-context-usage-contract` exposes remaining provider identity, Codex quota/account details and per-session/turn telemetry beyond the measured Claude category endpoint. Unknown fields remain omitted and historical totals stay separate.
 8. `agent-prompt-suggestions` exposes verified provider suggestions before adding suggested composer text.
 9. `targeted-task-runtime-edits` defines safe backend, model, sandbox and prompt transitions. Generic full-record PUT is not a runtime editor.
 10. `cross-backend-account-move` defines account movement beyond Claude. Existing movement remains Claude-only.
@@ -335,16 +335,16 @@ The optional workspace SHALL show a large rounded draft box with no placeholder 
 - **AND** native paste, dictation, IME and per-task drafts preserve existing behavior
 
 ### Requirement: Measured context popover
-The context control SHALL open an accessible dismissible popover, show only sourced existing REST values with their correct scope, and indicate unavailable context without fabricating a fill or percent. The popover SHALL retain Claude plan, email, organization and usage limit windows when available, while Account and historical role token totals SHALL remain in task Info and SHALL NOT appear in the composer popover. The composer SHALL NOT fetch the Hera roster for context readings. Unsupported backend fields SHALL be omitted. Switching tasks and disconnecting SHALL cancel reads and reject late results.
+The context control SHALL open an accessible dismissible popover, show only sourced existing REST values with their correct scope, and indicate unavailable context without fabricating a fill or percent. The popover SHALL retain Claude plan, email, organization and usage limit windows when available, while Account and historical role token totals SHALL remain in task Info and SHALL NOT appear in the composer popover. The composer SHALL NOT fetch the Hera roster for context readings. Unsupported backend fields SHALL be omitted. Switching tasks and disconnecting SHALL cancel reads and reject late results. Bridge and Hera metadata context readings SHALL be fallback only when the task context route is unsupported.
 
 #### Scenario: Backend measurements are partial
 - **WHEN** REST exposes account usage but no context-window measurement
 - **THEN** usage is shown only for the task's matching account and backend
 - **AND** the context ring remains unknown rather than displaying quota as context
-#### Scenario: Live bridge and recorded stamp availability
-- **WHEN** the selected task has a live bridge context with a measured percent or measured tokens/window
+#### Scenario: Legacy bridge and recorded stamp availability
+- **WHEN** the daemon lacks the task context route and the selected task has a live bridge context with a measured percent or measured tokens/window
 - **THEN** the ring displays that context percentage and the popover shows available token/window values
-- **WHEN** only Hera metadata is present
+- **WHEN** that older daemon has only Hera metadata
 - **THEN** the popover labels the values as recorded, shows record time and pairs percent with tokens only for equal timestamps
 - **AND** a configured recycle budget and historical role token totals never supply an inferred window
 
@@ -1123,3 +1123,45 @@ Large-batch confirmation SHALL have a fixed height, a one-line effects summary, 
 - **THEN** selection SHALL exit with a short notice and focus SHALL reach a surviving row or current filter
 - **AND** partial failures SHALL stay selected with an alert naming task failures and their reasons; not-started tasks SHALL remain available for explicit continuation
 - **AND** deletion of the open task SHALL select a sensible neighbor without discarding other drafts
+
+### Requirement: Task context categories in the composer
+Theia SHALL prefer GET /api/tasks/{id}/context over bridge/meta measurements when the route is supported. It SHALL render measured category token counts for messages, memory, tools, agents, skills, system and compaction. Null categories SHALL be absent, never coerced to zero. Historical role totals SHALL NOT supply categories. A supported response with context=null SHALL show unavailable context, without substituting older bridge/meta data.
+
+#### Scenario: Measured counts and age
+- **WHEN** the task context response contains category measurements
+- **THEN** the popover shows each measured count, including measured zero, and omits null categories
+- **AND** measured_at appears as measurement age and a timestamp
+- **AND** live=false is labeled last recorded while live=true remains measured regardless of age
+
+#### Scenario: Old daemon
+- **WHEN** the context route returns 404 or HTML through a successful GET fallback
+- **THEN** the composer quietly retains its existing bridge/meta context behavior
+- **AND** other context read failures clear optional measurements rather than substituting old data
+
+#### Scenario: Context refresh and selection fencing
+- **WHEN** the selected task emits task.context_changed on the daemon event stream
+- **THEN** Theia refetches its context, also retaining popover-open and foreground 15 second polling refreshes
+- **AND** task/session switches and disconnect cancel or ignore superseded reads and clear prior measurements
+- **AND** events buffered during a task snapshot also invalidate selected context
+
+### Requirement: Keyboard scrolling of context details
+The named context and usage popover SHALL be keyboard focusable and receive focus on opening without trapping Tab navigation. Native keyboard scrolling SHALL reach overflowing content at narrow viewport sizes. Refresh SHALL preserve panel focus and scroll position, and Escape SHALL dismiss the popover and return focus to its trigger.
+
+#### Scenario: Overflow at a narrow viewport
+- **WHEN** context categories, quotas and account details overflow at 320 by 600 pixels
+- **THEN** keyboard opening focuses the named scroll region
+- **AND** PageDown scrolls it and End reaches its lower content
+- **AND** refreshing category values retains panel focus and scroll
+- **AND** Escape closes the popover and focuses the trigger
+
+### Requirement: Independent coalesced context refresh
+Context measurement reads SHALL publish independently of auxiliary account, backend and bridge usage reads. Same-session context events SHALL retain valid displayed measurements while refetching, debounce bursts and share overlapping reads. Context events SHALL NOT refetch auxiliary usage. Auxiliary data SHALL retain its existing foreground cadence and explicit-open refresh. Legacy Hera metadata SHALL be fetched only for unsupported context routes. Task or session replacement SHALL still cancel old reads and clear prior measurements immediately. Supported empty or failed context reads SHALL still clear measurements. Shared reads SHALL have a bounded deadline so a hung request cannot prevent later refreshes.
+
+#### Scenario: Slow accounts
+- **WHEN** an account request is still pending and a context result arrives
+- **THEN** the context categories publish immediately without awaiting the account read
+
+#### Scenario: Burst and overlapping triggers
+- **WHEN** ten same-session context events arrive twenty milliseconds apart
+- **THEN** they coalesce into a bounded context-only refresh without blanking displayed categories
+- **AND** overlapping open and poll refreshes share in-flight reads
