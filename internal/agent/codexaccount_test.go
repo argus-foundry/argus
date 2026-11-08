@@ -298,9 +298,9 @@ func seedCodexStateDB(t *testing.T, dir, cwd, id string) {
 	conn, err := sql.Open("sqlite", filepath.Join(dir, codexStateDB))
 	testutil.NoError(t, err)
 	defer func() { _ = conn.Close() }()
-	_, err = conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER)`)
+	_, err = conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER, source TEXT NOT NULL DEFAULT 'cli')`)
 	testutil.NoError(t, err)
-	_, err = conn.Exec(`INSERT INTO threads VALUES (?, ?, 1)`, id, cwd)
+	_, err = conn.Exec(`INSERT INTO threads (id,cwd,updated_at) VALUES (?, ?, 1)`, id, cwd)
 	testutil.NoError(t, err)
 }
 

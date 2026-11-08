@@ -128,6 +128,7 @@ type idleWatcherState struct {
 	seenBefore    map[string]bool      // taskID -> have we observed this session on a prior tick?
 	pushedAt      map[string]time.Time // taskID -> wall-clock time we last fired an idle push
 	needsInputNow map[string]bool      // taskID -> last seen blocked-on-user-input?
+	contextAt     map[string]time.Time // taskID -> measured_at last announced via task.context_changed
 	// contentFP carries each prompt-showing session's content fingerprint from
 	// the previous tick (BUG-032). A session whose meaningful output is
 	// unchanged across ticks while it shows the prompt signature is blocked
@@ -589,6 +590,8 @@ func (s *Server) idleWatcherTick(state *idleWatcherState) {
 			idleSet[id] = bridge.Quiescent(bridge.Resolve(st, state.scraperNeeds[id]))
 		}
 	}
+
+	s.emitReaderContextChanges(state, running)
 
 	for _, id := range running {
 		seen[id] = true

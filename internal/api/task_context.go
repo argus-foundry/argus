@@ -54,6 +54,10 @@ func (s *Server) handleTaskContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := TaskContext{TaskID: id, Provider: contextProviderAnthropic, Source: contextSourceBridge}
+	if fam, cfg := s.contextFamily(task); fam.ContextReader != nil {
+		s.serveReaderContext(w, task, fam, cfg, out)
+		return
+	}
 	now := time.Now()
 	st, live := s.bridgeState(id, now)
 	if !live && s.bridgeHub != nil {

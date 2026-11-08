@@ -1729,7 +1729,7 @@ func TestCaptureCodexSessionID_Success(t *testing.T) {
 	}
 	t.Cleanup(func() { conn.Close() })
 
-	if _, err := conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER)`); err != nil {
+	if _, err := conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER, source TEXT NOT NULL DEFAULT 'cli')`); err != nil {
 		t.Fatal(err)
 	}
 	wt := "/wt/path"
@@ -1756,7 +1756,7 @@ func TestCaptureCodexSessionID_CustomSQLiteHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { testutil.NoError(t, conn.Close()) })
-	if _, err := conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER)`); err != nil {
+	if _, err := conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER, source TEXT NOT NULL DEFAULT 'cli')`); err != nil {
 		t.Fatal(err)
 	}
 	want := "019cff60-2cfb-7ed3-bca6-15ef06587c99"
@@ -1785,7 +1785,7 @@ func TestCaptureCodexSessionID_BadFormat(t *testing.T) {
 	}
 	t.Cleanup(func() { conn.Close() })
 
-	if _, err := conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER)`); err != nil {
+	if _, err := conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER, source TEXT NOT NULL DEFAULT 'cli')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.Exec(`INSERT INTO threads (id, cwd, updated_at) VALUES (?, ?, ?)`, "not-a-uuid", "/wt", 100); err != nil {
@@ -1816,7 +1816,7 @@ func TestCaptureCodexSessionID_NoMatch(t *testing.T) {
 	}
 	t.Cleanup(func() { conn.Close() })
 
-	if _, err := conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER)`); err != nil {
+	if _, err := conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER, source TEXT NOT NULL DEFAULT 'cli')`); err != nil {
 		t.Fatal(err)
 	}
 	conn.Close()
@@ -2004,7 +2004,7 @@ func TestCaptureSessionID_DispatchesByBackend(t *testing.T) {
 		conn, err := sql.Open("sqlite", filepath.Join(codexDir, codexStateDB))
 		testutil.NoError(t, err)
 		t.Cleanup(func() { conn.Close() })
-		_, err = conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER)`)
+		_, err = conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER, source TEXT NOT NULL DEFAULT 'cli')`)
 		testutil.NoError(t, err)
 		wt := "/codex-dispatch-wt"
 		seeded := "01923456-789a-7bcd-9def-0123456789ab"
