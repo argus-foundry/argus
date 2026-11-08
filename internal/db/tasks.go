@@ -582,6 +582,7 @@ func (d *DB) Delete(id string) error {
 		); err != nil {
 			return err
 		}
+		clearDeadRoleMailAfterEnd(tx, heraEndReasonTaskDeleted)
 		return nil
 	})
 }
