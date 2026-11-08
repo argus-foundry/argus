@@ -55,7 +55,6 @@ The numbered references retain the original backend tally identifiers and record
 Named backend follow-up `reject-archived-task-input` makes daemon handleWriteInput reject archived tasks. The frontend does not fence input during a pure event-stream outage without an archive envelope.
 
 The broader existing backend exclusions also have names. `conditional-pty-input` checks input against process identity at the PTY owner. `identified-git-outcomes` defines comparison identity and explicit missing-worktree, git-failure and stale-snapshot outcomes. `task-shell-and-source-browsing` defines independent task shells and bounded repository content reads. `provider-conversation-feeds` defines verified provider conversation rendering. `durable-review-feedback` ties feedback to comparison identity and external review synchronization. None is implemented here. Client request fencing, attachment readiness observation and settled terminal fitting do not strengthen these backend guarantees.
-
 ## Requirements
 ### Requirement: Standalone additive workspace
 The workspace SHALL run as a separate loopback frontend using existing authenticated REST and SSE operations through its development proxy. It SHALL NOT require Go, daemon, existing static shell, REST contract, schema or backend behavior changes. The existing web UI SHALL remain available and unchanged.
@@ -1255,3 +1254,23 @@ The workspace SHALL read the selected task's suggestion from GET /api/tasks/{id}
 - **WHEN** a suggestion is visible in an empty draft and the page is visible
 - **THEN** authority checks run at approximately 15-second intervals with one request in flight and a bounded read deadline
 - **AND** no polling runs without a visible suggestion, event bursts are debounced, the existing textarea label remains and no aria-live region is added
+
+### Requirement: Web terminal keeps the user's place and draft across a resize kick
+
+The web terminal SHALL report `scrolled_up` (the xterm viewport is above the bottom) and `composer_dirty` (a typed-since-submit fold over bytes sent to the agent: printable and pasted content set it; Enter, Ctrl+C and Ctrl+U clear it; escape sequences, other control bytes and DEL are ignored) on every resize POST. When the response carries `deferred`, the client SHALL re-POST the current size when the viewport returns to the bottom and every 10 seconds, and SHALL stop when the deferral clears, a kick lands, the selected task changes, the page is hidden or the terminal view is torn down. The shell asset change SHALL bump the service worker version.
+
+#### Scenario: Reading history during a resize
+
+- **WHEN** the user is scrolled up and the pane width changes past the margin
+- **THEN** the session is not restarted until the viewport is back at the bottom
+
+#### Scenario: Typed but unsent text
+
+- **WHEN** the user has typed in the terminal and not pressed Enter
+- **THEN** the resize is deferred and retried until the text is submitted or cleared
+
+#### Scenario: View goes away
+
+- **WHEN** the user switches task or the page is hidden while a deferral is pending
+- **THEN** the retry timer is cancelled and no further resize is posted
+
