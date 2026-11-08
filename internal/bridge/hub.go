@@ -21,6 +21,11 @@ type State struct {
 	Model         string    `json:"model,omitempty"`
 	Cwd           string    `json:"cwd,omitempty"`
 
+	// HasDraft is true while the mod reports unsent composer text. Only the
+	// boolean is ever serialized; the text lives in Hub.drafts so REST and the
+	// Tailscale-reachable API never expose what the user is typing.
+	HasDraft bool `json:"has_draft,omitempty"`
+
 	Busy           bool   `json:"busy"`
 	NeedsInput     bool   `json:"needs_input"`
 	NeedsInputKind string `json:"needs_input_kind,omitempty"`
@@ -47,11 +52,30 @@ type Hub struct {
 	mu      sync.Mutex
 	states  map[string]*State
 	retired map[string]map[string]bool
+	drafts  map[string]*draftRec
+}
+
+// DraftMaxAge bounds how long a reported draft stays eligible to be handed to
+// a resumed session: a kick restart takes seconds, so a minutes-old draft is
+// no longer "what the user was typing when the kill happened".
+const DraftMaxAge = 2 * time.Minute
+
+type draftRec struct {
+	boot   string
+	text   string
+	cursor int
+	at     time.Time
+}
+
+// Draft is a pending composer draft handed to a resumed session.
+type Draft struct {
+	Text   string
+	Cursor int
 }
 
 // NewHub returns an empty Hub.
 func NewHub() *Hub {
-	return &Hub{states: make(map[string]*State), retired: make(map[string]map[string]bool)}
+	return &Hub{states: make(map[string]*State), retired: make(map[string]map[string]bool), drafts: make(map[string]*draftRec)}
 }
 
 // Ingest applies events (in order) to the task's state at receive time now and
@@ -83,6 +107,9 @@ func (h *Hub) Ingest(taskID string, events []Event, now time.Time) int {
 			// or restarted mid-turn session must not come back live still busy.
 			st.Busy, st.LastTransitionAt = false, now
 			st.NeedsInput, st.NeedsInputKind, st.NeedsInputConfidence = false, "", ""
+			// The new process starts with an empty box; the previous boot's draft
+			// stays in h.drafts for TakeDraft.
+			st.HasDraft = false
 		}
 		if st.Events > 0 && ev.Boot != st.Boot {
 			if h.retired[taskID] == nil {
@@ -91,6 +118,9 @@ func (h *Hub) Ingest(taskID string, events []Event, now time.Time) int {
 			h.retired[taskID][st.Boot] = true
 		}
 		apply(st, ev, now)
+		if ev.Type == TypeDraft {
+			h.recordDraft(taskID, ev, now)
+		}
 		accepted++
 	}
 	return accepted
@@ -102,6 +132,7 @@ func apply(st *State, ev Event, now time.Time) {
 		st.LastMeasureAt = time.Time{}
 		st.Busy, st.NeedsInput, st.NeedsInputKind = false, false, ""
 		st.NeedsInputConfidence = ""
+		st.HasDraft = false
 	}
 	if ev.Generation != st.Generation {
 		st.SessionID = ""
@@ -156,6 +187,8 @@ func apply(st *State, ev Event, now time.Time) {
 			st.CostUSD = &v
 		}
 		st.RateLimits = append([]RateLimit(nil), ev.RateLimits...)
+	case TypeDraft:
+		st.HasDraft = ev.Text != ""
 	case TypeHeartbeat:
 		if ev.Busy != nil {
 			st.Busy = *ev.Busy
@@ -217,7 +250,37 @@ func (h *Hub) Prune(now time.Time) int {
 			n++
 		}
 	}
+	for id, d := range h.drafts {
+		if now.Sub(d.at) > pruneAfter {
+			delete(h.drafts, id)
+		}
+	}
 	return n
+}
+
+// recordDraft stores (or, for an empty box, clears) the task's latest draft.
+// The caller holds h.mu.
+func (h *Hub) recordDraft(taskID string, ev Event, now time.Time) {
+	if ev.Text == "" {
+		delete(h.drafts, taskID)
+		return
+	}
+	h.drafts[taskID] = &draftRec{boot: ev.Boot, text: ev.Text, cursor: ev.Cursor, at: now}
+}
+
+// TakeDraft hands the task's pending draft to a freshly booted mod, once. It
+// returns a draft only when it is non-empty, was reported by a DIFFERENT boot
+// than the asker (a process's own typing is never handed back to it), and is
+// younger than DraftMaxAge. Taking removes it.
+func (h *Hub) TakeDraft(taskID, boot string, now time.Time) (Draft, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	d := h.drafts[taskID]
+	if d == nil || d.text == "" || d.boot == boot || now.Sub(d.at) > DraftMaxAge {
+		return Draft{}, false
+	}
+	delete(h.drafts, taskID)
+	return Draft{Text: d.text, Cursor: d.cursor}, true
 }
 
 func copyState(st *State) State {

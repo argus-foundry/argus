@@ -10,15 +10,18 @@ import (
 )
 
 func TestBridgeUISettingsOverlay(t *testing.T) {
-	for _, key := range []string{"band", "toasts"} {
+	for _, key := range []string{"band", "toasts", "keep_place"} {
 		t.Run(key, func(t *testing.T) {
 			dir := t.TempDir()
 			d, err := Open(filepath.Join(dir, "data.sql"))
 			testutil.NoError(t, err)
 			t.Cleanup(func() { _ = d.Close() })
 			value := func() bool {
-				if key == "band" {
+				switch key {
+				case "band":
 					return d.Config().Bridge.Band
+				case "keep_place":
+					return d.Config().Bridge.KeepPlace
 				}
 				return d.Config().Bridge.Toasts
 			}

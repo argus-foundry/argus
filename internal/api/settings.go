@@ -30,10 +30,11 @@ type settingsResponse struct {
 }
 
 type bridgeSettings struct {
-	Enabled  bool `json:"enabled"`
-	Delivery bool `json:"delivery"`
-	Band     bool `json:"band"`
-	Toasts   bool `json:"toasts"`
+	Enabled   bool `json:"enabled"`
+	Delivery  bool `json:"delivery"`
+	Band      bool `json:"band"`
+	Toasts    bool `json:"toasts"`
+	KeepPlace bool `json:"keep_place"`
 }
 
 type sandboxJSON struct {
@@ -63,7 +64,7 @@ type defaultsJSON struct {
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	cfg := s.db.Config()
 	writeJSON(w, http.StatusOK, settingsResponse{
-		Bridge: bridgeSettings{Enabled: cfg.Bridge.Enabled, Delivery: cfg.Bridge.Delivery, Band: cfg.Bridge.Band, Toasts: cfg.Bridge.Toasts},
+		Bridge: bridgeSettings{Enabled: cfg.Bridge.Enabled, Delivery: cfg.Bridge.Delivery, Band: cfg.Bridge.Band, Toasts: cfg.Bridge.Toasts, KeepPlace: cfg.Bridge.KeepPlace},
 		Sandbox: sandboxJSON{
 			Enabled:          cfg.Sandbox.Enabled,
 			Available:        isSandboxAvailable(),
@@ -99,10 +100,11 @@ type updateSettingsReq struct {
 }
 
 type bridgeUpdate struct {
-	Enabled  *bool `json:"enabled,omitempty"`
-	Delivery *bool `json:"delivery,omitempty"`
-	Band     *bool `json:"band,omitempty"`
-	Toasts   *bool `json:"toasts,omitempty"`
+	Enabled   *bool `json:"enabled,omitempty"`
+	Delivery  *bool `json:"delivery,omitempty"`
+	Band      *bool `json:"band,omitempty"`
+	Toasts    *bool `json:"toasts,omitempty"`
+	KeepPlace *bool `json:"keep_place,omitempty"`
 }
 
 // Each *Update mirrors the corresponding response section but with pointer
@@ -184,6 +186,9 @@ func buildSettingsUpdates(req updateSettingsReq) map[string]string {
 		}
 		if b.Toasts != nil {
 			out["bridge.toasts"] = boolStr(*b.Toasts)
+		}
+		if b.KeepPlace != nil {
+			out["bridge.keep_place"] = boolStr(*b.KeepPlace)
 		}
 	}
 	if s := req.Sandbox; s != nil {

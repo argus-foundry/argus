@@ -466,6 +466,9 @@ func (s *Store) SetConfigValue(key, value string) error {
 	case "bridge.toasts":
 		b := value == "true"
 		upd.Bridge = &apiclient.BridgeUpdate{Toasts: &b}
+	case "bridge.keep_place":
+		b := value == "true"
+		upd.Bridge = &apiclient.BridgeUpdate{KeepPlace: &b}
 	case "sandbox.enabled":
 		b := value == "true"
 		upd.Sandbox = &apiclient.SandboxUpdate{Enabled: &b}
@@ -502,6 +505,7 @@ func (s *Store) SetConfigValue(key, value string) error {
 		s.cachedConfig.Bridge.Delivery = response.Bridge.Delivery
 		s.cachedConfig.Bridge.Band = response.Bridge.Band
 		s.cachedConfig.Bridge.Toasts = response.Bridge.Toasts
+		s.cachedConfig.Bridge.KeepPlace = response.Bridge.KeepPlace
 		s.configMu.Unlock()
 	}
 	return err

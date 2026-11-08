@@ -14,6 +14,8 @@ const (
 	TypeCleared      = "cleared"
 	TypeMeasure      = "session.measure"
 	TypeHeartbeat    = "heartbeat"
+	// TypeDraft reports the prompt-box draft (kick-timing-keep-place).
+	TypeDraft = "draft"
 )
 
 // Confidence values carried by a needs_input event. A question/plan dialog is
@@ -78,6 +80,11 @@ type Event struct {
 	Tool       string `json:"tool,omitempty"`
 	ToolUseID  string `json:"tool_use_id,omitempty"`
 
+	// draft: the prompt-box text and the cursor offset into it (UTF-16 code
+	// units, as the engine reports). Empty text means an empty box.
+	Text   string `json:"text,omitempty"`
+	Cursor int    `json:"cursor,omitempty"`
+
 	// session.measure
 	Context    *Context    `json:"context,omitempty"`
 	CostUSD    *float64    `json:"cost_usd,omitempty"`
@@ -92,7 +99,7 @@ type Batch struct {
 func knownType(t string) bool {
 	switch t {
 	case TypeSessionStart, TypeTurnStart, TypeTurnComplete, TypeNeedsInput,
-		TypeCleared, TypeMeasure, TypeHeartbeat:
+		TypeCleared, TypeMeasure, TypeHeartbeat, TypeDraft:
 		return true
 	}
 	return false

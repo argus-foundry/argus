@@ -195,6 +195,11 @@ type BridgeConfig struct {
 	// Band and Toasts control visible mod UI and are read live by sessions.
 	Band   bool `toml:"band"`
 	Toasts bool `toml:"toasts"`
+	// KeepPlace (default true) gates the kick-timing-keep-place behavior: the
+	// size-drift kick is deferred while the pane is scrolled up or the composer
+	// holds unsent text, and the mod saves/restores the Claude composer draft
+	// across a kick. false restores the pre-feature kick timing. Read live.
+	KeepPlace bool `toml:"keep_place"`
 }
 
 // DevStackConfig controls the daemon's finished-task dev-stack sweeper
@@ -558,7 +563,7 @@ func DefaultConfig() Config {
 			WorkerContextWindow:       1000000,
 		},
 		DevStack: DevStackConfig{StopFinished: true},
-		Bridge:   BridgeConfig{Enabled: true, Delivery: true, Band: true, Toasts: true},
+		Bridge:   BridgeConfig{Enabled: true, Delivery: true, Band: true, Toasts: true, KeepPlace: true},
 		Supervisor: SupervisorConfig{
 			// Default ON as of P4: agents run under the out-of-process
 			// session-supervisor so the daemon can bounce without interrupting
