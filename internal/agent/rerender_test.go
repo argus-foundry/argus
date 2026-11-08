@@ -178,3 +178,27 @@ func TestMarginExceedsRerenderThreshold(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldKickRerenderKeepPlace(t *testing.T) {
+	tests := []struct {
+		name                 string
+		idle, needsInput     bool
+		scrolledUp, hasDraft bool
+		panelCols            int
+		want                 RerenderDecision
+	}{
+		{"clear bottom empty composer kicks", true, false, false, false, 120, RerenderKick},
+		{"scrolled up defers", true, false, true, false, 120, RerenderDeferScrolled},
+		{"unsent draft defers", true, false, false, true, 120, RerenderDeferDraft},
+		{"draft outranks scrolled", true, false, true, true, 120, RerenderDeferDraft},
+		{"busy outranks keep-place gates", false, false, true, true, 120, RerenderDeferBusy},
+		{"prompt outranks keep-place gates", true, true, true, true, 120, RerenderDeferPrompt},
+		{"no drift skips even when scrolled", true, false, true, true, 82, RerenderSkip},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ShouldKickRerenderKeepPlace(true, 80, 0, tc.panelCols, tc.idle, false, tc.needsInput, tc.scrolledUp, tc.hasDraft)
+			testutil.Equal(t, got, tc.want)
+		})
+	}
+}

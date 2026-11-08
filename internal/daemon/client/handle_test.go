@@ -564,3 +564,26 @@ func writeFile(p, content string) error {
 
 // _ keeps test infra references stable.
 var _ = strings.HasPrefix
+
+func TestH_ComposerDirty(t *testing.T) {
+	_, rs := startedClient(t, "t-h-composer", "sleep 60")
+	testutil.Equal(t, rs.ComposerDirty(), false)
+
+	_, err := rs.WriteInput([]byte("draft"), agentview.OriginUser)
+	testutil.NoError(t, err)
+	testutil.Equal(t, rs.ComposerDirty(), true)
+
+	// argus-injected input is not the user typing and must not change the flag.
+	_, err = rs.WriteInput([]byte("\r"), agentview.OriginSystem)
+	testutil.NoError(t, err)
+	testutil.Equal(t, rs.ComposerDirty(), true)
+
+	_, err = rs.WriteInput([]byte("\r"), agentview.OriginUser)
+	testutil.NoError(t, err)
+	testutil.Equal(t, rs.ComposerDirty(), false)
+
+	// System input never sets it either.
+	_, err = rs.WriteInput([]byte("injected"), agentview.OriginSystem)
+	testutil.NoError(t, err)
+	testutil.Equal(t, rs.ComposerDirty(), false)
+}

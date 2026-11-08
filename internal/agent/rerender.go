@@ -51,6 +51,13 @@ const (
 	// to answer. Defer until the user responds; the caller should invalidate
 	// any cols cache so a later resize re-evaluates once the agent moves on.
 	RerenderDeferPrompt
+	// RerenderDeferScrolled — the kick would fire while the user is scrolled up
+	// reading; the resume would lose their place. Keep the drift anchor and
+	// re-arm once the pane is back at the bottom (kick-timing-keep-place).
+	RerenderDeferScrolled
+	// RerenderDeferDraft — the composer holds unsent text the kill would
+	// discard. Re-arm once the draft clears (kick-timing-keep-place).
+	RerenderDeferDraft
 	// RerenderKick — stop the session. The exit handler is responsible for
 	// resuming via --session-id at the new dimensions.
 	RerenderKick
@@ -121,6 +128,26 @@ func ShouldKickRerender(hasSessionID bool, initCols, committedCols, panelCols in
 	}
 	if needsInput {
 		return RerenderDeferPrompt
+	}
+	return RerenderKick
+}
+
+// ShouldKickRerenderKeepPlace is ShouldKickRerender plus the keep-place gates:
+// a kick that would otherwise fire is deferred while the user is scrolled up
+// (scrolledUp) or the composer holds unsent text (hasDraft). Busy and prompt
+// deferrals and Skip keep their precedence, and an unsent draft outranks a
+// scrolled pane because losing text is the worse outcome. Callers pass false
+// for both when the bridge.keep_place setting is off.
+func ShouldKickRerenderKeepPlace(hasSessionID bool, initCols, committedCols, panelCols int, idle, alreadyPending, needsInput, scrolledUp, hasDraft bool) RerenderDecision {
+	d := ShouldKickRerender(hasSessionID, initCols, committedCols, panelCols, idle, alreadyPending, needsInput)
+	if d != RerenderKick {
+		return d
+	}
+	if hasDraft {
+		return RerenderDeferDraft
+	}
+	if scrolledUp {
+		return RerenderDeferScrolled
 	}
 	return RerenderKick
 }
