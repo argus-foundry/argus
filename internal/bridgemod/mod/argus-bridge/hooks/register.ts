@@ -14,6 +14,7 @@ import { Reporter, type Env } from './reporter'
 import { Delivery } from './delivery'
 import { confidenceOf, GRACE_MS, NeedsInputTracker, type Kind, type Transition } from './tracker'
 import { registerUI, startUI, scheduleUI, refreshUI, type UI } from './ui'
+import { DraftSync, restoreDraft } from './draft'
 
 /** The engine interface a hook receives. */
 type Engine = Parameters<Hook<'session.start'>>[0]
@@ -39,6 +40,8 @@ type Bridge = {
   heartbeat: { cancel: () => void } | undefined
   deliveryTimer: { cancel: () => void } | undefined
   delivery: Delivery | undefined
+  /** Set at session.start once this is a real argus task (inert otherwise). */
+  draft: DraftSync | undefined
 }
 
 function newBridge(): Bridge {
@@ -58,6 +61,7 @@ function newBridge(): Bridge {
     heartbeat: undefined,
     deliveryTimer: undefined,
     delivery: undefined,
+    draft: undefined,
   }
 }
 
@@ -162,7 +166,7 @@ async function syncSession($: Engine, b: Bridge, force: boolean): Promise<void> 
   }
   r.setSession(id)
   b.lastModel = model
-  await r.emit('session.start', { model, cwd: await $.session.cwd() })
+  await r.emit('session.start', { model, cwd: await $.session.cwd(), draft_aware: true })
 }
 
 async function pollNeedsInput($: Engine, b: Bridge): Promise<void> {
@@ -203,6 +207,40 @@ async function bridgeRequest($: Engine, b: Bridge, path: string, token?: string)
   return JSON.parse(response.text) as Record<string, unknown>
 }
 
+// kick-timing-keep-place: report the composer draft so the daemon can defer a
+// width-repair kick over unsent text and hand the draft to the resumed session.
+function draftSync($: Engine, b: Bridge): DraftSync {
+  b.draft ??= new DraftSync({
+    report: fields => rep($, b).emit('draft', fields),
+    after: (ms, fn) => $.clock.after(ms, fn),
+  })
+  return b.draft
+}
+
+// Asks the daemon for the draft the previous process reported before a kick
+// killed it, then puts it back into the (still empty) prompt box.
+async function pullAndRestoreDraft($: Engine, b: Bridge): Promise<void> {
+  const answer = await bridgeRequest($, b, 'draft')
+  const d = answer?.draft as { text?: unknown; cursor?: unknown } | null | undefined
+  if (!d || typeof d.text !== 'string' || d.text === '') return
+  const cursor = typeof d.cursor === 'number' ? d.cursor : d.text.length
+  await restoreDraft(
+    {
+      read: () => $.prompt.read(),
+      fill: async (text, at) => {
+        const r = await $.prompt.fill({ text, mode: 'replace', cursor: at })
+        return { isFilled: r.isFilled, refusal: r.refusal }
+      },
+      sleep: ms => $.clock.sleep(ms),
+      report: async (text, at, outcome) => {
+        draftSync($, b).noteReported(text)
+        await rep($, b).emit('draft', { text, cursor: at, reason: outcome })
+      },
+    },
+    { text: d.text, cursor },
+  )
+}
+
 function deliveryFor($: Engine, b: Bridge): Delivery {
   b.delivery ??= new Delivery({
     idle: () => !b.busy && !b.tracker.active,
@@ -239,6 +277,8 @@ export const register: Register = on => {
       b.heartbeat = $.clock.every(HEARTBEAT_MS, () => {
         void safe(() => beat($, b))
       })
+      draftSync($, b)
+      $.clock.after(0, () => { void safe(() => pullAndRestoreDraft($, b)) })
       b.deliveryTimer?.cancel()
       b.deliveryTimer = $.clock.every(5_000, () => { void safe(() => pollDelivery($, b)) })
       $.clock.after(0, () => { void safe(() => pollDelivery($, b)) })
@@ -272,6 +312,28 @@ export const register: Register = on => {
     }
     return next(e)
   })
+
+  // Typing and pasting arrive as prompt.edit; history recall, a submit's clear,
+  // undo and fills arrive as prompt.change. Both only observe: the hook answers
+  // exactly what the editor would, and a failure here must never touch typing.
+  on('prompt.edit', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      b.draft?.change(result.text, result.cursor)
+    } catch {
+      // fail open
+    }
+    return result
+  }).catch(($, e, next) => next(e))
+
+  on('prompt.change', async ($, e, next) => {
+    try {
+      b.draft?.change(e.text, e.cursor)
+    } catch {
+      // fail open
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('tool.check', async ($, e, next) => {
     const result = await next(e)

@@ -2279,7 +2279,7 @@ func (r *Rail) adjustOffset(viewH int) {
 }
 
 func (r *Rail) drawRow(screen tcell.Screen, x, y, w int, row railRow, selected bool) {
-	const marker = '›'
+	const marker = theme.RailCaret
 	indent := row.depth * 2
 
 	// heramodel.Selection marker gutter. The continuation (line 2) of a two-line pinned

@@ -77,6 +77,26 @@ struct ClientRequestTests {
         #expect(obj?["cols"] as? Int == 80)
     }
 
+    @Test("resize carries the keep-place signals and decodes `deferred`")
+    func resizeKeepPlace() async throws {
+        MockURLProtocol.stubJSON(body: Data(#"{"cols":120,"rows":30,"rerendered":false,"deferred":"scrolled"}"#.utf8))
+        let result = try await makeClient().resize(taskID: "t1", rows: 30, cols: 120,
+                                                   scrolledUp: true, composerDirty: true)
+        #expect(result.deferred == "scrolled")
+        let body = try #require(MockURLProtocol.lastBody)
+        let obj = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        #expect(obj?["scrolled_up"] as? Bool == true)
+        #expect(obj?["composer_dirty"] as? Bool == true)
+    }
+
+    @Test("an older daemon's resize response has no `deferred` and decodes as empty")
+    func resizeOldDaemon() async throws {
+        MockURLProtocol.stubJSON(body: Data(#"{"cols":80,"rows":24,"rerendered":true}"#.utf8))
+        let result = try await makeClient().resize(taskID: "t1", rows: 24, cols: 80)
+        #expect(result.deferred == "")
+        #expect(result.rerendered == true)
+    }
+
     @Test("createTask omits empty backend/model")
     func createTaskBody() async throws {
         MockURLProtocol.stubJSON(status: 201,

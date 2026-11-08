@@ -23,6 +23,7 @@ import (
 // theme, keybindings) are intentionally omitted.
 type settingsResponse struct {
 	Bridge   bridgeSettings `json:"bridge"`
+	UI       uiSettings     `json:"ui"`
 	Sandbox  sandboxJSON    `json:"sandbox"`
 	KB       kbJSON         `json:"kb"`
 	API      apiSettings    `json:"api"`
@@ -34,6 +35,12 @@ type bridgeSettings struct {
 	Delivery bool `json:"delivery"`
 	Band     bool `json:"band"`
 	Toasts   bool `json:"toasts"`
+}
+
+// uiSettings is the slice of UI behavior settings that affect daemon-side
+// decisions too (the web resize-kick gate), so remote clients can manage them.
+type uiSettings struct {
+	RerenderKeepPlace bool `json:"rerender_keep_place"`
 }
 
 type sandboxJSON struct {
@@ -64,6 +71,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	cfg := s.db.Config()
 	writeJSON(w, http.StatusOK, settingsResponse{
 		Bridge: bridgeSettings{Enabled: cfg.Bridge.Enabled, Delivery: cfg.Bridge.Delivery, Band: cfg.Bridge.Band, Toasts: cfg.Bridge.Toasts},
+		UI:     uiSettings{RerenderKeepPlace: cfg.UI.RerenderKeepPlace},
 		Sandbox: sandboxJSON{
 			Enabled:          cfg.Sandbox.Enabled,
 			Available:        isSandboxAvailable(),
@@ -92,6 +100,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 // without needing to round-trip the rest.
 type updateSettingsReq struct {
 	Bridge   *bridgeUpdate   `json:"bridge,omitempty"`
+	UI       *uiUpdate       `json:"ui,omitempty"`
 	Sandbox  *sandboxUpdate  `json:"sandbox,omitempty"`
 	KB       *kbUpdate       `json:"kb,omitempty"`
 	API      *apiUpdate      `json:"api,omitempty"`
@@ -103,6 +112,10 @@ type bridgeUpdate struct {
 	Delivery *bool `json:"delivery,omitempty"`
 	Band     *bool `json:"band,omitempty"`
 	Toasts   *bool `json:"toasts,omitempty"`
+}
+
+type uiUpdate struct {
+	RerenderKeepPlace *bool `json:"rerender_keep_place,omitempty"`
 }
 
 // Each *Update mirrors the corresponding response section but with pointer
@@ -185,6 +198,9 @@ func buildSettingsUpdates(req updateSettingsReq) map[string]string {
 		if b.Toasts != nil {
 			out["bridge.toasts"] = boolStr(*b.Toasts)
 		}
+	}
+	if u := req.UI; u != nil && u.RerenderKeepPlace != nil {
+		out["ui.rerender_keep_place"] = boolStr(*u.RerenderKeepPlace)
 	}
 	if s := req.Sandbox; s != nil {
 		if s.Enabled != nil {
