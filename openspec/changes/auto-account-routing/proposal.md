@@ -26,5 +26,5 @@ _None._
 ## Impact
 
 - Code: `internal/backendtier/choice.go` (+ new spawn ledger), `internal/agent/{create,routing,hera_spawn}.go`, `internal/mcp/server.go`, `internal/api/handlers.go`, `internal/tui/{newtaskform,app}.go`, `internal/api/static/{index.html,sw.js}`, `macos/Sources/{Argus,ArgusKit}`.
-- Wire: REST `account` already optional; `"auto"` is a new accepted alias. No schema change.
+- Wire: REST `account` is already optional; no wire or schema change.
 - Frontend parity: all three clients updated in this PR.
