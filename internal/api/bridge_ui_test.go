@@ -66,6 +66,21 @@ func TestBridgeUISnapshotReadOnly(t *testing.T) {
 	testutil.False(t, got.Settings.Enabled)
 }
 
+func TestBridgeUISnapshotOnlySystemNotesIsZeroUnread(t *testing.T) {
+	s, _, task := bridgeAuthorityServer(t)
+	for _, typ := range []string{"ARGUS_HOST_SUSPENDED", "ARGUS_BOUNCED"} {
+		_, err := s.db.InsertSystemMessage(&model.TaskMessage{From: model.SystemTaskID, To: task.ID, Kind: model.KindNote, Body: `{"type":"` + typ + `"}`})
+		testutil.NoError(t, err)
+	}
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, authedReq("GET", "/api/tasks/"+task.ID+"/bridge/ui", ""))
+	testutil.Equal(t, w.Code, 200)
+	var got bridgeUISnapshot
+	testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	testutil.Equal(t, got.Unread, 0)
+	testutil.Equal(t, len(got.Messages), 0)
+}
+
 func TestBridgeUISnapshotUnboundAndErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
