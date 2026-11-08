@@ -206,3 +206,32 @@ func TestRefreshResumeSessionID_AccountConfigDir(t *testing.T) {
 		testutil.Equal(t, got.SessionID, original)
 	})
 }
+
+func TestRestoreAcceptedCoordinatorHat(t *testing.T) {
+	d := newResumeTestDB(t)
+	orch, err := d.CreateHeraOrchestrator("child", "")
+	testutil.NoError(t, err)
+	role, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "c", Kind: db.HeraKindCoordinator, ArgusProject: "p"}, "t1", "/wt/t1")
+	testutil.NoError(t, err)
+	_ = role
+
+	// Nothing ended by an accept: a no-op that does not touch the live binding.
+	testutil.NoError(t, RestoreAcceptedCoordinatorHat(d, "t1"))
+	g, err := d.LiveHeraKeepAliveBinding("t1")
+	testutil.NoError(t, err)
+	testutil.True(t, g != nil)
+
+	_, err = d.EndHeraCoordinatorBindingsForTask("t1", db.HeraEndReasonAccepted)
+	testutil.NoError(t, err)
+	g, err = d.LiveHeraKeepAliveBinding("t1")
+	testutil.NoError(t, err)
+	testutil.True(t, g == nil)
+
+	testutil.NoError(t, RestoreAcceptedCoordinatorHat(d, "t1"))
+	g, err = d.LiveHeraKeepAliveBinding("t1")
+	testutil.NoError(t, err)
+	testutil.True(t, g != nil)
+
+	testutil.NoError(t, d.Close())
+	testutil.Error(t, RestoreAcceptedCoordinatorHat(d, "t1")) // closed DB: surfaced, not swallowed
+}
