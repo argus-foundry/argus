@@ -132,6 +132,18 @@ func (e ExitInfo) CleanExit() bool {
 	return !e.Stopped && e.Err == "" && !e.StreamLost
 }
 
+// NoEvidenceOfExit reports whether e is the all-zero value: no error, not
+// stopped, not stream-lost, no pending restart and no captured output. A real
+// exit carries at least the PTY's final ring tail (every agent TUI emits
+// bytes), so this shape is what an OLD server answers for "nothing recorded"
+// (never exited, expired or already consumed) and must not be read as a clean
+// exit. Clients treat it as StreamLost. Known trade-off: a custom backend that
+// exits 0 having printed nothing at all lands in_review via the tick
+// reconciler instead of complete — recoverable, and the safe direction.
+func (e ExitInfo) NoEvidenceOfExit() bool {
+	return e.Err == "" && !e.Stopped && !e.StreamLost && !e.PendingRestart && len(e.LastOutput) == 0
+}
+
 // Daemon manages agent sessions and exposes them over a Unix socket.
 //
 // The session-serving substrate (runner, stream-conn registry, exit-info cache,
