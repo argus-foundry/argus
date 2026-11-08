@@ -215,9 +215,17 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 		// Answer with an error — callers treat that as "daemon unreachable"
 		// (stream lost, status unchanged) — instead of a false Alive=false.
 		if p, ok := c.runner.(sessionProber); ok {
-			if _, err := p.ProbeSession(req.TaskID); err != nil {
+			info, err := p.ProbeSession(req.TaskID)
+			if err != nil {
 				slog.Warn("rpc.SessionStatus: supervisor probe failed, not reporting death", "task", req.TaskID, "err", err)
 				return err
+			}
+			if info.Alive {
+				// Get missed on a transient failure but the supervisor does
+				// hold the session: report what it says, not a false death.
+				*resp = info
+				resp.TaskID = req.TaskID
+				return nil
 			}
 		}
 		// During the brief gap between a kick-restart's old-session exit and

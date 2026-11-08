@@ -138,10 +138,11 @@ func TestFinishedReaper_ArchivedCoordinatorStillReaped(t *testing.T) {
 
 type probeRunner struct {
 	fakeSupClient
-	err error
+	err  error
+	info SessionInfo
 }
 
-func (p *probeRunner) ProbeSession(string) (SessionInfo, error) { return SessionInfo{}, p.err }
+func (p *probeRunner) ProbeSession(string) (SessionInfo, error) { return p.info, p.err }
 
 func TestSessionStatus_FailedSupervisorProbeIsAnErrorNotDeath(t *testing.T) {
 	r := &probeRunner{err: errors.New("dial supervisor: reconnecting")}
@@ -167,4 +168,14 @@ func TestExitInfo_NoEvidenceOfExit(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) { testutil.False(t, e.NoEvidenceOfExit()) })
 	}
+}
+
+func TestSessionStatus_ProbeFindsLiveSessionGetMissed(t *testing.T) {
+	r := &probeRunner{info: SessionInfo{Alive: true, PID: 42}}
+	c := newSessionCore(r, config.DefaultConfig, make(chan struct{}))
+	var resp SessionInfo
+	testutil.NoError(t, c.SessionStatus(&TaskIDReq{TaskID: "t"}, &resp))
+	testutil.True(t, resp.Alive)
+	testutil.Equal(t, resp.PID, 42)
+	testutil.Equal(t, resp.TaskID, "t")
 }
