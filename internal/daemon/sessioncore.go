@@ -238,6 +238,25 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 		}
 		return nil
 	}
+	// Supervisor mode: a cached handle reads dead when its client was DETACHED
+	// (the old daemon's cleanup() closes the supervisor client, which closes
+	// every RemoteSession's done channel) or its stream gave up — neither is
+	// the process exiting, and the daemon keeps serving open TUI connections
+	// during that teardown. Only the supervisor knows; ask it, and say
+	// "unknown" (an error) when it cannot be asked (root cause of the
+	// post-restart SessionStatus false negative).
+	if p, ok := c.runner.(sessionProber); ok && !sess.Alive() {
+		info, err := p.ProbeSession(req.TaskID)
+		if err != nil {
+			slog.Warn("rpc.SessionStatus: cached handle is closed and the supervisor cannot be asked, not reporting death", "task", req.TaskID, "err", err)
+			return err
+		}
+		if info.Alive {
+			*resp = info
+			resp.TaskID = req.TaskID
+			return nil
+		}
+	}
 	cols, rows := sess.PTYSize()
 	initCols, initRows := sess.InitialPTYSize()
 	resp.TaskID = req.TaskID

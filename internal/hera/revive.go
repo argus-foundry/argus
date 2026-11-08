@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/drn/argus/internal/model"
+	"github.com/drn/argus/internal/uxlog"
 )
 
 // ReviveOutcome enumerates what a hera_revive attempt actually did, per
@@ -50,6 +51,10 @@ type ReviveStore interface {
 	// internal/db/hera.go) that restores a worker-bound task from in_review
 	// back to in_progress, unless it's awaiting coordinator close-out.
 	ReviveHeraWorkerToInProgress(taskID string) (bool, error)
+	// RestoreAcceptedHeraCoordinatorBindings re-opens the coordinator
+	// binding(s) AcceptRole ended, so a revived sub-coordinator is a working
+	// coordinator again (fix-probe-and-accept).
+	RestoreAcceptedHeraCoordinatorBindings(taskID string) (int, error)
 }
 
 // ReviveRunner is the daemon-side seam for session liveness checks and the
@@ -118,6 +123,9 @@ func ReviveRole(store ReviveStore, runner ReviveRunner, taskID string, isCoordin
 	// Best-effort: the kick itself already succeeded; a worker left stranded
 	// in in_review (e.g. awaiting close-out) can still be closed manually.
 	_, _ = store.ReviveHeraWorkerToInProgress(taskID)
+	if err := restoreCoordinatorHat(store, taskID); err != nil {
+		return ReviveKickedStuck, err
+	}
 	return ReviveKickedStuck, nil
 }
 
@@ -153,5 +161,23 @@ func restartIfDead(store ReviveStore, runner ReviveRunner, taskID string) (*mode
 	if err := runner.RestartDead(taskID); err != nil {
 		return nil, "", fmt.Errorf("revive: restart dead session for task %s: %w", taskID, err)
 	}
+	if err := restoreCoordinatorHat(store, taskID); err != nil {
+		return task, ReviveRestartedDead, err
+	}
 	return task, ReviveRestartedDead, nil
+}
+
+// restoreCoordinatorHat re-opens the coordinator binding an accept ended. The
+// session was already (re)started when this runs, so a failure is reported
+// loudly rather than swallowed: the role is running but would not be a working
+// coordinator, and the caller must say so.
+func restoreCoordinatorHat(store ReviveStore, taskID string) error {
+	n, err := store.RestoreAcceptedHeraCoordinatorBindings(taskID)
+	if err != nil {
+		return fmt.Errorf("revive: session restarted but its coordinator binding could not be restored: %w", err)
+	}
+	if n > 0 {
+		uxlog.Log("[hera] revive: restored %d coordinator binding(s) of task %s", n, taskID)
+	}
+	return nil
 }
