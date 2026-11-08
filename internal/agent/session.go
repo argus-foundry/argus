@@ -64,7 +64,10 @@ type Session struct {
 	lastUserInput time.Time
 	ptmxClosed    bool // true after waitLoop closes ptmx; guards Resize/WriteInput
 
-	logFile       *os.File // PTY output log for post-session scrollback; nil if unavailable
+	logFile       *os.File     // PTY output log for post-session scrollback; nil if unavailable
+	logOff        atomic.Int64 // bytes written to logFile so far; the offset space of the .sizes index
+	markCols      uint16       // last size recorded in the .sizes index (guarded by mu)
+	markRows      uint16
 	colorQueries  terminalColorQueries
 	colorReplies  chan []byte
 	colorAnswered [2]bool // OSC 10/11; guarded by mu
@@ -117,6 +120,9 @@ func StartSession(taskID string, cmd *exec.Cmd, rows, cols uint16) (*Session, er
 	// Persist the PTY size alongside the log so dead-session previews can
 	// re-emulate the bytes at the width they were formatted for.
 	SaveSessionSize(taskID, int(cols), int(rows))
+	if logFile != nil {
+		ResetSessionSizes(taskID, int(cols), int(rows))
+	}
 
 	s := &Session{
 		TaskID:        taskID,
@@ -128,6 +134,8 @@ func StartSession(taskID string, cmd *exec.Cmd, rows, cols uint16) (*Session, er
 		readDone:      make(chan struct{}),
 		detachCh:      make(chan struct{}),
 		ptyCols:       cols,
+		markCols:      cols,
+		markRows:      rows,
 		ptyRows:       rows,
 		initialCols:   cols,
 		initialRows:   rows,
@@ -195,7 +203,9 @@ func (s *Session) readLoop() {
 			s.mu.Unlock()
 			// Write to log file — sole writer, no lock needed.
 			if s.logFile != nil {
-				s.logFile.Write(data) //nolint:errcheck // best-effort
+				if wn, _ := s.logFile.Write(data); wn > 0 {
+					s.logOff.Add(int64(wn))
+				}
 			}
 			// Write to all attached writers, collect any that error.
 			var failed []io.Writer
@@ -698,6 +708,12 @@ func (s *Session) Resize(rows, cols uint16) error {
 		return nil
 	}
 	SaveSessionSize(s.TaskID, int(cols), int(rows))
+	if s.logFile != nil && (cols != s.markCols || rows != s.markRows) {
+		s.markCols, s.markRows = cols, rows
+		off := s.logOff.Load()
+		AppendSessionSizeMark(s.TaskID, off, int(cols), int(rows))
+		uxlog.Log("[sizes] mark task=%s off=%d size=%dx%d", s.TaskID, off, cols, rows)
+	}
 	return pty.Setsize(s.ptmx, &pty.Winsize{
 		Rows: rows,
 		Cols: cols,

@@ -2396,7 +2396,13 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 		if logSize > 0 {
 			origin = logSize - int64(len(raw))
 		}
-		windowEnd, cps = feedReplayChunks(emu, bytes.NewReader(raw), 0, int64(len(raw)), origin, ptyCols, ptyRows, 0, true)
+		// The width index shares the LOG's byte space; the ring-only fallback
+		// (logSize == 0, origin meaningless) must not use it.
+		var sizeMarks []agent.SizeMark
+		if logSize > 0 {
+			sizeMarks = agent.LoadSessionSizes(taskID)
+		}
+		windowEnd, cps = feedReplayChunksSized(emu, bytes.NewReader(raw), 0, int64(len(raw)), origin, ptyCols, ptyRows, 0, true, sizeMarks)
 		bytesFed = uint64(len(raw))
 		// Bound retained memory: trim oldest scrollback to the cell budget
 		// before maxScroll is derived, so the scroll range matches what is

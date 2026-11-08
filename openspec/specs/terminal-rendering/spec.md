@@ -1084,7 +1084,6 @@ A pane not drawn for 5 minutes SHALL release its spare slots and published repla
 - **WHEN** a pane was drawn within the idle threshold
 - **THEN** nothing is released
 
-
 ### Requirement: Live panes honor synchronized output
 
 While a live pane's output stream is inside an open DEC private mode 2026 block (`CSI ?2026h` without its `CSI ?2026l`), the pane SHALL NOT feed that block to its emulator and SHALL keep painting the last completed frame. The block SHALL be fed and painted as soon as it closes. Sequences split across read boundaries SHALL be recognized. A block still open after 150ms, or holding more than 128KiB, SHALL be flushed so a missing `?2026l` can never freeze a pane; the flush SHALL be logged at most once per 10 seconds per pane. The hold SHALL be dropped on every reset or rebind of the live emulator. Replay and preview paths are unaffected.
@@ -1118,3 +1117,20 @@ While a live pane's output stream is inside an open DEC private mode 2026 block 
 
 - **WHEN** a write begins and ends inside the same open block
 - **THEN** the repaint pump SHALL NOT be woken for it
+
+### Requirement: Scroll replay emulates each log segment at its authored width
+
+When a width index exists for the session log, the replay SHALL feed the log in segments and resize the emulator at each recorded offset so each segment is emulated at the PTY size it was authored for, start a window that begins mid-log at the size in force at its start, and return the emulator to its build size after the last segment so painting and anchoring are unchanged. Without an index, or when the log is read from the ring-only fallback, the replay SHALL behave as a single-width feed.
+
+#### Scenario: Relative redraw across a width change
+- **WHEN** a segment authored at 20 columns redraws its two-row UI with a relative cursor-up of 2, and the PTY was later widened to 40
+- **THEN** the replay shows the redrawn UI wrapped at 20 columns and the content above it intact
+
+#### Scenario: No index
+- **WHEN** the session has no width index
+- **THEN** the log is emulated at one width as before
+
+#### Scenario: Window starts mid-log
+- **WHEN** a sliding window begins after a recorded size change
+- **THEN** the window is fed starting at the size in force at its first byte
+
