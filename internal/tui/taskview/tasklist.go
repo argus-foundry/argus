@@ -76,6 +76,7 @@ type TaskListView struct {
 	expandAll         bool
 	OnExpandAllToggle func(bool)
 	railArchiveOpen   bool
+	railArchiveForced bool // derived each buildRows: archive-only rail shows Archive open
 
 	cursor          int
 	offset          int    // scroll offset
@@ -483,10 +484,8 @@ func (tl *TaskListView) buildRows() {
 	// Group active tasks by project
 	projectOrder, projectTasks := groupByProject(active)
 
-	// Classic list: auto-expand the first project only when none is expanded.
-	// Rail: keep an admitted project expanded, including after deletion or
-	// filtering, so the selection always lands on a task row.
-	if len(projectOrder) > 0 && (tl.expanded == "" || (tl.railMode && len(projectTasks[tl.expanded]) == 0)) {
+	// Keep an admitted project expanded, including after deletion or filtering.
+	if len(projectOrder) > 0 && len(projectTasks[tl.expanded]) == 0 {
 		tl.expanded = projectOrder[0]
 	}
 
@@ -501,12 +500,12 @@ func (tl *TaskListView) buildRows() {
 
 	// Archive section
 	if len(archived) > 0 {
-		if tl.railMode && len(pinned) == 0 && len(active) == 0 {
-			tl.railArchiveOpen = true
-		}
+		// Archive-only rail: show Archive open without latching railArchiveOpen,
+		// so it folds again once active/pinned tasks reappear.
+		tl.railArchiveForced = tl.railMode && len(pinned) == 0 && len(active) == 0
 		tl.rows = append(tl.rows, taskRow{kind: rowSeparator})
 		tl.rows = append(tl.rows, taskRow{kind: rowArchiveHeader})
-		if filterActive || (tl.railMode && tl.railArchiveOpen) || (!tl.railMode && tl.archiveExpanded) {
+		if filterActive || (tl.railMode && (tl.railArchiveOpen || tl.railArchiveForced)) || (!tl.railMode && tl.archiveExpanded) {
 			archOrder, archTasks := groupByProject(archived)
 			if tl.railMode && len(archOrder) > 0 && len(archTasks[tl.archiveProject]) == 0 {
 				tl.archiveProject = archOrder[0]
@@ -1473,7 +1472,7 @@ func (tl *TaskListView) drawSeparator(screen tcell.Screen, x, y, w int) {
 func (tl *TaskListView) drawArchiveHeader(screen tcell.Screen, x, y, w int) {
 	style := tcell.StyleDefault.Foreground(theme.ColorDimmed).Bold(true)
 	indicator := "▸"
-	if (!tl.railMode && tl.archiveExpanded) || (tl.railMode && (tl.railArchiveOpen || tl.filter != "")) {
+	if (!tl.railMode && tl.archiveExpanded) || (tl.railMode && (tl.railArchiveOpen || tl.railArchiveForced || tl.filter != "")) {
 		indicator = "▾"
 	}
 	text := fmt.Sprintf("  %s Archive", indicator)

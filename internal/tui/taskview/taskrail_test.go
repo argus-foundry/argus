@@ -257,12 +257,25 @@ func rowRunes(row []tcell.SimCell) []rune {
 	return out
 }
 
-// The emptied-project reset is rail-only: the classic list keeps its original
-// "expand the first project only when none is expanded" behavior.
-func TestTaskListClassicKeepsExpandedProjectWhenEmptied(t *testing.T) {
+// The emptied-project reset applies to the classic list as well as the rail.
+func TestTaskListClassicExpandedProjectResetsWhenEmptied(t *testing.T) {
 	tl := NewTaskListView()
 	tl.SetTasks([]*model.Task{{ID: "a", Project: "A"}, {ID: "b", Project: "B"}})
 	tl.SetExpanded("B")
 	tl.SetTasks([]*model.Task{{ID: "a", Project: "A"}})
-	testutil.Equal(t, tl.expanded, "B")
+	testutil.Equal(t, tl.expanded, "A")
+	testutil.Equal(t, tl.SelectedTask().ID, "a")
+}
+
+// Archive-only rail shows Archive open, but that must not latch: once an active
+// task appears Archive folds again until navigation enters it.
+func TestTaskRailArchiveOpenIsNotStickyWhenArchiveOnly(t *testing.T) {
+	tl := NewTaskListView()
+	tl.SetRailMode(true)
+	tl.SetTasks([]*model.Task{{ID: "old", Project: "A", Archived: true}})
+	testutil.Equal(t, tl.SelectedTask().ID, "old")
+	tl.SetTasks([]*model.Task{{ID: "old", Project: "A", Archived: true}, {ID: "new", Project: "B"}})
+	for _, id := range tl.VisibleTaskIDs() {
+		testutil.Equal(t, id != "old", true)
+	}
 }
