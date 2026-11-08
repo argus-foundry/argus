@@ -52,7 +52,7 @@ export class TaskNavigation {
       this.hierarchyWarning.textContent = hierarchyState.warning || '';
       this.hierarchyWarning.hidden = !hierarchyState.warning;
     }
-    this.roles = taskRoles(this.roster);
+    this.roles = taskRoles(this.roster, tasks);
     this.hierarchy = taskParents(tasks, this.roster);
     if (defer) this.scheduleRender();
     else if (this.renderKey() !== this.renderedKey) this.render();

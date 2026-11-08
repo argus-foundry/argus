@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {focusDOM} from '../../shared/focus-dom.mjs';
 import {KanbanDisclosure,projectKanban} from '../../../workspace/rail/kanban-group.js';
+import {TaskNavigation} from '../../../workspace/rail/tasks.js';
 import {compactTaskRow} from '../../../workspace/rail/task-row.js';
 
 function fixture(t){
@@ -37,4 +38,36 @@ test('unavailable row and role kinds use plain accessible copy',t=>{
  assert.match(row.getAttribute('aria-label'),/^Task unavailable,/);
  assert.equal(row.querySelector('.task-role-tag').textContent,'Unavailable');
  assert.equal(row.querySelector('.task-role-tag').getAttribute('aria-label'),'Agent unavailable');
+});
+
+test('an idle session does not keep a stale working tag',t=>{
+ fixture(t);
+ const role={role_id:15,kind:'coordinator',live:true,status:'working'};
+ const idle=compactTaskRow({task:{id:'c',name:'Coord',live:true,idle:true},role,select(){}});
+ assert.equal(idle.querySelector('.task-role-tag').textContent,'idle');
+ const busy=compactTaskRow({task:{id:'c',name:'Coord',live:true,idle:false},role,select(){}});
+ assert.equal(busy.querySelector('.task-role-tag').textContent,'working');
+});
+
+test('missing task roster rows are disabled with stopped or ready tags',t=>{
+ fixture(t);
+ for (const ready of [false,true]) {
+  const row=compactTaskRow({role:{live:true,status:'working',ready_to_close:ready},select(){}});
+  assert.equal(row.disabled,true);
+  assert.equal(row.querySelector('.task-role-tag').textContent,ready?'ready':'stopped');
+ }
+});
+for (const reversed of [false,true]) test(`navigation ranks bindings with current task activity (reversed ${reversed})`,t=>{
+ fixture(t);
+ const task={id:'t',name:'Task',live:true,idle:true};
+ const roles=[{role_id:1,live:true,task_id:'t',status:'working'},{role_id:2,live:true,task_id:'t',status:'done',ready_to_close:true}];
+ const navigation=Object.create(TaskNavigation.prototype);
+ Object.assign(navigation,{roster:{orchestrators:[{id:1,roles:reversed?[...roles].reverse():roles}]},renderKey:()=>'',renderedKey:''});
+ const check=(id,status)=>{
+  navigation.update([task],'t');
+  const role=navigation.roles.get('t');
+  assert.equal(role.role_id,id);
+  assert.equal(compactTaskRow({task,role,select(){}}).querySelector('.task-role-tag').textContent,status);
+ };
+ check(2,'ready');task.idle=false;check(1,'working');task.idle=true;check(2,'ready');
 });

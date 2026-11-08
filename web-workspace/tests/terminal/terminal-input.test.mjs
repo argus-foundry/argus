@@ -4,10 +4,10 @@ import { TerminalInput } from '../../terminal/terminal-input.js';
 
 const task = { id: 'isolated-shell', status: 'in_progress', live: true };
 
-function inputFixture(bracketed, json = async () => task) {
-  const writes = [];
-  const api = { inputTask: () => task, json, request: async (path, options) => writes.push({ path, body: options.body }) };
-  return { writes, input: new TerminalInput(api, task, new AbortController().signal, () => true, bracketed) };
+function inputFixture(bracketed, json = async () => task, backend = 'shell', kind, rosterRead) {
+  const writes = [], abort = new AbortController();
+  const api = { inputTask: () => task, json: (path, options) => path === '/api/backends' ? (rosterRead ? rosterRead() : Promise.resolve({backends:[{name:backend,kind}]})) : json(path, options), request: async (path, options) => writes.push({ path, body: options.body }) };
+  return { writes, abort, input: new TerminalInput(api, {...task,backend}, abort.signal, () => true, bracketed) };
 }
 
 test('plain shell sends one unwrapped line and a separate submit', async () => {
@@ -50,4 +50,25 @@ test('lone Ctrl+Z is swallowed without posting or disabling input', async () => 
   const {writes,input}=inputFixture(()=>true);
   await input.raw('\x1a\x1a');await input.raw('still connected');
   assert.deepEqual(writes.map(write=>write.body),['still connected']);
+});
+for (const [kind,suppressed] of [['claude',true],['',true],['codex',false],['pi',false],['opencode',false],['antigravity',false],['cursor',false],['omp',false],[undefined,false]]) {
+  test(`focus reports preserve input except Claude-family focus-out (${kind})`, async () => {
+    const {writes,input}=inputFixture(()=>true,undefined,'backend-alias',kind);
+    await new Promise(setImmediate);
+    for (const data of ['\x1b[O','\x1b[I','\x1b[Ox','\x1bOA','\x1bOB','\x1bOC','\x1bOD']) await input.raw(data);
+    const expected=['\x1b[I','\x1b[Ox','\x1bOA','\x1bOB','\x1bOC','\x1bOD'];
+    if (!suppressed) expected.unshift('\x1b[O');
+    assert.deepEqual(writes.map(write=>write.body),expected);
+  });
+}
+
+test('failed roster holds focus-out while unmatched roster forwards it', async () => {
+ for (const [json,expected] of [[async()=>{throw new Error('offline');},['after']],[async()=>({backends:[]}),['\x1b[O','after']]]) {
+  const {writes,input,abort}=inputFixture(()=>false,undefined,'backend-alias','claude',json);
+  try {
+   await new Promise(setImmediate);
+   await input.raw('\x1b[O');await input.raw('after');
+   assert.deepEqual(writes.map(write=>write.body),expected);
+  } finally {abort.abort();}
+ }
 });
