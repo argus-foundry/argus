@@ -44,10 +44,19 @@ func SetUsageSource(read func() (Usage, error)) func() {
 type readings struct {
 	claude func(account string) (float64, bool)
 	codex  func() (float64, bool)
-	// claudeAt/codexAt report when the reading was measured (zero = unknown);
-	// nil means unknown. Spawns older than it no longer carry a burst penalty.
-	claudeAt func(account string) time.Time
-	codexAt  func() time.Time
+	// claudeAt/codexAt report when the reading was measured and when its
+	// window resets (zero = unknown); nil means unknown. Spawns older than the
+	// measurement no longer carry a burst penalty, and a remembered reading is
+	// not recalled past its reset.
+	claudeAt func(account string) readingTimes
+	codexAt  func() readingTimes
+}
+
+// readingTimes is when a reading was measured and when its window resets.
+type readingTimes struct{ probed, reset time.Time }
+
+func timesOf(r usagebudget.Reading) readingTimes {
+	return readingTimes{probed: r.LastProbedAt, reset: r.ResetAt}
 }
 
 // currentReadings returns the reading functions for one resolution: a single
@@ -74,17 +83,17 @@ func currentReadings() readings {
 					}
 					return u.Codex.Percentage, true
 				},
-				claudeAt: func(account string) time.Time {
+				claudeAt: func(account string) readingTimes {
 					if account == "" {
 						account = config.DefaultAccountName
 					}
-					return u.Claude[account].LastProbedAt
+					return timesOf(u.Claude[account])
 				},
-				codexAt: func() time.Time {
+				codexAt: func() readingTimes {
 					if u.Codex == nil {
-						return time.Time{}
+						return readingTimes{}
 					}
-					return u.Codex.LastProbedAt
+					return timesOf(*u.Codex)
 				},
 			}
 		}
@@ -98,16 +107,16 @@ func currentReadings() readings {
 	return readings{
 		claude: func(account string) (float64, bool) { return claudeUsageForAccount([]string{account})() },
 		codex:  func() (float64, bool) { return codexCachedPct() },
-		claudeAt: func(account string) time.Time {
+		claudeAt: func(account string) readingTimes {
 			if account == "" {
 				account = config.DefaultAccountName
 			}
 			r, _ := usagebudget.CachedReadingForAccount(account)
-			return r.LastProbedAt
+			return timesOf(r)
 		},
-		codexAt: func() time.Time {
+		codexAt: func() readingTimes {
 			r, _ := CachedReading()
-			return r.LastProbedAt
+			return readingTimes{probed: r.LastProbedAt, reset: r.ResetAt}
 		},
 	}
 }

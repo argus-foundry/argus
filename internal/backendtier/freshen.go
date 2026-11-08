@@ -45,8 +45,10 @@ func FreshenBeforeSpawn() {
 
 // Last-known readings. A tier whose reading is currently unavailable (probe
 // failing, daemon unreachable) is scored on the last reading seen for it, up to
-// StaleReadingMaxAge, instead of fail-open "unknown", which used to resolve to
-// the first tier in list order regardless of how depleted it was.
+// StaleReadingMaxAge and never past the reading's own window reset (after a
+// reset the old percentage says nothing), instead of fail-open "unknown",
+// which used to resolve to the first tier in list order regardless of how
+// depleted it was.
 const StaleReadingMaxAge = 6 * time.Hour
 
 var lastKnown struct {
@@ -55,8 +57,9 @@ var lastKnown struct {
 }
 
 type staleReading struct {
-	pct float64
-	at  time.Time
+	pct   float64
+	at    time.Time
+	reset time.Time // zero = unknown
 }
 
 func readingKey(probe, account string) string {
@@ -66,13 +69,13 @@ func readingKey(probe, account string) string {
 	return probe + "\x00" + account
 }
 
-func rememberReading(probe, account string, pct float64) {
+func rememberReading(probe, account string, pct float64, reset time.Time) {
 	lastKnown.mu.Lock()
 	defer lastKnown.mu.Unlock()
 	if lastKnown.m == nil {
 		lastKnown.m = map[string]staleReading{}
 	}
-	lastKnown.m[readingKey(probe, account)] = staleReading{pct: pct, at: ledgerNow()}
+	lastKnown.m[readingKey(probe, account)] = staleReading{pct: pct, at: ledgerNow(), reset: reset}
 }
 
 func recallReading(probe, account string) (float64, time.Duration, bool) {
@@ -82,8 +85,13 @@ func recallReading(probe, account string) (float64, time.Duration, bool) {
 	if !ok {
 		return 0, 0, false
 	}
-	age := ledgerNow().Sub(r.at)
+	now := ledgerNow()
+	age := now.Sub(r.at)
 	if age > StaleReadingMaxAge {
+		return 0, 0, false
+	}
+	if !r.reset.IsZero() && !now.Before(r.reset) {
+		uxlog.Log("[routing] last known reading probe=%s account=%q expired at its window reset %s; treating as unknown", probe, account, r.reset.Format(time.RFC3339))
 		return 0, 0, false
 	}
 	uxlog.Log("[routing] reading unavailable probe=%s account=%q; using last known %.2f (%s old)", probe, account, r.pct, age.Round(time.Second))

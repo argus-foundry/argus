@@ -69,22 +69,34 @@ func TestCliRouteRedial(t *testing.T) {
 
 	// Simulate the daemon bounce: this client's connection is dead for good.
 	testutil.NoError(t, c.rpc.Close())
-	_, err := c.RoutingUsage()
-	testutil.Error(t, err)
+	_, origErr := c.RoutingUsage()
+	testutil.Error(t, origErr)
 
 	got, err := c.RoutingUsageResilient()
 	testutil.NoError(t, err)
 	testutil.Equal(t, got.Claude["personal"].Percentage, 8.0)
 
-	// Daemon gone entirely: the original error surfaces, nothing panics.
+	// Daemon gone entirely: the ORIGINAL call error surfaces (not the dial
+	// error), nothing panics.
 	c.sockPath = filepath.Join(t.TempDir(), "gone.sock")
 	_, err = c.RoutingUsageResilient()
 	testutil.Error(t, err)
+	testutil.Equal(t, err.Error(), origErr.Error())
 
-	// A live connection never takes the fallback path.
-	live := fakeClient(t, newFakeDaemon(t))
+	// A live connection never takes the fallback path: one call, no new dial.
+	lfd := newFakeDaemon(t)
+	live := fakeClient(t, lfd)
+	_, err = live.RoutingUsage() // completes the dial, so it is counted
+	testutil.NoError(t, err)
+	lfd.mu.Lock()
+	acceptsBefore := lfd.accepts
+	lfd.mu.Unlock()
 	_, err = live.RoutingUsageResilient()
 	testutil.NoError(t, err)
+	lfd.mu.Lock()
+	defer lfd.mu.Unlock()
+	testutil.Equal(t, lfd.accepts, acceptsBefore)
+	testutil.Equal(t, lfd.routingCalls, 2)
 }
 
 func TestCliRouteFresh(t *testing.T) {

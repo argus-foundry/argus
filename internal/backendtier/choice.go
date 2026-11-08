@@ -51,7 +51,7 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 		choice := Choice{Backend: tier.Backend, Account: selected}
 		var pct float64
 		var known bool
-		var readingAt time.Time
+		var at readingTimes
 		switch tier.Probe {
 		case config.ProbeNone:
 		case config.ProbeClaudeUsage, config.ProbeCodexUsage:
@@ -61,12 +61,12 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 			if tier.Probe == config.ProbeClaudeUsage {
 				pct, known = rd.claude(selected)
 				if rd.claudeAt != nil {
-					readingAt = rd.claudeAt(selected)
+					at = rd.claudeAt(selected)
 				}
 			} else if selected == "" || selected == config.DefaultAccountName {
 				pct, known = rd.codex()
 				if rd.codexAt != nil {
-					readingAt = rd.codexAt()
+					at = rd.codexAt()
 				}
 			}
 		default:
@@ -74,13 +74,13 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 		}
 		if tier.Probe == config.ProbeClaudeUsage || tier.Probe == config.ProbeCodexUsage {
 			if known {
-				rememberReading(string(tier.Probe), selected, pct)
+				rememberReading(string(tier.Probe), selected, pct, at.reset)
 			} else if stale, _, ok := recallReading(string(tier.Probe), selected); ok {
 				pct, known = stale, true
 			}
 		}
 		if known {
-			adj, n := penalized(tier.Backend, selected, pct, readingAt)
+			adj, n := penalized(tier.Backend, selected, pct, at.probed)
 			if n > 0 {
 				uxlog.Log("[routing] burst penalty backend=%q account=%q spawns=%d usage=%.2f->%.2f", tier.Backend, selected, n, pct, adj)
 				pct = adj

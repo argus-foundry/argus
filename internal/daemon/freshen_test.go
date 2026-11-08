@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/drn/argus/internal/backendtier"
+	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/testutil"
+	"github.com/drn/argus/internal/usagebudget"
 )
 
 func TestFreshenUsageProbesBothAndDebounces(t *testing.T) {
@@ -36,13 +38,80 @@ func TestFreshenUsageProbesBothAndDebounces(t *testing.T) {
 func TestRoutingUsageFreshRPCProbesFirst(t *testing.T) {
 	d, _ := testDaemon(t)
 	var probed atomic.Int32
-	d.usageBudgetProbe = func(context.Context) error { probed.Add(1); return nil }
+	// The probe publishes a new reading; the RPC must return it, i.e. read
+	// usage only after the probe round.
+	d.usageBudgetProbe = func(context.Context) error {
+		probed.Add(1)
+		t.Cleanup(usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
+			return usagebudget.Reading{Percentage: 42}, account == config.DefaultAccountName
+		}))
+		return nil
+	}
 	d.codexProbe = func(context.Context) error { return nil }
 	var resp backendtier.Usage
 	testutil.NoError(t, rpcFor(d).RoutingUsageFresh(&Empty{}, &resp))
 	testutil.Equal(t, probed.Load(), int32(1))
+	testutil.Equal(t, resp.Claude[config.DefaultAccountName].Percentage, 42.0)
 }
 
 func TestUsagePollIntervalIsFiveMinutes(t *testing.T) {
-	testutil.Equal(t, usageBudgetProbeInterval, 5*time.Minute)
+	d, _ := testDaemon(t)
+	testutil.Equal(t, d.usageProbeInterval(), 5*time.Minute)
+	testutil.Equal(t, (&Daemon{}).usageProbeInterval(), 5*time.Minute)
+}
+
+// Both pollers tick on the configured cadence (not a literal of their own).
+func TestUsagePollersTickOnConfiguredInterval(t *testing.T) {
+	d, _ := testDaemon(t)
+	d.usageProbeEvery = 5 * time.Millisecond
+	var claude, codex atomic.Int32
+	d.usageBudgetProbe = func(context.Context) error { claude.Add(1); return nil }
+	d.codexProbe = func(context.Context) error { codex.Add(1); return nil }
+	stopped := make(chan struct{}, 2)
+	go func() { d.runUsageBudgetPoller(); stopped <- struct{}{} }()
+	go func() { d.runCodexProbePoller(); stopped <- struct{}{} }()
+	deadline := time.Now().Add(5 * time.Second)
+	for (claude.Load() < 3 || codex.Load() < 3) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(d.done)
+	<-stopped
+	<-stopped
+	testutil.Equal(t, claude.Load() >= 3, true)
+	testutil.Equal(t, codex.Load() >= 3, true)
+}
+
+// A stopped daemon's freshener is inert: the process-global hook can be left
+// pointing at it when two daemons in one process restore out of order.
+func TestFreshenUsageNoopAfterShutdown(t *testing.T) {
+	d, _ := testDaemon(t)
+	var probed atomic.Int32
+	d.usageBudgetProbe = func(context.Context) error { probed.Add(1); return nil }
+	d.codexProbe = func(context.Context) error { probed.Add(1); return nil }
+	close(d.done)
+	d.freshenUsage()
+	testutil.Equal(t, probed.Load(), int32(0))
+}
+
+// A probe that ignores its context (e.g. blocked on usagebudget's probeMu
+// behind an in-flight poll probe) must not hold the spawn past the cap.
+func TestFreshenUsageCapIsHard(t *testing.T) {
+	d, _ := testDaemon(t)
+	orig := usageFreshenTimeout
+	usageFreshenTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { usageFreshenTimeout = orig })
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	var rounds atomic.Int32
+	d.usageBudgetProbe = func(context.Context) error { <-release; return nil }
+	d.codexProbe = func(context.Context) error { rounds.Add(1); return nil }
+
+	start := time.Now()
+	d.freshenUsage()
+	testutil.Equal(t, time.Since(start) < time.Second, true)
+
+	// The abandoned round still debounces: a follow-up spawn does not stack a
+	// second blocked round.
+	d.freshenUsage()
+	testutil.Equal(t, rounds.Load(), int32(1))
 }

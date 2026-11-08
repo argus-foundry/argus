@@ -138,3 +138,74 @@ func TestPenaltyClearsOnFreshDaemonReading(t *testing.T) {
 	}
 	testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "personal")
 }
+
+func twoClaudeAccounts(t *testing.T) config.Config {
+	t.Helper()
+	return config.Config{Backends: testBackends(), Accounts: map[string]config.Account{"personal": {ClaudeConfigDir: t.TempDir()}}, BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
+		{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+		{Backend: "claude", Account: "personal", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+	}}}
+}
+
+// Pins the boundaries of the placeholder: exactly SpawnPenaltyPct points per
+// spawn, cleared by a reading taken exactly SpawnSettle after the spawn but not
+// one second earlier, and never past SpawnPenaltyWindow without a timestamp.
+func TestPenaltyBoundaries(t *testing.T) {
+	t.Run("five points per spawn", func(t *testing.T) {
+		resetLedger(t)
+		cfg := burstCfg(t, 70, 38)
+		WithReservation(func() Choice { return ResolveChoice(cfg, "claude", "") })
+		c := ResolveChoice(cfg, "claude", "personal")
+		testutil.Contains(t, c.Reason, "usage=43.00")
+		WithReservation(func() Choice { return ResolveChoice(cfg, "claude", "") })
+		testutil.Contains(t, ResolveChoice(cfg, "claude", "personal").Reason, "usage=48.00")
+	})
+	t.Run("settle boundary", func(t *testing.T) {
+		now := resetLedger(t)
+		withCachedPct(t, known(40), known(0))
+		spawnAt := *now
+		readingAt := spawnAt
+		t.Cleanup(usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
+			return usagebudget.Reading{Percentage: 38, LastProbedAt: readingAt}, account == "personal"
+		}))
+		cfg := twoClaudeAccounts(t)
+		WithReservation(func() Choice { return ResolveChoice(cfg, "claude", "") })
+		// Literal spec values, not the constants, so a changed constant fails.
+		*now = spawnAt.Add(5 * time.Minute)
+		readingAt = spawnAt.Add(5*time.Minute - time.Second)
+		testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "default")
+		readingAt = spawnAt.Add(5 * time.Minute)
+		testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "personal")
+	})
+	t.Run("window backstop without a timestamp", func(t *testing.T) {
+		now := resetLedger(t)
+		cfg := burstCfg(t, 40, 38) // bridge readings carry no LastProbedAt
+		spawnAt := *now
+		WithReservation(func() Choice { return ResolveChoice(cfg, "claude", "") })
+		*now = spawnAt.Add(29 * time.Minute)
+		testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "default")
+		*now = spawnAt.Add(30*time.Minute + time.Second)
+		testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "personal")
+	})
+}
+
+// The Codex reading's own timestamp clears a Codex spawn's placeholder, the
+// same as Claude's.
+func TestPenaltyClearsOnFreshCodexReading(t *testing.T) {
+	now := resetLedger(t)
+	at := now.Add(-time.Hour)
+	usage := Usage{
+		Claude: map[string]usagebudget.Reading{"default": {Percentage: 42, LastProbedAt: at}},
+		Codex:  &usagebudget.Reading{Percentage: 40, LastProbedAt: at},
+	}
+	defer SetUsageSource(func() (Usage, error) { return usage, nil })()
+	cfg := config.Config{Backends: testBackends(), BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
+		{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+		{Backend: "codex", Probe: config.ProbeCodexUsage, ThresholdPct: 80},
+	}}}
+	testutil.Equal(t, WithReservation(func() Choice { return ResolveChoice(cfg, "", "") }).Backend, "codex")
+	testutil.Equal(t, ResolveChoice(cfg, "", "").Backend, "claude") // 45 > 42
+	*now = now.Add(SpawnSettle)
+	usage.Codex = &usagebudget.Reading{Percentage: 40, LastProbedAt: *now}
+	testutil.Equal(t, ResolveChoice(cfg, "", "").Backend, "codex")
+}

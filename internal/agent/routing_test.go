@@ -166,6 +166,7 @@ func TestSubCoordinatorRoutesAccountFromBlankParent(t *testing.T) {
 // threshold on the least-used one — never silently on the default account.
 func TestResolveTaskChoiceUsesInstalledDaemonReadings(t *testing.T) {
 	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
 	cfg := config.Config{
 		Backends: map[string]config.Backend{"claude": {Command: "claude"}},
 		Accounts: map[string]config.Account{"personal": {ClaudeConfigDir: t.TempDir()}},
@@ -326,6 +327,7 @@ func TestNoProjectBackendRoutesAcrossBackends(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			backendtier.ResetSpawnLedger()
+			t.Cleanup(backendtier.ResetSpawnLedger)
 			defer backendtier.SetUsageSource(func() (backendtier.Usage, error) {
 				return backendtier.Usage{
 					Claude: map[string]usagebudget.Reading{"default": {Percentage: tc.claude}},
@@ -337,4 +339,48 @@ func TestNoProjectBackendRoutesAcrossBackends(t *testing.T) {
 			testutil.Equal(t, c.Step, "best-overall")
 		})
 	}
+}
+
+const probedTiersTOML = "[backend_routing]\nstrategy=\"headroom\"\n[[backend_routing.tier]]\nbackend=\"test\"\nprobe=\"claude_usage\"\nthreshold_pct=80\n[[backend_routing.tier]]\nbackend=\"test\"\naccount=\"work\"\nprobe=\"claude_usage\"\nthreshold_pct=80\n"
+
+func claudeUsage(def, work float64) func() (backendtier.Usage, error) {
+	return func() (backendtier.Usage, error) {
+		return backendtier.Usage{Claude: map[string]usagebudget.Reading{
+			"default": {Percentage: def}, "work": {Percentage: work},
+		}}, nil
+	}
+}
+
+// The fresh read must land BEFORE resolution: the freshener publishes readings
+// that reverse the stale snapshot, and the task follows the fresh ones.
+func TestCreateAndStartRoutesOnFreshReadingNotStaleSnapshot(t *testing.T) {
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+	t.Cleanup(backendtier.SetUsageSource(claudeUsage(5, 50))) // stale: default roomy
+	defer backendtier.SetFreshener(func() {
+		backendtier.SetUsageSource(claudeUsage(95, 10)) // fresh: default depleted
+	})()
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo, probedTiersTOML)
+	task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "freshfirst", Project: "proj", Backend: "test"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, task.Account, "work")
+	testutil.True(t, task.AccountRouted)
+}
+
+// Burst spreading through CreateAndStart on probed (known) tiers: without the
+// per-spawn penalty all four would land on work (38 < 40).
+func TestCreateAndStartSpreadsBurstOnKnownReadings(t *testing.T) {
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+	t.Cleanup(backendtier.SetUsageSource(claudeUsage(40, 38)))
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo, probedTiersTOML)
+	var got []string
+	for i := 0; i < 4; i++ {
+		task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "kb" + string(rune('a'+i)), Project: "proj", Backend: "test"})
+		testutil.NoError(t, err)
+		got = append(got, task.Account)
+	}
+	testutil.DeepEqual(t, got, []string{"work", "", "work", ""})
 }
