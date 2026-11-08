@@ -1,4 +1,4 @@
-.PHONY: build vet test test-watch test-cover test-cover-gate test-pkg lint-pr fmt fmt-check vuln workspace-test pre-pr plugin-smoke secrets-smoke install-signed mac-build mac-test mac-run mac-app
+.PHONY: build vet test test-watch test-cover test-cover-gate test-pkg lint-pr fmt fmt-check vuln workspace-test pre-pr test-contaminated plugin-smoke secrets-smoke install-signed mac-build mac-test mac-run mac-app
 
 build:
 	go build ./...
@@ -115,6 +115,17 @@ test-cover:
 test-cover-gate:
 	go test -race -count=1 -timeout 300s -coverprofile=coverage.out ./...
 	go run ./scripts/coverfilter -in coverage.out -out coverage.filtered.out -min 88
+
+# Hermeticity guard: run the cases that used to false-fail inside an
+# argus/hera worker with the worker's own env vars deliberately set. Must pass
+# exactly like a clean shell (see context/knowledge/testing.md).
+test-contaminated:
+	ARGUS_TASK_ID=leak ARGUS_ARCHETYPE=bug_fix ARGUS_MODEL=leak ARGUS_PROFILE=leak ARGUS_SANDBOXED=1 \
+	CODEX_HOME=/nonexistent/codex CODEX_SQLITE_HOME=/nonexistent/codex CODEX_THREAD_ID=leak \
+	CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=leak CLAUDE_CODE_CHILD_SESSION=1 CLAUDE_CONFIG_DIR=/nonexistent/claude \
+	go test -count=1 -timeout 300s \
+	  -run 'EnvScrubbed|ProfileEnv|Recapture|MissingTranscript|ExportsTaskID' \
+	  ./internal/testenv/ ./internal/agent/ ./internal/daemon/ ./internal/tui/
 
 test-pkg:
 	@test -n "$(PKG)" || { echo "Usage: make test-pkg PKG=./internal/db/"; exit 1; }

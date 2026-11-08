@@ -97,6 +97,15 @@ Prefer `t.Cleanup` over `defer` inside helpers — runs LIFO at end of test, sur
 
 Pure-logic tests should call `t.Parallel()`. Tests that use `t.Setenv`, modify global state, or share files **must not** parallelize — `t.Setenv` panics under parallel. UI smoke tests are sequential.
 
+## Environment hermeticity
+
+**Every test package's `TestMain` must call `testenv.Main(m)` (or `testenv.Scrub()` before its own setup); never hand-roll per-test unsets of agent/host variables.** An argus/hera worker exports its own `ARGUS_TASK_ID`/`ARGUS_ARCHETYPE`/`ARGUS_MODEL`/`ARGUS_PROFILE`, Codex workers export `CODEX_HOME`/`CODEX_SQLITE_HOME`/`CODEX_THREAD_ID`, and Claude workers export the `claudeenv.ParentSessionMarkers` plus `CLAUDE_CONFIG_DIR`; `go test` inherits all of it and CI has none, so ambient reads (BuildCmd profile env, Codex session-ID capture, session discovery) false-fail only inside a worker. `internal/testenv` owns the explicit denylist (an explicit list, NOT an `ARGUS_*` prefix strip — `ARGUS_TEST_*` helper-process variables must survive). A test that needs one of these sets it with `t.Setenv`; the scrub only gives a clean baseline.
+
+- New package with tests: copy `internal/testenv`'s `main_test.go` shape (`TestMain` + `TestEnvScrubbed`). `TestEveryTestPackageInstallsScrub` (AST walk) fails if a package forgets.
+- New variable an agent exports that production code reads: add it to the denylist in `internal/testenv/testenv.go` (Claude markers come from `claudeenv` automatically).
+- `make test-contaminated` runs the formerly failing cases with the worker variables deliberately set; it is the regression guard and must pass like a clean shell.
+- `internal/claudeenv`'s test is an external (`claudeenv_test`) package because `testenv` imports `claudeenv`.
+
 ## Concurrency Testing
 
 - **`-race -count=1`** on every CI run (already wired).
