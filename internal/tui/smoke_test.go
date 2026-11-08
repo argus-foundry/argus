@@ -21,6 +21,7 @@ import (
 	"github.com/drn/argus/internal/skew"
 	"github.com/drn/argus/internal/testutil"
 	"github.com/drn/argus/internal/tui/hera"
+	"github.com/drn/argus/internal/tui/terminal"
 	"github.com/drn/argus/internal/tui/widget"
 	"github.com/drn/argus/internal/uxlog"
 	"github.com/gdamore/tcell/v2"
@@ -3116,4 +3117,36 @@ func TestSmoke_JumpSwitcherFilterAndEnter(t *testing.T) {
 		testutil.Equal(t, app.agentState.TaskID, "ts-zeta")
 		testutil.Equal(t, app.tasklist.SelectedTask().ID, "ts-zeta")
 	})
+}
+
+// TestSmoke_ReleaseIdlePaneMemory exercises the tick hook on the real event
+// loop: before the loop exists it is a no-op; with it, every pane (agent view
+// plus the two Hera panes) is visited exactly once, on the tview goroutine.
+func TestSmoke_ReleaseIdlePaneMemory(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[*terminal.TerminalPane]int{}
+	old := releaseIdlePane
+	releaseIdlePane = func(p *terminal.TerminalPane, _ time.Time) {
+		mu.Lock()
+		seen[p]++
+		mu.Unlock()
+	}
+	defer func() { releaseIdlePane = old }()
+
+	app := New(testDB(t), agent.NewRunner(nil), true)
+	app.releaseIdlePaneMemory() // tapp nil → must not touch any pane
+	mu.Lock()
+	testutil.Equal(t, len(seen), 0)
+	mu.Unlock()
+
+	_, stop := wireApp(t, app)
+	defer stop()
+	app.releaseIdlePaneMemory()
+	syncUI(t, app.tapp)
+	mu.Lock()
+	defer mu.Unlock()
+	testutil.Equal(t, len(seen), 3)
+	for _, p := range []*terminal.TerminalPane{app.agentPane, app.heraPage.CoordPane(), app.heraPage.AgentPane()} {
+		testutil.Equal(t, seen[p], 1)
+	}
 }

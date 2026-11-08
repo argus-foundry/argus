@@ -301,6 +301,15 @@ type TerminalPane struct {
 	// window jumps forward as new agent output pushes the 8MB read window
 	// past the bytes the previous build had cached (defect 5).
 	replayEmuFirstByte int64
+	// replayEmuTrimmed records that the current replayEmu's scrollback was
+	// trimmed to replayScrollbackCellBudget. A trimmed build is as deep as the
+	// bound allows, so scroll-past-top "extend" (BUG-E) must not re-read the
+	// log for more: it would be trimmed straight back every frame.
+	replayEmuTrimmed bool
+
+	// lastDrawNanos is the UnixNano of the pane's last Draw, read by
+	// ReleaseIdle from the tick goroutine.
+	lastDrawNanos atomic.Int64
 
 	// replayEmuSpare holds a retired replay emulator instead of discarding
 	// it, so the next asyncReplayRebuild reuses it (RIS-reset in place) via
@@ -494,9 +503,11 @@ const replayNoDataCooldown = 250 * time.Millisecond
 
 // NewTerminalPane creates a native terminal rendering pane.
 func NewTerminalPane() *TerminalPane {
-	return &TerminalPane{
+	tp := &TerminalPane{
 		Box: tview.NewBox(),
 	}
+	tp.lastDrawNanos.Store(time.Now().UnixNano())
+	return tp
 }
 
 // notifyBranchChange fires OnBranchChange if set. Call AFTER releasing tp.mu
@@ -837,6 +848,7 @@ func (tp *TerminalPane) ResetVT() {
 	tp.replayEmuMaxScroll = 0
 	tp.replayEmuAltScreen = false
 	tp.replayEmuFirstByte = 0
+	tp.replayEmuTrimmed = false
 	tp.replayRebuildPending = false
 	tp.replayNoDataUntil = time.Time{}
 	tp.replayData = nil
@@ -995,6 +1007,7 @@ func (tp *TerminalPane) invalidateReplayCache() {
 	tp.replayEmuMaxScroll = 0
 	tp.replayEmuAltScreen = false
 	tp.replayEmuFirstByte = 0
+	tp.replayEmuTrimmed = false
 	tp.anchorTotalLines = 0
 	// Bump the generation instead of clearing replayBuilding: an in-flight
 	// rebuild finishes (parking its emulator, since it is now stale) and its
@@ -1856,6 +1869,7 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 		}
 	}()
 
+	tp.lastDrawNanos.Store(time.Now().UnixNano())
 	tp.Box.DrawForSubclass(screen, tp)
 	x, y, width, height := tp.GetInnerRect()
 	if width <= 0 || height <= 0 {
@@ -2084,9 +2098,7 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 			// size, not a further-back extend. Reading strictly further back
 			// each ceiling hit breaks the density-underestimate stall where
 			// scrollOffset is clamped to a maxScroll the heuristic can't grow.
-			extend := alive && tp.replayEmu != nil &&
-				tp.replayEmuCols == replayCols && tp.replayEmuRows == replayRows &&
-				prevFirstByte > 0 && scrollOffset > tp.replayEmuMaxScroll
+			extend := tp.replayExtendWantedLocked(alive, replayCols, replayRows, scrollOffset)
 			var replayDataCopy []byte
 			if len(tp.replayData) > 0 {
 				replayDataCopy = tp.replayData
@@ -2174,9 +2186,11 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 // Defect 5 monotonic-firstByteOffset clamp can keep growing the read window
 // as the agent writes more output; without an upper bound, an agent that
 // runs for hours would force a multi-hundred-MB synchronous read on each
-// scroll-past-maxScroll. 64MB covers roughly 200K lines of dense output at
-// typical widths — far beyond what a user scrolls through interactively.
-const replayRebuildMaxBytes = 64 * 1024 * 1024
+// scroll-past-maxScroll. 24MB covers tens of thousands of lines of dense
+// output — beyond what a user scrolls through interactively — and keeps the
+// transient pre-trim peak bounded (a dense feed costs ~57 MB heap per 8 MB;
+// see replayScrollbackCellBudget and gotchas/pty-terminal.md).
+const replayRebuildMaxBytes = 24 * 1024 * 1024
 
 // asyncReplayRebuild performs the heavy replay emulator build (file I/O + VT emulation)
 // on a background goroutine. When done, it stores the result and triggers a redraw.
@@ -2281,6 +2295,14 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 	// title can't leak onto the scrollback view.
 	_, _ = SafeEmuWrite(emu, FilterOSC(ClampScrollRegion(AlignToEscBoundary(raw), ptyCols, ptyRows)))
 
+	// Bound retained memory: trim oldest scrollback to the cell budget before
+	// maxScroll is derived, so the scroll range matches what is retained.
+	trimmedLines := TrimScrollbackToCells(emu, replayScrollbackCellBudget, replayScrollbackSize)
+	if trimmedLines > 0 {
+		uxlog.Log("[terminalpane] replay scrollback trimmed for %s: dropped %d oldest lines to fit %d-cell budget (kept %d)",
+			taskID, trimmedLines, replayScrollbackCellBudget, emu.ScrollbackLen())
+	}
+
 	// Compute max scroll from emulator's scrollback capacity.
 	sbLen := emu.ScrollbackLen()
 	lastRow := FindLastContentRowEmu(emu, ptyCols, ptyRows)
@@ -2336,6 +2358,7 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 	// linear scrollback (BUG-082 — see InAltScreen).
 	tp.replayEmuAltScreen = emu.IsAltScreen()
 	tp.replayEmuMaxScroll = maxScroll
+	tp.replayEmuTrimmed = trimmedLines > 0
 	// firstByteOffset = logSize - bytes-fed. When we fed from the log,
 	// that's the position of the first byte in `raw`; when we fell back
 	// to the ring buffer (logSize=0), no monotonic clamp is possible and
@@ -2868,7 +2891,7 @@ func (tp *TerminalPane) resetLiveEmulatorInPlace() {
 	}
 	tp.emuGen.Add(1)
 	_, _ = SafeEmuWrite(tp.emu, []byte("\x1bc"))
-	tp.emu.ClearScrollback()
+	ReleaseScrollback(tp.emu) // ClearScrollback alone keeps the peak reachable
 }
 
 // retireReplayEmulator moves the currently-published replay emulator (if
@@ -2946,7 +2969,7 @@ func (tp *TerminalPane) acquireReplayEmulatorForRebuild(cols, rows int, onCursor
 			emu.Resize(cols, rows)
 		}
 		_, _ = SafeEmuWrite(emu, []byte("\x1bc"))
-		emu.ClearScrollback()
+		ReleaseScrollback(emu) // ClearScrollback alone keeps the peak reachable
 	}
 	if onCursorVisible != nil {
 		emu.Emulator.SetCallbacks(xvt.Callbacks{
@@ -2956,6 +2979,59 @@ func (tp *TerminalPane) acquireReplayEmulatorForRebuild(cols, rows int, onCursor
 		onCursorVisible(false)
 	}
 	return emu
+}
+
+// replayExtendWantedLocked reports whether a rebuild should read further back
+// than the loaded window (BUG-E). A TRIMMED build is already as deep as the
+// cell budget allows — extending would be trimmed straight back and re-read
+// the log every frame. Callers hold tp.mu.
+func (tp *TerminalPane) replayExtendWantedLocked(alive bool, cols, rows, scrollOffset int) bool {
+	return alive && tp.replayEmu != nil &&
+		tp.replayEmuCols == cols && tp.replayEmuRows == rows &&
+		tp.replayEmuFirstByte > 0 && !tp.replayEmuTrimmed && scrollOffset > tp.replayEmuMaxScroll
+}
+
+// ReleaseIdle shrinks the pane's replay emulators once the pane has not been
+// drawn for idleFor (<=0 disables): spares are emptied in place and the
+// published replay emulator is retired, emptied and unpublished so the next
+// Draw rebuilds it like a first view. Emulators are never closed or dropped
+// (see ReleaseScrollback). It must run on the tview goroutine so it
+// serializes with Draw, which paints the published emulator outside tp.mu.
+// Returns whether anything was released.
+func (tp *TerminalPane) ReleaseIdle(now time.Time, idleFor time.Duration) bool {
+	if idleFor <= 0 || now.Sub(time.Unix(0, tp.lastDrawNanos.Load())) < idleFor {
+		return false
+	}
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	if tp.replayBuilding {
+		return false // the in-flight rebuild owns an emulator; retry next tick
+	}
+	released := 0
+	if tp.replayEmu != nil {
+		tp.retireReplayEmulator()
+		tp.replayEmuBytes = 0
+		tp.replayEmuLogSize = 0
+		tp.replayEmuMaxScroll = 0
+		tp.replayEmuAltScreen = false
+		tp.replayEmuFirstByte = 0
+		tp.replayEmuTrimmed = false
+		tp.replayGen++
+		released++
+	}
+	freed := 0
+	for _, e := range []*xvt.SafeEmulator{tp.replayEmuSpare, tp.replayEmuParked} {
+		if e != nil && e.ScrollbackLen() > 0 {
+			ReleaseScrollback(e)
+			freed++
+		}
+	}
+	if released == 0 && freed == 0 {
+		return false
+	}
+	uxlog.Log("[terminalpane] idle release for %s: published=%d spares-emptied=%d (undrawn >= %s)",
+		tp.taskID, released, freed, idleFor)
+	return true
 }
 
 // --- Diff rendering ---

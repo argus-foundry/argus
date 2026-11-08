@@ -1714,6 +1714,9 @@ func (a *App) onTick() {
 	// so it can never fight the main agent view's resize of the same task.
 	a.heraPage.SyncPanes()
 
+	// Shrink replay emulators of panes nobody has looked at for a while.
+	a.releaseIdlePaneMemory()
+
 	// Read daemon state for health check BEFORE QueueUpdateDraw — daemon
 	// fields are protected by a.mu and don't touch tview widgets.
 	a.mu.Lock()
@@ -8272,4 +8275,26 @@ func (a *App) exitAgentView() {
 	// Also clear any transient info notice (e.g. the remote-fork
 	// "context not carried" message) so it doesn't linger on the task list.
 	a.statusbar.ClearInfo()
+}
+
+// releaseIdlePaneMemory asks every terminal pane to release replay emulators
+// it has not drawn for a while. The release runs on the tview goroutine so it
+// serializes with Draw (which paints the published emulator outside the pane
+// lock). No-op before the event loop exists (bare-New() unit tests).
+func (a *App) releaseIdlePaneMemory() {
+	if a.tapp == nil || a.agentPane == nil || a.heraPage == nil {
+		return
+	}
+	panes := []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane()}
+	a.tapp.QueueUpdate(func() {
+		now := time.Now()
+		for _, p := range panes {
+			releaseIdlePane(p, now)
+		}
+	})
+}
+
+// releaseIdlePane is a seam so tests can observe the tick hook's reach.
+var releaseIdlePane = func(p *terminal.TerminalPane, now time.Time) {
+	p.ReleaseIdle(now, terminal.ReplayIdleRelease)
 }
