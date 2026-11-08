@@ -61,7 +61,13 @@ destdir=$(dirname "$dest")
 mkdir -p "$destdir" || die "cannot create $destdir"
 
 tmp="$dest.new.$$"
-trap 'rm -f "$tmp"' EXIT INT TERM
+# Remove the temp (and any codesign sidecar like $tmp.cstemp) on EVERY exit
+# path: die(), codesign timeout, or a signal. INT/TERM must `exit` — a trap
+# that only cleans would let the script resume after the signal.
+cleanup() { rm -f "$tmp" "$tmp".*; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # 1. Build to a temp path (same dir => same filesystem => atomic rename).
 if [ -n "${ARGUS_BUILD_CMD:-}" ]; then

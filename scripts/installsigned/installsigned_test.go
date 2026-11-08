@@ -81,6 +81,8 @@ func run(t *testing.T, env ...string) result {
 	el := time.Since(start)
 	b, _ := os.ReadFile(dest)
 	lg, _ := os.ReadFile(logp)
+	left, _ := filepath.Glob(dest + ".new.*")
+	testutil.Equal(t, len(left), 0) // temp file cleaned on every path
 	return result{string(out), runErr, string(b), string(lg), el}
 }
 
@@ -133,4 +135,41 @@ func TestInstallSigned(t *testing.T) {
 		testutil.Equal(t, r.err != nil, true)
 		testutil.Equal(t, r.dest, "OLD\n")
 	})
+}
+
+// TestDefaultBuildKeepsVCSStamp proves the build-to-temp path still embeds
+// vcs.revision/vcs.modified (which `argus doctor` and the skew modal read), by
+// running the script's real default build inside a throwaway git repo.
+func TestDefaultBuildKeepsVCSStamp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go build")
+	}
+	repo := t.TempDir()
+	sh := func(name string, args ...string) {
+		c := exec.Command(name, args...)
+		c.Dir = repo
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+		}
+	}
+	testutil.NoError(t, os.MkdirAll(filepath.Join(repo, "cmd", "argus"), 0o755))
+	testutil.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module vp\n\ngo 1.26\n"), 0o644))
+	testutil.NoError(t, os.WriteFile(filepath.Join(repo, "cmd", "argus", "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644))
+	sh("git", "init", "-q")
+	sh("git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
+	sh("git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+
+	dest := filepath.Join(t.TempDir(), "bin", "argus") // outside the repo: no dirty tree
+	script, err := filepath.Abs("../install-signed.sh")
+	testutil.NoError(t, err)
+	cmd := exec.Command("/bin/sh", script)
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "ARGUS_INSTALL_BIN="+dest, "ARGUS_SKIP_SIGN=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("install-signed: %v\n%s", err, out)
+	}
+	out, err := exec.Command("go", "version", "-m", dest).CombinedOutput()
+	testutil.NoError(t, err)
+	testutil.Contains(t, string(out), "vcs.revision=")
+	testutil.Contains(t, string(out), "vcs.modified=false")
 }
