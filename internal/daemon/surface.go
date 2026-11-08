@@ -202,7 +202,11 @@ const (
 	// 37: the bridge mod hooks prompt.suggest and reports the engine's suggested
 	//     next prompt. A stale supervisor spawns sessions with the older mod,
 	//     which never reports a suggestion.
-	SupervisorSpawnSurface = 37
+	// 38: the argus-bridge mod reports the Claude composer draft and puts a
+	//     handed-back draft into a resumed session's box (kick-timing-keep-place).
+	//     A stale supervisor's sessions never report drafts, so the TUI falls
+	//     back to its typed-since-submit signal and a kick restores nothing.
+	SupervisorSpawnSurface = 38
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -257,7 +261,12 @@ const (
 	//     exit (which skipped the daemon's status flip).
 	//   - v14: SessionStatus/ListSessions expose the immutable bridge launch
 	//     generation so a resumed transcript cannot inherit old authority.
-	SupervisorStreamSurface = 14
+	//   - v15: GetExitInfo answers StreamLost=true (never a zero, clean-looking
+	//     ExitInfo) when it has no recorded exit for the reader, and
+	//     SessionStatus surfaces a failed supervisor probe as an error instead
+	//     of Alive=false — a post-restart probe can no longer manufacture a
+	//     clean exit that completes a live coordinator.
+	SupervisorStreamSurface = 15
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -423,6 +432,7 @@ var SupervisorSpawnPaths = []string{
 	"internal/bridgemod/mod/argus-bridge/.claude-plugin/plugin.json", // the mod the spawned session loads
 	"internal/bridgemod/mod/argus-bridge/hooks/hooks.json",
 	"internal/bridgemod/mod/argus-bridge/hooks/delivery.ts",
+	"internal/bridgemod/mod/argus-bridge/hooks/draft.ts",
 	"internal/bridgemod/mod/argus-bridge/hooks/measure.ts",
 	"internal/bridgemod/mod/argus-bridge/hooks/register.ts",
 	"internal/bridgemod/mod/argus-bridge/hooks/reporter.ts",
@@ -495,8 +505,8 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "53d4353558282648347698bbb0b8949f597cfcd841ae222090d38eae0d93d161"
-	StreamSurfaceDigest = "4db586fb7dcaf62899cb2ebc82bbaa7fcc325d7cf99611f5f7942c44f9bc9467"
+	SpawnSurfaceDigest  = "983bcdf3c032e68533a51da7f2b3fc46e6cff8d85eceb426c94cc0d7f634d930"
+	StreamSurfaceDigest = "b9f594956c180bcbc961311b610ed96c9dbd53daeaba8855212b30c62959b495"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

@@ -279,10 +279,22 @@ const KickDebounce = 300 * time.Millisecond
 // "rerender deferred" uxlog line every 300ms for the whole busy stretch
 // (BUG-077). 10s keeps retry pressure on the daemon negligible while still
 // catching the agent going idle well within a session's lifetime. Consecutive
-// deferrals double the dwell up to 60s; a rebind resets it.
+// deferrals back off to kickRetryMax; a rebind or a zoom toggle resets it.
 const KickRetryInterval = 10 * time.Second
 
-const kickRetryMax = 60 * time.Second
+// kickRetryMax caps the deferral backoff. It was 60s, which starved a
+// constantly-busy coordinator for minutes: the retry only samples "idle" once
+// per interval, and a coordinator idles in short gaps between tool calls. The
+// interim view (replay at the authored width) keeps a pending pane readable,
+// so a tight cap costs only one cheap IsIdle/InitialPTYSize decision per
+// pane per 15s while it buys the earliest possible repair after a gap (9a).
+const kickRetryMax = 15 * time.Second
+
+// ZoomKickDebounce is the dwell for a Ctrl+Z fullscreen toggle. A toggle is a
+// discrete user action, not a drag or a rail traversal, so it skips the 300ms
+// KickDebounce dwell meant to collapse kick storms; the short dwell only
+// collapses an accidental double-tap into one evaluation at the settled width.
+const ZoomKickDebounce = 100 * time.Millisecond
 
 // kickPending tracks an armed-but-unfired size-drift kick candidate for one
 // pane (HeraPage.coordKickPending / agentKickPending). The zero value means
@@ -294,6 +306,10 @@ type kickPending struct {
 	cols       int
 	deadline   time.Time
 	retryDelay time.Duration
+	// held is true while the pane is scrolled up and the evaluation is being
+	// withheld (kick-timing-keep-place); the first frame back at the bottom
+	// clears it and restarts the dwell from scratch.
+	held bool
 }
 
 // maybeKickPaneRerender evaluates the shared size-drift kill+resume decision
@@ -343,7 +359,14 @@ type kickPending struct {
 // The callback can also fire synchronously inside the kickRerender call itself
 // (the "kick already in flight" early return), before maybeKickPaneRerender
 // returns.
-func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols int, pending *kickPending) {
+//
+// scrolledUp (kick-timing-keep-place) is whether THIS pane is scrolled above
+// the bottom of its scrollback. While it is, and the keep-place setting is on,
+// no evaluation is issued (no decision RPCs, no log spam): the pending kick is
+// held, and the first frame back at the bottom restarts the KickDebounce dwell
+// so the kick never lands while the user is reading and fires only after they
+// have settled at the bottom.
+func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols int, pending *kickPending, scrolledUp bool) {
 	if p.kickRerender == nil || bound == "" || cols <= 0 {
 		return
 	}
@@ -355,9 +378,10 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 	// the toggle moved the width — rapid toggling keeps pushing the deadline, so
 	// it collapses into one evaluation at the settled width.
 	if p.layoutShifted && pending.taskID == bound && pending.cols != cols {
-		uxlog.Log("[hera-view] fullscreen width change task=%s cols %d->%d: re-arming size-drift kick evaluation", bound, pending.cols, cols)
+		uxlog.Log("[hera-view] fullscreen width change task=%s cols %d->%d: re-arming size-drift kick evaluation (dwell=%s, retry backoff reset from %s)", bound, pending.cols, cols, ZoomKickDebounce, pending.retryDelay)
 		*kickedFor = ""
-		pending.deadline = now.Add(KickDebounce)
+		pending.deadline = now.Add(ZoomKickDebounce)
+		pending.retryDelay = 0 // a fresh user action restarts the backoff
 	}
 	if *kickedFor == bound {
 		if pending.taskID == bound {
@@ -369,6 +393,18 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 		*pending = kickPending{taskID: bound, deadline: now.Add(KickDebounce)}
 	}
 	pending.cols = cols
+	if scrolledUp && p.KeepPlaceOn() {
+		if !pending.held {
+			uxlog.Log("[hera-view] size-drift kick held task=%s: pane scrolled up — waiting for the bottom", bound)
+		}
+		pending.held = true
+		return
+	}
+	if pending.held {
+		pending.held = false
+		pending.deadline = now.Add(KickDebounce)
+		uxlog.Log("[hera-view] size-drift kick resumed task=%s: pane back at the bottom, dwell restarted", bound)
+	}
 	if now.Before(pending.deadline) {
 		return // still dwelling
 	}
@@ -392,6 +428,26 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 		*pending = kickPending{taskID: deferredFor, deadline: p.kickClockNow().Add(retryDelay), retryDelay: nextDelay}
 		uxlog.Log("[rerender] retry armed task=%s delay=%s", deferredFor, retryDelay)
 	})
+}
+
+// SetKeepPlace wires the live ui.rerender_keep_place setting (kick-timing-keep-place).
+// Left nil (tests, remote mode), the keep-place hold is ON.
+func (p *HeraPage) SetKeepPlace(fn func() bool) { p.keepPlace = fn }
+
+// KeepPlaceOn reports whether the keep-place scroll hold is active.
+func (p *HeraPage) KeepPlaceOn() bool { return p.keepPlace == nil || p.keepPlace() }
+
+// TaskScrolledUp reports whether a pane currently bound to taskID is scrolled
+// above the bottom of its scrollback. The App's kick decision re-reads it on
+// the UI goroutine after its decision RPCs, to cover the round-trip window.
+func (p *HeraPage) TaskScrolledUp(taskID string) bool {
+	if taskID == "" {
+		return false
+	}
+	if p.coordBound == taskID && p.coordPane.ScrollOffset() > 0 {
+		return true
+	}
+	return p.agentBound == taskID && p.agentPane.ScrollOffset() > 0
 }
 
 // kickClockNow returns the current time for the kick debounce, defaulting to

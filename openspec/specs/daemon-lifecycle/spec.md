@@ -82,11 +82,23 @@ When a session exits, the daemon SHALL flip its task out of the in-progress stat
 
 ### Requirement: Cached exit info on session end
 
-When a session exits, the daemon SHALL cache its exit information (error string, stopped flag, last output, pending-restart flag) so a client can query it once after the stream closes. The cached info SHALL be consumed on read, returning empty thereafter.
+When a session exits, the daemon SHALL cache its exit information (error string, stopped flag, last output, pending-restart flag) so a client can query it once after the stream closes. The cached info SHALL be consumed on read. A query for which no exit is recorded (the session never exited, the record expired, or it was already consumed) SHALL answer a stream-lost result, never an empty record, because an empty record reads as a clean exit and would complete a live task. Stream-lost leaves task status unchanged.
 
 #### Scenario: Consume-once exit info
 - **WHEN** a client queries exit info for a finished session
-- **THEN** the cached info is returned and removed, and a subsequent query returns empty
+- **THEN** the cached info is returned and removed, and a subsequent query returns stream-lost
+
+#### Scenario: No recorded exit is not a clean exit
+- **WHEN** a client queries exit info for a session with no recorded exit, such as after a post-restart status probe wrongly reported it dead
+- **THEN** the result is stream-lost and the task's status is not changed to complete
+
+#### Scenario: Old server's empty record is not a clean exit
+- **WHEN** the daemon-side client receives an exit-info reply with no error, no stop, no pending restart and no captured output from a server that has not been restarted
+- **THEN** it treats the exit as unconfirmed (stream-lost) and the task's status is not changed to complete; an exit that carries output is still a clean exit
+
+#### Scenario: Failed supervisor probe is not a death verdict
+- **WHEN** the daemon cannot query the supervisor about a session
+- **THEN** the status probe fails with an error rather than reporting the session not alive
 
 ### Requirement: Post-exit session ID capture
 
@@ -258,4 +270,57 @@ On clean shutdown the daemon SHALL remove `~/.argus/api-port` only while it stil
 #### Scenario: Takeover
 - **WHEN** a newer daemon has already rewritten the port file with a different port
 - **THEN** the exiting daemon leaves it in place
+
+### Requirement: Session status never reports a live supervisor session dead from a detached handle
+
+In supervisor mode, when the daemon's cached handle for a session reads dead, the daemon SHALL ask the supervisor before answering a status probe: if the supervisor reports the session alive it SHALL report that; if the supervisor cannot be asked it SHALL answer an error rather than a verdict; only a supervisor-confirmed absence SHALL be reported as not alive. A daemon that is shutting down and has detached its supervisor client SHALL therefore never publish a death verdict for a session the supervisor still runs.
+
+#### Scenario: Detached daemon does not report a live session dead
+- **WHEN** the old daemon has detached its supervisor client during a restart and a client asks it for the status of a session the supervisor still runs
+- **THEN** the answer is an error (unknown) or alive, never not-alive
+
+#### Scenario: Genuine exit is still reported
+- **WHEN** the supervisor no longer has the session
+- **THEN** the status probe reports not alive with no error
+
+### Requirement: Daemon system notes coalesce
+
+The host-suspend and bounce system notes SHALL each be posted through the coalescing system-note path, so a task never accumulates more than one unread note of each type, and neither note counts as unread mail or toward the inbox cap.
+
+#### Scenario: Repeated suspends leave one note
+
+- **WHEN** the host suspends and resumes twice while a task is running
+- **THEN** the task holds exactly one unread host-suspend note, from the latest suspend
+
+### Requirement: Dead client connection does not trigger a daemon restart
+
+When the TUI's health-check pings fail repeatedly, it SHALL first dial a fresh connection to the daemon socket and ping it. If a live daemon answers, the TUI SHALL adopt that connection, reset its failure streak, and SHALL NOT shut down or spawn any daemon.
+
+#### Scenario: Live daemon behind a dead connection
+- **WHEN** three consecutive pings over the TUI's connection fail but a fresh connect-and-ping to the socket succeeds
+- **THEN** the TUI swaps to the fresh client, logs the reconnect, and starts no daemon
+
+#### Scenario: No daemon answers
+- **WHEN** a fresh connect-and-ping also fails
+- **THEN** the TUI proceeds with the cooldown-gated restart
+
+### Requirement: Restart shutdown reaches the live daemon
+
+When restarting the daemon, if the Shutdown RPC over the TUI's own connection fails, the TUI SHALL retry Shutdown over a fresh connection before spawning a replacement.
+
+#### Scenario: Own connection dead, daemon alive
+- **WHEN** Shutdown over the TUI's connection errors and a live daemon answers on a fresh connection
+- **THEN** Shutdown is delivered over the fresh connection
+
+### Requirement: AutoStart returns only the daemon it started
+
+`AutoStart` SHALL NOT return a client connected to a daemon that owned the socket before the spawn. It SHALL record the pre-spawn daemon's boot time, and accept only a live daemon whose boot time differs (or any live daemon if none answered before the spawn), waiting long enough for the successor to replace its predecessor.
+
+#### Scenario: Old daemon still owns the socket at spawn
+- **WHEN** a replacement is spawned while the old daemon still answers on the socket
+- **THEN** AutoStart keeps waiting, ignores the old daemon, and returns a client to the replacement once it owns the socket
+
+#### Scenario: Replacement never appears
+- **WHEN** only the pre-spawn daemon answers until the timeout
+- **THEN** AutoStart returns an error rather than a client to the old daemon
 

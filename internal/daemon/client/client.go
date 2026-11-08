@@ -342,6 +342,16 @@ func (c *Client) Get(taskID string) agent.SessionHandle {
 	return rs
 }
 
+// ProbeSession asks the server about one session and surfaces an RPC failure
+// as an error (Get folds it into nil). The daemon's SessionStatus uses it so a
+// supervisor probe that failed right after a daemon restart is never published
+// as "session is dead" (fix-bounce-false-complete).
+func (c *Client) ProbeSession(taskID string) (daemon.SessionInfo, error) {
+	var info daemon.SessionInfo
+	err := c.call("Daemon.SessionStatus", &daemon.TaskIDReq{TaskID: taskID}, &info)
+	return info, err
+}
+
 // Stop stops a session via RPC (full tree stop).
 func (c *Client) Stop(taskID string) error { return c.StopScoped(taskID, agent.StopTree) }
 
@@ -829,6 +839,14 @@ func (c *Client) removeSession(taskID string) {
 			// StreamLost so HandleSessionExit treats it as "process maybe alive,
 			// status unchanged" — the tick reconciler later lands it InReview.
 			info.StreamLost = true
+		} else if info.NoEvidenceOfExit() {
+			// An older server (daemon or supervisor not yet restarted) answers
+			// "nothing recorded" with a zero ExitInfo, which reads as a clean
+			// exit. Right after a daemon restart a status probe can wrongly say
+			// a live session died; trusting that would complete a live
+			// coordinator (fix-bounce-false-complete). Treat it as unconfirmed.
+			uxlog.Log("client.removeSession: task=%s exit info carries no evidence of an exit, treating as stream lost", taskID)
+			info.StreamLost = true
 		}
 		uxlog.Log("client.removeSession: task=%s exitInfo err=%v rpcErr=%v stopped=%v streamLost=%v lastOutput=%d bytes",
 			taskID, info.Err, err, info.Stopped, info.StreamLost, len(info.LastOutput))
@@ -862,6 +880,51 @@ func (c *Client) RoutingUsage() (backendtier.Usage, error) {
 	var usage backendtier.Usage
 	err := c.call("Daemon.RoutingUsage", &daemon.Empty{}, &usage)
 	return usage, err
+}
+
+// RoutingUsageFresh asks the daemon to probe usage now (debounced) and returns
+// the result. It can outlast the normal RPC deadline: a probe round may take
+// several seconds (the daemon caps it at 5s).
+func (c *Client) RoutingUsageFresh() (backendtier.Usage, error) {
+	var usage backendtier.Usage
+	err := c.callWithTimeout("Daemon.RoutingUsageFresh", &daemon.Empty{}, &usage, 15*time.Second)
+	return usage, err
+}
+
+// RoutingUsageResilient is RoutingUsage that survives a daemon bounce. This
+// client's connection is never re-dialed, so after the daemon restarts every
+// call on it fails with "connection is shut down" and tier routing in the TUI
+// silently saw every account as unknown (fail-open → the depleted default
+// account). On failure it asks the socket once through a short-lived fresh
+// connection; the original error is returned if that also fails.
+func (c *Client) RoutingUsageResilient() (backendtier.Usage, error) {
+	return c.resilientUsage((*Client).RoutingUsage)
+}
+
+// RoutingUsageFreshResilient is RoutingUsageFresh with the same
+// reconnect-once behavior as RoutingUsageResilient.
+func (c *Client) RoutingUsageFreshResilient() (backendtier.Usage, error) {
+	return c.resilientUsage((*Client).RoutingUsageFresh)
+}
+
+func (c *Client) resilientUsage(call func(*Client) (backendtier.Usage, error)) (backendtier.Usage, error) {
+	usage, err := call(c)
+	if err == nil || c == nil || c.sockPath == "" {
+		return usage, err
+	}
+	fresh, derr := Connect(c.sockPath)
+	if derr != nil {
+		uxlog.Log("[routing] usage RPC failed (%v) and fresh dial failed: %v", err, derr)
+		return usage, err
+	}
+	defer func() { _ = fresh.Close() }()
+	u2, ferr := call(fresh)
+	if ferr != nil {
+		uxlog.Log("[routing] usage RPC failed (%v) and fresh-connection retry failed: %v", err, ferr)
+		return usage, err
+	}
+	uxlog.Log("[routing] usage RPC recovered over a fresh daemon connection after: %v", err)
+	return u2, nil
 }
 
 // AccountUsageSource adapts AccountUsage for agent.SetAccountUsageSource. A

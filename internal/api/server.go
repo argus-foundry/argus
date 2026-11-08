@@ -78,6 +78,17 @@ type Server struct {
 	lastResizeMu   sync.Mutex
 	lastResizeCols map[string]uint16
 
+	// kickDeferSince is the per-task, per-width clock for keep-place deferrals
+	// of the resize-driven kick: started at the first deferral at a width and
+	// cleared by any non-deferral outcome. It bounds how long a client-reported
+	// typed flag may hold the kick (agent.KickDeferCap).
+	kickDeferMu    sync.Mutex
+	kickDeferSince map[string]kickDeferClock
+	// kickScreen re-emulates a session's output tail to read the rendered
+	// Claude composer; kickScreenMu serializes its (non-reentrant) use.
+	kickScreenMu sync.Mutex
+	kickScreen   agent.ScreenRenderer
+
 	// pluginSections is the in-memory mirror of the `plugin_settings` table
 	// (PR 7 of the plugin substrate). The DB is the source of truth; this
 	// shadow lets the daemon answer "is this plugin still registered?"
@@ -191,6 +202,7 @@ func New(database *db.DB, runner agent.SessionRunner, token string, creator Task
 		eventBus:       newEventBus(),
 		stopCh:         make(chan struct{}),
 		lastResizeCols: make(map[string]uint16),
+		kickDeferSince: make(map[string]kickDeferClock),
 		pluginSections: settings.NewRegistry(),
 		metrics:        sysmetrics.New(db.DataDir()),
 		hostSleep:      hostsleep.NewMonitor(),

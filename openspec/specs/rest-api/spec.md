@@ -907,3 +907,67 @@ History paging SHALL use a full recipient/message-id index covering both read an
 
 - **WHEN** a task's ended and active roles have matching mail amid substantial unrelated read history
 - **THEN** each page seeks the matching recipients, cursor pages also seek `id < before_id`, and returned IDs remain oldest first within the selected newest page
+
+### Requirement: Targeted task pin action
+
+The system SHALL expose `POST /api/tasks/{id}/pin` accepting `{"pinned":<bool>}` and returning 200 `{"task_id","pinned","archived"}` reflecting the stored flags. It SHALL write only the pinned and archived columns using SetPinned semantics (pinning clears archived; unpinning leaves archived alone) and SHALL NOT overwrite any other task field or start or stop a session. A request that changes nothing SHALL succeed without emitting `task.updated`. The endpoint SHALL return 400 for malformed JSON, a missing, null or non-boolean `pinned`, unknown fields, trailing non-whitespace, multiple JSON values, or a body over 1 KiB (including trailing whitespace); 404 for an unknown task; 500 for a store failure; and SHALL be open to any authenticated token.
+
+#### Scenario: Pin preserves concurrent edits
+
+- **WHEN** a task is renamed and its status changed, then pinned via the endpoint
+- **THEN** the stored name and status are the newer values and only pinned changed
+
+#### Scenario: Pin restores an archived task
+
+- **WHEN** an archived task is pinned
+- **THEN** the response has `pinned:true, archived:false` and the stored row matches
+
+#### Scenario: Invalid body
+
+- **WHEN** the body is `{"pinned":"yes"}` or `{}` or contains an unknown field
+- **THEN** the response is 400 and nothing is stored or emitted
+
+#### Scenario: Complete pin request validation
+
+- **WHEN** a valid pin object is followed by garbage, another JSON value, or whitespace that takes the complete body above 1 KiB
+- **THEN** the response is 400 and no task field or event is changed
+
+#### Scenario: Pin body at the limit
+
+- **WHEN** exactly one valid pin object and optional whitespace occupy at most 1 KiB through EOF
+- **THEN** the request succeeds with the stored flags
+
+### Requirement: Resize reports client-side keep-place state
+
+`POST /api/tasks/{id}/resize` SHALL accept optional boolean `scrolled_up` and `composer_dirty` fields (absent means false) and SHALL return a `deferred` field: `"scrolled"`, `"draft"` or empty. When the resize would trigger the size-drift kill + resume, the daemon SHALL defer it when the composer holds unsent text (the Claude mod's report, else the rendered Claude composer read from the session's output tail when it is found, else `composer_dirty`) and otherwise when `scrolled_up` is true; the draft gate outranks the scroll gate. A deferral SHALL keep the task's cols cache invalidated so a later same-size resize re-evaluates, and SHALL be logged. `composer_dirty` alone SHALL stop holding after 10 minutes of deferrals at one width; the scroll gate is uncapped. The rendered-composer read SHALL run only while a kick is being evaluated. With `ui.rerender_keep_place` off both fields SHALL be ignored.
+
+#### Scenario: Scrolled-up client
+
+- **WHEN** a resize crosses the rerender margin with `scrolled_up` true and an empty composer
+- **THEN** no kick is queued, the response carries `deferred: "scrolled"`, and a later same-size resize with `scrolled_up` false kicks
+
+#### Scenario: Client flag only
+
+- **WHEN** no mod report exists, the composer is not found on screen, and `composer_dirty` is true
+- **THEN** the kick is deferred with `deferred: "draft"` until the flag clears or 10 minutes pass at that width
+
+#### Scenario: Screen overrides a stale flag
+
+- **WHEN** the rendered Claude composer is found empty and `composer_dirty` is true
+- **THEN** the flag does not hold the kick
+
+#### Scenario: Old client
+
+- **WHEN** a resize omits both fields
+- **THEN** behavior is unchanged from before this requirement
+
+#### Scenario: Setting off
+
+- **WHEN** `ui.rerender_keep_place` is off
+- **THEN** both fields are ignored and no screen read occurs
+
+#### Scenario: Steady state
+
+- **WHEN** a resize does not cross the margin, or the cols are unchanged
+- **THEN** the rendered-composer read does not run
+

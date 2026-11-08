@@ -22,6 +22,8 @@ const (
 	TypeCleared      = "cleared"
 	TypeMeasure      = "session.measure"
 	TypeHeartbeat    = "heartbeat"
+	// TypeDraft reports the prompt-box draft (kick-timing-keep-place).
+	TypeDraft = "draft"
 
 	TypeSuggestionChanged = "suggestion.changed"
 	TypeSuggestionCleared = "suggestion.cleared"
@@ -150,6 +152,9 @@ type Event struct {
 	Model string `json:"model,omitempty"`
 	Cwd   string `json:"cwd,omitempty"`
 
+	// session.start: the mod reports composer drafts (kick-timing-keep-place).
+	DraftAware bool `json:"draft_aware,omitempty"`
+
 	// turn.start / turn.complete
 	TurnID string `json:"turn_id,omitempty"`
 	Reason string `json:"reason,omitempty"`
@@ -160,8 +165,11 @@ type Event struct {
 	Tool       string `json:"tool,omitempty"`
 	ToolUseID  string `json:"tool_use_id,omitempty"`
 
-	// suggestion.changed
+	// suggestion.changed carries the suggested prompt; draft carries the
+	// prompt-box text. Empty draft text means an empty box.
 	Text string `json:"text,omitempty"`
+	// draft: cursor offset into Text (UTF-16 code units, as the engine reports).
+	Cursor int `json:"cursor,omitempty"`
 
 	// session.measure
 	Context    *Context    `json:"context,omitempty"`
@@ -203,7 +211,7 @@ type Batch struct {
 func knownType(t string) bool {
 	switch t {
 	case TypeSessionStart, TypeTurnStart, TypeTurnComplete, TypeNeedsInput,
-		TypeCleared, TypeMeasure, TypeHeartbeat, TypeSuggestionChanged, TypeSuggestionCleared:
+		TypeCleared, TypeMeasure, TypeHeartbeat, TypeDraft, TypeSuggestionChanged, TypeSuggestionCleared:
 		return true
 	}
 	return false

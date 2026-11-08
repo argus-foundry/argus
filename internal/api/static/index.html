@@ -2079,6 +2079,7 @@ function onTermScrollEnd() {
   clearTimeout(composeScrollRecoveryTimer);
   composeScrollRecoveryTimer = null;
   drainIfSettled();
+  keepPlaceOnScroll();
 }
 
 function scheduleComposeScrollRecovery() {
@@ -2916,6 +2917,9 @@ function setupTerm() {
 // split: recordInputBytes strips bracketed-paste markers, accumulates the
 // message body, then recordInputBytes('\r') flushes the entry.
 function postInputBytes(taskId, data) {
+  if (currentTask && currentTask.id === taskId && typeof data === 'string') {
+    composerTyped = composerTypedFold(composerTyped, data);
+  }
   recordInputBytes(taskId, data);
   if (restartQueue && restartQueue.taskId === taskId) {
     return Promise.resolve(enqueueRestartInput(data));
@@ -3227,6 +3231,9 @@ function destroyTerm() {
   // Reset rerender expectation — the next attachTerminal starts fresh, no
   // pending /resize response should carry over from the previous task.
   setExpectingRerender(false);
+  // Keep-place state and the retry timer die with the terminal view, so a
+  // dismissed or switched-away view never keeps POSTing /resize.
+  clearKeepPlace();
   // Compose bar tracks term lifecycle — every teardown path (closeDetail,
   // switchTab, showOffline, mid-attachTerminal swap) must hide it. Centralising
   // here so callers can't forget. Re-shown by the next attachTerminal when the
@@ -3378,6 +3385,7 @@ document.getElementById('jump-bottom').addEventListener('click', () => {
   // Prefer compose-input on touch; see focusInputOrTerm.
   focusInputOrTerm();
   updateJumpButton();
+  keepPlaceOnScroll();
 });
 
 // expectingRerender is true between a /resize POST that returned
@@ -3411,18 +3419,114 @@ function fit() {
   if (cols === lastTerm.cols && rows === lastTerm.rows) return;
   lastTerm = { cols, rows };
   if (currentTask && currentTask.status === 'in_progress') {
-    const taskId = currentTask.id;
-    fetch(API + `/api/tasks/${taskId}/resize`, {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cols, rows }),
-    }).then(r => r.ok ? r.json() : null).then(j => {
-      if (j && j.rerendered && currentTask && currentTask.id === taskId) {
-        setExpectingRerender(true);
-        beginRestartQueue(taskId);
-      }
-    }).catch(() => {});
+    postResize(currentTask.id, cols, rows);
   }
+}
+
+// --- Keep place across a width re-render (kick-timing-keep-place) ---
+//
+// The daemon's size-drift kick kills + resumes the agent, which would lose the
+// user's scroll position and any unsent composer text. The daemon can't see
+// either, so every /resize reports them; when it answers `deferred`, we owe it
+// a same-size retry (its cols cache is invalidated on a deferral) on a timer
+// and when the viewport returns to the bottom. Kept as small pure functions;
+// there is no SPA unit harness, so these are covered by the daemon tests only.
+
+// Typed-since-submit fold, the same rules as agentview.ComposerTyped (Go) and
+// KeepPlace.composerTyped (Swift): printable and pasted bytes set the flag;
+// CR, Ctrl+C and Ctrl+U clear it; escape sequences, other control bytes and DEL
+// are ignored (DEL cannot prove the box is empty again).
+function composerTypedFold(typed, str) {
+  let pasting = false;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    if (c === 0x1b) {
+      const n = str[i + 1];
+      if (n === undefined) break;
+      if (n === '[') {
+        let j = i + 2;
+        while (j < str.length && str.charCodeAt(j) >= 0x20 && str.charCodeAt(j) <= 0x3f) j++;
+        if (j >= str.length) break;
+        const seq = str.slice(i, j + 1);
+        if (seq === '\x1b[200~') pasting = true;
+        else if (seq === '\x1b[201~') pasting = false;
+        i = j;
+      } else if (n === 'O') {
+        i = Math.min(i + 2, str.length - 1);
+      } else {
+        i += 1; // Alt+key: ESC plus one char
+      }
+    } else if (pasting) {
+      typed = true;
+    } else if (c === 0x0d || c === 0x03 || c === 0x15) {
+      typed = false;
+    } else if (c < 0x20 || c === 0x7f) {
+      // other control bytes: no effect
+    } else {
+      typed = true;
+    }
+  }
+  return typed;
+}
+
+// Retry only while the daemon still reports a deferral for the task on screen
+// and the page is visible with a live terminal.
+function keepPlaceShouldRetry(deferred, sameTask, visible, hasTerm) {
+  return !!deferred && sameTask && visible && hasTerm;
+}
+
+let composerTyped = false;        // per-task; reset in destroyTerm
+let keepPlaceDeferred = '';       // '', 'scrolled' or 'draft'
+let keepPlaceTimer = null;
+const KEEP_PLACE_RETRY_MS = 10000;
+
+function clearKeepPlace() {
+  clearTimeout(keepPlaceTimer);
+  keepPlaceTimer = null;
+  keepPlaceDeferred = '';
+  composerTyped = false;
+}
+
+function postResize(taskId, cols, rows) {
+  const body = { cols, rows, scrolled_up: !termIsAtBottom(), composer_dirty: composerTyped };
+  return fetch(API + `/api/tasks/${taskId}/resize`, {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(r => r.ok ? r.json() : null).then(j => {
+    if (!j || !currentTask || currentTask.id !== taskId) return;
+    if (j.rerendered) {
+      keepPlaceDeferred = '';
+      clearTimeout(keepPlaceTimer);
+      setExpectingRerender(true);
+      beginRestartQueue(taskId);
+      return;
+    }
+    keepPlaceDeferred = j.deferred || '';
+    scheduleKeepPlaceRetry(taskId);
+  }).catch(() => {});
+}
+
+function scheduleKeepPlaceRetry(taskId) {
+  clearTimeout(keepPlaceTimer);
+  keepPlaceTimer = null;
+  const same = !!currentTask && currentTask.id === taskId;
+  if (!keepPlaceShouldRetry(keepPlaceDeferred, same, !document.hidden, !!term)) {
+    keepPlaceDeferred = '';
+    return;
+  }
+  keepPlaceTimer = setTimeout(() => {
+    keepPlaceTimer = null;
+    if (term && lastTerm.cols) postResize(taskId, lastTerm.cols, lastTerm.rows);
+  }, KEEP_PLACE_RETRY_MS);
+}
+
+// The viewport settled back at the bottom: a kick that was waiting on scroll
+// position can proceed now, without waiting out the timer.
+function keepPlaceOnScroll() {
+  if (keepPlaceDeferred !== 'scrolled' || !currentTask || !term || !lastTerm.cols) return;
+  if (!termIsAtBottom()) return;
+  postResize(currentTask.id, lastTerm.cols, lastTerm.rows);
 }
 
 function openStream(id, since) {
@@ -5332,6 +5436,9 @@ function syncViewportOnForeground() {
 }
 window.addEventListener('pageshow', syncViewportOnForeground);
 document.addEventListener('visibilitychange', syncViewportOnForeground);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { clearTimeout(keepPlaceTimer); keepPlaceTimer = null; keepPlaceDeferred = ''; }
+});
 
 // --- Create Task ---
 // Set on the first completed loadProjects()/loadBackends() — regardless of
@@ -5411,9 +5518,9 @@ async function loadBackends() {
 
 // Accounts: the Account select lists the default account plus every account
 // that supports the selected backend's tool, and is shown only when that is
-// more than the default. Options carry the account name ("default" included):
-// a visible select is always an explicit choice, while "" (field hidden) lets
-// the daemon resolve the project / global default.
+// more than the default. Options carry the account name ("default" included).
+// Choosing a named account pins it; "default" (and a hidden field) submit ""
+// so the daemon routes by usage headroom (auto-account-routing).
 let createAccounts = [];
 // The name the user last picked; survives backend changes, reset on project change.
 let createAccountPicked = '';
@@ -5475,6 +5582,7 @@ function updateCreateAccountVisibility() {
         : 'not logged in';
     }
     opt.textContent = who ? a.name + ' - ' + who : a.name;
+    if (a.name === 'default') opt.textContent += ' (auto-routed)';
     sel.appendChild(opt);
   }
   sel.value = pickCreateAccount(usable, createAccountPicked);
@@ -5487,7 +5595,7 @@ function createAccountValue() {
   const grp = document.getElementById('create-account-group');
   const sel = document.getElementById('create-account');
   if (!grp || !sel || grp.style.display === 'none') return '';
-  return sel.value;
+  return sel.value === 'default' ? '' : sel.value;
 }
 
 // CREATE_MODEL_CUSTOM is the sentinel <option> value for the "custom…" entry.

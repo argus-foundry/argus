@@ -52,7 +52,7 @@ func TestTaskCreate_Account(t *testing.T) {
 		{name: "cwd inherits", args: `{"cwd":"/tmp/worktrees/myapp/caller/sub"}`, wantAccount: "work", wantInherited: true},
 		{name: "explicit overrides caller", args: `{"caller_id":"caller1","account":"personal"}`, wantAccount: "personal"},
 		{name: "explicit default overrides caller", args: `{"caller_id":"caller1","account":"default"}`, wantAccount: "default"},
-		{name: "default-account caller pins default", args: `{"caller_id":"plain1"}`, wantAccount: "default", wantInherited: true},
+		{name: "blank-account caller lets the child route", args: `{"caller_id":"plain1"}`},
 		{name: "routed caller lets the child route", args: `{"caller_id":"routed1"}`},
 		{name: "explicit overrides routed caller", args: `{"caller_id":"routed1","account":"work"}`, wantAccount: "work"},
 		{name: "unresolvable caller inherits nothing", args: `{"cwd":"/nowhere"}`},

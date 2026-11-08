@@ -165,16 +165,16 @@ func (d *DB) addLocked(t *model.Task) error {
 }
 
 func (d *DB) Update(t *model.Task) error {
-	oldStatus, oldArchived, hadOld, err := d.updateLocked(t)
+	old, err := d.updateLocked(t)
 	if err != nil {
 		return err
 	}
-	// Status-change events fire AFTER the lock is released to avoid deadlock
-	// with the events sink (which re-acquires d.mu via InsertEvent). Compare
-	// against the snapshot we captured inside updateLocked.
-	if hadOld && oldStatus != t.Status {
+	// Events fire AFTER the lock is released to avoid deadlock with the events
+	// sink (which re-acquires d.mu via InsertEvent). Compare against the
+	// snapshot captured inside updateLocked.
+	if old != nil && old.Status != t.Status {
 		events.Emit(model.EventTypeTaskStatusChanged, t.ID, map[string]string{
-			"from": oldStatus.String(),
+			"from": old.Status.String(),
 			"to":   t.Status.String(),
 		})
 		if t.Status == model.StatusComplete {
@@ -186,32 +186,23 @@ func (d *DB) Update(t *model.Task) error {
 	// the row. HTTP /api/tasks PUT and MCP task_archive both flow through
 	// Update; without this they would silently flip the bit and leave any
 	// downstream view of "live bindings" stale.
-	if hadOld && !oldArchived && t.Archived {
+	if old != nil && !old.Archived && t.Archived {
 		events.Emit(model.EventTypeTaskArchived, t.ID, nil)
+	}
+	if old != nil {
+		events.EmitTaskUpdated(t.ID, model.ChangedTaskFields(old, t)...)
 	}
 	return nil
 }
 
-func (d *DB) updateLocked(t *model.Task) (model.Status, bool, bool, error) {
+func (d *DB) updateLocked(t *model.Task) (*model.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Capture old status + archived state BEFORE the write so the post-unlock
-	// emission sees the transition. A row that doesn't exist yet (hadOld=false)
-	// is the "row missing" case that returns ErrTaskNotFound below; we
-	// suppress the event for that.
-	var (
-		oldStatus    model.Status
-		oldArchived  bool
-		hadOld       bool
-		oldStatusStr string
-		oldArchInt   int
-	)
-	if err := d.conn.QueryRow(`SELECT status, archived FROM tasks WHERE id=?`, t.ID).Scan(&oldStatusStr, &oldArchInt); err == nil {
-		oldStatus, _ = model.ParseStatus(oldStatusStr)
-		oldArchived = oldArchInt != 0
-		hadOld = true
-	}
+	// Snapshot the row BEFORE the write so the post-unlock emission sees the
+	// transition. A missing row (old=nil) falls through to ErrTaskNotFound
+	// below and suppresses events.
+	old, _ := scanTask(d.conn.QueryRow(`SELECT `+taskColumns+` FROM tasks WHERE id=?`, t.ID))
 
 	sandboxedInt := 0
 	if t.Sandboxed {
@@ -230,13 +221,13 @@ func (d *DB) updateLocked(t *model.Task) (model.Status, bool, bool, error) {
 		t.BaseBranch, t.Result, t.Archetype, t.Profile, t.SandboxOverride, t.Account, boolToInt(t.AccountRouted),
 		formatTime(t.CreatedAt), formatTime(t.StartedAt), formatTime(t.EndedAt), t.ID)
 	if err != nil {
-		return oldStatus, oldArchived, hadOld, err
+		return old, err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return oldStatus, oldArchived, hadOld, fmt.Errorf("%w: %s", ErrTaskNotFound, t.ID)
+		return old, fmt.Errorf("%w: %s", ErrTaskNotFound, t.ID)
 	}
-	return oldStatus, oldArchived, hadOld, nil
+	return old, nil
 }
 
 // Rename updates only the name column for a task.
@@ -251,6 +242,9 @@ func (d *DB) Rename(id, name string) error {
 		"from": oldName,
 		"to":   name,
 	})
+	if oldName != name {
+		events.EmitTaskUpdated(id, model.TaskFieldName)
+	}
 	return nil
 }
 
@@ -288,6 +282,9 @@ func (d *DB) RenameIfName(id, expected, newName string) (bool, error) {
 			"from": expected,
 			"to":   newName,
 		})
+		if expected != newName {
+			events.EmitTaskUpdated(id, model.TaskFieldName)
+		}
 	}
 	return ok, nil
 }
@@ -319,18 +316,31 @@ func (d *DB) renameIfNameLocked(id, expected, newName string) (bool, error) {
 // not parse the contents — it's the agent/orchestrator contract. Returns an
 // error if the row is missing. Idempotent: last write wins.
 func (d *DB) SetResult(id, result string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	res, err := d.conn.Exec(`UPDATE tasks SET result=? WHERE id=?`, result, id)
+	changed, err := d.setResultLocked(id, result)
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	if changed {
+		events.EmitTaskUpdated(id, model.TaskFieldResult)
 	}
 	return nil
+}
+
+func (d *DB) setResultLocked(id, result string) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	var old string
+	if err := d.conn.QueryRow(`SELECT result FROM tasks WHERE id=?`, id).Scan(&old); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+		}
+		return false, err
+	}
+	if _, err := d.conn.Exec(`UPDATE tasks SET result=? WHERE id=?`, result, id); err != nil {
+		return false, err
+	}
+	return old != result, nil
 }
 
 // SetArchived writes only the archived column (plus the pinned-clearing leg
@@ -351,11 +361,15 @@ func (d *DB) SetArchived(id string, archived bool) error {
 	// Both statements (tasks UPDATE + on-archive task_messages DELETE) run in
 	// one SQLite transaction so a crash between them can't leave an archived
 	// row with a queued inbox forever counting against the unread cap.
+	var oldArchived, oldPinned int
 	err := d.WithTx(func(tx *sql.Tx) error {
 		var (
 			res sql.Result
 			err error
 		)
+		if qerr := tx.QueryRow(`SELECT archived, pinned FROM tasks WHERE id=?`, id).Scan(&oldArchived, &oldPinned); qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
+			return qerr
+		}
 		if archived {
 			res, err = tx.Exec(`UPDATE tasks SET archived=1, pinned=0 WHERE id=?`, id)
 		} else {
@@ -384,7 +398,27 @@ func (d *DB) SetArchived(id string, archived bool) error {
 	if err == nil && archived {
 		events.Emit(model.EventTypeTaskArchived, id, nil)
 	}
+	if err == nil {
+		emitSectionChange(id, oldArchived != 0, oldPinned != 0, archived, pinnedAfterArchive(archived, oldPinned != 0))
+	}
 	return err
+}
+
+func pinnedAfterArchive(archived, oldPinned bool) bool {
+	return oldPinned && !archived
+}
+
+// emitSectionChange publishes task.updated for whichever of archived/pinned
+// actually moved, so a no-op toggle stays silent.
+func emitSectionChange(id string, oldArchived, oldPinned, newArchived, newPinned bool) {
+	var fields []string
+	if oldArchived != newArchived {
+		fields = append(fields, model.TaskFieldArchived)
+	}
+	if oldPinned != newPinned {
+		fields = append(fields, model.TaskFieldPinned)
+	}
+	events.EmitTaskUpdated(id, fields...)
 }
 
 // SetPinned writes only the pinned column (plus the archived-clearing leg of
@@ -394,31 +428,39 @@ func (d *DB) SetArchived(id string, archived bool) error {
 // just rewritten in the DB. Mirrors model.Task.SetPinned: pinning clears
 // archived; unpinning leaves archived alone.
 //
-// Unlike SetArchived, this emits no event — pin state has no event type in
-// internal/model and no consumer (hera, idle watcher, SSE) listens for it.
-// The old db.Update pin path emitted nothing pin-specific either, so this is
-// deliberate parity, not an omission.
+// Emits only the shared task.updated invalidation (changed_fields pinned
+// and/or archived), and only when a flag actually moved.
 func (d *DB) SetPinned(id string, pinned bool) error {
+	oldArchived, oldPinned, err := d.setPinnedLocked(id, pinned)
+	if err != nil {
+		return err
+	}
+	emitSectionChange(id, oldArchived, oldPinned, oldArchived && !pinned, pinned)
+	return nil
+}
+
+func (d *DB) setPinnedLocked(id string, pinned bool) (oldArchived, oldPinned bool, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	var (
-		res sql.Result
-		err error
-	)
+	var a, p int
+	if qerr := d.conn.QueryRow(`SELECT archived, pinned FROM tasks WHERE id=?`, id).Scan(&a, &p); qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
+		return false, false, qerr
+	}
+	var res sql.Result
 	if pinned {
 		res, err = d.conn.Exec(`UPDATE tasks SET pinned=1, archived=0 WHERE id=?`, id)
 	} else {
 		res, err = d.conn.Exec(`UPDATE tasks SET pinned=0 WHERE id=?`, id)
 	}
 	if err != nil {
-		return err
+		return false, false, err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+		return false, false, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
 	}
-	return nil
+	return a != 0, p != 0, nil
 }
 
 // SetStatus writes only the status column and its derived timestamps
@@ -441,6 +483,7 @@ func (d *DB) SetStatus(id string, s model.Status) error {
 		if s == model.StatusComplete {
 			events.Emit(model.EventTypeTaskCompleted, id, nil)
 		}
+		events.EmitTaskUpdated(id, model.TaskFieldStatus)
 	}
 	return nil
 }
@@ -539,6 +582,7 @@ func (d *DB) Delete(id string) error {
 		); err != nil {
 			return err
 		}
+		clearDeadRoleMailAfterEnd(tx, heraEndReasonTaskDeleted)
 		return nil
 	})
 }
@@ -782,16 +826,31 @@ func (d *DB) WorktreePaths() (map[string]bool, error) {
 // SetTaskAccount writes only a task's account and routed flag, so an account
 // move never reverts a concurrent edit to any other column.
 func (d *DB) SetTaskAccount(id, account string, routed bool) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	res, err := d.conn.Exec(`UPDATE tasks SET account=?, account_routed=? WHERE id=?`, account, boolToInt(routed), id)
+	changed, err := d.setTaskAccountLocked(id, account, routed)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	if changed {
+		events.EmitTaskUpdated(id, model.TaskFieldAccount)
 	}
 	return nil
+}
+
+func (d *DB) setTaskAccountLocked(id, account string, routed bool) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var oldAccount string
+	var oldRouted int
+	if err := d.conn.QueryRow(`SELECT account, account_routed FROM tasks WHERE id=?`, id).Scan(&oldAccount, &oldRouted); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+		}
+		return false, err
+	}
+	if _, err := d.conn.Exec(`UPDATE tasks SET account=?, account_routed=? WHERE id=?`, account, boolToInt(routed), id); err != nil {
+		return false, err
+	}
+	return oldAccount != account || (oldRouted != 0) != routed, nil
 }
 
 // TaskWorktreeRow is the minimal task projection `argus doctor` needs to map a

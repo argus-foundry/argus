@@ -138,14 +138,16 @@ func TestSupReattach(t *testing.T) {
 // only because the startup re-attach (Get) armed daemon #2's exit relay — without
 // it, the clean exit would never reach handleSessionExit. The agent blocks on a
 // sentinel file so it is provably still alive at re-attach, then exits 0 when we
-// create the file. (Non-hera task, so the clean exit lands Complete, not the
+// create the file. It prints before exiting, like any real agent: an exit that
+// carries no output at all is indistinguishable from "nothing recorded" and is
+// deliberately not trusted as clean (fix-bounce-false-complete). (Non-hera task, so the clean exit lands Complete, not the
 // worker InReview policy.)
 func TestSupReattachComplete(t *testing.T) {
 	supSock, database := reattachHarness(t)
 
 	wt := t.TempDir()
 	sentinel := filepath.Join(wt, "DONE")
-	cmd := "sh -c 'while [ ! -f " + sentinel + " ]; do sleep 0.05; done'"
+	cmd := "sh -c 'while [ ! -f " + sentinel + " ]; do sleep 0.05; done; echo bye'"
 
 	_, sc1 := connectDaemon(t, supSock, database)
 	task := startLive(t, sc1, database, "707b", cmd, wt)
@@ -162,4 +164,61 @@ func TestSupReattachComplete(t *testing.T) {
 	// ExitInfo to #2's DB → Complete (#707 across the bounce).
 	testutil.NoError(t, os.WriteFile(sentinel, []byte("x"), 0o644))
 	waitStatus(t, database, task.ID, model.StatusComplete)
+}
+
+// TestSupStatusAfterDetach reproduces the post-restart SessionStatus false
+// negative: the OLD daemon's cleanup() detaches its supervisor client
+// (Client.Close closes every cached RemoteSession's done channel) while the
+// daemon keeps serving the TUI's open RPC connection. A TUI stream retry then
+// asks that dying daemon SessionStatus; it used to answer Alive=false (with the
+// cached non-zero PID) for a session the supervisor still runs, and the TUI
+// read that as a confirmed exit. It must answer an error ("unknown") instead.
+func TestSupStatusAfterDetach(t *testing.T) {
+	supSock, database := reattachHarness(t)
+	d1, sc1 := connectDaemon(t, supSock, database)
+	task := startLive(t, sc1, database, "detach", "sh -c 'sleep 30'", t.TempDir())
+	waitAliveInSup(t, sc1, task.ID)
+
+	// Sanity: while attached the dying-daemon-to-be reports it alive.
+	var before daemon.SessionInfo
+	testutil.NoError(t, d1.SessionStatus(&daemon.TaskIDReq{TaskID: task.ID}, &before))
+	testutil.True(t, before.Alive)
+
+	testutil.NoError(t, sc1.Close()) // d1.cleanup(): detach, agents keep running
+
+	var resp daemon.SessionInfo
+	err := d1.SessionStatus(&daemon.TaskIDReq{TaskID: task.ID}, &resp)
+	if err == nil && !resp.Alive {
+		t.Fatalf("detached daemon published a death verdict for a live session: %+v", resp)
+	}
+
+	// A fresh daemon on the same supervisor still sees it alive.
+	_, sc2 := connectDaemon(t, supSock, database)
+	t.Cleanup(func() { sc2.Close() }) //nolint:errcheck
+	waitAliveInSup(t, sc2, task.ID)
+}
+
+// TestSupStatusGenuineExit pins the other direction: once the supervisor
+// really has no live session, SessionStatus still reports Alive=false with no
+// error — the probe fix must not turn every death into "unknown".
+func TestSupStatusGenuineExit(t *testing.T) {
+	supSock, database := reattachHarness(t)
+	d, sc := connectDaemon(t, supSock, database)
+	t.Cleanup(func() { sc.Close() }) //nolint:errcheck
+	task := startLive(t, sc, database, "genuine", "sh -c 'sleep 30'", t.TempDir())
+	waitAliveInSup(t, sc, task.ID)
+	testutil.NoError(t, sc.Stop(task.ID))
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var resp daemon.SessionInfo
+		err := d.SessionStatus(&daemon.TaskIDReq{TaskID: task.ID}, &resp)
+		if err == nil && !resp.Alive {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never reported a genuine exit: err=%v resp=%+v", err, resp)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }

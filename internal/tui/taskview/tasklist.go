@@ -76,6 +76,7 @@ type TaskListView struct {
 	expandAll         bool
 	OnExpandAllToggle func(bool)
 	railArchiveOpen   bool
+	railArchiveForced bool // derived each buildRows: archive-only rail shows Archive open
 
 	cursor          int
 	offset          int    // scroll offset
@@ -483,8 +484,8 @@ func (tl *TaskListView) buildRows() {
 	// Group active tasks by project
 	projectOrder, projectTasks := groupByProject(active)
 
-	// Auto-expand first project if none is expanded
-	if tl.expanded == "" && len(projectOrder) > 0 {
+	// Keep an admitted project expanded, including after deletion or filtering.
+	if len(projectOrder) > 0 && len(projectTasks[tl.expanded]) == 0 {
 		tl.expanded = projectOrder[0]
 	}
 
@@ -499,11 +500,14 @@ func (tl *TaskListView) buildRows() {
 
 	// Archive section
 	if len(archived) > 0 {
+		// Archive-only rail: show Archive open without latching railArchiveOpen,
+		// so it folds again once active/pinned tasks reappear.
+		tl.railArchiveForced = tl.railMode && len(pinned) == 0 && len(active) == 0
 		tl.rows = append(tl.rows, taskRow{kind: rowSeparator})
 		tl.rows = append(tl.rows, taskRow{kind: rowArchiveHeader})
-		if filterActive || (tl.railMode && tl.railArchiveOpen) || (!tl.railMode && tl.archiveExpanded) {
+		if filterActive || (tl.railMode && (tl.railArchiveOpen || tl.railArchiveForced)) || (!tl.railMode && tl.archiveExpanded) {
 			archOrder, archTasks := groupByProject(archived)
-			if tl.railMode && tl.archiveProject == "" && len(archOrder) > 0 {
+			if tl.railMode && len(archOrder) > 0 && len(archTasks[tl.archiveProject]) == 0 {
 				tl.archiveProject = archOrder[0]
 			}
 			for _, proj := range archOrder {
@@ -624,18 +628,16 @@ func (tl *TaskListView) CursorUp() {
 // lands on a task. When navigating up past a project header, the cursor
 // lands on the last task of the previous project.
 func (tl *TaskListView) moveCursor(dir int) {
-	if tl.railMode {
-		tl.moveRailCursor(dir)
-		return
-	}
 	if len(tl.rows) == 0 {
 		return
 	}
 
 	prev := tl.cursor
+	prevTask := tl.SelectedTask()
 	defer func() {
-		// Only notify when the cursor actually moved to a different position.
-		if tl.cursor != prev {
+		tl.clampCursor()
+		// Focus-fold can put a different task at the same row index.
+		if tl.cursor != prev || tl.SelectedTask() != prevTask {
 			tl.notifyCursorChange()
 		}
 	}()
@@ -770,9 +772,6 @@ func (tl *TaskListView) notifyCursorChange() {
 // rebuilds the row list so exactly one project is expanded in the cursor's
 // section, and the archive section is expanded only when the cursor is inside it.
 func (tl *TaskListView) autoExpand() {
-	if tl.railMode {
-		return
-	}
 	if len(tl.rows) == 0 {
 		return
 	}
@@ -784,8 +783,17 @@ func (tl *TaskListView) autoExpand() {
 	sec := tl.sectionAt(c)
 
 	wantArchiveExpanded := sec == sectionArchive
+	if tl.railMode {
+		// Rail Archive stays open once navigation has entered it.
+		if wantArchiveExpanded && !tl.railArchiveOpen {
+			tl.railArchiveOpen = true
+			tl.buildRows()
+			tl.restoreCursor(r, sec)
+			uxlog.Log("[tasks-rail] navigation opened archive")
+		}
+	}
 
-	if tl.archiveExpanded != wantArchiveExpanded {
+	if !tl.railMode && tl.archiveExpanded != wantArchiveExpanded {
 		tl.archiveExpanded = wantArchiveExpanded
 		tl.buildRows()
 		tl.restoreCursor(r, sec)
@@ -1095,9 +1103,6 @@ func (tl *TaskListView) InputHandler() func(event *tcell.EventKey, setFocus func
 		case tcell.KeyDown:
 			tl.CursorDown()
 		case tcell.KeyEnter:
-			if tl.toggleRailFolder() {
-				return
-			}
 			if t := tl.SelectedTask(); t != nil && (tl.railMode || t.Status != model.StatusComplete) && tl.OnSelect != nil {
 				tl.OnSelect(t)
 			}
@@ -1107,10 +1112,6 @@ func (tl *TaskListView) InputHandler() func(event *tcell.EventKey, setFocus func
 				tl.ClearFilter()
 			}
 		default:
-			if tl.railMode && event.Key() == tcell.KeyRune && event.Rune() == ' ' {
-				tl.toggleRailFolder()
-				return
-			}
 			// Resolve for ALL non-structural keys (not just runes) so ctrl/named
 			// keyspec overrides are honored, not silently dropped. Filter input is
 			// already handled above; arrows/Enter/Esc are the explicit cases.
@@ -1471,7 +1472,7 @@ func (tl *TaskListView) drawSeparator(screen tcell.Screen, x, y, w int) {
 func (tl *TaskListView) drawArchiveHeader(screen tcell.Screen, x, y, w int) {
 	style := tcell.StyleDefault.Foreground(theme.ColorDimmed).Bold(true)
 	indicator := "▸"
-	if (!tl.railMode && tl.archiveExpanded) || (tl.railMode && (tl.railArchiveOpen || tl.filter != "")) {
+	if (!tl.railMode && tl.archiveExpanded) || (tl.railMode && (tl.railArchiveOpen || tl.railArchiveForced || tl.filter != "")) {
 		indicator = "▾"
 	}
 	text := fmt.Sprintf("  %s Archive", indicator)
@@ -1511,8 +1512,12 @@ func (tl *TaskListView) drawTaskRow(screen tcell.Screen, x, y, w int, task *mode
 	prefix := "    "
 	col := x
 	widget.DrawText(screen, col, y, len(prefix), prefix, theme.StyleDefault)
-	if dimCursor {
+	if dimCursor && !tl.railMode {
 		screen.SetContent(col+1, y, '›', nil, theme.StyleDimmed)
+	}
+	if tl.railMode && (cursor || dimCursor) {
+		// Same marker, gutter column, and style as the Hera rail's selected row.
+		tl.drawRailCursor(screen, x, y)
 	}
 	col += len(prefix)
 

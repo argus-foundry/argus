@@ -41,6 +41,18 @@ type RemoteSession struct {
 	inputCh       chan inputItem     // async input channel for WriteInput
 	lastInput     time.Time          // wall-clock time of last input write (either origin)
 	lastUserInput time.Time          // wall-clock time of last agentview.OriginUser write — BUG-034 clear-on-input source
+	composerTyped bool               // user typed since the last submit through THIS handle (see ComposerDirty)
+}
+
+// ComposerDirty reports whether the user has typed through this handle since
+// the last submit (kick-timing-keep-place): a conservative stand-in for "the
+// agent's composer holds unsent text" for backends with no structured draft
+// report. Tracked client-side like LastUserInput, so typing done in the web
+// app, another TUI, or through an earlier handle for the same task is not seen.
+func (rs *RemoteSession) ComposerDirty() bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.composerTyped
 }
 
 // inputItem is one queued WriteInput call awaiting its RPC.
@@ -152,6 +164,7 @@ func (rs *RemoteSession) WriteInput(p []byte, origin agentview.InputOrigin) (int
 		rs.lastInput = now
 		if origin == agentview.OriginUser {
 			rs.lastUserInput = now
+			rs.composerTyped = agentview.ComposerTyped(rs.composerTyped, cp)
 		}
 		rs.mu.Unlock()
 		return len(p), nil

@@ -1,0 +1,3 @@
+- [x] Failing render test for caret rune/column/style
+- [x] Draw the shared caret on rail task rows
+- [x] Delta applied to base spec and archived

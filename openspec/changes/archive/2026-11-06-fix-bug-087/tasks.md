@@ -1,0 +1,3 @@
+- [x] Failing SimulationScreen test for selected style while agent focused
+- [x] Stop dimming the rail cursor on terminal focus
+- [x] Delta applied to base spec and archived

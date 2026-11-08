@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/drn/argus/internal/config"
@@ -11,6 +12,20 @@ import (
 
 // migrate checks if the database has been initialized. If not, it seeds defaults.
 func (d *DB) migrate() error {
+	// One-shot (marker-guarded) cleanup of the pre-coalescing system-note
+	// backlog. Best-effort: a failure must never block opening the database
+	// and simply retries on the next start.
+	if removed, marked, err := d.MigrateLegacySystemNotices(); err != nil {
+		slog.Warn("db: legacy system notice migration failed", "err", err)
+	} else if removed+marked > 0 {
+		slog.Info("db: migrated legacy system notices", "removed", removed, "marked_read", marked)
+	}
+	// Same idea for hera mail stranded on roles that are permanently gone.
+	if n, err := d.ClearDeadRoleMail(); err != nil {
+		slog.Warn("db: clear dead-role hera mail failed", "err", err)
+	} else if n > 0 {
+		slog.Info("db: cleared hera mail for dead roles", "messages", n)
+	}
 	var version int
 	err := d.conn.QueryRow(`SELECT version FROM schema_version LIMIT 1`).Scan(&version)
 	if err == nil {

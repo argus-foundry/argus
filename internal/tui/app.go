@@ -114,12 +114,14 @@ type App struct {
 	taskPreview  *TaskPreviewPanel
 	taskDetail   *taskview.TaskDetailPanel
 	agentPane    *terminal.TerminalPane
-	agentHeader  *widget.AgentHeader
-	gitPanel     *gitpanel.GitPanel // git status for agent view (left panel)
-	filePanel    *gitpanel.FilePanel
-	attentionBar *widget.AttentionBar // sits above gitPanel in agent view
-	agentLeftCol *tview.Flex          // vertical flex that owns attentionBar + gitPanel
-	agentPanels  *tview.Flex          // horizontal flex: left col | agent pane | file panel
+	// idleReleaseEnabled is set by Run() once the tview loop is about to start.
+	idleReleaseEnabled atomic.Bool
+	agentHeader        *widget.AgentHeader
+	gitPanel           *gitpanel.GitPanel // git status for agent view (left panel)
+	filePanel          *gitpanel.FilePanel
+	attentionBar       *widget.AttentionBar // sits above gitPanel in agent view
+	agentLeftCol       *tview.Flex          // vertical flex that owns attentionBar + gitPanel
+	agentPanels        *tview.Flex          // horizontal flex: left col | agent pane | file panel
 
 	// Tabs
 	settings     *SettingsView
@@ -506,6 +508,10 @@ type App struct {
 	// to avoid forking the test binary as a fake daemon (see ErrTestBinary
 	// in internal/daemon/client/client.go for the failure mode).
 	restartDaemonFn func()
+	// sockPathFn resolves the daemon socket for health-check reconnects and
+	// restarts. Defaults to daemon.DefaultSocketPath; tests point it at a
+	// fake daemon under t.TempDir() so they never touch the real ~/.argus.
+	sockPathFn func() string
 
 	// restartSupervisorFn is the function invoked to bounce the session-
 	// supervisor. Defaults to a.restartSupervisor. Tests override it to avoid
@@ -536,7 +542,22 @@ type App struct {
 	// map, it immediately restarts the session via `--session-id` so Claude
 	// re-renders the conversation history at the current (wider) PTY.
 	pendingRerenderRestart map[string]bool
-	initialPTYPublisher    initialPTYPublisher
+	// kickWait holds Tasks-view kicks deferred for scroll position or an unsent
+	// draft (kick-timing-keep-place): task ID -> when the pane+composer were
+	// first seen clear (zero while still blocked). Only touched on the tview
+	// goroutine; onTick re-evaluates after a KickDebounce dwell. Hera panes
+	// retry through their own onDeferred path instead.
+	kickWait map[string]time.Time
+	// kickDeferSince / kickRetryAfter bound the keep-place deferral per task:
+	// the first deferral at the current width (agent.KickDeferCap) and the
+	// earliest the next full evaluation may run after a draft deferral.
+	kickDeferSince map[string]kickDefer
+	kickRetryAfter map[string]time.Time
+	// kickScreen re-emulates a session's output tail to read the rendered Claude
+	// composer; kickScreenMu serializes the off-thread kick goroutines on it.
+	kickScreen          *agent.ScreenRenderer
+	kickScreenMu        sync.Mutex
+	initialPTYPublisher initialPTYPublisher
 
 	// pendingHeraReclaim marks tasks that were in_progress (actively live) at
 	// the moment a Hera nuke/reclaim (heraReclaimAndArchiveTask) fired their
@@ -745,6 +766,9 @@ func New(database store.Store, runner agent.SessionProvider, daemonConnected boo
 		idleUnvisited:          make(map[string]bool),
 		viewedWhileAgent:       make(map[string]bool),
 		pendingRerenderRestart: make(map[string]bool),
+		kickWait:               make(map[string]time.Time),
+		kickDeferSince:         make(map[string]kickDefer),
+		kickRetryAfter:         make(map[string]time.Time),
 		pendingHeraReclaim:     make(map[string]bool),
 		lastAttachCols:         make(map[string]uint16),
 		committedCols:          make(map[string]uint16),
@@ -760,6 +784,7 @@ func New(database store.Store, runner agent.SessionProvider, daemonConnected boo
 		app.skewProvider = dc
 	}
 	app.restartDaemonFn = app.restartDaemon
+	app.sockPathFn = daemon.DefaultSocketPath
 	app.restartSupervisorFn = app.restartSupervisor
 	app.agentCountFn = app.liveAgentCount
 	app.maintenanceClientFactory = app.newLocalMaintenanceClient
@@ -1006,7 +1031,9 @@ func (a *App) buildUI() {
 	a.agentPage = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.agentHeader, 1, 0, false).
 		AddItem(a.agentPanels, 0, 1, true)
-	a.tasksRailPage = taskview.NewRailPage(a.tasklist, a.agentPage, a.agentPane)
+	// The rail identifies the selected task; only the classic page needs the
+	// task-name header. Rail content starts directly below the root tab bar.
+	a.tasksRailPage = taskview.NewRailPage(a.tasklist, a.agentPanels, a.agentPane)
 	a.tasksRailPage.PaneFocused = func() bool { return a.mode == modeAgent }
 	a.tasksRailPage.OnRailFocus = a.focusTasksRail
 	a.tasklist.SetRailMode(a.tasksRailEnabled)
@@ -1056,6 +1083,7 @@ func (a *App) buildUI() {
 		// Size-drift kill+resume seam (see heraKickRerender) — same runner/db
 		// access as the resolver above, wired unconditionally alongside it.
 		a.heraPage.SetRerenderKicker(a.heraKickRerender)
+		a.heraPage.SetKeepPlace(func() bool { return a.db.Config().UI.RerenderKeepPlace })
 	}
 	// Focus-aware status bar: update heraFocus whenever the Hera focus machine
 	// changes state (keyboard or mouse). The statusbar renders different hint
@@ -1714,6 +1742,9 @@ func (a *App) onTick() {
 	// so it can never fight the main agent view's resize of the same task.
 	a.heraPage.SyncPanes()
 
+	// Shrink replay emulators of panes nobody has looked at for a while.
+	a.releaseIdlePaneMemory()
+
 	// Read daemon state for health check BEFORE QueueUpdateDraw — daemon
 	// fields are protected by a.mu and don't touch tview widgets.
 	a.mu.Lock()
@@ -1813,6 +1844,7 @@ func (a *App) onTick() {
 		// deletes from client map → next Get creates fresh session with empty
 		// buffer → SetSession resets emulator → "Waiting for output..." flash).
 		if taskID != "" {
+			a.retryDeferredKick(taskID)
 			if a.agentPane.Session() == nil {
 				sess := a.runner.Get(taskID)
 				if sess != nil {
@@ -1841,7 +1873,10 @@ healthCheck:
 				failures := a.daemonFailures
 				cooldownOK := time.Since(a.lastDaemonRestart) >= 30*time.Second
 				a.mu.Unlock()
-				if failures >= 3 && cooldownOK {
+				if failures >= 3 && a.reconnectLiveDaemon() {
+					// A live daemon answered on a fresh connection: only OUR
+					// connection had died. No spawn, no restart.
+				} else if failures >= 3 && cooldownOK {
 					uxlog.Log("[tui] daemon unreachable after %d pings, restarting...", failures)
 					a.mu.Lock()
 					a.daemonRestarting = true
@@ -2082,11 +2117,55 @@ func (a *App) toggleAutoStart(installed bool) {
 // Shutdown failure (e.g. the connection is already dead) is logged and
 // swallowed: the caller proceeds to close the local connection and start a
 // replacement regardless, unchanged from before this function existed.
-func gracefulDaemonShutdown(c *dclient.Client) {
+func gracefulDaemonShutdown(c *dclient.Client, sockPath string) {
 	if serr := c.Shutdown(); serr != nil {
 		uxlog.Log("[tui] daemon shutdown RPC error: %v", serr)
+		// Our own connection may be the dead part while the daemon is alive and
+		// still owns the socket. Ask it again over a fresh connection, else it
+		// is never told to exit and AutoStart would connect to it.
+		if fresh, cerr := dclient.ConnectLive(sockPath); cerr == nil {
+			if serr2 := fresh.Shutdown(); serr2 != nil {
+				uxlog.Log("[tui] daemon shutdown over fresh connection failed: %v", serr2)
+			} else {
+				uxlog.Log("[tui] daemon shutdown delivered over fresh connection")
+			}
+			fresh.Close() //nolint:errcheck // short-lived shutdown client
+		}
 	}
 	c.Close() //nolint:errcheck // best-effort local teardown; close error is non-actionable
+}
+
+// reconnectLiveDaemon distinguishes "my connection died" from "the daemon
+// died": it dials a fresh connection and, if a live daemon answers, swaps the
+// App onto that client and resets the failure streak. Returns true when it
+// adopted a live daemon (the caller must then NOT restart anything). Runs on
+// the tick goroutine (it does RPC).
+func (a *App) reconnectLiveDaemon() bool {
+	fresh, err := dclient.ConnectLive(a.sockPathFn())
+	if err != nil {
+		return false
+	}
+	uxlog.Log("[tui] daemon alive on fresh connection; reconnected without restart")
+	fresh.OnSessionExit(func(taskID string, info daemon.ExitInfo) {
+		a.HandleSessionExit(taskID, info)
+	})
+	a.tapp.QueueUpdateDraw(func() {
+		a.mu.Lock()
+		old := a.daemonClient
+		a.daemonFailures = 0
+		a.daemonClient = fresh
+		a.skewProvider = fresh
+		a.runner = fresh
+		a.restartedClient = fresh
+		a.mu.Unlock()
+		if old != nil && old != fresh {
+			old.Close() //nolint:errcheck // superseded dead connection
+		}
+	})
+	a.mu.Lock()
+	a.daemonFailures = 0
+	a.mu.Unlock()
+	return true
 }
 
 // restartDaemon kills the old daemon, auto-starts a new one, and reconnects.
@@ -2096,10 +2175,10 @@ func (a *App) restartDaemon() {
 
 	// Ask the daemon to exit via RPC before tearing down our local connection.
 	if a.daemonClient != nil {
-		gracefulDaemonShutdown(a.daemonClient)
+		gracefulDaemonShutdown(a.daemonClient, a.sockPathFn())
 	}
 
-	sockPath := daemon.DefaultSocketPath()
+	sockPath := a.sockPathFn()
 	dclient.WaitForShutdown(sockPath, 3*time.Second)
 
 	// Auto-start new daemon.
@@ -5196,6 +5275,10 @@ func (a *App) prepareRun() {
 // inside the page itself. a.tapp is read at call time, not captured.
 func (a *App) enableAsyncHeraRefresh() {
 	a.heraPage.SetUIQueue(func(fn func()) { a.tapp.QueueUpdateDraw(fn) })
+	// Same gate for the idle-pane release: tview's QueueUpdate blocks until the
+	// event loop runs the closure, so it must never be called on an App that
+	// has no loop (bare-New() tests would deadlock).
+	a.idleReleaseEnabled.Store(true)
 }
 
 // restoreLastTab local-only loads the persisted `ui.last_tab` value and, if
@@ -5621,7 +5704,7 @@ func (a *App) bindTaskAgent(task *model.Task, autoStart, focus bool) {
 		a.mu.Unlock()
 		a.tasksRailPage.Bound = true
 		a.tasklist.SetFocused(!focus)
-		a.tasklist.SetCursorDimmed(focus)
+		a.tasklist.SetCursorDimmed(false)
 		a.root.ResizeItem(a.header, 1, 0)
 		a.pages.SwitchToPage("tasks-rail")
 		if focus {
@@ -5693,7 +5776,137 @@ func (a *App) bindTaskAgent(task *model.Task, autoStart, focus bool) {
 // heraKickRerender, BUG-077).
 func (a *App) maybeKickRerender(task *model.Task, sess agent.SessionHandle) {
 	_, panelCols := a.computePTYSize() // safe: GetInnerRect on the main goroutine
-	a.maybeKickRerenderAtWidth(task, sess, panelCols, nil)
+	a.maybeKickRerenderGated(task, sess, panelCols, nil, func() bool { return a.agentPane.ScrollOffset() > 0 })
+}
+
+// kickDefer records when kicks at one width were first deferred.
+type kickDefer struct {
+	cols uint16
+	at   time.Time
+}
+
+// draftProbe is the rendered-composer reading taken off the UI goroutine.
+type draftProbe struct {
+	has   bool
+	found bool
+}
+
+// keepPlaceState reports whether the pane showing taskID is scrolled up and
+// whether the task's composer holds unsent text, for the kick-timing-keep-place
+// gates. Both are false when ui.rerender_keep_place is off. UI goroutine only:
+// it reads a.bridgeStates, the deferral clock and the pane's scroll offset.
+// probe is the off-thread rendered-composer reading, nil when none was taken.
+func (a *App) keepPlaceState(taskID string, sess agent.SessionHandle, panelCols uint16, scrolled func() bool, probe *draftProbe) (scrolledUp, hasDraft bool) {
+	if !a.db.Config().UI.RerenderKeepPlace {
+		return false, false
+	}
+	in := a.composerSignals(taskID, sess, panelCols)
+	if probe != nil {
+		in.ScreenFound, in.ScreenHas = probe.found, probe.has
+	}
+	return scrolled != nil && scrolled(), a.resolveDraft(taskID, in)
+}
+
+// composerSignals gathers the draft signals that are cheap and UI-goroutine
+// safe: the mod's report and the TUI-local typed flag, plus the deferral age.
+func (a *App) composerSignals(taskID string, sess agent.SessionHandle, panelCols uint16) agent.ComposerDraftInput {
+	var in agent.ComposerDraftInput
+	if st, ok := a.bridgeStates[taskID]; ok && st.DraftAware {
+		in.BridgeAware, in.BridgeHas = true, st.HasDraft
+	}
+	if c, ok := sess.(interface{ ComposerDirty() bool }); ok {
+		in.TypedFlag = c.ComposerDirty()
+	}
+	if d, ok := a.kickDeferSince[taskID]; ok && d.cols == panelCols {
+		in.DeferredFor = time.Since(d.at)
+	}
+	return in
+}
+
+// resolveDraft applies agent.ComposerDraft (mod report > rendered composer >
+// typed flag, flag capped) and logs when the cap released a held kick.
+func (a *App) resolveDraft(taskID string, in agent.ComposerDraftInput) bool {
+	has, _, capped := agent.ComposerDraft(in)
+	if capped {
+		uxlog.Log("[rerender] typed-flag deferral cap reached task=%s after %s: no longer holding the kick", taskID, in.DeferredFor.Round(time.Second))
+	}
+	return has
+}
+
+// probeComposerScreen reads the rendered Claude composer from the session's
+// output tail. It does ring-buffer/RPC work, so call it off the UI goroutine.
+// found=false (not the Claude composer, or no marker on screen) is "unknown".
+func (a *App) probeComposerScreen(sess agent.SessionHandle) draftProbe {
+	cols, rows := sess.PTYSize()
+	tail := agent.SubstantiveTail(sess.RecentOutputTail, 64*1024, agent.NeedsInputMaxExpandBytes)
+	a.kickScreenMu.Lock()
+	defer a.kickScreenMu.Unlock()
+	if a.kickScreen == nil {
+		a.kickScreen = &agent.ScreenRenderer{}
+	}
+	draft, found := a.kickScreen.InputDraft(tail, cols, rows)
+	return draftProbe{has: strings.TrimSpace(draft) != "", found: found}
+}
+
+// keepPlaceHold is the cheap per-tick hold check for a Tasks-view deferral:
+// the pane is scrolled up, or the mod reports an unsent draft.
+func (a *App) keepPlaceHold(taskID string) bool {
+	if !a.db.Config().UI.RerenderKeepPlace {
+		return false
+	}
+	if a.agentPane.ScrollOffset() > 0 {
+		return true
+	}
+	st, ok := a.bridgeStates[taskID]
+	return ok && st.DraftAware && st.HasDraft
+}
+
+// dropKickWait forgets every piece of Tasks-view deferral state for taskID.
+func (a *App) dropKickWait(taskID string) {
+	delete(a.kickWait, taskID)
+	delete(a.kickDeferSince, taskID)
+	delete(a.kickRetryAfter, taskID)
+}
+
+// retryDeferredKick re-evaluates a Tasks-view kick that was deferred for scroll
+// position or an unsent draft. Called from onTick for the task shown in the
+// agent view: once the pane is at the bottom and the composer clear for a
+// KickDebounce dwell, the ordinary size-drift decision runs again.
+func (a *App) retryDeferredKick(taskID string) {
+	// Idle tick: nothing is armed, so this is one map lookup — no runner, DB,
+	// RPC or file access on the 1s tick for the (usual) undeferred task.
+	clearedAt, waiting := a.kickWait[taskID]
+	if !waiting {
+		return
+	}
+	sess := a.runner.Get(taskID)
+	if sess == nil || !sess.Alive() {
+		a.dropKickWait(taskID)
+		return
+	}
+	// Only the cheap local signals gate the dwell (scroll position, the mod's
+	// draft report). The rendered-composer read and the typed flag — which can
+	// be stale — are weighed by the full evaluation below, at most every
+	// KickRetryInterval after a draft deferral.
+	if a.keepPlaceHold(taskID) {
+		a.kickWait[taskID] = time.Time{}
+		return
+	}
+	now := time.Now()
+	if clearedAt.IsZero() {
+		a.kickWait[taskID] = now
+		return
+	}
+	if now.Sub(clearedAt) < hera.KickDebounce || now.Before(a.kickRetryAfter[taskID]) {
+		return
+	}
+	delete(a.kickWait, taskID)
+	task, err := a.db.Get(taskID)
+	if err != nil || task == nil {
+		return
+	}
+	uxlog.Log("[rerender] retrying deferred kick task=%s: pane at the bottom and composer clear", taskID)
+	a.maybeKickRerender(task, sess)
 }
 
 // heraKickRerender is the Hera-view entry point for the same decision.
@@ -5714,7 +5927,7 @@ func (a *App) heraKickRerender(taskID string, panelCols uint16, onDeferred func(
 		return
 	}
 	sess := a.runner.Get(taskID)
-	a.maybeKickRerenderAtWidth(task, sess, panelCols, onDeferred)
+	a.maybeKickRerenderGated(task, sess, panelCols, onDeferred, func() bool { return a.heraPage.TaskScrolledUp(taskID) })
 }
 
 // maybeKickRerenderAtWidth detects sessions whose committed scrollback width
@@ -5753,7 +5966,18 @@ func (a *App) heraKickRerender(taskID string, panelCols uint16, onDeferred func(
 //
 // Shared predicate with the API's resize handler — see
 // `agent.ShouldKickRerender` for the gating logic.
+//
+// scrolled (kick-timing-keep-place) reports whether the pane showing this task
+// is scrolled up; together with the composer-draft signal it defers a kick
+// that would otherwise cost the user their place or their unsent text. Both
+// are read on the UI goroutine, up front and again in the decision callback.
 func (a *App) maybeKickRerenderAtWidth(task *model.Task, sess agent.SessionHandle, panelCols uint16, onDeferred func()) {
+	a.maybeKickRerenderGated(task, sess, panelCols, onDeferred, nil)
+}
+
+// maybeKickRerenderGated is maybeKickRerenderAtWidth plus the pane's scrolled-up
+// probe; the composer-draft gate needs no caller input (see keepPlaceState).
+func (a *App) maybeKickRerenderGated(task *model.Task, sess agent.SessionHandle, panelCols uint16, onDeferred func(), scrolled func() bool) {
 	if task == nil || sess == nil || !sess.Alive() {
 		return
 	}
@@ -5799,6 +6023,9 @@ func (a *App) maybeKickRerenderAtWidth(task *model.Task, sess agent.SessionHandl
 	cfg := a.db.Config()
 	kickTask := *task
 	committedSnapshot := int(a.committedCols[taskID])
+	sig0 := a.composerSignals(taskID, sess, panelCols)
+	keepPlace := a.db.Config().UI.RerenderKeepPlace
+	scrolled0 := keepPlace && scrolled != nil && scrolled()
 	checkResume := agent.ResumableSessionAvailable
 	if remote, ok := a.runner.(interface {
 		ResumableSessionAvailable(*model.Task, config.Config) (bool, error)
@@ -5811,9 +6038,21 @@ func (a *App) maybeKickRerenderAtWidth(task *model.Task, sess agent.SessionHandl
 		initCols, _ := sess.InitialPTYSize()
 		idle := sess.IsIdle()
 		needsInput := sessionBlockedOnPrompt(taskID, idle)
+		// Read the rendered composer only for a would-be kick with no live
+		// draft-aware bridge to ask: it re-emulates the session's output tail.
+		var probe *draftProbe
+		draft0 := false
+		if keepPlace {
+			if !sig0.BridgeAware && agent.ShouldKickRerender(true, initCols, committedSnapshot, int(panelCols), idle, false, needsInput) == agent.RerenderKick {
+				p := a.probeComposerScreen(sess)
+				probe = &p
+				sig0.ScreenFound, sig0.ScreenHas = p.found, p.has
+			}
+			draft0 = a.resolveDraft(taskID, sig0)
+		}
 		// Transcript probes require filesystem or REST I/O. Only probe a
 		// candidate kick; a changed decision below defers safely for retry.
-		checked := agent.ShouldKickRerender(true, initCols, committedSnapshot, int(panelCols), idle, false, needsInput) == agent.RerenderKick
+		checked := agent.ShouldKickRerenderKeepPlace(true, initCols, committedSnapshot, int(panelCols), idle, false, needsInput, scrolled0, draft0) == agent.RerenderKick
 		var available bool
 		var transcriptErr error
 		if checked {
@@ -5830,10 +6069,33 @@ func (a *App) maybeKickRerenderAtWidth(task *model.Task, sess agent.SessionHandl
 				return
 			}
 			committed := int(a.committedCols[taskID])
-			decision := agent.ShouldKickRerender(true, initCols, committed, int(panelCols), idle, false, needsInput)
+			scrolledNow, draftNow := a.keepPlaceState(taskID, sess, panelCols, scrolled, probe)
+			decision := agent.ShouldKickRerenderKeepPlace(true, initCols, committed, int(panelCols), idle, false, needsInput, scrolledNow, draftNow)
+			if decision != agent.RerenderDeferScrolled && decision != agent.RerenderDeferDraft {
+				a.dropKickWait(taskID)
+			}
 			switch decision {
 			case agent.RerenderSkip:
 				a.setRerendering(taskID, false)
+				return
+			case agent.RerenderDeferScrolled, agent.RerenderDeferDraft:
+				a.setRerenderPending(taskID)
+				a.invalidateAttachCache(taskID)
+				a.recordUnreconciledCommittedCols(taskID, panelCols, pid)
+				reason := "pane scrolled up — preserving the user's place"
+				if d, ok := a.kickDeferSince[taskID]; !ok || d.cols != panelCols {
+					a.kickDeferSince[taskID] = kickDefer{cols: panelCols, at: time.Now()}
+				}
+				if decision == agent.RerenderDeferDraft {
+					reason = "unsent composer text — preserving the draft"
+					a.kickRetryAfter[taskID] = time.Now().Add(hera.KickRetryInterval)
+				}
+				uxlog.Log("[rerender] deferred task=%s: %s (init=%d committed=%d panel=%d)", taskID, reason, initCols, committed, panelCols)
+				if onDeferred != nil {
+					onDeferred()
+				} else if _, waiting := a.kickWait[taskID]; !waiting {
+					a.kickWait[taskID] = time.Time{} // Tasks view: onTick re-evaluates once clear
+				}
 				return
 			case agent.RerenderDeferBusy:
 				a.setRerenderPending(taskID)
@@ -6338,7 +6600,8 @@ func (a *App) computePTYSize() (rows, cols uint16) {
 			if !a.agentZen {
 				w = w * 3 / 5
 			}
-			return PTYSizeForRect(Rect{W: w, H: max(h-3, 1)})
+			// Only the root tab bar and status bar sit outside the panels.
+			return PTYSizeForRect(Rect{W: w, H: max(h-2, 1)})
 		}
 	}
 	rows, cols = ptySizeFromHostTerm(term.GetSize(int(os.Stdout.Fd())))
@@ -6501,6 +6764,8 @@ func (a *App) refreshResumeSessionID(task *model.Task, resume bool) {
 	}
 	if d, ok := a.db.(*db.DB); ok {
 		agent.RefreshResumeSessionID(d, task)
+		// A resumed accepted sub-coordinator gets its coordinator hat back.
+		_ = agent.RestoreAcceptedCoordinatorHat(d, task.ID)
 	}
 }
 
@@ -7421,7 +7686,7 @@ func (a *App) executeFork(source *model.Task, targetProject string) {
 			Prompt:  buildForkPrompt(source, ctx, proj),
 			Project: proj,
 			Backend: source.Backend,
-			Account: agent.PinnedAccount(source.Account),
+			Account: agent.InheritableAccount(source),
 			Rows:    rows,
 			Cols:    cols,
 			OnWorktreeCreated: func(wtPath string) error {
@@ -8272,4 +8537,27 @@ func (a *App) exitAgentView() {
 	// Also clear any transient info notice (e.g. the remote-fork
 	// "context not carried" message) so it doesn't linger on the task list.
 	a.statusbar.ClearInfo()
+}
+
+// releaseIdlePaneMemory asks every terminal pane to release replay emulators
+// it has not drawn for a while. The release runs on the tview goroutine so it
+// serializes with Draw (which paints the published emulator outside the pane
+// lock). No-op until Run() wires it (bare-New() unit tests have no loop and
+// tview's QueueUpdate would block forever).
+func (a *App) releaseIdlePaneMemory() {
+	if !a.idleReleaseEnabled.Load() || a.tapp == nil || a.agentPane == nil || a.heraPage == nil {
+		return
+	}
+	panes := []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane()}
+	a.tapp.QueueUpdate(func() {
+		now := time.Now()
+		for _, p := range panes {
+			releaseIdlePane(p, now)
+		}
+	})
+}
+
+// releaseIdlePane is a seam so tests can observe the tick hook's reach.
+var releaseIdlePane = func(p *terminal.TerminalPane, now time.Time) {
+	p.ReleaseIdle(now, terminal.ReplayIdleRelease)
 }

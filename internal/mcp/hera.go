@@ -91,6 +91,9 @@ type HeraStore interface {
 	// hera.AcceptStore.
 	Get(taskID string) (*model.Task, error)
 	SetStatus(taskID string, status model.Status) error
+	// EndHeraCoordinatorBindingsForTask lets AcceptRole end an accepted
+	// sub-coordinator's coordinator binding (fix-probe-and-accept).
+	EndHeraCoordinatorBindingsForTask(taskID, reason string) (int, error)
 }
 
 // maxHeraInboxTimeoutSeconds caps the server-side hera_inbox wait. It matches
@@ -227,7 +230,7 @@ var heraToolDefs = []Tool{
 				"cwd":             map[string]interface{}{"type": "string", "description": "Caller's worktree path (use $PWD)"},
 				"status":          map[string]interface{}{"type": "string", "enum": []string{"idle", "working", "blocked", "done"}, "description": "New role status"},
 				"orchestrator":    map[string]interface{}{"type": "string", "description": "(required when the caller's argus task holds 2+ live bindings; optional when it holds exactly one) The orchestrator whose binding identifies the calling role."},
-				"handoff_note":    map[string]interface{}{"type": "string", "description": "Short free-text distilled context, overwritten into task_meta(hera, handoff_note) in the same call. Accepted from any hera-bound role kind."},
+				"handoff_note":    map[string]interface{}{"type": "string", "description": "Short free-text distilled context, overwritten into task_meta(hera, handoff_note) in the same call. Accepted from any hera-bound role kind. MUST include an \"Open with the user\" section: the user's last unresolved question or request, your latest answer or thinking on it, and any decision the user still owes — write \"none\" if nothing is open. The fresh session relays it to the user first."},
 				"request_recycle": map[string]interface{}{"type": "boolean", "description": "When true, records a pending-recycle intent for the caller's task, consumed by the recycle_coord primitive once the session goes idle. Accepted from any hera-bound role kind."},
 			},
 			"required": []string{"cwd", "status"},

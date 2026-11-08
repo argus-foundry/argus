@@ -80,9 +80,11 @@ func TestNewTaskForm_Account(t *testing.T) {
 		testutil.Equal(t, f.focused, ntFieldPrompt)
 	})
 
-	t.Run("explicit default pick submits default", func(t *testing.T) {
+	t.Run("default selection submits blank so the daemon routes", func(t *testing.T) {
 		f := accountForm(t, "b")
-		testutil.Equal(t, f.Task().Account, "default")
+		testutil.Equal(t, f.selectedAccountName(), "default")
+		testutil.Equal(t, f.Task().Account, "")
+		testutil.Contains(t, f.accountDisplayNames()[0], "auto-routed")
 	})
 
 	t.Run("project default preselect still submits the explicit name", func(t *testing.T) {
@@ -92,7 +94,7 @@ func TestNewTaskForm_Account(t *testing.T) {
 		testutil.Equal(t, f.Task().Account, "work")
 		f.projInput = []rune("p")
 		f.onProjectChanged()
-		testutil.Equal(t, f.Task().Account, "default")
+		testutil.Equal(t, f.Task().Account, "")
 	})
 
 	t.Run("cycling selects account", func(t *testing.T) {
@@ -124,7 +126,7 @@ func TestNewTaskForm_Account(t *testing.T) {
 		f := accountForm(t, "b")
 		f.projInput = []rune("c")
 		f.onProjectChanged()
-		testutil.Equal(t, f.Account(), "default")
+		testutil.Equal(t, f.Account(), "")
 		f.focused = ntFieldAccount
 		key(f, tcell.KeyLeft)
 		testutil.Equal(t, f.Account(), "work")

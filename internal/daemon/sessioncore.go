@@ -85,6 +85,15 @@ type sessionInfoLister interface {
 	ListSessionInfo() []SessionInfo
 }
 
+// sessionProber is the supervisor-client's checked single-session probe.
+// SessionHandle lookup (runner.Get) folds "the supervisor RPC failed" into nil,
+// which SessionStatus would then publish as Alive=false — a false death
+// verdict right after a daemon restart. *client.Client satisfies this via
+// ProbeSession so a failed probe can surface as an error instead.
+type sessionProber interface {
+	ProbeSession(taskID string) (SessionInfo, error)
+}
+
 // newSessionCore wires a runner, a config accessor, and a shutdown channel into
 // the session-serving substrate. The maps are owned here; the caller retains
 // ownership of the runner (so it controls onFinish) and the done channel.
@@ -201,6 +210,24 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 	sess := c.runner.Get(req.TaskID)
 	if sess == nil {
 		resp.TaskID = req.TaskID
+		// Supervisor mode: a nil handle may only mean the probe to the
+		// supervisor failed (e.g. mid-reconnect right after a daemon bounce).
+		// Answer with an error — callers treat that as "daemon unreachable"
+		// (stream lost, status unchanged) — instead of a false Alive=false.
+		if p, ok := c.runner.(sessionProber); ok {
+			info, err := p.ProbeSession(req.TaskID)
+			if err != nil {
+				slog.Warn("rpc.SessionStatus: supervisor probe failed, not reporting death", "task", req.TaskID, "err", err)
+				return err
+			}
+			if info.Alive {
+				// Get missed on a transient failure but the supervisor does
+				// hold the session: report what it says, not a false death.
+				*resp = info
+				resp.TaskID = req.TaskID
+				return nil
+			}
+		}
 		// During the brief gap between a kick-restart's old-session exit and
 		// the new session's slot being filled, report Alive=true so stream
 		// clients retry the connection instead of giving up and tearing down
@@ -210,6 +237,25 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 			resp.Alive = true
 		}
 		return nil
+	}
+	// Supervisor mode: a cached handle reads dead when its client was DETACHED
+	// (the old daemon's cleanup() closes the supervisor client, which closes
+	// every RemoteSession's done channel) or its stream gave up — neither is
+	// the process exiting, and the daemon keeps serving open TUI connections
+	// during that teardown. Only the supervisor knows; ask it, and say
+	// "unknown" (an error) when it cannot be asked (root cause of the
+	// post-restart SessionStatus false negative).
+	if p, ok := c.runner.(sessionProber); ok && !sess.Alive() {
+		info, err := p.ProbeSession(req.TaskID)
+		if err != nil {
+			slog.Warn("rpc.SessionStatus: cached handle is closed and the supervisor cannot be asked, not reporting death", "task", req.TaskID, "err", err)
+			return err
+		}
+		if info.Alive {
+			*resp = info
+			resp.TaskID = req.TaskID
+			return nil
+		}
 	}
 	cols, rows := sess.PTYSize()
 	initCols, initRows := sess.InitialPTYSize()
@@ -417,13 +463,22 @@ func (c *sessionCore) Recycle(req *RecycleReq, resp *StatusResp) error {
 }
 
 // GetExitInfo returns cached exit info for a finished session.
-// Returns empty ExitInfo if the session is still running or info has expired.
+//
+// When there is NO recorded exit for this reader — the session never exited
+// (a client's post-restart SessionStatus probe can wrongly say it did), the
+// entry expired, or another reader already consumed it — it answers
+// StreamLost=true, never a zero ExitInfo: a zero value reads CleanExit()==true
+// and would mark a still-live task complete (fix-bounce-false-complete). The
+// StreamLost verdict leaves task status unchanged on every consumer.
 func (c *sessionCore) GetExitInfo(req *TaskIDReq, resp *ExitInfo) error {
 	c.mu.Lock()
 	e, ok := c.exitInfos[req.TaskID]
 	if ok && !e.consumed { // consume once
 		*resp = e.info
 		c.exitInfos[req.TaskID] = exitEntry{owner: e.owner, gen: e.gen, consumed: true}
+	} else {
+		*resp = ExitInfo{StreamLost: true}
+		slog.Info("rpc.GetExitInfo: no recorded exit, reporting stream-lost (status unchanged)", "task", req.TaskID, "consumed", ok)
 	}
 	c.mu.Unlock()
 

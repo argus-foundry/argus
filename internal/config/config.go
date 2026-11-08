@@ -449,6 +449,12 @@ type UIConfig struct {
 	// default) opens single-pane/zoomed with the side panels collapsed; false
 	// opens the 1:3:1 three-pane layout. Ctrl+Z still toggles at runtime.
 	DefaultAgentZoom bool `toml:"default_agent_zoom"`
+	// RerenderKeepPlace (default true) gates the kick-timing-keep-place
+	// behavior: the size-drift kill+resume is deferred while the pane is scrolled
+	// up or the composer holds unsent text, and the bridge mod saves/restores
+	// the Claude composer draft across a kick. false restores the pre-feature
+	// kick timing exactly. Read live.
+	RerenderKeepPlace bool `toml:"rerender_keep_place"`
 	// CrossTabArrows lets modified (Cmd) Left/Right traverse the whole TUI as one
 	// chain: Tasks ⇄ Hera rail ⇄ coord pane ⇄ agent pane ⇄ Settings left ⇄
 	// Settings right. Defaults off; opt in from Settings → Appearance.
@@ -538,12 +544,13 @@ func DefaultConfig() Config {
 		Projects:    make(map[string]Project),
 		Keybindings: DefaultKeybindings(),
 		UI: UIConfig{
-			Theme:            "default",
-			ShowElapsed:      true,
-			ShowIcons:        true,
-			CoordinatorBoard: true,
-			SpinnerStyle:     "progress",
-			DefaultAgentZoom: true,
+			Theme:             "default",
+			ShowElapsed:       true,
+			ShowIcons:         true,
+			CoordinatorBoard:  true,
+			SpinnerStyle:      "progress",
+			DefaultAgentZoom:  true,
+			RerenderKeepPlace: true,
 		},
 		KB: KBConfig{
 			HTTPPort: 7742,

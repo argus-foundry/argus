@@ -594,6 +594,7 @@ func (s *Server) restartTaskSession(task *model.Task) (reattached bool, err erro
 	// so the resume picks the most recent in-place session, not the stale
 	// create-time UUID. No-op for non-Claude / no-change / no-transcript.
 	agent.RefreshResumeSessionID(s.db, task)
+	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
 	// Always resume so BuildCmd appends --resume <session-id> when the task
 	// has a prior session (the normal post-exit case). If SessionID is empty,
 	// BuildCmd starts fresh — same graceful degradation as /resume.
@@ -659,6 +660,7 @@ func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 	// stale create-time UUID. No-op for non-Claude / no-change / no-transcript,
 	// and never populates an empty ID, so the resume decision above is unchanged.
 	agent.RefreshResumeSessionID(s.db, task)
+	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
 
 	sess, reattached, err := s.runner.StartOrReattach(task, cfg, 24, 80, resume)
 	if err != nil {
@@ -782,6 +784,53 @@ func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived boo
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"archived": archived})
+}
+
+// --- Pin ---
+
+type pinReq struct {
+	Pinned *bool `json:"pinned"`
+}
+
+// handlePinTask flips only the pinned/archived section flags via the targeted
+// db.SetPinned write, so concurrent edits to other columns survive. Pinning an
+// archived task restores it (model.Task.SetPinned semantics). It never starts
+// or stops a session.
+func (s *Server) handlePinTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	var req pinReq
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON", err)
+		return
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		writeErr(w, http.StatusBadRequest, "expected one JSON value within 1 KiB", err)
+		return
+	}
+
+	if req.Pinned == nil {
+		writeErr(w, http.StatusBadRequest, "pinned is required", nil)
+		return
+	}
+	if err := s.db.SetPinned(id, *req.Pinned); err != nil {
+		if errors.Is(err, db.ErrTaskNotFound) {
+			writeErr(w, http.StatusNotFound, "task not found", nil)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "", err)
+		return
+	}
+	task, err := s.db.Get(id)
+	if err != nil || task == nil {
+		writeErr(w, http.StatusNotFound, "task not found", nil)
+		return
+	}
+	uxlog.Log("[api] pin: task=%s pinned=%t archived=%t", id, task.Pinned, task.Archived)
+	writeJSON(w, http.StatusOK, map[string]any{"task_id": id, "pinned": task.Pinned, "archived": task.Archived})
 }
 
 // --- Rename ---
@@ -966,7 +1015,7 @@ func (s *Server) handleForkTask(w http.ResponseWriter, r *http.Request) {
 	// Forks inherit the source task's backend, model, sandbox override, and account so
 	// the new task starts with the same agent and confinement rather than
 	// silently defaulting back to the global setting.
-	task, err := s.createTask(name, prompt, project, src.Backend, src.Model, src.SandboxOverride, agent.PinnedAccount(src.Account), false)
+	task, err := s.createTask(name, prompt, project, src.Backend, src.Model, src.SandboxOverride, agent.InheritableAccount(src), false)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
@@ -1224,6 +1273,24 @@ func (s *Server) handleGetSize(w http.ResponseWriter, r *http.Request) {
 type resizeReq struct {
 	Cols uint16 `json:"cols"`
 	Rows uint16 `json:"rows"`
+	// ScrolledUp / ComposerDirty are the client-side keep-place signals the
+	// daemon cannot see (xterm.js / SwiftTerm scroll position, typed-since-
+	// submit over bytes the client sent). Absent means false.
+	ScrolledUp    bool `json:"scrolled_up,omitempty"`
+	ComposerDirty bool `json:"composer_dirty,omitempty"`
+}
+
+// kickClientState carries the keep-place signals a client reported with a
+// resize.
+type kickClientState struct {
+	ScrolledUp    bool
+	ComposerDirty bool
+}
+
+// kickDeferClock records when kicks at one width were first deferred.
+type kickDeferClock struct {
+	cols uint16
+	at   time.Time
 }
 
 func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
@@ -1260,13 +1327,14 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
 	// The kick stops the session; the runner's exit goroutine restarts it
 	// at the new dimensions via --session-id so the agent re-emits the
 	// entire conversation. Best-effort: never let this fail the resize.
-	rerendered := s.maybeKickRerender(id, req.Rows, req.Cols)
+	rerendered, deferred := s.evalKickRerender(id, req.Rows, req.Cols, kickClientState{ScrolledUp: req.ScrolledUp, ComposerDirty: req.ComposerDirty})
 
 	writeJSON(w, http.StatusOK, struct {
-		Cols       int  `json:"cols"`
-		Rows       int  `json:"rows"`
-		Rerendered bool `json:"rerendered"`
-	}{Cols: int(req.Cols), Rows: int(req.Rows), Rerendered: rerendered})
+		Cols       int    `json:"cols"`
+		Rows       int    `json:"rows"`
+		Rerendered bool   `json:"rerendered"`
+		Deferred   string `json:"deferred"`
+	}{Cols: int(req.Cols), Rows: int(req.Rows), Rerendered: rerendered, Deferred: deferred})
 }
 
 // isRedundantResize caches the latest cols for taskID and reports
@@ -1305,12 +1373,21 @@ func (s *Server) invalidateColsCache(taskID string) {
 // Safe to call from any goroutine — KickRerender itself only touches runner
 // state and the session's PTY.
 func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
+	kicked, _ := s.evalKickRerender(taskID, rows, cols, kickClientState{})
+	return kicked
+}
+
+// evalKickRerender is maybeKickRerender plus the client-reported keep-place
+// state (kick-timing-keep-place for the web/macOS clients). deferred names the
+// keep-place gate that held an otherwise-eligible kick ("draft" or "scrolled")
+// so the client knows it owes a same-size retry; it is empty otherwise.
+func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClientState) (kicked bool, deferred string) {
 	sess := s.runner.Get(taskID)
 	if sess == nil || !sess.Alive() {
-		return false
+		return false, ""
 	}
 	if s.runner.HasPendingRestart(taskID) {
-		return false
+		return false, ""
 	}
 	// Skip when cols matches the most recent resize for this task. xterm.js
 	// fires /resize on every terminal mount — without this gate, reopening
@@ -1318,7 +1395,7 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 	// overlays) that doesn't survive the --session-id restart. Genuine
 	// resizes fall through because cols differs from the cached value.
 	if s.isRedundantResize(taskID, cols) {
-		return false
+		return false, ""
 	}
 	// Margin gate before the DB read — eliminates a SQLite hit on every
 	// resize that doesn't cross the rerender threshold. The unchanged-cols
@@ -1326,7 +1403,7 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 	// circuits before this gate even reads InitialPTYSize.
 	initCols, _ := sess.InitialPTYSize()
 	if !agent.MarginExceedsRerenderThreshold(initCols, int(cols)) {
-		return false
+		return false, ""
 	}
 	// Now the expensive lookups. Re-check IsIdle here so the idle gate
 	// reflects state at-the-moment-of-stop, not earlier.
@@ -1334,7 +1411,7 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 		// Agent is mid-tool-call — invalidate so the next same-cols
 		// /resize re-evaluates when the agent goes idle.
 		s.invalidateColsCache(taskID)
-		return false
+		return false, ""
 	}
 	if agent.BlockedOnPrompt(sess) {
 		// Agent is idle because it's blocked on a user prompt (AskUserQuestion
@@ -1342,21 +1419,31 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 		// and silently dismiss the prompt the user is about to answer.
 		// Invalidate so a later resize re-evaluates once the agent moves on.
 		s.invalidateColsCache(taskID)
-		return false
+		return false, ""
 	}
+	// Keep-place gates (kick-timing-keep-place): same order as the TUI's
+	// decision — an unsent draft outranks scroll position. With the setting off
+	// every client signal is ignored and no screen is read.
+	if s.db.Config().UI.RerenderKeepPlace {
+		if hold, reason := s.keepPlaceHold(taskID, sess, cols, cs); hold {
+			s.invalidateColsCache(taskID)
+			return false, reason
+		}
+	}
+	s.clearKickDefer(taskID)
 	task, err := s.db.Get(taskID)
 	if err != nil || task == nil {
 		// Transient DB error — invalidate so the next same-cols /resize
 		// retries instead of permanently short-circuiting on a stale
 		// cached value.
 		s.invalidateColsCache(taskID)
-		return false
+		return false, ""
 	}
 	if task.SessionID == "" {
 		// Codex and other backends without --session-id can never be
 		// kicked — leave the cache populated so same-cols /resize
 		// permanently short-circuits (correct; no retry semantic).
-		return false
+		return false, ""
 	}
 	cfg := s.db.Config()
 	if available, err := agent.ResumableSessionAvailable(task, cfg); err != nil || !available {
@@ -1364,7 +1451,7 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 		//nolint:gosec // G706: slog encodes these as structured attributes, escaping control characters.
 		slog.Warn("[rerender] deferred: transcript unavailable", "task", task.ID, "session", task.SessionID, "error", err)
 		s.invalidateColsCache(taskID)
-		return false
+		return false, ""
 	}
 	if err := agent.KickWidthRerender(s.runner, task, cfg, rows, cols); err != nil {
 		// Don't fail the resize on a kick failure — runner.KickRerender's
@@ -1374,10 +1461,10 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 		// retries (a transient daemon error shouldn't permanently break
 		// the gate).
 		s.invalidateColsCache(taskID)
-		return false
+		return false, ""
 	}
 	// runner.KickRerender already logs via slog with task=, cols=, rows=.
-	return true
+	return true, ""
 }
 
 // --- Stream Output (SSE) ---
@@ -2030,4 +2117,71 @@ func sanitizeName(prompt string) string {
 		}
 	}
 	return string(runes)
+}
+
+// keepPlaceHold evaluates the keep-place gates for a kick that every earlier
+// gate (margin, idle, prompt) would fire, and reports whether one holds it.
+// reason is "draft" or "scrolled". A hold starts the per-width deferral clock.
+//
+// The rendered-composer read re-emulates the session's output tail, so it runs
+// ONLY here — on the kick-evaluation path, after the cheap gates passed and
+// only when no draft-aware bridge answered — never per poll or per resize that
+// is not evaluating a kick, so it costs nothing in steady state.
+func (s *Server) keepPlaceHold(taskID string, sess agent.SessionHandle, cols uint16, cs kickClientState) (bool, string) {
+	in := agent.ComposerDraftInput{TypedFlag: cs.ComposerDirty}
+	in.BridgeAware, in.BridgeHas = s.bridgeDraftSignal(taskID)
+	if !in.BridgeAware {
+		in.ScreenHas, in.ScreenFound = s.composerFromScreen(sess)
+	}
+	s.kickDeferMu.Lock()
+	clock, ok := s.kickDeferSince[taskID]
+	if ok && clock.cols == cols {
+		in.DeferredFor = time.Since(clock.at)
+	}
+	s.kickDeferMu.Unlock()
+
+	has, _, capped := agent.ComposerDraft(in)
+	if capped {
+		uxlog.Log("[rerender] typed-flag deferral cap reached task=%s cols=%d after %s: no longer holding the kick", taskID, cols, in.DeferredFor.Round(time.Second))
+	}
+	reason := ""
+	switch {
+	case has:
+		reason = "draft"
+	case cs.ScrolledUp:
+		reason = "scrolled"
+	default:
+		return false, ""
+	}
+	s.kickDeferMu.Lock()
+	if c, held := s.kickDeferSince[taskID]; !held || c.cols != cols {
+		s.kickDeferSince[taskID] = kickDeferClock{cols: cols, at: time.Now()}
+	}
+	s.kickDeferMu.Unlock()
+	if reason == "draft" {
+		uxlog.Log("[rerender] deferred task=%s cols=%d: unsent composer draft — preserving typed text", taskID, cols)
+	} else {
+		uxlog.Log("[rerender] deferred task=%s cols=%d: client scrolled up — preserving the user's place", taskID, cols)
+	}
+	return true, reason
+}
+
+// composerFromScreen reads the rendered Claude composer from the session's
+// output tail. found=false (not Claude's composer, or no marker on screen) is
+// "unknown", never "empty".
+func (s *Server) composerFromScreen(sess agent.SessionHandle) (has, found bool) {
+	cols, rows := sess.PTYSize()
+	tail := agent.SubstantiveTail(sess.RecentOutputTail, 64*1024, agent.NeedsInputMaxExpandBytes)
+	s.kickScreenMu.Lock()
+	defer s.kickScreenMu.Unlock()
+	draft, found := s.kickScreen.InputDraft(tail, cols, rows)
+	return strings.TrimSpace(draft) != "", found
+}
+
+// clearKickDefer forgets a task's keep-place deferral clock once a kick is no
+// longer held.
+func (s *Server) clearKickDefer(taskID string) {
+	s.kickDeferMu.Lock()
+	delete(s.kickDeferSince, taskID)
+	s.kickDeferMu.Unlock()
 }

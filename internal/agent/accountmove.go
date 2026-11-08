@@ -87,7 +87,7 @@ type accountMoveRunner interface {
 
 // MoveTaskAccount moves a Claude task to another account without any model
 // turn: it copies the task's newest transcript into the target account,
-// switches and persists the task's account (clearing the routed flag),
+// switches and persists the task's account (a named target pins it, "auto" keeps it routable),
 // and restarts a live session in place under the target with --resume. The
 // task row, worktree, branch and hera bindings are untouched.
 func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveInput) (*model.Task, AccountMoveResult, error) {
@@ -128,7 +128,10 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	}
 	moved := *task
 	moved.Account = storedAccount(to)
-	moved.AccountRouted = false
+	// An auto move leaves the task routable like one created unpinned; a move
+	// to a named account (or explicit "default") is a pin.
+	routed := strings.TrimSpace(in.Account) == AutoMoveTarget
+	moved.AccountRouted = routed
 	if _, err := resolveSpawnClaudeConfigDir(&moved, cfg, true); err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: %w", ErrAccount, err)
 	}
@@ -147,10 +150,10 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	}
 
 	prevAccount, prevRouted := task.Account, task.AccountRouted
-	if err := database.SetTaskAccount(task.ID, moved.Account, false); err != nil {
+	if err := database.SetTaskAccount(task.ID, moved.Account, routed); err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("persist account move: %w", err)
 	}
-	task.Account, task.AccountRouted = moved.Account, false
+	task.Account, task.AccountRouted = moved.Account, routed
 	res := AccountMoveResult{From: from, To: to, Resumed: resumed}
 	logAccountMove(task.ID, res, "persisted")
 

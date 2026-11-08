@@ -481,8 +481,8 @@ func TestPanes_KickRetriesAfterDeferred(t *testing.T) {
 	advance(KickRetryInterval)
 	p.Draw(sim)
 	testutil.Equal(t, len(kicksFor(*kicks, "t-wkr")), 2)
-	// Further deferrals back off without giving up, capped at one minute.
-	for _, interval := range []time.Duration{20 * time.Second, 40 * time.Second, 60 * time.Second, 60 * time.Second} {
+	// Further deferrals back off without giving up, capped at kickRetryMax (15s).
+	for _, interval := range []time.Duration{15 * time.Second, 15 * time.Second, 15 * time.Second, 15 * time.Second} {
 		count := len(kicksFor(*kicks, "t-wkr"))
 		advance(interval - time.Millisecond)
 		p.Draw(sim)
@@ -1464,18 +1464,203 @@ func TestPanes_FullscreenToggleRearmsKick(t *testing.T) {
 	// the final width.
 	p.Machine().ToggleFullscreen()
 	p.Draw(sim)
-	advance(KickDebounce / 3)
+	advance(ZoomKickDebounce / 3)
 	p.Machine().ToggleFullscreen()
 	p.Draw(sim)
-	advance(KickDebounce / 3)
+	advance(ZoomKickDebounce / 3)
 	p.Machine().ToggleFullscreen()
 	p.Draw(sim)
 	testutil.Equal(t, len(*kicks), 0)
-	advance(KickDebounce)
+	advance(ZoomKickDebounce)
 	p.Draw(sim)
 	final := kicksFor(*kicks, "t-coord")
 	testutil.Equal(t, len(final), 1)
 	testutil.Equal(t, len(kicksFor(*kicks, "t-wkr")), 0) // unzoomed back to its unchanged width
 	testutil.Equal(t, len(kicksFor(*kicks, "t-wkr")), 0) // agent width never changed
 	testutil.Equal(t, final[0], split[0])                // 3 toggles from zoomed settle unzoomed
+}
+
+// drawHeld draws once with the given pane scrolled up (or at the bottom). The
+// hold check runs before the pane's own Draw, which clamps a fake session's
+// empty scrollback back to 0, so the offset is re-applied before every frame.
+func drawHeld(p *HeraPage, sim tcell.SimulationScreen, scrolled bool) {
+	if scrolled {
+		p.AgentPane().ScrollUp(3)
+		p.CoordPane().ScrollUp(3)
+	} else {
+		p.AgentPane().ResetScroll()
+		p.CoordPane().ResetScroll()
+	}
+	p.Draw(sim)
+}
+
+func keepPlacePage(t *testing.T) (*HeraPage, tcell.SimulationScreen, *[]kickRecord, func(time.Duration)) {
+	t.Helper()
+	d := memDB(t)
+	orch := seedOrch(t, d, "orch")
+	seedBoundRole(t, d, orch, "coord", db.HeraKindCoordinator, "t-coord")
+	seedBoundRole(t, d, orch, "wkr", db.HeraKindWorker, "t-wkr")
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{
+		"t-coord": {id: "t-coord", alive: true},
+		"t-wkr":   {id: "t-wkr", alive: true},
+	}))
+	kicks, advance := newKickRecorder(p)
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "wkr"), true)
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	t.Cleanup(sim.Fini)
+	sim.SetSize(120, 30)
+	p.SetRect(0, 0, 120, 30)
+	return p, sim, kicks, advance
+}
+
+// A pane the user has scrolled up must never be kicked; once they are back at
+// the bottom the kick fires through the ordinary debounce, not at once.
+func TestPanes_KickHeldWhileScrolledThenFiresAtBottom(t *testing.T) {
+	p, sim, kicks, advance := keepPlacePage(t)
+
+	drawHeld(p, sim, true) // arms
+	advance(KickDebounce * 5)
+	drawHeld(p, sim, true) // dwell long past, but scrolled: held
+	advance(KickDebounce * 5)
+	drawHeld(p, sim, true)
+	testutil.Equal(t, len(*kicks), 0)
+
+	drawHeld(p, sim, false) // back at the bottom: dwell restarts, no kick yet
+	testutil.Equal(t, len(*kicks), 0)
+	advance(KickDebounce)
+	drawHeld(p, sim, false)
+	testutil.Equal(t, len(kicksFor(*kicks, "t-wkr")), 1)
+	testutil.Equal(t, len(kicksFor(*kicks, "t-coord")), 1)
+}
+
+// Scrolling away again before the restarted dwell elapses keeps pushing it.
+func TestPanes_KickHoldRestartsDwellOnEachScroll(t *testing.T) {
+	p, sim, kicks, advance := keepPlacePage(t)
+	drawHeld(p, sim, true)
+	advance(KickDebounce * 2)
+	drawHeld(p, sim, false)
+	advance(KickDebounce / 2)
+	drawHeld(p, sim, true) // scrolled again mid-dwell
+	advance(KickDebounce)
+	drawHeld(p, sim, false) // dwell restarts again
+	testutil.Equal(t, len(*kicks), 0)
+	advance(KickDebounce)
+	drawHeld(p, sim, false)
+	testutil.Equal(t, len(kicksFor(*kicks, "t-wkr")), 1)
+}
+
+func TestPanes_KickHoldOffWhenKeepPlaceDisabled(t *testing.T) {
+	p, sim, kicks, advance := keepPlacePage(t)
+	p.SetKeepPlace(func() bool { return false })
+	drawHeld(p, sim, true)
+	advance(KickDebounce)
+	drawHeld(p, sim, true)
+	testutil.Equal(t, len(kicksFor(*kicks, "t-wkr")), 1) // pre-feature behavior
+}
+
+// Ctrl+Z (or any layout shift) re-arming a resolved pane must also respect the
+// scrolled-up hold: it waits for the bottom instead of kicking.
+func TestPanes_ZoomRearmHeldWhileScrolled(t *testing.T) {
+	d := memDB(t)
+	p := NewHeraPage(d)
+	kicks, advance := newKickRecorder(p)
+	kickedFor := "t"
+	pending := kickPending{taskID: "t", cols: 60}
+	p.layoutShifted = true
+
+	p.maybeKickPaneRerender("t", &kickedFor, 120, &pending, true)
+	testutil.Equal(t, kickedFor, "") // re-armed
+	advance(KickDebounce * 3)
+	p.layoutShifted = false
+	p.maybeKickPaneRerender("t", &kickedFor, 120, &pending, true)
+	testutil.Equal(t, len(*kicks), 0)
+
+	p.maybeKickPaneRerender("t", &kickedFor, 120, &pending, false) // bottom: dwell restarts
+	testutil.Equal(t, len(*kicks), 0)
+	advance(KickDebounce)
+	p.maybeKickPaneRerender("t", &kickedFor, 120, &pending, false)
+	testutil.Equal(t, len(*kicks), 1)
+}
+
+// A deferred-retry deadline that is already pending is replaced, not kept, by
+// the scroll hold, so scroll-then-return re-evaluates after the debounce
+// instead of waiting out the 10-60s retry interval.
+func TestPanes_HoldReplacesRetryDeadlineButKeepsBackoff(t *testing.T) {
+	d := memDB(t)
+	p := NewHeraPage(d)
+	kicks, advance := newKickRecorder(p)
+	kickedFor := ""
+	pending := kickPending{taskID: "t", cols: 120, deadline: time.Now().Add(KickRetryInterval), retryDelay: 20 * time.Second}
+	p.maybeKickPaneRerender("t", &kickedFor, 120, &pending, true)
+	testutil.Equal(t, pending.retryDelay, 20*time.Second)
+	testutil.Equal(t, len(*kicks), 0)
+	advance(KickDebounce)
+	p.maybeKickPaneRerender("t", &kickedFor, 120, &pending, false)
+	testutil.Equal(t, len(*kicks), 0) // dwell restarted when it was still held
+	advance(KickDebounce)
+	p.maybeKickPaneRerender("t", &kickedFor, 120, &pending, false)
+	testutil.Equal(t, len(*kicks), 1)
+}
+
+func TestHeraPage_TaskScrolledUp(t *testing.T) {
+	p, sim, _, _ := keepPlacePage(t)
+	p.Draw(sim)
+	testutil.Equal(t, p.TaskScrolledUp("t-wkr"), false)
+	p.AgentPane().ScrollUp(2)
+	testutil.Equal(t, p.TaskScrolledUp("t-wkr"), true)
+	testutil.Equal(t, p.TaskScrolledUp("t-coord"), false)
+	testutil.Equal(t, p.TaskScrolledUp("unrelated"), false)
+	testutil.Equal(t, p.TaskScrolledUp(""), false)
+	p.CoordPane().ScrollUp(2)
+	testutil.Equal(t, p.TaskScrolledUp("t-coord"), true)
+}
+
+// TestPanes_ZoomToggleSkipsDragDebounceAndResetsBackoff (9a): Ctrl+Z is a
+// discrete toggle, so it evaluates after only ZoomKickDebounce (not the 300ms
+// rail-traversal KickDebounce), and a coordinator that was deferring busy with
+// a long backoff must get a FRESH first retry interval, not inherit the stale
+// doubled delay (the 20s-60s waits seen live).
+func TestPanes_ZoomToggleSkipsDragDebounceAndResetsBackoff(t *testing.T) {
+	d := memDB(t)
+	orch := seedOrch(t, d, "orch")
+	seedBoundRole(t, d, orch, "coord", db.HeraKindCoordinator, "t-coord")
+	seedBoundRole(t, d, orch, "wkr", db.HeraKindWorker, "t-wkr")
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{
+		"t-coord": {id: "t-coord", alive: true},
+		"t-wkr":   {id: "t-wkr", alive: true},
+	}))
+	kicks, advance := newDeferringKickRecorder(p)
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "wkr"), true)
+	p.Machine().SetRegion(FocusCoord)
+
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	defer sim.Fini()
+	sim.SetSize(160, 30)
+	p.SetRect(0, 0, 160, 30)
+
+	p.Draw(sim)
+	advance(KickDebounce)
+	p.Draw(sim) // initial kick, deferred busy
+	// Burn the backoff up to the cap.
+	for range 4 {
+		advance(kickRetryMax)
+		p.Draw(sim)
+	}
+	testutil.Equal(t, p.coordKickPending.retryDelay, kickRetryMax)
+
+	*kicks = nil
+	p.Machine().ToggleFullscreen()
+	p.Draw(sim) // layout shift re-arms
+	testutil.Equal(t, len(kicksFor(*kicks, "t-coord")), 0)
+	advance(ZoomKickDebounce) // well under KickDebounce
+	p.Draw(sim)
+	testutil.Equal(t, len(kicksFor(*kicks, "t-coord")), 1)
+	// Deferred again: the retry delay restarted at KickRetryInterval.
+	testutil.Equal(t, p.coordKickPending.deadline.Sub(p.kickClockNow()), KickRetryInterval)
 }

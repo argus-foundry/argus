@@ -190,8 +190,10 @@ func TestResolveOrchestratorAccount(t *testing.T) {
 	})
 }
 
-func TestPinnedAccount(t *testing.T) {
-	testutil.Equal(t, PinnedAccount(""), "default")
-	testutil.Equal(t, PinnedAccount("default"), "default")
-	testutil.Equal(t, PinnedAccount("work"), "work")
+func TestInheritableAccount(t *testing.T) {
+	testutil.Equal(t, InheritableAccount(nil), "")
+	testutil.Equal(t, InheritableAccount(&model.Task{}), "")
+	testutil.Equal(t, InheritableAccount(&model.Task{Account: "work", AccountRouted: true}), "")
+	testutil.Equal(t, InheritableAccount(&model.Task{Account: "default"}), "default")
+	testutil.Equal(t, InheritableAccount(&model.Task{Account: "work"}), "work")
 }
