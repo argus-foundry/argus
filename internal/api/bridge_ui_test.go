@@ -39,8 +39,9 @@ func TestBridgeUISnapshotReadOnly(t *testing.T) {
 		testutil.True(t, got.Live)
 		testutil.True(t, got.Settings.Band)
 		testutil.True(t, got.Settings.Toasts)
-		testutil.Equal(t, got.Unread, 2)
-		testutil.Equal(t, len(got.Messages), 2)
+		testutil.Equal(t, got.Unread, 1) // system note is not unread mail
+		testutil.Equal(t, len(got.Messages), 1)
+		testutil.Equal(t, got.Messages[0].Tldr, "Ready to review")
 		testutil.Equal(t, got.Bindings[0].BindingID, binding.ID)
 		testutil.Equal(t, got.Bindings[0].Role, "coord")
 		testutil.Equal(t, got.Bindings[0].Status, "working")

@@ -33,9 +33,18 @@ extension ArgusClient {
     }
 
     /// `POST /api/tasks/{id}/resize` — sends a SIGWINCH-equivalent resize.
-    public func resize(taskID: String, rows: UInt16, cols: UInt16) async throws -> ResizeResult {
-        // Field order matches resizeReq{Cols,Rows}; JSON is order-independent.
-        try await sendDecoding("POST", "/api/tasks/\(pc(taskID))/resize",
-                               body: ["rows": rows, "cols": cols])
+    /// `scrolledUp` / `composerDirty` report client-side state the daemon cannot
+    /// see so it can defer the size-drift kick (kick-timing-keep-place).
+    public func resize(taskID: String, rows: UInt16, cols: UInt16,
+                       scrolledUp: Bool = false, composerDirty: Bool = false) async throws -> ResizeResult {
+        struct Body: Encodable {
+            let rows: UInt16
+            let cols: UInt16
+            let scrolled_up: Bool
+            let composer_dirty: Bool
+        }
+        return try await sendDecoding("POST", "/api/tasks/\(pc(taskID))/resize",
+                                      body: Body(rows: rows, cols: cols,
+                                                 scrolled_up: scrolledUp, composer_dirty: composerDirty))
     }
 }

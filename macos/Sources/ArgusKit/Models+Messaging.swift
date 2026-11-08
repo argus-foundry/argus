@@ -79,6 +79,20 @@ public struct ResizeResult: Sendable, Equatable, Decodable {
     public let rows: Int
     /// True when the resize also triggered a kill+resume rerender.
     public let rerendered: Bool
+    /// The keep-place gate that held an otherwise-eligible kick: `"scrolled"`,
+    /// `"draft"`, or empty. Non-empty means the client owes a same-size retry.
+    /// Absent from an older daemon's response (decodes as empty).
+    public let deferred: String
+
+    private enum CodingKeys: String, CodingKey { case cols, rows, rerendered, deferred }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        cols = try c.decode(Int.self, forKey: .cols)
+        rows = try c.decode(Int.self, forKey: .rows)
+        rerendered = try c.decode(Bool.self, forKey: .rerendered)
+        deferred = try c.decodeIfPresent(String.self, forKey: .deferred) ?? ""
+    }
 }
 
 /// The most-recent terminal output tail from `GET /api/tasks/{id}/output`.

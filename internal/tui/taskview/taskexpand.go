@@ -28,32 +28,7 @@ func (tl *TaskListView) SetExpandAll(enabled bool) {
 	tl.buildRows()
 	if hasPrev {
 		tl.restoreCursor(prev, sec)
-	} else {
-		tl.clampCursor()
 	}
+	tl.clampCursor()
 	uxlog.Log("[tasks-rail] expand all=%v", enabled)
-}
-
-func (tl *TaskListView) focusRailProject() {
-	if tl.cursor < 0 || tl.cursor >= len(tl.rows) {
-		return
-	}
-	row := tl.rows[tl.cursor]
-	if row.project == "" {
-		return
-	}
-	sec := tl.sectionAt(tl.cursor)
-	changed := false
-	if sec == sectionActive && tl.expanded != row.project {
-		tl.expanded = row.project
-		changed = true
-	}
-	if sec == sectionArchive && tl.archiveProject != row.project {
-		tl.archiveProject = row.project
-		changed = true
-	}
-	if changed && !tl.expandAll && tl.filter == "" {
-		tl.buildRows()
-		tl.restoreCursor(row, sec)
-	}
 }

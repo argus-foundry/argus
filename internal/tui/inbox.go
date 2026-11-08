@@ -136,7 +136,7 @@ func taskInboxEntry(m *model.TaskMessage, from string) modal.InboxEntry {
 		Source:  "task",
 		From:    from,
 		Summary: summary,
-		Unread:  m.ReadAt.IsZero(),
+		Unread:  m.ReadAt.IsZero() && m.From != model.SystemTaskID, // system notes are not mail
 		ReadAt:  m.ReadAt,
 		Body:    m.Body,
 	}
