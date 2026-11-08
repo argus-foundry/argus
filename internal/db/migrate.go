@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/drn/argus/internal/config"
@@ -11,6 +12,12 @@ import (
 
 // migrate checks if the database has been initialized. If not, it seeds defaults.
 func (d *DB) migrate() error {
+	// Same idea for hera mail stranded on roles that are permanently gone.
+	if n, err := d.ClearDeadRoleMail(); err != nil {
+		slog.Warn("db: clear dead-role hera mail failed", "err", err)
+	} else if n > 0 {
+		slog.Info("db: cleared hera mail for dead roles", "messages", n)
+	}
 	var version int
 	err := d.conn.QueryRow(`SELECT version FROM schema_version LIMIT 1`).Scan(&version)
 	if err == nil {

@@ -557,3 +557,111 @@ func TestHeraInboxAfterFreeCapacity(t *testing.T) {
 		}
 	})
 }
+
+func unreadFor(t *testing.T, d *DB, roleID int64) int {
+	t.Helper()
+	msgs, err := d.HeraInbox(roleID)
+	testutil.NoError(t, err)
+	return len(msgs)
+}
+
+func bindRole(t *testing.T, d *DB, roleID int64, task string) *HeraBinding {
+	t.Helper()
+	b, err := d.CreateHeraBinding(CreateHeraBindingInput{RoleID: roleID, ArgusTaskID: task, WorktreePath: "/wt/" + task})
+	testutil.NoError(t, err)
+	return b
+}
+
+func TestHeraMail_ClearedOnTerminalBindingEnd(t *testing.T) {
+	for _, tc := range []struct {
+		reason    string
+		wantAfter int
+	}{
+		{HeraEndReasonUserDeleted, 0},
+		{heraEndReasonTaskDeleted, 0},
+		{HeraEndReasonTaskMissing, 0},
+		{HeraEndReasonMoved, 0},
+		{"hera_rebind", 2},
+		{HeraEndReasonReparented, 2},
+		{"materialize_failed", 2},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			d := heraTestDB(t)
+			o := mkOrch(t, d, "orch")
+			coord := mkRole(t, d, o.ID, "coord", HeraKindCoordinator)
+			w := mkRole(t, d, o.ID, "worker", HeraKindWorker)
+			b := bindRole(t, d, w.ID, "T1")
+			mkMsg(t, d, coord.ID, w.ID, "a", "a", nil)
+			mkMsg(t, d, coord.ID, w.ID, "b", "b", nil)
+			testutil.NoError(t, d.EndHeraBinding(b.ID, tc.reason))
+			testutil.Equal(t, unreadFor(t, d, w.ID), tc.wantAfter)
+		})
+	}
+}
+
+func TestHeraMail_ClearedOnTaskBindingsEnd(t *testing.T) {
+	d := heraTestDB(t)
+	o := mkOrch(t, d, "orch")
+	coord := mkRole(t, d, o.ID, "coord", HeraKindCoordinator)
+	w := mkRole(t, d, o.ID, "worker", HeraKindWorker)
+	bindRole(t, d, w.ID, "T1")
+	mkMsg(t, d, coord.ID, w.ID, "a", "a", nil)
+	n, err := d.EndHeraBindingsForTask("T1", HeraEndReasonUserDeleted)
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 1)
+	testutil.Equal(t, unreadFor(t, d, w.ID), 0)
+}
+
+func TestHeraMail_ClearedOnTaskDelete(t *testing.T) {
+	d := heraTestDB(t)
+	task := &model.Task{Name: "t"}
+	testutil.NoError(t, d.Add(task))
+	o := mkOrch(t, d, "orch")
+	coord := mkRole(t, d, o.ID, "coord", HeraKindCoordinator)
+	w := mkRole(t, d, o.ID, "worker", HeraKindWorker)
+	bindRole(t, d, w.ID, task.ID)
+	mkMsg(t, d, coord.ID, w.ID, "a", "a", nil)
+	testutil.NoError(t, d.Delete(task.ID))
+	testutil.Equal(t, unreadFor(t, d, w.ID), 0)
+}
+
+func TestHeraMail_SweepDeadRoles(t *testing.T) {
+	d := heraTestDB(t)
+	o := mkOrch(t, d, "orch")
+	coord := mkRole(t, d, o.ID, "coord", HeraKindCoordinator)
+	gone := mkRole(t, d, o.ID, "gone", HeraKindWorker)
+	rebound := mkRole(t, d, o.ID, "rebound", HeraKindWorker)
+	planned := mkRole(t, d, o.ID, "planned", HeraKindWorker) // never bound
+	live := mkRole(t, d, o.ID, "live", HeraKindWorker)
+	nuked := mkRole(t, d, o.ID, "nuked", HeraKindWorker)
+	bGone := bindRole(t, d, gone.ID, "T1")
+	bRe := bindRole(t, d, rebound.ID, "T2")
+	bindRole(t, d, live.ID, "T3")
+	for _, r := range []*HeraRole{gone, rebound, planned, live, nuked} {
+		mkMsg(t, d, coord.ID, r.ID, "x", "x", nil)
+	}
+	// End bindings WITHOUT the clearing path, simulating legacy data.
+	_, err := d.conn.Exec(`UPDATE hera_bindings SET ended_at=?, end_reason=? WHERE id=?`, formatTime(time.Now()), HeraEndReasonUserDeleted, bGone.ID)
+	testutil.NoError(t, err)
+	_, err = d.conn.Exec(`UPDATE hera_bindings SET ended_at=?, end_reason=? WHERE id=?`, formatTime(time.Now()), "hera_rebind", bRe.ID)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.NukeHeraRole(nuked.ID))
+
+	n, err := d.ClearDeadRoleMail()
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 2) // gone + nuked
+	testutil.Equal(t, unreadFor(t, d, gone.ID), 0)
+	testutil.Equal(t, unreadFor(t, d, nuked.ID), 0)
+	testutil.Equal(t, unreadFor(t, d, rebound.ID), 1)
+	testutil.Equal(t, unreadFor(t, d, planned.ID), 1)
+	testutil.Equal(t, unreadFor(t, d, live.ID), 1)
+
+	n, err = d.ClearDeadRoleMail()
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 0)
+
+	// Wired into migrate(): re-open path clears new legacy rows.
+	mkMsg(t, d, coord.ID, gone.ID, "late", "late", nil)
+	testutil.NoError(t, d.migrate())
+	testutil.Equal(t, unreadFor(t, d, gone.ID), 0)
+}

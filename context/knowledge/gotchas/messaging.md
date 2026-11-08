@@ -272,7 +272,7 @@ true)` and `db.Delete(id)`; entrypoints that go through `db.Update`
   a no-op on already-submitted deliveries).
 - **doorbell line includes user-controlled strings (role name, tldr).**
   Unlike `task_messages` nudge (which uses only digit-only task IDs and a typed enum),
-  the hera doorbell `[hera from <role-name>] msg #<id> — <tldr>` contains user-
+  the hera doorbell `[hera from <role-name>] msg #<id> — <tldr> · read: hera_inbox` contains user-
   supplied text. Acceptable under the cooperative single-user local threat model,
   but do NOT copy this pattern to the task_messages nudge format.
 - **A worker reporting `done` must NOT archive its role — native deliberately
@@ -317,3 +317,7 @@ true)` and `db.Delete(id)`; entrypoints that go through `db.Update`
 
 - **Strict board mutations must reject zero expected timestamps before `formatTime` converts them to an empty string.** The empty revision deliberately disables comparison for legacy resolution; strict callers must never reach that sentinel.
 - **Validate decoder EOF through `MaxBytesReader` before a board write.** The first JSON decode can leave garbage, another value or oversized trailing whitespace unread, bypassing validation of the full encoded body.
+
+- **Hera "unread" means `hera_inbox` was never called, not "undelivered"** (clear-stale-hera-unread). `read_at` is stamped only by `hera_inbox`/`hera_get_messages`/`hera_mark_read`; the doorbell carried only the tldr so agents acted without fetching. The doorbell now ends `· read: hera_inbox` (the `[hera from ` prefix MUST stay — `internal/notify` matches it to recognise doorbells). **`delivered_at`/`idle_submit` is stamped at ReliableNotify ENQUEUE, not when text reaches the pane**, so "band counts only undelivered" would hide queued-but-unseen mail; the band deliberately still counts every unread message for live bindings.
+- **Mail is cleared only for permanently gone roles.** `clearDeadRoleMail` marks read mail for roles with no live binding that are nuked or whose latest binding ended `user_deleted`/`argus_deleted`/`task_missing`/`moved`; it runs after those ends (`EndHeraBinding`, `EndHeraBindingsForTask`, `MoveHeraBinding`, task `Delete` tx) and from `migrate()` (best-effort, idempotent). NEVER clear on `hera_rebind`/`reparented`/materialize failures or for never-bound planned nodes: role-addressed mail waits for a later binding (`queued_no_binding`). A role has at most one live binding (UNIQUE role_id), so the NOT-EXISTS-live guard is defensive only.
+
