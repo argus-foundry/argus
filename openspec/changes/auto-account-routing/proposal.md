@@ -4,10 +4,9 @@ Argus does not spread Claude usage across Aaron's accounts. Account-aware tier r
 
 ## What Changes
 
-- Add an **Auto** account choice to the new-task form in all three frontends (TUI, web, macOS). It is the default selection and submits a blank account (unpinned → routed by headroom). Choosing a named account or `default` still pins.
+- In the new-task form of all three frontends (TUI, web, macOS), selecting **`default`** now means "route by headroom": it submits a blank (unpinned) account. Only choosing a named account pins. No separate "Auto" entry; the `default` entry's label notes it is auto-routed. Consequence: the forms can no longer pin the default account explicitly (REST/MCP `account: "default"` still does).
 - Persist an unpinned task as blank account + `account_routed=true` (even when routing lands on `default`), so children route too.
 - MCP `task_create` inheritance, hera `resolveOrchestratorAccount`, and forks treat a blank/routed parent as routable; only a deliberately pinned (named or explicit `default`) parent account is inherited.
-- `task_create` and `POST /api/tasks` accept `account: "auto"` as an alias for blank.
 - Burst spreading: `ResolveChoice` adds an in-process recent-spawn penalty (5 usage points per spawn on that backend+account within 30 minutes), recorded atomically with the resolution at task creation, so N rapid spawns spread. Applies to known readings; among unknown readings the least-recently-used identity wins.
 - Codex-vs-Claude threshold skew (95 vs 80): **out of scope** — `ThresholdPct` is a per-tier user setting and headroom is intentionally threshold-relative; documented in gotchas.
 - Existing pinned rows: **no migration code.** Pinned rows stay pinned (we cannot tell an accidental `default` pin from a deliberate one); documented as a one-off `account-move auto` option.
@@ -21,8 +20,8 @@ _None._
 ### Modified Capabilities
 
 - `backend-tier-routing`: unpinned-account semantics, implicit-default persistence and inheritance, burst spreading.
-- `forms-and-modals`: Account selector gains a default-selected Auto entry.
-- `mcp-server`: `task_create` account inheritance treats blank/routed callers as routable and accepts `auto`.
+- `forms-and-modals`: selecting `default` in the Account selector submits a blank (routed) account.
+- `mcp-server`: `task_create` account inheritance treats blank/routed callers as routable and .
 
 ## Impact
 

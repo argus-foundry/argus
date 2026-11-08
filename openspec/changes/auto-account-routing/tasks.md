@@ -2,21 +2,21 @@
 
 - [ ] 1.1 backendtier: burst spreading, penalty expiry, unknown-tier LRU, pure ResolveChoice does not reserve
 - [ ] 1.2 agent: implicit default persisted blank + routed; explicit default stays pinned; hera orchestrator account; fork account
-- [ ] 1.3 mcp/api: blank/routed caller routes; `auto` alias
-- [ ] 1.4 TUI form Auto default/submit; Swift NewTaskAccount tests
+- [ ] 1.3 mcp/api: blank/routed caller routes
+- [ ] 1.4 TUI form `default` submits blank; Swift NewTaskAccount tests
 
 ## 2. Backend
 
 - [ ] 2.1 Spawn ledger + `ResolveAndReserve` with injectable clock and `[routing]` logs
 - [ ] 2.2 `create.go`/`routing.go`: reserve, routed flag, `[routing]` pin/auto log
 - [ ] 2.3 `resolveOrchestratorAccount`, fork account helper (`app.go`, `handlers.go`)
-- [ ] 2.4 MCP `taskCreateAccount` + `auto` alias; REST `auto` alias
+- [ ] 2.4 MCP `taskCreateAccount` blank/routed callers route
 
 ## 3. Frontends
 
-- [ ] 3.1 TUI newtaskform Auto entry (default selection)
-- [ ] 3.2 Web SPA Auto option + bump `SW_VERSION`
-- [ ] 3.3 macOS NewTaskAccount/NewTaskSheet Auto
+- [ ] 3.1 TUI newtaskform: `default` submits blank, label notes auto-routing
+- [ ] 3.2 Web SPA `default` submits blank + bump `SW_VERSION`
+- [ ] 3.3 macOS NewTaskAccount/NewTaskSheet `default` submits blank
 
 ## 4. Docs and wrap-up
 

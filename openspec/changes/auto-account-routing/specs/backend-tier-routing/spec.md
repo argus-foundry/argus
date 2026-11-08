@@ -2,9 +2,9 @@
 
 ### Requirement: Unpinned account requests are routed and persisted as routable
 
-A task created without an explicit or project account (a blank account, or the alias `auto`) SHALL have its account chosen by tier routing. The task SHALL be persisted with `account_routed=true`, storing the routed account name, or a blank account when routing lands on `default`. An explicit account (a configured name or `default`) SHALL remain a pin that scores every Claude tier as that account. Every account decision SHALL be logged with a `[routing]` prefix stating whether it was auto-routed or pinned.
+A task created without an explicit or project account (a blank account, which the new-task forms submit when `default` is selected) SHALL have its account chosen by tier routing. The task SHALL be persisted with `account_routed=true`, storing the routed account name, or a blank account when routing lands on `default`. An explicit account (a configured name or `default`) SHALL remain a pin that scores every Claude tier as that account. Every account decision SHALL be logged with a `[routing]` prefix stating whether it was auto-routed or pinned.
 
-#### Scenario: Auto request routes by headroom
+#### Scenario: Unpinned request routes by headroom
 
 - **WHEN** a task is created with a blank account, `default` is at 70% and `personal` at 7% (both threshold 80)
 - **THEN** the task runs on `personal` and is stored `account_routed=true`
