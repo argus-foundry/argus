@@ -1,0 +1,7 @@
+- [x] Bridge mod: categories mapping + breakdown read + tests
+- [x] bridge.Context categories, Validate/Clone, hub deep copy
+- [x] Per-measurement ingest validation (200 for valid batch events) and task.context_changed event
+- [x] GET /api/tasks/{id}/context + tests
+- [x] Re-record supervisor spawn surface (35 -> 36)
+- [x] Gotchas, README reference
+- [x] Archive change

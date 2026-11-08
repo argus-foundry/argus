@@ -1,0 +1,7 @@
+body { --event-banner-height:0px; }
+body.events-warning { --event-banner-height:72px; }
+.connection-banner { display:flex;align-items:center;justify-content:center;gap:var(--space-3);height:var(--event-banner-height);background:var(--surface);border-bottom:1px solid var(--border);padding:var(--space-3); }
+.connection-banner span { min-width:0;overflow:auto;max-height:100%; }
+.connection-banner button { flex-shrink:0; }
+.workspace { height:calc(100dvh - var(--header-height) - var(--event-banner-height)); }
+@media(max-width:1099px){#navigation,#tools,.backdrop { top:calc(var(--header-height) + var(--event-banner-height)); }}

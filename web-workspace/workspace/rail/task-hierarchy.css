@@ -1,0 +1,17 @@
+.task-family{position:relative;min-width:0}
+.task-disclosure{position:relative;cursor:pointer;list-style:none}
+.task-disclosure::-webkit-details-marker{display:none}
+.task-caret{position:absolute;z-index:1;left:-8px;top:17px;transform:translateY(-50%);pointer-events:auto;color:var(--secondary)}
+.task-family[open]>.task-disclosure>.task-caret{transform:translateY(-50%) rotate(90deg)}
+.task-disclosure:hover>.task-item>.task-row{background:var(--raised)}
+.task-children{margin-left:var(--rail-indent)}
+.rail-chevron{display:block;width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+
+.kanban-header{position:relative;display:flex;align-items:center;padding:4px 0 4px 32px;min-height:28px;list-style:none;cursor:pointer;color:var(--secondary);font-size:11px}
+.kanban-header::-webkit-details-marker{display:none}
+.kanban-header:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.kanban-group[open]>.kanban-header>.kanban-chevron{transform:rotate(90deg)}
+
+.kanban-chevron{position:absolute;left:-8px;top:8px}
+.task-triage{display:block;margin-left:32px;padding-bottom:4px;font-size:10px;line-height:14px;color:var(--secondary)}
+.triage-blocked>.task-archive,.triage-blocked>.task-more,.triage-blocked>.task-select{top:17px}

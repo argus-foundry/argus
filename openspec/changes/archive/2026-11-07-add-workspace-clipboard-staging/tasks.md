@@ -1,0 +1,4 @@
+- [x] 1.1 Add failing tests for clipboard stream dispatch and selected-task staging behavior.
+- [x] 1.2 Add the compact staged-copy control, selection reads and live SSE updates with shared copy feedback.
+- [x] 1.3 Verify copy retention, empty payloads, stale selection/read fencing, malformed frames, errors and focus restoration.
+- [x] 1.4 Run unit and browser regression checks, document gotchas, merge integration updates and archive the spec.

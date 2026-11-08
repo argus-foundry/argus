@@ -317,6 +317,36 @@ The mod SHALL register /hera-inbox and /hera-status during session.start and ans
 - **WHEN** /hera-inbox runs twice
 - **THEN** both responses include the same unread mail and no delivery or read state changes
 
+### Requirement: Measurements carry optional context categories
+`session.measure` context SHALL optionally carry non-negative integer token counts for `messages`, `memory`, `tools`, `agents`, `skills`, `system` and `compaction`, taken from the engine's context breakdown. A category the engine did not report SHALL be absent, never zero-filled. Breakdown reads SHALL run only for released context measurements, in background single-flight work with a short deadline. Timeout or read failure SHALL send the measurement without categories. A timed-out unresolved read SHALL retain the flight, and results from a replaced session SHALL be discarded. The daemon SHALL drop only a measurement with negative or nonfinite context, log it, ingest all other valid events in the batch, return success with accepted/received counts, and keep the previous context until a valid measurement replaces it. A new session id or launch generation SHALL clear stored categories.
+
+#### Scenario: Missing versus zero
+- **WHEN** a measurement reports `memory: 0` and omits `agents`
+- **THEN** the stored snapshot holds memory 0 and agents unknown
+
+#### Scenario: Invalid measurement
+- **WHEN** a measurement carries a negative category
+- **THEN** the response is 200, the invalid measurement is not accepted, and the previous context snapshot is unchanged
+
+#### Scenario: Invalid measurement shares a batch with lifecycle events
+- **WHEN** an invalid measurement precedes or follows valid needs_input, cleared, turn.start, turn.complete or heartbeat events
+- **THEN** the valid events update the authoritative snapshot consumed by all clients, and the response is 200 with counts excluding only the invalid measurement
+
+### Requirement: Bridge reports the provider's suggested next prompt
+The mod SHALL report `suggestion.changed {text}` only for a next-prompt suggestion the Claude engine itself proposed and the prompt box will show, never for a plugin-origin proposal, blank text, text over 4 KiB or text containing NUL, and SHALL NOT write the suggestion to the session or the prompt box. The daemon SHALL store one suggestion per task with session id, launch generation and receive time, SHALL ignore a suggestion carrying no or a non-current generation, and SHALL clear it on `suggestion.cleared`, a new turn, a session or generation change or a new mod boot. It SHALL reject a batch containing an invalid suggestion with 400 and keep the stored state.
+
+#### Scenario: Engine suggestion stored
+- **WHEN** the current launch reports `suggestion.changed` with text
+- **THEN** the hub holds the text with the session id, generation and receive time and nothing is written to the PTY
+
+#### Scenario: Cleared by a new turn
+- **WHEN** a `turn.start` follows a stored suggestion
+- **THEN** the stored suggestion is empty
+
+#### Scenario: Oversized text
+- **WHEN** a suggestion's text exceeds 4096 bytes
+- **THEN** the response is 400 and the previous suggestion is unchanged
+
 ### Requirement: The mod reports the composer draft
 
 When `ui.rerender_keep_place` is on, the mod SHALL report the Claude prompt-box draft to the daemon as a `draft` event carrying text and cursor, debounced to 300 ms, with an emptied box reported immediately. The daemon SHALL expose only a boolean `has_draft` in REST/state JSON and SHALL NOT serialize the draft text.
@@ -364,4 +394,3 @@ On `session.start` the mod SHALL ask the daemon for a pending draft. The daemon 
 
 - **WHEN** `ui.rerender_keep_place` is off
 - **THEN** the daemon ignores `draft` events and returns no draft
-

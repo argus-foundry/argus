@@ -4,6 +4,7 @@ const PORT = Number(process.env.ARGUS_TEST_PORT || 7744);
 
 export default defineConfig({
   testDir: './tests',
+  testIgnore: '**/workspace/**',
   fullyParallel: false, // single backing daemon — keep serial
   workers: 1,
   retries: 0,

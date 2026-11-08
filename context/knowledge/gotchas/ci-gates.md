@@ -1,6 +1,6 @@
 ## CI Gate Troubleshooting (`make pre-pr`)
 
-`make pre-pr` mirrors `.github/workflows/ci.yml` step-for-step (build → vet → fmt-check → lint-pr → vuln → test-cover-gate). Steps run in sequence and the first failure short-circuits the rest, so a formatting miss hides downstream test/lint/coverage failures until fixed — always run the **full** `pre-pr` locally to surface everything in one pass. Per-gate failure recipes:
+`make pre-pr` mirrors `.github/workflows/ci.yml` step-for-step (build → vet → fmt-check → lint-pr → vuln → test-cover-gate → workspace-test). Steps run in sequence and the first failure short-circuits the rest, so a formatting miss hides downstream test/lint/coverage failures until fixed — always run the **full** `pre-pr` locally to surface everything in one pass. Per-gate failure recipes:
 
 - **`fmt-check`** — run `make fmt` first; goimports rewrites the tree. An unformatted file is the most common CI miss.
 - **`test-cover-gate`** — filtered coverage dropped below the 88% floor. Add tests for code you touched (or under-covered platform-agnostic code) until it clears; the floor ratchets up, never down. Do NOT lower `-min`. Filtered coverage drifts ~0.2% darwin↔linux from platform branches (e.g. `internal/agent/sandbox.go`) — target platform-agnostic code for reliable margin.
@@ -17,3 +17,4 @@
 - **Codex-hosted runs must unset `CODEX_SQLITE_HOME` and `CODEX_HOME` as well as task/profile env before the full suite.** Session-capture fixtures seed a database under temporary `HOME`, but an inherited `CODEX_SQLITE_HOME` overrides it and produces false "no rows"/recapture failures; isolate the environment rather than changing capture behavior.
 - **Tests driving filesystem autocomplete must type short paths inside a test-owned sparse directory.** Typing absolute `t.TempDir()` paths repeatedly scans shared macOS `TMPDIR` ancestors and made individual ProjectForm tests take ~5s. Use `setupACDirs` (which enters the fixture with `t.Chdir`) and relative input; exercise absolute paths by pasting the complete fixture path so the shared ancestors are never enumerated.
 - **An absolute fake Claude session backend does not isolate the daemon's startup usage probe, which resolves `claude` on `PATH`.** Resume fixtures also supply a no-op probe CLI there so an installed CLI cannot keep writing `.claude` during temporary HOME cleanup.
+- **GitHub’s 300-file PR diff limit breaks `only-new-issues` in golangci-lint-action.** Use full checkout history and `--new-from-rev` so lint reads the local git diff instead of the GitHub diff API.

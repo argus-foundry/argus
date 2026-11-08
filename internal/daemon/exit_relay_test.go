@@ -114,10 +114,12 @@ func TestHandleSessionExit_Recapture(t *testing.T) {
 	testutil.NoError(t, os.MkdirAll(codexDir, 0o700))
 	conn, err := sql.Open("sqlite", filepath.Join(codexDir, "state_5.sqlite"))
 	testutil.NoError(t, err)
-	_, err = conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER)`)
+	_, err = conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER, source TEXT NOT NULL DEFAULT 'cli')`)
 	testutil.NoError(t, err)
 	wantID := "019cff60-2cfb-7ed3-bca6-15ef06587c99"
 	_, err = conn.Exec(`INSERT INTO threads (id, cwd, updated_at) VALUES (?, ?, ?)`, wantID, wt, 100)
+	testutil.NoError(t, err)
+	_, err = conn.Exec(`INSERT INTO threads (id, cwd, updated_at, source) VALUES (?, ?, ?, ?)`, "22222222-2222-4222-8222-222222222222", wt, 200, `{"subagent":{}}`)
 	testutil.NoError(t, err)
 	conn.Close() //nolint:errcheck
 
@@ -154,7 +156,7 @@ func TestHandleSessionExit_StreamLostDoesNotRecapture(t *testing.T) {
 	testutil.NoError(t, os.MkdirAll(codexDir, 0o700))
 	conn, err := sql.Open("sqlite", filepath.Join(codexDir, "state_5.sqlite"))
 	testutil.NoError(t, err)
-	_, err = conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER)`)
+	_, err = conn.Exec(`CREATE TABLE threads (id TEXT, cwd TEXT, updated_at INTEGER, source TEXT NOT NULL DEFAULT 'cli')`)
 	testutil.NoError(t, err)
 	_, err = conn.Exec(`INSERT INTO threads (id, cwd, updated_at) VALUES (?, ?, ?)`, "019cff60-2cfb-7ed3-bca6-15ef06587c99", wt, 100)
 	testutil.NoError(t, err)

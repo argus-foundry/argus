@@ -31,11 +31,12 @@ make test-pkg PKG=./internal/db/   # single package, verbose
 make test-cover     # coverage profile + summary
 make test-cover-gate # race suite + coverage floor (-min 88; matches CI gate)
 make test-watch     # gotestsum --watch
+make workspace-test # Node 20+ workspace unit tests (npm test --prefix web-workspace)
 make fmt            # goimports -w . (format the tree)
 make fmt-check      # fail if any file is not goimports-clean (matches CI)
 make vuln           # govulncheck ./...
 make lint-pr        # golangci-lint --new-from-rev=origin/master (matches CI)
-make pre-pr         # full CI mirror: build+vet+fmt-check+lint-pr+vuln+test-cover-gate
+make pre-pr         # full CI mirror: build+vet+fmt-check+lint-pr+vuln+test-cover-gate+workspace-test
 go build -o argus ./cmd/argus/
 make mac-build      # swift build the macos/ package (--disable-sandbox)
 make mac-test       # run the Swift suite (NOT `swift test`; see gotchas/macos-app.md)
@@ -46,7 +47,7 @@ The `mac-*` targets drive the `macos/` SwiftPM package with the Swift 6.3 Comman
 
 ## Before Opening a PR
 
-**`make pre-pr` must pass clean before opening OR updating any PR — non-negotiable; do not `git push` a PR branch until it does.** It mirrors `.github/workflows/ci.yml` step-for-step (build → vet → fmt-check → lint-pr → vuln → test-cover-gate), so a green `pre-pr` means green CI. Steps short-circuit on first failure, so run the **full** gate locally to surface everything at once. Per-gate failure recipes: `context/knowledge/gotchas/ci-gates.md`.
+**`make pre-pr` must pass clean before opening OR updating any PR — non-negotiable; do not `git push` a PR branch until it does.** It mirrors `.github/workflows/ci.yml` step-for-step (build → vet → fmt-check → lint-pr → vuln → test-cover-gate → workspace-test), so a green `pre-pr` means green CI. Steps short-circuit on first failure, so run the **full** gate locally to surface everything at once. Per-gate failure recipes: `context/knowledge/gotchas/ci-gates.md`.
 
 ## Test-Driven Development
 

@@ -43,6 +43,9 @@ func (s *Server) routes() *http.ServeMux {
 	// plus freelance roles. Read-only; feeds the webapp's Hera tab.
 	mux.HandleFunc("GET /api/hera", s.handleHera)
 	mux.HandleFunc("GET /api/hera/roles/{id}/board", s.handleHeraBoard)
+	mux.HandleFunc("PUT /api/hera/roles/{role_id}/board/{item_id}/read-state", s.handleHeraBoardReadState)
+	mux.HandleFunc("POST /api/hera/roles/{role_id}/board/{item_id}/dismiss", s.handleHeraBoardDismiss)
+	mux.HandleFunc("GET /api/tasks/{id}/hera-messages", s.handleTaskHeraMessages)
 	// Hera mutations; nuke is master-gated inside its handlers.
 	mux.HandleFunc("GET /api/hera/orchestrators/{id}/nuke-preview", s.handleHeraNukePreview)
 	mux.HandleFunc("POST /api/hera/orchestrators/{id}/nuke", s.handleHeraNukeOrch)
@@ -69,6 +72,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/events", s.handleBridgeEvents)
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/draft", s.handleBridgeDraft)
 	mux.HandleFunc("GET /api/tasks/{id}/bridge", s.handleBridgeState)
+	mux.HandleFunc("GET /api/tasks/{id}/context", s.handleTaskContext)
 	mux.HandleFunc("GET /api/tasks/{id}/bridge/ui", s.handleBridgeUI)
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/deliveries", s.handleBridgeDeliveries)
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/deliveries/authorize", s.handleBridgeAuthorize)

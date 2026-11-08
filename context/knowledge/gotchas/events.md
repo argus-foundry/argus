@@ -6,6 +6,10 @@
 - **A first-idle read outside rotation must feed every remaining pass through the same `TailView`.** Otherwise fresh awaiting state and an old working/fingerprint signal would share a newly advanced log baseline. Idle IDs absent from the running set must not seed a partial raw-signal entry.
 - **Keep windowed and whole-buffer stripped text separate in `TailView`.** Raw prompt checks use the last 16 KiB, while raw fingerprints use all of the substantive tail; merging them changes fingerprints after tail expansion. Render sharing is scan-local and safe only for immutable tail bytes and PTY size; the renderer RIS-resets, and `InputDraft` retains its separate cell-inspecting path.
 
+## TUI writes do not broadcast through the daemon
+
+- **TUI-originated events do not reach daemon SSE because `events.SetSink` is process-local and only installed by the daemon.** Board writes remain durable and web clients converge by refetching `/api/hera` and its `board_unread`; forwarding TUI events to the daemon is a named follow-up.
+
 ## Emission MUST happen outside `db.mu`
 
 `db.Add`, `db.Update`, `db.Rename`, `db.SetArchived`, `db.InsertMessage`, and `db.AckMessages` each emit via `events.Emit` AFTER releasing `d.mu`. The installed sink (`api.Server.Emit`) re-acquires `d.mu` inside `db.InsertEvent`, so emitting from a still-locked region deadlocks the entire DB. Every wired method uses a `*Locked` helper + post-unlock `events.Emit(...)` to keep the two phases separate. If you add a new emission site inside the `db` package, follow the same split — do NOT call `events.Emit` between `d.mu.Lock()` and the matching unlock.

@@ -5,6 +5,14 @@
 // them. Current live reports can override inference through Authority.
 package bridge
 
+import (
+	"errors"
+	"math"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
 // Event types the mod posts (internal/bridgemod/mod/argus-bridge).
 const (
 	TypeSessionStart = "session.start"
@@ -16,7 +24,13 @@ const (
 	TypeHeartbeat    = "heartbeat"
 	// TypeDraft reports the prompt-box draft (kick-timing-keep-place).
 	TypeDraft = "draft"
+
+	TypeSuggestionChanged = "suggestion.changed"
+	TypeSuggestionCleared = "suggestion.cleared"
 )
+
+// MaxSuggestionBytes caps a suggested prompt's text.
+const MaxSuggestionBytes = 4096
 
 // Confidence values carried by a needs_input event. A question/plan dialog is
 // bracketed exactly by its tool call, so it is exact. A permission ask is
@@ -40,9 +54,77 @@ const (
 
 // Context is the live context-window fill reported by session.measure.
 type Context struct {
-	Tokens  *int64   `json:"tokens,omitempty"`
-	Percent *float64 `json:"percent,omitempty"`
-	Window  int64    `json:"window,omitempty"`
+	Tokens     *int64             `json:"tokens,omitempty"`
+	Percent    *float64           `json:"percent,omitempty"`
+	Window     int64              `json:"window,omitempty"`
+	Categories *ContextCategories `json:"categories,omitempty"`
+}
+
+// ContextCategories are the engine's per-category context token counts. A nil
+// counter was not reported; zero is a real measured zero.
+type ContextCategories struct {
+	Messages   *int64 `json:"messages,omitempty"`
+	Memory     *int64 `json:"memory,omitempty"`
+	Tools      *int64 `json:"tools,omitempty"`
+	Agents     *int64 `json:"agents,omitempty"`
+	Skills     *int64 `json:"skills,omitempty"`
+	System     *int64 `json:"system,omitempty"`
+	Compaction *int64 `json:"compaction,omitempty"`
+}
+
+func (c *ContextCategories) counters() []*int64 {
+	return []*int64{c.Messages, c.Memory, c.Tools, c.Agents, c.Skills, c.System, c.Compaction}
+}
+
+// Clone deep-copies the context so stored state never aliases an event.
+func (c *Context) Clone() *Context {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	if c.Tokens != nil {
+		v := *c.Tokens
+		out.Tokens = &v
+	}
+	if c.Percent != nil {
+		v := *c.Percent
+		out.Percent = &v
+	}
+	if c.Categories != nil {
+		cc := *c.Categories
+		for _, dst := range []**int64{&cc.Messages, &cc.Memory, &cc.Tools, &cc.Agents, &cc.Skills, &cc.System, &cc.Compaction} {
+			if *dst != nil {
+				v := **dst
+				*dst = &v
+			}
+		}
+		out.Categories = &cc
+	}
+	return &out
+}
+
+// Validate rejects negative or nonfinite measurements.
+func (c *Context) Validate() error {
+	if c == nil {
+		return nil
+	}
+	if c.Tokens != nil && *c.Tokens < 0 {
+		return errors.New("context tokens must not be negative")
+	}
+	if c.Window < 0 {
+		return errors.New("context window must not be negative")
+	}
+	if c.Percent != nil && (math.IsNaN(*c.Percent) || math.IsInf(*c.Percent, 0) || *c.Percent < 0) {
+		return errors.New("context percent must be finite and non-negative")
+	}
+	if c.Categories != nil {
+		for _, v := range c.Categories.counters() {
+			if v != nil && *v < 0 {
+				return errors.New("context category tokens must not be negative")
+			}
+		}
+	}
+	return nil
 }
 
 // RateLimit is one plan-usage window reported by session.measure.
@@ -83,15 +165,42 @@ type Event struct {
 	Tool       string `json:"tool,omitempty"`
 	ToolUseID  string `json:"tool_use_id,omitempty"`
 
-	// draft: the prompt-box text and the cursor offset into it (UTF-16 code
-	// units, as the engine reports). Empty text means an empty box.
-	Text   string `json:"text,omitempty"`
-	Cursor int    `json:"cursor,omitempty"`
+	// suggestion.changed carries the suggested prompt; draft carries the
+	// prompt-box text. Empty draft text means an empty box.
+	Text string `json:"text,omitempty"`
+	// draft: cursor offset into Text (UTF-16 code units, as the engine reports).
+	Cursor int `json:"cursor,omitempty"`
 
 	// session.measure
 	Context    *Context    `json:"context,omitempty"`
 	CostUSD    *float64    `json:"cost_usd,omitempty"`
 	RateLimits []RateLimit `json:"rate_limits,omitempty"`
+}
+
+// Suggestion is the provider's current suggested next prompt: shown to the
+// person, never written to the session.
+type Suggestion struct {
+	Text       string    `json:"text"`
+	SessionID  string    `json:"session_id"`
+	Generation string    `json:"generation"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+// ValidateSuggestion rejects a suggestion.changed event whose text is blank,
+// oversized, not valid UTF-8 or carries a NUL.
+func (e Event) ValidateSuggestion() error {
+	if e.Type != TypeSuggestionChanged {
+		return nil
+	}
+	switch {
+	case strings.TrimSpace(e.Text) == "":
+		return errors.New("suggestion text must not be blank")
+	case len(e.Text) > MaxSuggestionBytes:
+		return errors.New("suggestion text exceeds 4 KiB")
+	case !utf8.ValidString(e.Text) || strings.ContainsRune(e.Text, 0):
+		return errors.New("suggestion text must be plain UTF-8 text")
+	}
+	return nil
 }
 
 // Batch is the request body of POST /api/tasks/{id}/bridge/events.
@@ -102,7 +211,7 @@ type Batch struct {
 func knownType(t string) bool {
 	switch t {
 	case TypeSessionStart, TypeTurnStart, TypeTurnComplete, TypeNeedsInput,
-		TypeCleared, TypeMeasure, TypeHeartbeat, TypeDraft:
+		TypeCleared, TypeMeasure, TypeHeartbeat, TypeDraft, TypeSuggestionChanged, TypeSuggestionCleared:
 		return true
 	}
 	return false

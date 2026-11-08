@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Theia</title>
+  <link rel="icon" href="/theia-icon-32.png" sizes="32x32" type="image/png">
+  <link rel="icon" href="/theia-icon-192.png" sizes="192x192" type="image/png">
+  <link rel="icon" href="/theia-favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/theia-apple-touch-icon.png">
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="workspace/styles.css">
+  <link rel="stylesheet" href="tasks/task-information.css">
+  <link rel="stylesheet" href="workspace/events/events.css">
+  <link rel="stylesheet" href="workspace/attention/attention.css">
+  <link rel="stylesheet" href="workspace/rail/unified-rail.css">
+  <link rel="stylesheet" href="tasks/task-header.css">
+</head>
+<body>
+  <header class="workspace-header">
+    <div class="brand" aria-label="Theia"><img class="brand-mark" src="/theia-mark.svg" width="25" height="25" alt="" aria-hidden="true"><strong>Theia</strong></div>
+    <div class="layout-actions" aria-label="Workspace layout">
+      <button id="toggle-nav" aria-controls="navigation" aria-expanded="true">Hide tasks</button>
+      <button id="focus-agent" aria-pressed="false">Focus agent</button>
+      <button id="toggle-tools" aria-controls="tools" aria-expanded="true">Hide tools</button>
+    </div>
+    <button id="disconnect" hidden>Disconnect</button>
+  </header>
+  <div id="workspace" class="workspace">
+    <div id="backdrop" class="backdrop" hidden></div>
+    <aside id="navigation" aria-label="Task navigation">
+      <div class="rail-heading"><span class="eyebrow">YOUR WORKSPACE</span><button class="drawer-close" data-close="nav">Close tasks</button></div>
+      <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Find a task…" aria-label="Find a task" autocomplete="off"><button id="search-clear" type="button" aria-label="Clear search" data-tooltip="Clear search" hidden>×</button></label>
+      <div class="nav-filters" role="group" aria-label="Task filter"><button id="active-filter" aria-pressed="true" aria-label="Active tasks" data-tooltip="Active tasks">Active <span id="active-count">0</span></button><button id="archive-filter" aria-pressed="false" aria-label="Archived tasks" data-tooltip="Archived tasks">Archived <span id="archive-count">0</span></button></div>
+      <div class="nav-summary"><span id="task-count">Connect to see tasks</span></div>
+      <p id="projects-warning" class="projects-warning" role="status" hidden></p>
+      <nav id="task-groups" aria-label="Projects and tasks"></nav>
+      <footer class="nav-footer"><div class="connection-row"><span id="connection-state" class="connection-state" role="img" tabindex="0" aria-label="Not connected" data-tooltip="Not connected" data-state="disconnected">●</span><button id="workspace-settings" class="footer-gear" aria-label="Settings" data-tooltip="Settings" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 3-.7 2.2-2 .9-2.1-.9-2.4 4.2 1.6 1.7v2.3l-1.6 1.7 2.4 4.2 2.1-.9 2 .9.7 2.2h5l.7-2.2 2-.9 2.1.9 2.4-4.2-1.6-1.7v-2.3l1.6-1.7-2.4-4.2-2.1.9-2-.9-.7-2.2z"/><circle cx="12" cy="12" r="3"/></svg></button></div></footer>
+    </aside>
+    <div id="nav-resize" class="separator" role="separator" tabindex="0" aria-label="Task navigation width" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="380" aria-valuenow="256"></div>
+    <main id="main">
+      <div class="task-header">
+        <div class="task-heading"><h1 id="task-title" title="Connect to your daemon to pick up where you left off.">A little room to focus.</h1></div>
+        <div class="task-header-actions">
+          <div class="workspace-tabs" role="tablist" aria-label="Task workspace">
+            <button id="tab-agent" role="tab" aria-selected="true" aria-controls="agent-panel">Agent</button>
+            <button id="tab-review" role="tab" aria-selected="false" aria-controls="review-panel" tabindex="-1">Review</button>
+          </div>
+          <div id="terminal-actions" class="terminal-actions" role="group" aria-label="Terminal actions">
+            <button id="fit-session" class="header-icon" disabled aria-label="Fit session" data-tooltip="Fit session to the available pane"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M8 8h8v8H8z"/></svg></button>
+          </div>
+        </div>
+      </div>
+      <section id="agent-panel" class="main-panel agent-panel" role="tabpanel" aria-labelledby="tab-agent">
+        <div id="terminal-feedback" class="terminal-feedback"><span id="terminal-state" role="status">No task selected</span><button id="reconnect-terminal" aria-label="Reconnect" data-tooltip="Reconnect terminal output" hidden>Reconnect</button></div>
+        <div id="terminal" aria-label="Agent terminal"></div>
+        <div id="agent-empty" class="agent-empty"><div class="empty-orbit" aria-hidden="true">a</div><h2>Your next thought starts here.</h2><p>Select a task to see its real agent session.<br>Changes and artifacts stay close at hand.</p></div>
+      </section>
+      <section id="review-panel" class="main-panel review-panel" role="tabpanel" aria-labelledby="tab-review" hidden><div class="empty-state"><h2>See the work take shape.</h2><p>Choose a changed file or registered artifact from task tools.</p></div></section>
+      <div class="composer-wrap"><form id="composer"><label for="draft" class="sr-only">Message the selected agent</label><textarea id="draft" rows="2" disabled></textarea><div class="composer-footer"><span id="composer-label">No agent selected</span><div class="composer-actions"><button id="context-toggle" type="button" aria-label="Context usage unavailable" data-tooltip="Context usage unavailable" disabled><span class="context-ring" aria-hidden="true"></span></button><button id="attach-files" type="button" aria-label="Attach files" data-tooltip="Attach files" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16M4 12h16"/></svg></button><button id="send" type="submit" aria-label="Send message" data-tooltip="Send message" data-tooltip-shortcut="↵" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4m-7 7 7-7 7 7"/></svg></button></div></div></form><div id="composer-status" class="composer-hint" role="status">Drafts stay in this tab until you disconnect.</div></div>
+    </main>
+    <div id="tools-resize" class="separator" role="separator" tabindex="0" aria-label="Task tools width" aria-orientation="vertical" aria-valuemin="290" aria-valuemax="520" aria-valuenow="340"></div>
+    <aside id="tools" aria-label="Task tools">
+      <div class="rail-heading"><span class="eyebrow">TASK TOOLS</span><button class="drawer-close" data-close="tools">Close tools</button></div>
+      <div class="tool-tabs" role="tablist" aria-label="Task tools"><button id="tool-changes" role="tab" aria-selected="true" aria-controls="tool-panel" data-tool="changes">Changes</button><button id="tool-artifacts" role="tab" aria-selected="false" aria-controls="tool-panel" data-tool="artifacts" tabindex="-1">Artifacts</button><button id="tool-status" role="tab" aria-selected="false" aria-controls="tool-panel" data-tool="status" tabindex="-1">Info</button></div>
+      <section id="tool-panel" class="tool-panel" role="tabpanel" aria-labelledby="tool-changes"><div class="empty-state"><p>Select a task to explore its work.</p></div></section>
+      <footer class="tools-footer">One task. Everything in view.</footer>
+    </aside>
+  </div>
+  <dialog id="connect-dialog" aria-labelledby="connect-title"><form id="connect-form"><span class="eyebrow">WELCOME TO YOUR WORKSPACE</span><h2 id="connect-title">Make space for the work.</h2><p>Connect with your Argus API token. Remember your token on this device, or keep it only in this tab.</p><label for="token">API token</label><input id="token" type="password" autocomplete="off" spellcheck="false" autofocus placeholder="Paste token"><label class="remember-token"><input id="remember-token" type="checkbox" checked> Remember on this device</label><p id="connect-error" class="error-text" role="alert" hidden></p><button id="connect-button" type="submit" class="primary">Connect to Argus</button><a href="/original" target="_blank" rel="noopener">Open original UI ↗</a></form></dialog>
+  <div id="notice" class="notice" role="status" hidden></div>
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/xterm-addon-fit.js"></script>
+  <script type="module" src="workspace/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+.nav-footer .connection-row{display:flex;flex-flow:row nowrap;align-items:center;justify-content:flex-start;gap:8px;height:28px}
+.nav-footer .connection-state{display:grid;place-items:center;flex:0 0 24px;width:24px;height:24px;font-size:11px;cursor:help}
+.nav-footer .connection-state[data-state="connecting"]{color:var(--warning)}.nav-footer .connection-state[data-state="error"]{color:var(--error)}
+.nav-footer #shortcuts-help{margin-left:auto;font-size:20px;line-height:1;padding:4px}
+.nav-footer .footer-gear{display:grid;place-items:center;width:28px;height:28px;flex-shrink:0}
+.search input{min-width:0;width:100%}.search #search-clear{padding:0;width:22px;height:22px;flex-shrink:0;color:var(--secondary)}
+#search::-webkit-search-cancel-button{appearance:none}

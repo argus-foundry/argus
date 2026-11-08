@@ -1,4 +1,4 @@
-.PHONY: build vet test test-watch test-cover test-cover-gate test-pkg lint-pr fmt fmt-check vuln pre-pr plugin-smoke secrets-smoke install-signed mac-build mac-test mac-run mac-app
+.PHONY: build vet test test-watch test-cover test-cover-gate test-pkg lint-pr fmt fmt-check vuln workspace-test pre-pr plugin-smoke secrets-smoke install-signed mac-build mac-test mac-run mac-app
 
 build:
 	go build ./...
@@ -58,7 +58,7 @@ install-signed:
 # Note: `vuln` is `continue-on-error` in CI (advisory only — stdlib CVEs
 # need a Go bump), but is fatal here so local runs surface them early.
 # A red `make pre-pr` whose ONLY failure is `vuln` will still pass CI.
-pre-pr: build vet fmt-check lint-pr vuln test-cover-gate
+pre-pr: build vet fmt-check lint-pr vuln test-cover-gate workspace-test
 	@echo "✓ pre-pr checks passed — safe to open/update the PR"
 
 vet:
@@ -97,6 +97,9 @@ lint-pr:
 # 300s leaves shared-host headroom; this is a hang guard, not a speed budget.
 test:
 	go test -race -count=1 -timeout 300s ./...
+
+workspace-test:
+	npm test --prefix web-workspace
 
 test-watch:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "Install gotestsum: go install gotest.tools/gotestsum@latest"; exit 1; }

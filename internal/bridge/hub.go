@@ -42,6 +42,9 @@ type State struct {
 	CostUSD    *float64    `json:"cost_usd,omitempty"`
 	RateLimits []RateLimit `json:"rate_limits,omitempty"`
 
+	// Suggestion is null until the provider offers one for the current turn.
+	Suggestion *Suggestion `json:"suggestion"`
+
 	Boot             string    `json:"boot,omitempty"`
 	LastSeq          int64     `json:"last_seq"`
 	Events           int64     `json:"events"`
@@ -115,6 +118,7 @@ func (h *Hub) Ingest(taskID string, events []Event, now time.Time) int {
 			// The new process starts with an empty box; the previous boot's draft
 			// stays in h.drafts for TakeDraft.
 			st.HasDraft, st.DraftAware = false, false
+			st.Suggestion = nil
 		}
 		if st.Events > 0 && ev.Boot != st.Boot {
 			if h.retired[taskID] == nil {
@@ -138,6 +142,7 @@ func apply(st *State, ev Event, now time.Time) {
 		st.Busy, st.NeedsInput, st.NeedsInputKind = false, false, ""
 		st.NeedsInputConfidence = ""
 		st.HasDraft, st.DraftAware = false, false
+		st.Suggestion = nil
 	}
 	if ev.Generation != st.Generation {
 		st.SessionID = ""
@@ -161,7 +166,14 @@ func apply(st *State, ev Event, now time.Time) {
 		if ev.Cwd != "" {
 			st.Cwd = ev.Cwd
 		}
+	case TypeSuggestionChanged:
+		if ev.ValidateSuggestion() == nil && st.SessionID != "" {
+			st.Suggestion = &Suggestion{Text: ev.Text, SessionID: st.SessionID, Generation: st.Generation, RecordedAt: now.UTC()}
+		}
+	case TypeSuggestionCleared:
+		st.Suggestion = nil
 	case TypeTurnStart:
+		st.Suggestion = nil
 		if !st.Busy {
 			st.LastTransitionAt = now
 		}
@@ -187,8 +199,7 @@ func apply(st *State, ev Event, now time.Time) {
 	case TypeMeasure:
 		st.LastMeasureAt = now
 		if ev.Context != nil {
-			c := *ev.Context
-			st.Context = &c
+			st.Context = ev.Context.Clone()
 		}
 		if ev.CostUSD != nil {
 			v := *ev.CostUSD
@@ -293,9 +304,10 @@ func (h *Hub) TakeDraft(taskID, boot string, now time.Time) (Draft, bool) {
 
 func copyState(st *State) State {
 	out := *st
-	if st.Context != nil {
-		c := *st.Context
-		out.Context = &c
+	out.Context = st.Context.Clone()
+	if st.Suggestion != nil {
+		sg := *st.Suggestion
+		out.Suggestion = &sg
 	}
 	if st.CostUSD != nil {
 		v := *st.CostUSD

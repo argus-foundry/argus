@@ -126,6 +126,13 @@ type Family struct {
 	// only CostSourceCodexRollout families, so it never touches a binding the
 	// Stop-hook/bridge accounting owns.
 	CostSource CostSource
+	// ContextReader measures the task's current context-window fill from the
+	// CLI's own on-disk records; nil means this family reports no context
+	// outside the Claude bridge mod. It must be read-only and bounded.
+	ContextReader func(task *model.Task, cfg config.Config) (ContextReading, bool, error)
+	// ContextProvider and ContextSource label ContextReader's responses, even
+	// when nothing is measured yet.
+	ContextProvider, ContextSource string
 
 	// KnownModels is the curated model list for pickers; nil means
 	// custom-only (any typed id is accepted).
@@ -412,10 +419,13 @@ var families = []*Family{
 		},
 	},
 	{
-		Spec:       mustSpec(backendkind.Codex),
-		Capture:    captureCodex,
-		ResumeCmd:  codexResumeCommand,
-		CostSource: CostSourceCodexRollout,
+		Spec:            mustSpec(backendkind.Codex),
+		Capture:         captureCodex,
+		ResumeCmd:       codexResumeCommand,
+		CostSource:      CostSourceCodexRollout,
+		ContextReader:   readCodexContext,
+		ContextProvider: ContextProviderOpenAI,
+		ContextSource:   ContextSourceCodex,
 		// Keep this list synced with the Codex CLI's own `/model` picker and
 		// the seed diligence profiles' archetype.*.models.codex entries.
 		KnownModels:   []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"},

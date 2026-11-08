@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Theia dictation check</title>
+  <style>
+    :root{color-scheme:dark;font-family:system-ui,sans-serif;background:#151312;color:#efebe5}
+    body{max-width:760px;margin:40px auto;padding:0 24px;line-height:1.6}
+    h1{font-size:24px}p{color:#aaa299}label{display:block;margin:20px 0 8px}
+    textarea,input,button{font:inherit;color:inherit;background:#1d1b19;border:1px solid #635b53;border-radius:8px;padding:12px;box-sizing:border-box}
+    textarea,input{display:block;width:100%}textarea{min-height:160px;resize:vertical}
+    button{margin:16px 8px 0 0;cursor:pointer}a{color:#d9bca6}
+    :focus-visible{outline:2px solid #a7c7ff;outline-offset:3px}
+    #terminal{margin-top:16px;overflow:auto}pre{white-space:pre-wrap;word-break:break-word;font-size:12px}
+  </style>
+</head>
+<body>
+  <a href="/">Return to workspace</a>
+  <h1>Dictation check</h1>
+  <p id="mode">A plain text box with no terminal on the page.</p>
+  <p>Try two separate Wispr phrases in this box. Nothing here is sent to an agent or saved.</p>
+  <label for="dictation">Dictation text</label>
+  <textarea id="dictation" name="dictation" autofocus></textarea>
+  <button id="clear" type="button">Clear text</button>
+  <button id="show" type="button">Show input diagnostics</button>
+  <p><a id="compare" href="?terminal=1">Compare with a local terminal on the page</a></p>
+  <div id="terminal" hidden></div>
+  <pre id="diagnostics" hidden></pre>
+  <script type="module" src="wispr-check.js"></script>
+</body>
+</html>

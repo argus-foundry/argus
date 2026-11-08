@@ -792,7 +792,7 @@ A redundant attach decision SHALL clear existing repair status for that task acr
 
 ### Requirement: Visible terminal panes repaint when output arrives
 
-The TUI SHALL repaint when output arrives for a session shown in a terminal pane that was drawn in the most recent frame, covering the Tasks agent view pane and both Hera panes. It SHALL NOT rely on a timer to paint that output. Repaints SHALL be coalesced, and at most one such repaint SHALL be queued at a time. A repaint within 150ms after a key event reached the global key handler or a pane forwarded a paste to a live session (an echo frame) SHALL use a minimum frame interval of about 8ms; every other repaint (an output-only frame) SHALL use a minimum frame interval of about 40ms. A key event arriving while the pump is waiting out an output-only interval SHALL shorten that wait to the echo interval. The first output after a quiet period longer than the applicable interval SHALL queue a repaint immediately. Output that arrives during a wait or during a repaint SHALL NOT be lost: the last output of a burst SHALL paint no later than one output-only interval after it arrived. The output notification and the key signal SHALL NOT block the session's stream reader or the UI goroutine. This mechanism SHALL NOT call `screen.Sync()`.
+The TUI SHALL repaint when output arrives for a session shown in a terminal pane that was drawn in the most recent frame, covering the Tasks agent view pane and both Hera panes. It SHALL NOT rely on a timer to paint that output. Repaints SHALL be coalesced, and at most one such repaint SHALL be queued at a time. A repaint within 150ms after a key event reached the global key handler a pane forwarded a paste or a mouse click press or release to a live session (an echo frame) SHALL use a minimum frame interval of about 8ms; every other repaint (an output-only frame) SHALL use a minimum frame interval of about 40ms. A key event arriving while the pump is waiting out an output-only interval SHALL shorten that wait to the echo interval. The first output after a quiet period longer than the applicable interval SHALL queue a repaint immediately. Output that arrives during a wait or during a repaint SHALL NOT be lost: the last output of a burst SHALL paint no later than one output-only interval after it arrived. The output notification and the key signal SHALL NOT block the session's stream reader or the UI goroutine. This mechanism SHALL NOT call `screen.Sync()`.
 
 #### Scenario: Echo paints without waiting for a timer
 
@@ -818,6 +818,16 @@ The TUI SHALL repaint when output arrives for a session shown in a terminal pane
 
 - **WHEN** a paste is forwarded to a live session in a visible pane and its echo arrives
 - **THEN** the echo repaints at the 8ms interval, the same as a keystroke echo
+
+#### Scenario: A forwarded click echo keeps the fast cap
+
+- **WHEN** a mouse click press or release is forwarded to a live session in a visible pane and the agent redraws in response
+- **THEN** the redraw repaints at the 8ms interval, the same as a keystroke echo
+
+#### Scenario: Wheel scrolling and unforwarded clicks do not open the echo window
+
+- **WHEN** the pane forwards a mouse wheel event, or a click is not forwarded because the pane is unfocused or has no live session
+- **THEN** the echo window is not opened and output repaints at the output-only interval
 
 #### Scenario: A key shortens a throttle in progress
 
@@ -982,4 +992,37 @@ Emulators that exist only to reconstruct the visible screen as text (the needs-i
 
 - **WHEN** a tail is rendered after the scrollback bound is applied
 - **THEN** the returned visible screen text is identical to the text produced before the change
+
+### Requirement: Replay rebuilds are single-flight and never publish stale content
+
+A terminal pane SHALL have at most one asynchronous replay rebuild in flight. Resetting the pane, invalidating its replay cache, or changing its task SHALL NOT permit a second rebuild to start while one is running. A rebuild kicked for a binding that has since been reset SHALL NOT publish its emulator or its alt-screen state; it SHALL park the emulator for reuse and trigger a redraw so a fresh rebuild is kicked for the current binding.
+
+#### Scenario: Rebind while a rebuild is in flight
+
+- **WHEN** a pane's rebuild for task A is in flight and the pane is rebound to task B
+- **THEN** no second rebuild starts until A's rebuild finishes, A's result is not published, and the rebuild that follows publishes B's content
+
+#### Scenario: Slow stale rebuild finishes last
+
+- **WHEN** a rebuild for the previous binding finishes after a rebuild for the current binding
+- **THEN** the published emulator still holds the current binding's content
+
+#### Scenario: Stale alt-screen state is not recorded
+
+- **WHEN** a stale rebuild's content entered the alternate screen
+- **THEN** the pane's recorded alt-screen state is unchanged
+
+### Requirement: A pane owns at most two replay emulators
+
+A terminal pane SHALL own at most two replay emulators at any time (published plus spare, or two spares), reusing them across rebuilds. An emulator SHALL NOT be discarded without being retained for reuse; if none can be retained, a drop counter and a log line SHALL record it, and the emulator SHALL NOT be closed.
+
+#### Scenario: Repeated rebinds during rebuilds
+
+- **WHEN** a pane is rebound 25 times, each while a rebuild is in flight
+- **THEN** the pane has created at most two replay emulators, the drop counter is zero, and the process goroutine count has grown by no more than the two emulators' drain goroutines
+
+#### Scenario: A rebuild panics before publishing
+
+- **WHEN** a rebuild panics after acquiring its emulator
+- **THEN** the in-flight flag is cleared and the emulator is retained for reuse
 

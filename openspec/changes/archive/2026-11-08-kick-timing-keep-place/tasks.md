@@ -20,7 +20,7 @@
 
 - [x] 4.1 `prompt.edit` + `prompt.change` hooks with debounce, immediate empty flush; `draft_aware` on session.start
 - [x] 4.2 Restore pull on `session.start`, read-then-fill-if-empty, outcome report
-- [x] 4.3 Mod tests; add `draft.ts` to `SupervisorSpawnPaths`, bump spawn surface to 36, re-record the digest
+- [x] 4.3 Mod tests; add `draft.ts` to `SupervisorSpawnPaths`, bump spawn surface (38 after merging master), re-record the digest
 
 ## 5. Setting and docs
 

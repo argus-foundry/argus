@@ -16,7 +16,7 @@ A persistent daemon keeps PTY sessions alive across TUI restarts and reboots. An
 
 ## Build, test, and quality gates
 
-- **`make pre-pr` is the non-negotiable gate before opening OR updating any PR.** It mirrors `.github/workflows/ci.yml` step-for-step: build → vet → fmt-check → lint-pr → vuln → test-cover-gate. A green `make pre-pr` means CI will be green.
+- **`make pre-pr` is the non-negotiable gate before opening OR updating any PR.** It mirrors `.github/workflows/ci.yml` step-for-step: build → vet → fmt-check → lint-pr → vuln → test-cover-gate → workspace-test. A green `make pre-pr` means CI will be green.
 - **Coverage floor:** filtered coverage must stay at or above the **88%** floor (`make test-cover-gate`, `-min 88`). The floor ratchets up, never down — do not lower `-min`. Target platform-agnostic code for the most reliable margin (filtered coverage can drift ~0.2% between darwin and linux).
 - **`make fmt`** runs goimports over the tree; **`make fmt-check`** fails CI if anything is unformatted (the most common CI miss).
 - **`make lint-pr`** uses `--new-from-rev=origin/master`, so it only flags issues your diff introduces. Fix them; do not add blanket `//nolint`.
@@ -39,4 +39,4 @@ Common targets: `make build`, `make vet`, `make test` (`-race -count=1 ./...`), 
 
 ## Load-bearing note on OpenSpec in this repo
 
-**OpenSpec specs in this repo are LOCAL DOCS only — nothing in CI, the Makefile, or the Go build depends on them.** The `openspec/` artifacts are authoring aids that get injected into PRs for the maintainer's workflow; no code reads them and they are strippable. Future change authors **MUST NOT** wire spec-validation (e.g. `openspec validate`) into the Go CI or any `make` target. The quality gate is and stays `make pre-pr` — build, vet, fmt-check, lint-pr, vuln, and the coverage gate. Keep spec tooling out of it.
+**OpenSpec specs in this repo are LOCAL DOCS only — nothing in CI, the Makefile, or the Go build depends on them.** The `openspec/` artifacts are authoring aids that get injected into PRs for the maintainer's workflow; no code reads them and they are strippable. Future change authors **MUST NOT** wire spec-validation (e.g. `openspec validate`) into the Go CI or any `make` target. The quality gate is and stays `make pre-pr` — build, vet, fmt-check, lint-pr, vuln, the coverage gate, and workspace unit tests. Keep spec tooling out of it.

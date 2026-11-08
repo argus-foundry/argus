@@ -1,0 +1,5 @@
+- [x] codexctx reader + thread lookup + fixtures
+- [x] Family ContextReader/Provider/Source for Codex
+- [x] Handler and task.context_changed tick emission + tests
+- [x] Gotchas, README reference
+- [x] Archive change
