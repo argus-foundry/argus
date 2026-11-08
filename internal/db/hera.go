@@ -816,6 +816,13 @@ func (d *DB) CreateHeraRoleWithBinding(roleIn CreateHeraRoleInput, taskID, workt
 // tool (fix-hera-join-move-binding), as opposed to a normal leave/delete.
 const HeraEndReasonMoved = "moved"
 
+// HeraEndReasonAccepted is stamped on a coordinator binding ended by
+// AcceptRole (fix-probe-and-accept): accepting a sub-coordinator's task
+// complete ends its coordinator hat so the finished-session reaper no longer
+// spares its idle session. RestoreAcceptedHeraCoordinatorBindings undoes it
+// when the task is revived.
+const HeraEndReasonAccepted = "accepted"
+
 // MoveHeraBindingResult reports the outcome of MoveHeraBinding: the ended
 // binding's orchestrator and role name (so the MCP layer can report what
 // moved) alongside the newly created role and binding under the target
@@ -996,6 +1003,55 @@ func (d *DB) EndHeraBindingsForTask(taskID, reason string) (int, error) {
 		formatTime(time.Now()), reason, taskID)
 	if err != nil {
 		return 0, fmt.Errorf("end hera bindings for task: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// EndHeraCoordinatorBindingsForTask ends every LIVE coordinator-kind binding
+// on taskID with the given reason and returns how many it ended. Worker and
+// freelance bindings are untouched. Used by AcceptRole so an accepted
+// sub-coordinator's coordinator hat stops keeping its idle session alive.
+func (d *DB) EndHeraCoordinatorBindingsForTask(taskID, reason string) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	res, err := d.conn.Exec(
+		`UPDATE hera_bindings SET ended_at=?, end_reason=?
+		 WHERE argus_task_id=? AND ended_at IS NULL
+		   AND role_id IN (SELECT id FROM hera_roles WHERE kind=?)`,
+		formatTime(time.Now()), reason, taskID, string(HeraKindCoordinator))
+	if err != nil {
+		return 0, fmt.Errorf("end hera coordinator bindings for task: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// RestoreAcceptedHeraCoordinatorBindings is the inverse of AcceptRole's
+// coordinator-binding end: it re-opens (un-ends, keeping role identity and
+// accrued cost) each coordinator binding on taskID that was ended with
+// HeraEndReasonAccepted, provided it is still the role's latest binding, the
+// role and its orchestrator are neither archived nor nuked, and the task holds
+// no live binding in that orchestrator. Idempotent; returns how many it
+// re-opened. Called wherever an accepted task's session is resumed so a
+// revived sub-coordinator gets its coordinator hat back.
+func (d *DB) RestoreAcceptedHeraCoordinatorBindings(taskID string) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	res, err := d.conn.Exec(
+		`UPDATE hera_bindings SET ended_at=NULL, end_reason=NULL
+		 WHERE id IN (
+		   SELECT b.id FROM hera_bindings b
+		   JOIN hera_roles r ON r.id = b.role_id
+		   JOIN hera_orchestrators o ON o.id = b.orchestrator_id
+		   WHERE b.argus_task_id=? AND b.ended_at IS NOT NULL AND b.end_reason=?
+		     AND r.kind=? AND r.archived_at IS NULL AND o.nuked_at IS NULL AND o.archived_at IS NULL
+		     AND b.id = (SELECT MAX(id) FROM hera_bindings WHERE role_id=b.role_id)
+		     AND NOT EXISTS (SELECT 1 FROM hera_bindings l
+		                     WHERE l.argus_task_id=b.argus_task_id AND l.orchestrator_id=b.orchestrator_id AND l.ended_at IS NULL)
+		 )`, taskID, HeraEndReasonAccepted, string(HeraKindCoordinator))
+	if err != nil {
+		return 0, fmt.Errorf("restore accepted hera coordinator bindings: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil

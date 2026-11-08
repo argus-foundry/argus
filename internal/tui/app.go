@@ -6501,6 +6501,8 @@ func (a *App) refreshResumeSessionID(task *model.Task, resume bool) {
 	}
 	if d, ok := a.db.(*db.DB); ok {
 		agent.RefreshResumeSessionID(d, task)
+		// A resumed accepted sub-coordinator gets its coordinator hat back.
+		_ = agent.RestoreAcceptedCoordinatorHat(d, task.ID)
 	}
 }
 

@@ -501,7 +501,7 @@ var SupervisorStreamPaths = []string{
 // message prints the computed digest to paste back here.
 const (
 	SpawnSurfaceDigest  = "53d4353558282648347698bbb0b8949f597cfcd841ae222090d38eae0d93d161"
-	StreamSurfaceDigest = "11024ea57e1c40147b4c52d778af95da81fd73b07eccf004cf014df871efd1be"
+	StreamSurfaceDigest = "b9f594956c180bcbc961311b610ed96c9dbd53daeaba8855212b30c62959b495"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

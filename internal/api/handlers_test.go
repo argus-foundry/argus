@@ -4548,3 +4548,36 @@ func TestCreateUpdateBackend_ResponseCarriesFamilyMetadata(t *testing.T) {
 	testutil.Equal(t, updated.Kind, "claude")
 	testutil.Equal(t, updated.SessionSwitcher, true)
 }
+
+// Restarting an accepted sub-coordinator's task re-opens the coordinator
+// binding hera_accept ended (fix-probe-and-accept).
+func TestHandleRestartTask_RestoresAcceptedCoordinatorHat(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a real PTY-backed sleep; skipped in -short")
+	}
+	srv, d := testServer(t)
+	mux := srv.routes()
+	testutil.NoError(t, d.SetBackend("sh-sleep", config.Backend{Command: "sleep 30"}))
+	task := &model.Task{Name: "sub", Status: model.StatusComplete, Backend: "sh-sleep", Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
+	orch, err := d.CreateHeraOrchestrator("child", "")
+	testutil.NoError(t, err)
+	_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "c", Kind: db.HeraKindCoordinator, ArgusProject: "p"}, task.ID, task.Worktree)
+	testutil.NoError(t, err)
+	_, err = d.EndHeraCoordinatorBindingsForTask(task.ID, db.HeraEndReasonAccepted)
+	testutil.NoError(t, err)
+
+	req := authedReq("POST", "/api/tasks/"+task.ID+"/restart", "")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	testutil.Equal(t, w.Code, http.StatusOK)
+	t.Cleanup(func() {
+		if sess := srv.runner.Get(task.ID); sess != nil {
+			_ = srv.runner.Stop(task.ID)
+			<-sess.Done()
+		}
+	})
+	g, err := d.LiveHeraKeepAliveBinding(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, g != nil)
+}

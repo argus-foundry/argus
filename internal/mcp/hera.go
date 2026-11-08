@@ -91,6 +91,9 @@ type HeraStore interface {
 	// hera.AcceptStore.
 	Get(taskID string) (*model.Task, error)
 	SetStatus(taskID string, status model.Status) error
+	// EndHeraCoordinatorBindingsForTask lets AcceptRole end an accepted
+	// sub-coordinator's coordinator binding (fix-probe-and-accept).
+	EndHeraCoordinatorBindingsForTask(taskID, reason string) (int, error)
 }
 
 // maxHeraInboxTimeoutSeconds caps the server-side hera_inbox wait. It matches
