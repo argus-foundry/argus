@@ -114,12 +114,14 @@ type App struct {
 	taskPreview  *TaskPreviewPanel
 	taskDetail   *taskview.TaskDetailPanel
 	agentPane    *terminal.TerminalPane
-	agentHeader  *widget.AgentHeader
-	gitPanel     *gitpanel.GitPanel // git status for agent view (left panel)
-	filePanel    *gitpanel.FilePanel
-	attentionBar *widget.AttentionBar // sits above gitPanel in agent view
-	agentLeftCol *tview.Flex          // vertical flex that owns attentionBar + gitPanel
-	agentPanels  *tview.Flex          // horizontal flex: left col | agent pane | file panel
+	// idleReleaseEnabled is set by Run() once the tview loop is about to start.
+	idleReleaseEnabled atomic.Bool
+	agentHeader        *widget.AgentHeader
+	gitPanel           *gitpanel.GitPanel // git status for agent view (left panel)
+	filePanel          *gitpanel.FilePanel
+	attentionBar       *widget.AttentionBar // sits above gitPanel in agent view
+	agentLeftCol       *tview.Flex          // vertical flex that owns attentionBar + gitPanel
+	agentPanels        *tview.Flex          // horizontal flex: left col | agent pane | file panel
 
 	// Tabs
 	settings     *SettingsView
@@ -1734,6 +1736,9 @@ func (a *App) onTick() {
 	// run this frame (pendingResize stays zero when the Hera tab is inactive),
 	// so it can never fight the main agent view's resize of the same task.
 	a.heraPage.SyncPanes()
+
+	// Shrink replay emulators of panes nobody has looked at for a while.
+	a.releaseIdlePaneMemory()
 
 	// Read daemon state for health check BEFORE QueueUpdateDraw — daemon
 	// fields are protected by a.mu and don't touch tview widgets.
@@ -5218,6 +5223,10 @@ func (a *App) prepareRun() {
 // inside the page itself. a.tapp is read at call time, not captured.
 func (a *App) enableAsyncHeraRefresh() {
 	a.heraPage.SetUIQueue(func(fn func()) { a.tapp.QueueUpdateDraw(fn) })
+	// Same gate for the idle-pane release: tview's QueueUpdate blocks until the
+	// event loop runs the closure, so it must never be called on an App that
+	// has no loop (bare-New() tests would deadlock).
+	a.idleReleaseEnabled.Store(true)
 }
 
 // restoreLastTab local-only loads the persisted `ui.last_tab` value and, if
@@ -8476,4 +8485,27 @@ func (a *App) exitAgentView() {
 	// Also clear any transient info notice (e.g. the remote-fork
 	// "context not carried" message) so it doesn't linger on the task list.
 	a.statusbar.ClearInfo()
+}
+
+// releaseIdlePaneMemory asks every terminal pane to release replay emulators
+// it has not drawn for a while. The release runs on the tview goroutine so it
+// serializes with Draw (which paints the published emulator outside the pane
+// lock). No-op until Run() wires it (bare-New() unit tests have no loop and
+// tview's QueueUpdate would block forever).
+func (a *App) releaseIdlePaneMemory() {
+	if !a.idleReleaseEnabled.Load() || a.tapp == nil || a.agentPane == nil || a.heraPage == nil {
+		return
+	}
+	panes := []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane()}
+	a.tapp.QueueUpdate(func() {
+		now := time.Now()
+		for _, p := range panes {
+			releaseIdlePane(p, now)
+		}
+	})
+}
+
+// releaseIdlePane is a seam so tests can observe the tick hook's reach.
+var releaseIdlePane = func(p *terminal.TerminalPane, now time.Time) {
+	p.ReleaseIdle(now, terminal.ReplayIdleRelease)
 }
