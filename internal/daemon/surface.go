@@ -261,7 +261,12 @@ const (
 	//     exit (which skipped the daemon's status flip).
 	//   - v14: SessionStatus/ListSessions expose the immutable bridge launch
 	//     generation so a resumed transcript cannot inherit old authority.
-	SupervisorStreamSurface = 14
+	//   - v15: GetExitInfo answers StreamLost=true (never a zero, clean-looking
+	//     ExitInfo) when it has no recorded exit for the reader, and
+	//     SessionStatus surfaces a failed supervisor probe as an error instead
+	//     of Alive=false — a post-restart probe can no longer manufacture a
+	//     clean exit that completes a live coordinator.
+	SupervisorStreamSurface = 15
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -501,7 +506,7 @@ var SupervisorStreamPaths = []string{
 // message prints the computed digest to paste back here.
 const (
 	SpawnSurfaceDigest  = "88dc602c5c29a22a3ce31c49caf26b5eff72fe30a1223c6dafc5363f638dfa62"
-	StreamSurfaceDigest = "4db586fb7dcaf62899cb2ebc82bbaa7fcc325d7cf99611f5f7942c44f9bc9467"
+	StreamSurfaceDigest = "11024ea57e1c40147b4c52d778af95da81fd73b07eccf004cf014df871efd1be"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

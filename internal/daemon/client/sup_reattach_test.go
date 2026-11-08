@@ -138,14 +138,16 @@ func TestSupReattach(t *testing.T) {
 // only because the startup re-attach (Get) armed daemon #2's exit relay — without
 // it, the clean exit would never reach handleSessionExit. The agent blocks on a
 // sentinel file so it is provably still alive at re-attach, then exits 0 when we
-// create the file. (Non-hera task, so the clean exit lands Complete, not the
+// create the file. It prints before exiting, like any real agent: an exit that
+// carries no output at all is indistinguishable from "nothing recorded" and is
+// deliberately not trusted as clean (fix-bounce-false-complete). (Non-hera task, so the clean exit lands Complete, not the
 // worker InReview policy.)
 func TestSupReattachComplete(t *testing.T) {
 	supSock, database := reattachHarness(t)
 
 	wt := t.TempDir()
 	sentinel := filepath.Join(wt, "DONE")
-	cmd := "sh -c 'while [ ! -f " + sentinel + " ]; do sleep 0.05; done'"
+	cmd := "sh -c 'while [ ! -f " + sentinel + " ]; do sleep 0.05; done; echo bye'"
 
 	_, sc1 := connectDaemon(t, supSock, database)
 	task := startLive(t, sc1, database, "707b", cmd, wt)

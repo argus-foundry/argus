@@ -261,14 +261,14 @@ func TestSupColdStart(t *testing.T) {
 	testutil.Equal(t, d.Runner() == agent.SessionRunner(sc), true)
 
 	// 5. A session started cold round-trips supervisor→daemon to Complete.
-	task := startE2E(t, d, sc, database, "cold", "sh -c 'sleep 0.2'")
+	task := startE2E(t, d, sc, database, "cold", "sh -c 'sleep 0.2; echo bye'")
 	waitStatus(t, database, task.ID, model.StatusComplete)
 }
 
 // TestSupClean: a clean (zero-exit) agent → the daemon flips the task Complete.
 func TestSupClean(t *testing.T) {
 	d, sc, database := supE2E(t)
-	task := startE2E(t, d, sc, database, "clean", "sh -c 'sleep 0.3'")
+	task := startE2E(t, d, sc, database, "clean", "sh -c 'sleep 0.3; echo bye'")
 	waitStatus(t, database, task.ID, model.StatusComplete)
 }
 

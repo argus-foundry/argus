@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/drn/argus/internal/agent"
+	"github.com/drn/argus/internal/db"
 	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/uxlog"
 )
@@ -28,9 +29,18 @@ type finishedReapTasks interface {
 	Get(id string) (*model.Task, error)
 }
 
+// finishedReapGuard is the optional slice of *db.DB that names a live hera
+// coordinator/freelance binding. Coordinators and freelancers idle between
+// messages by design, so their sessions are never reaped, whatever the task
+// row says. Fakes that do not implement it get no guard.
+type finishedReapGuard interface {
+	LiveHeraKeepAliveBinding(taskID string) (*db.HeraKeepAliveBinding, error)
+}
+
 type finishedReapEntry struct {
-	exempt bool // session started while its task was already finished
-	armed  bool // idle + finished on the previous tick
+	exempt  bool // session started while its task was already finished
+	armed   bool // idle + finished on the previous tick
+	guarded bool // keep-alive skip already logged (log once per task)
 }
 
 // finishedSessionReaper stops the agent session of a task that is complete
@@ -80,9 +90,18 @@ func (f *finishedSessionReaper) tick() []string {
 			// first tick it is the backlog this reaper exists to clear.
 			e = finishedReapEntry{exempt: finished && !firstTick}
 		}
+		keep := false
+		// Archiving is a deliberate human act, so an archived task is reaped
+		// even with a live binding; only the status label (which a false exit
+		// inference can set) is not trusted for coordinators/freelancers.
+		if finished && !e.exempt && !t.Archived {
+			keep = f.keepAlive(id, t, &e)
+		}
 		switch {
 		case !finished:
 			e = finishedReapEntry{}
+		case keep:
+			e.armed = false
 		case e.exempt:
 		case !idleSet[id] || f.runner.HasPendingRestart(id):
 			e.armed = false
@@ -105,6 +124,39 @@ func (f *finishedSessionReaper) tick() []string {
 	}
 	f.state = next
 	return stopped
+}
+
+// keepAlive reports whether a live coordinator/freelance binding forbids
+// stopping id's session. A lookup error fails closed (keep). The first skip per
+// task is logged naming the binding so a mislabelled-complete coordinator is
+// visible rather than silently surviving (or silently dying).
+func (f *finishedSessionReaper) keepAlive(id string, t *model.Task, e *finishedReapEntry) bool {
+	g, ok := f.tasks.(finishedReapGuard)
+	if !ok {
+		return false
+	}
+	b, err := g.LiveHeraKeepAliveBinding(id)
+	if err != nil {
+		if !e.guarded {
+			e.guarded = true
+			slog.Warn("finished-session reaper: binding lookup failed, keeping session", "task", id, "err", err)
+			uxlog.Log("[finishedreap] keep task=%s: binding lookup failed: %v", id, err)
+		}
+		return true
+	}
+	if b == nil {
+		e.guarded = false
+		return false
+	}
+	if !e.guarded {
+		e.guarded = true
+		slog.Warn("finished-session reaper: not stopping session of finished task holding a live hera binding",
+			"task", id, "status", t.Status.String(), "archived", t.Archived,
+			"binding", b.BindingID, "role", b.RoleName, "kind", string(b.Kind), "orchestrator", b.OrchestratorID)
+		uxlog.Log("[finishedreap] keep task=%s status=%s archived=%t: live %s binding=%d role=%q orch=%d",
+			id, t.Status, t.Archived, b.Kind, b.BindingID, b.RoleName, b.OrchestratorID)
+	}
+	return true
 }
 
 // runFinishedSessionReaper is the reaper's d.done-gated loop.
