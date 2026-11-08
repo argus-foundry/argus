@@ -130,7 +130,7 @@ func (s *Server) handleBridgeUI(w http.ResponseWriter, r *http.Request) {
 			out.Messages = append(out.Messages, bridgeUIMessage{ID: fmt.Sprintf("hera:%d", m.ID), Sender: m.SenderName(sender.Name), Tldr: m.Tldr, SentAt: m.SentAt})
 		}
 	}
-	mail, err := s.db.Inbox(id, db.InboxFilter{UnreadOnly: true, Limit: db.MaxInboxLimit})
+	mail, err := s.db.Inbox(id, db.InboxFilter{UnreadOnly: true, ExcludeSystem: true, Limit: db.MaxInboxLimit})
 	if err != nil {
 		fail(err)
 		return

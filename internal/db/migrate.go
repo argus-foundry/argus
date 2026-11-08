@@ -12,6 +12,14 @@ import (
 
 // migrate checks if the database has been initialized. If not, it seeds defaults.
 func (d *DB) migrate() error {
+	// Idempotent backlog cleanup for pre-coalescing system notes; a no-op once
+	// clean, so it runs every start rather than behind a schema version bump.
+	// Best-effort: a failed cleanup must never block opening the database.
+	if n, err := d.CollapseSystemNotices(); err != nil {
+		slog.Warn("db: collapse legacy system notices failed", "err", err)
+	} else if n > 0 {
+		slog.Info("db: collapsed legacy system notices", "removed", n)
+	}
 	// Same idea for hera mail stranded on roles that are permanently gone.
 	if n, err := d.ClearDeadRoleMail(); err != nil {
 		slog.Warn("db: clear dead-role hera mail failed", "err", err)

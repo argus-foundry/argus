@@ -95,6 +95,7 @@ func TestLoadInboxEntries(t *testing.T) {
 	testutil.Equal(t, byBody["still unread"].Unread, true)
 	testutil.Equal(t, byBody["still unread"].Summary, "question")
 	testutil.Equal(t, byBody["ARGUS_BOUNCED"].From, "system")
+	testutil.False(t, byBody["ARGUS_BOUNCED"].Unread) // system notes are not unread mail
 
 	h := byBody["hera body"]
 	testutil.Equal(t, h.Source, "hera")
@@ -107,7 +108,7 @@ func TestLoadInboxEntries(t *testing.T) {
 	// Loading must never ack/mark read in either store.
 	unread, err := f.d.UnreadCount(f.recv.ID)
 	testutil.NoError(t, err)
-	testutil.Equal(t, unread, 2)
+	testutil.Equal(t, unread, 1)
 	heraUnread, err := f.d.HeraInbox(f.workerID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(heraUnread), 1)
@@ -185,7 +186,7 @@ func TestSmoke_InboxModal(t *testing.T) {
 	testutil.Equal(t, len(waitInboxLoaded(t, app)), 5)
 	unread, err := f.d.UnreadCount(f.recv.ID)
 	testutil.NoError(t, err)
-	testutil.Equal(t, unread, 3)
+	testutil.Equal(t, unread, 1) // system notes (incl. "late") are not counted
 
 	sim.InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
 	syncUI(t, app.tapp)
