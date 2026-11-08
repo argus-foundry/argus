@@ -398,3 +398,35 @@ test('new session publishes identical context immediately', async ($, on) => {
   expect(measures.length).toBe(2)
   expect(measures[1]).toMatchObject({ session_id: 'new', context: { tokens: 10, categories: { messages: 7 } } })
 })
+
+test('the engine suggestion is reported once shown; plugin-origin and hidden ones are not', async ($, on) => {
+  const w = world(on, { task: 'T1' })
+  let shown = true
+  on('prompt.suggest', () => ({ isShown: shown }))
+  await $.session.start(START)
+  await $.prompt.suggest({ text: 'from a plugin', origin: { kind: 'plugin', name: 'other' } })
+  shown = false
+  await $.prompt.suggest({ text: 'hidden', origin: { kind: 'suggestion' } })
+  await w.delivered()
+  expect(w.types()).not.toContain('suggestion.changed')
+  shown = true
+  await $.prompt.suggest({ text: 'Run the focused tests', origin: { kind: 'suggestion' } })
+  await w.delivered()
+  const sent = w.posted.filter(p => p.type === 'suggestion.changed')
+  expect(sent.length).toBe(1)
+  expect(sent[0]?.text).toBe('Run the focused tests')
+  expect(sent[0]?.session_id).toBe('sess-1')
+})
+
+test('suggestion hooks preserve shown and hidden engine results', async ($, on) => {
+  const w = world(on, { task: 'T1' })
+  let shown = true
+  on('prompt.suggest', () => ({ isShown: shown }))
+  await $.session.start(START)
+  const visible = await $.prompt.suggest({ text: 'next prompt', origin: { kind: 'suggestion' } })
+  expect(visible).toEqual({ isShown: true })
+  shown = false
+  const hidden = await $.prompt.suggest({ text: 'hidden prompt', origin: { kind: 'suggestion' } })
+  expect(hidden).toEqual({ isShown: false })
+  await w.delivered()
+})

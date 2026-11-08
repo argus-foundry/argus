@@ -1,0 +1,7 @@
+- [x] Verify provider support (`prompt.suggest` in the engine SDK types)
+- [x] Mod hook + producer mapping + tests
+- [x] bridge.Event/State/Hub suggestion support + validation + tests
+- [x] Ingest validation (400), `task.suggestion_changed`, GET /bridge `suggestion` + tests
+- [x] Re-record supervisor spawn surface (36 -> 37)
+- [x] Gotchas, README reference
+- [x] Archive change

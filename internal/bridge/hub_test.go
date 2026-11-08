@@ -229,3 +229,77 @@ func TestContextHubCloneEveryPointer(t *testing.T) {
 		}
 	}
 }
+
+func sugg(typ string, seq int64, gen, session, text string) Event {
+	return Event{Type: typ, Seq: seq, Boot: "b1", Generation: gen, SessionID: session, Text: text}
+}
+
+func TestHub_Suggestion(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []Event
+		want   string
+	}{
+		{"changed stores text with session identity", []Event{sugg(TypeSuggestionChanged, 1, "g", "s", "Run the tests")}, "Run the tests"},
+		{"later suggestion replaces earlier", []Event{
+			sugg(TypeSuggestionChanged, 1, "g", "s", "one"), sugg(TypeSuggestionChanged, 2, "g", "s", "two")}, "two"},
+		{"explicit clear", []Event{sugg(TypeSuggestionChanged, 1, "g", "s", "x"), sugg(TypeSuggestionCleared, 2, "g", "s", "")}, ""},
+		{"new turn clears", []Event{sugg(TypeSuggestionChanged, 1, "g", "s", "x"), sugg(TypeTurnStart, 2, "g", "s", "")}, ""},
+		{"turn complete keeps it", []Event{sugg(TypeSuggestionChanged, 1, "g", "s", "x"), sugg(TypeTurnComplete, 2, "g", "s", "")}, "x"},
+		{"session replacement clears", []Event{sugg(TypeSuggestionChanged, 1, "g", "s1", "x"), sugg(TypeHeartbeat, 2, "g", "s2", "")}, ""},
+		{"generation change clears", []Event{sugg(TypeSuggestionChanged, 1, "g1", "s", "x"), sugg(TypeHeartbeat, 2, "g2", "s", "")}, ""},
+		{"new boot clears", []Event{sugg(TypeSuggestionChanged, 1, "g", "s", "x"), {Type: TypeHeartbeat, Seq: 1, Boot: "b2", Generation: "g", SessionID: "s"}}, ""},
+		{"invalid text never stored", []Event{sugg(TypeSuggestionChanged, 1, "g", "s", "  ")}, ""},
+		{"no session identity never stored", []Event{sugg(TypeSuggestionChanged, 1, "g", "", "x")}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewHub()
+			h.Ingest("t", tt.events, t0)
+			st, _ := h.Get("t")
+			if tt.want == "" {
+				testutil.True(t, st.Suggestion == nil)
+				return
+			}
+			testutil.Equal(t, st.Suggestion.Text, tt.want)
+			testutil.Equal(t, st.Suggestion.Generation, "g")
+			testutil.Equal(t, st.Suggestion.SessionID, "s")
+			testutil.True(t, st.Suggestion.RecordedAt.Equal(t0))
+		})
+	}
+}
+
+func TestHub_SuggestionCopyIsIndependent(t *testing.T) {
+	h := NewHub()
+	h.Ingest("t", []Event{sugg(TypeSuggestionChanged, 1, "g", "s", "keep")}, t0)
+	st, _ := h.Get("t")
+	st.Suggestion.Text = "mutated"
+	again, _ := h.Get("t")
+	testutil.Equal(t, again.Suggestion.Text, "keep")
+}
+
+func TestEvent_ValidateSuggestion(t *testing.T) {
+	big := make([]byte, MaxSuggestionBytes+1)
+	for i := range big {
+		big[i] = 'a'
+	}
+	tests := []struct {
+		name string
+		ev   Event
+		ok   bool
+	}{
+		{"valid", Event{Type: TypeSuggestionChanged, Text: "go"}, true},
+		{"exactly 4 KiB", Event{Type: TypeSuggestionChanged, Text: string(big[:MaxSuggestionBytes])}, true},
+		{"oversized", Event{Type: TypeSuggestionChanged, Text: string(big)}, false},
+		{"blank", Event{Type: TypeSuggestionChanged, Text: " \n"}, false},
+		{"empty", Event{Type: TypeSuggestionChanged}, false},
+		{"invalid utf8", Event{Type: TypeSuggestionChanged, Text: "a\xffb"}, false},
+		{"NUL", Event{Type: TypeSuggestionChanged, Text: "a\x00b"}, false},
+		{"other types are not checked", Event{Type: TypeTurnStart, Text: string(big)}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testutil.Equal(t, tt.ev.ValidateSuggestion() == nil, tt.ok)
+		})
+	}
+}

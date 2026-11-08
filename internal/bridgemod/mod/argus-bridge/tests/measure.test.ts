@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { MEASURE_MIN_INTERVAL_MS, MeasureThrottle, categoriesFromBreakdown, measureFields } from '../hooks/measure'
+import { MEASURE_MIN_INTERVAL_MS, MeasureThrottle, categoriesFromBreakdown, measureFields, suggestionFields, suggestionToReport } from '../hooks/measure'
 
 test('measureFields maps context, cost and every rate limit window', () => {
   expect(
@@ -68,4 +68,18 @@ test('categoriesFromBreakdown drops invalid counts and answers nothing when noth
 
 test('deferred rows stay unknown even with a recognized category label', () => {
   expect(categoriesFromBreakdown([{ name: 'Messages', tokens: 123, kind: 'deferred' }])).toBe(undefined)
+})
+
+test('only a shown engine suggestion is reported', () => {
+  expect(suggestionToReport({ kind: 'suggestion' }, true, 'Run the focused tests')).toEqual({ text: 'Run the focused tests' })
+  expect(suggestionToReport({ kind: 'suggestion' }, false, 'Run the focused tests')).toBe(undefined)
+  expect(suggestionToReport({ kind: 'plugin' }, true, 'Run the focused tests')).toBe(undefined)
+})
+
+test('blank, NUL and oversized suggestions are never reported', () => {
+  expect(suggestionFields('   ')).toBe(undefined)
+  expect(suggestionFields('a\0b')).toBe(undefined)
+  expect(suggestionFields('x'.repeat(4096))).toEqual({ text: 'x'.repeat(4096) })
+  expect(suggestionFields('x'.repeat(4097))).toBe(undefined)
+  expect(suggestionFields('é'.repeat(2049))).toBe(undefined)
 })

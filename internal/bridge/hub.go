@@ -32,6 +32,9 @@ type State struct {
 	CostUSD    *float64    `json:"cost_usd,omitempty"`
 	RateLimits []RateLimit `json:"rate_limits,omitempty"`
 
+	// Suggestion is null until the provider offers one for the current turn.
+	Suggestion *Suggestion `json:"suggestion"`
+
 	Boot             string    `json:"boot,omitempty"`
 	LastSeq          int64     `json:"last_seq"`
 	Events           int64     `json:"events"`
@@ -83,6 +86,7 @@ func (h *Hub) Ingest(taskID string, events []Event, now time.Time) int {
 			// or restarted mid-turn session must not come back live still busy.
 			st.Busy, st.LastTransitionAt = false, now
 			st.NeedsInput, st.NeedsInputKind, st.NeedsInputConfidence = false, "", ""
+			st.Suggestion = nil
 		}
 		if st.Events > 0 && ev.Boot != st.Boot {
 			if h.retired[taskID] == nil {
@@ -102,6 +106,7 @@ func apply(st *State, ev Event, now time.Time) {
 		st.LastMeasureAt = time.Time{}
 		st.Busy, st.NeedsInput, st.NeedsInputKind = false, false, ""
 		st.NeedsInputConfidence = ""
+		st.Suggestion = nil
 	}
 	if ev.Generation != st.Generation {
 		st.SessionID = ""
@@ -122,7 +127,14 @@ func apply(st *State, ev Event, now time.Time) {
 		if ev.Cwd != "" {
 			st.Cwd = ev.Cwd
 		}
+	case TypeSuggestionChanged:
+		if ev.ValidateSuggestion() == nil && st.SessionID != "" {
+			st.Suggestion = &Suggestion{Text: ev.Text, SessionID: st.SessionID, Generation: st.Generation, RecordedAt: now.UTC()}
+		}
+	case TypeSuggestionCleared:
+		st.Suggestion = nil
 	case TypeTurnStart:
+		st.Suggestion = nil
 		if !st.Busy {
 			st.LastTransitionAt = now
 		}
@@ -222,6 +234,10 @@ func (h *Hub) Prune(now time.Time) int {
 func copyState(st *State) State {
 	out := *st
 	out.Context = st.Context.Clone()
+	if st.Suggestion != nil {
+		sg := *st.Suggestion
+		out.Suggestion = &sg
+	}
 	if st.CostUSD != nil {
 		v := *st.CostUSD
 		out.CostUSD = &v

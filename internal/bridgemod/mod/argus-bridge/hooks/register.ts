@@ -9,7 +9,7 @@
 // (`claude plugin validate` follows it nowhere else), so the helpers below take
 // `$` and the per-load `Bridge` state explicitly instead of closing over them.
 import type { Hook, Register } from 'claude-code'
-import { categoriesFromBreakdown, measureFields, MeasureThrottle } from './measure'
+import { categoriesFromBreakdown, measureFields, MeasureThrottle, suggestionToReport } from './measure'
 import { Reporter, type Env } from './reporter'
 import { Delivery } from './delivery'
 import { confidenceOf, GRACE_MS, NeedsInputTracker, type Kind, type Transition } from './tracker'
@@ -317,6 +317,22 @@ export const register: Register = on => {
   on('ui.render', { component: 'ToolProgress' }, ($, e, next) => {
     void safe(() => markRunning($, b, e.props.tool_use_id))
     return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The engine's own next-prompt guess is the only suggestion reported: a
+  // plugin-origin proposal is not the provider's, and nothing is ever written
+  // to the prompt box or the session.
+  on('prompt.suggest', async ($, e, next) => {
+    const result = await next(e)
+    const fields = suggestionToReport(e.origin, result.isShown, e.text)
+    if (fields) {
+      await safe(async () => {
+        if (!(await rep($, b).taskId())) return
+        await syncSession($, b, false)
+        await rep($, b).emit('suggestion.changed', fields)
+      })
+    }
+    return result
   }).catch(($, e, next) => next(e))
 
   on('session.measure', async ($, e, next) => {

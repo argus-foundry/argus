@@ -58,6 +58,11 @@ const (
 	// identity and timing only, never the counts themselves.
 	EventTypeTaskContextChanged = "task.context_changed"
 
+	// EventTypeTaskSuggestionChanged invites a GET /api/tasks/{id}/bridge when
+	// the provider's suggested next prompt appears or is cleared. Payload:
+	// {"session_id":"s","available":true,"recorded_at":"RFC3339"}; never the text.
+	EventTypeTaskSuggestionChanged = "task.suggestion_changed"
+
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.
 	// It is never persisted in the events table — clients seeing it should
