@@ -89,6 +89,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/tasks/{id}/archive", s.handleArchiveTask)
 	mux.HandleFunc("POST /api/tasks/{id}/unarchive", s.handleUnarchiveTask)
 	mux.HandleFunc("POST /api/tasks/{id}/rename", s.handleRenameTask)
+	mux.HandleFunc("POST /api/tasks/{id}/pin", s.handlePinTask)
 	mux.HandleFunc("POST /api/tasks/{id}/status", s.handleSetStatus)
 	mux.HandleFunc("POST /api/tasks/{id}/fork", s.handleForkTask)
 	// Claude session listing/switching (openspec add-mac-keybinding-parity

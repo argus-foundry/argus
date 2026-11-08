@@ -64,12 +64,12 @@ func TestEventsIntegration_DBMutationsEmitEvents(t *testing.T) {
 	// 4. Rename — expect task.renamed.
 	testutil.NoError(t, srv.db.Rename(task.ID, "renamed"))
 
-	// 5. Archive — expect task.archived.
+	// 5. Archive — expect task.archived (plus task.updated from earlier steps).
 	testutil.NoError(t, srv.db.SetArchived(task.ID, true))
 
 	gotTypes := map[string]bool{}
 	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && len(gotTypes) < 5 {
+	for time.Now().Before(deadline) && len(gotTypes) < 6 {
 		evType, data, err := readSSEEvent(scanner)
 		if err != nil {
 			break
