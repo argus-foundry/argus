@@ -106,3 +106,40 @@ func TestHub_PruneDropsOldDrafts(t *testing.T) {
 	testutil.False(t, ok)
 	testutil.Equal(t, len(h.drafts), 0)
 }
+
+func TestHub_DraftAwareness(t *testing.T) {
+	t.Run("session.start flag", func(t *testing.T) {
+		h := NewHub()
+		h.Ingest("t", []Event{{Type: TypeSessionStart, Seq: 1, Boot: "b1", SessionID: "s1", DraftAware: true}}, t0)
+		st, _ := h.Get("t")
+		testutil.True(t, st.DraftAware)
+		testutil.False(t, st.HasDraft)
+	})
+	t.Run("old mod stays unaware", func(t *testing.T) {
+		h := NewHub()
+		h.Ingest("t", []Event{ev(TypeSessionStart, 1)}, t0)
+		st, _ := h.Get("t")
+		testutil.False(t, st.DraftAware)
+	})
+	t.Run("a draft event proves awareness", func(t *testing.T) {
+		h := NewHub()
+		h.Ingest("t", []Event{draftEv(1, "b1", "x", 1)}, t0)
+		st, _ := h.Get("t")
+		testutil.True(t, st.DraftAware)
+	})
+	t.Run("a new boot must prove itself again", func(t *testing.T) {
+		h := NewHub()
+		h.Ingest("t", []Event{draftEv(1, "b1", "x", 1)}, t0)
+		h.Ingest("t", []Event{{Type: TypeTurnStart, Seq: 1, Boot: "b2", SessionID: "s1"}}, t0.Add(time.Second))
+		st, _ := h.Get("t")
+		testutil.False(t, st.DraftAware)
+	})
+	t.Run("a new launch generation resets it", func(t *testing.T) {
+		h := NewHub()
+		h.Ingest("t", []Event{{Type: TypeDraft, Seq: 1, Boot: "b1", SessionID: "s1", Generation: "g1", Text: "x"}}, t0)
+		h.Ingest("t", []Event{{Type: TypeHeartbeat, Seq: 2, Boot: "b1", SessionID: "s1", Generation: "g2"}}, t0.Add(time.Second))
+		st, _ := h.Get("t")
+		testutil.False(t, st.DraftAware)
+		testutil.False(t, st.HasDraft)
+	})
+}

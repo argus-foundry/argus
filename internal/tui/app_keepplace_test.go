@@ -197,3 +197,27 @@ func TestKeepPlace_RetryDropsEntryWhenSessionGone(t *testing.T) {
 		r.app.retryDeferredKick("never-armed") // no entry: no-op
 	})
 }
+
+// The real tick drives the Tasks-view retry for the task shown in the agent
+// view: with the pane at the bottom and the composer clear, the armed wait
+// starts its dwell without any key event.
+func TestKeepPlace_TickDrivesRetryForViewedTask(t *testing.T) {
+	r := newKeepPlaceRig(t, "tick")
+	base := &fakeKickSession{pid: 101, alive: true, idle: true, initCols: 80}
+	readUI(t, r.app.tapp, func() {
+		r.app.runner = getRunner{Runner: agent.NewRunner(nil), sess: base}
+		r.app.mu.Lock()
+		r.app.mode = modeAgent
+		r.app.agentState.TaskID = r.task.ID
+		r.app.mu.Unlock()
+		r.app.agentPane.SetTaskID(r.task.ID)
+		r.app.agentPane.SetSession(base)
+		r.app.kickWait[r.task.ID] = time.Time{}
+	})
+	r.app.onTick()
+	waitRerender(t, func() bool {
+		var started bool
+		readUI(t, r.app.tapp, func() { started = !r.app.kickWait[r.task.ID].IsZero() })
+		return started
+	})
+}

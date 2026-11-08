@@ -3,13 +3,16 @@ import type { On } from 'claude-code'
 
 type Posted = { type: string; seq: number; boot: string; session_id?: string; [k: string]: unknown }
 
-function world(on: On, opts: { task?: string; sessionId?: () => string; denyFetch?: boolean; hangFetch?: boolean; deliver?: boolean } = {}) {
+function world(on: On, opts: { task?: string; sessionId?: () => string; denyFetch?: boolean; hangFetch?: boolean; deliver?: boolean; draft?: { text: string; cursor: number } | null } = {}) {
   const posted: Posted[] = []
   const urls: string[] = []
   const reads: string[] = []
   let fetches = 0
   let offered = false
   const submitted: string[] = []
+  const draftPulls: string[] = []
+  const filled: { text: string; mode?: string; cursor?: number }[] = []
+  let box = ''
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, { HOME: '/h', ARGUS_BRIDGE_GENERATION: 'launch', ...(opts.task === undefined ? {} : { ARGUS_TASK_ID: opts.task }) })
   on('fs.read', (_, e) => {
@@ -21,6 +24,10 @@ function world(on: On, opts: { task?: string; sessionId?: () => string; denyFetc
     if (opts.denyFetch) return { deny: 'network blocked' }
     if (opts.hangFetch) return new Promise(() => {}) as never
     urls.push(e.url)
+    if (e.url.endsWith('/bridge/draft')) {
+      draftPulls.push(e.init?.body ?? '')
+      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ draft: opts.draft ?? null }) } }
+    }
     if (opts.deliver && e.url.endsWith('/deliveries')) {
       const delivery = offered ? null : { token: 'c1', text: 'INTEGRATION_NOTICE [argus-delivery:hera:1]' }
       offered = true
@@ -40,12 +47,14 @@ function world(on: On, opts: { task?: string; sessionId?: () => string; denyFetc
   on('turn.complete', (_, e) => ({ text: e.answer }))
   on('session.measure', (_, e) => ({ changed: e.changed }))
   on('prompt.submit', (_, e) => { submitted.push(e.text); return { text: e.text } })
+  on('prompt.read', () => ({ value: { text: box, cursor: box.length } }))
+  on('prompt.fill', (_, e) => { filled.push({ text: e.text, mode: e.mode, cursor: e.cursor }); box = e.text; return { isFilled: true } })
   // Delivery is background work: let it run before looking at what was posted.
   const delivered = async () => {
     await clock.settle()
     await clock.settle()
   }
-  return { posted, urls, reads, submitted, fetches: () => fetches, clock, delivered, types: () => posted.map(p => p.type) }
+  return { posted, urls, reads, submitted, draftPulls, filled, typeInto: (text: string) => { box = text }, fetches: () => fetches, clock, delivered, types: () => posted.map(p => p.type) }
 }
 
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
@@ -218,3 +227,49 @@ test('a daemon that never answers does not delay any hook', async ($, on) => {
 // here: the harness mints a different tool_use_id for the plugin's tool.call
 // than a test can name on tool.check, so the two never meet. It is verified
 // live (see context/knowledge/gotchas/bridge.md).
+
+test('session.start declares draft awareness and pulls once with this boot and launch generation', async ($, on) => {
+  const w = world(on, { task: 'T1' })
+  await $.session.start(START)
+  await w.delivered()
+  expect(w.posted[0]).toMatchObject({ type: 'session.start', draft_aware: true })
+  expect(w.draftPulls.length).toBe(1)
+  expect(JSON.parse(w.draftPulls[0] as string)).toMatchObject({ generation: 'launch', boot: w.posted[0]?.boot })
+  expect(w.filled).toEqual([])
+})
+
+test('a draft handed back after a kick is filled into the empty box and the outcome reported', async ($, on) => {
+  const w = world(on, { task: 'T1', draft: { text: 'fix the bug', cursor: 7 } })
+  await $.session.start(START)
+  await w.delivered()
+  expect(w.filled).toEqual([{ text: 'fix the bug', mode: 'replace', cursor: 7 }])
+  const report = w.posted.find(p => p.type === 'draft')
+  expect(report).toMatchObject({ type: 'draft', reason: 'restored' })
+})
+
+test('a box the user already typed into is never overwritten by the restore', async ($, on) => {
+  const w = world(on, { task: 'T1', draft: { text: 'old draft', cursor: 9 } })
+  w.typeInto('typed first')
+  await $.session.start(START)
+  await w.delivered()
+  expect(w.filled).toEqual([])
+  expect(w.posted.find(p => p.type === 'draft')).toMatchObject({ text: 'typed first', reason: 'skipped_nonempty' })
+})
+
+for (const [name, draft] of [['no draft', null], ['an empty draft', { text: '', cursor: 0 }]] as const) {
+  test(`${name} in the pull answer restores nothing and reports nothing`, async ($, on) => {
+    const w = world(on, { task: 'T1', draft })
+    await $.session.start(START)
+    await w.delivered()
+    expect(w.filled).toEqual([])
+    expect(w.posted.some(p => p.type === 'draft')).toBe(false)
+  })
+}
+
+test('inert without ARGUS_TASK_ID: no draft pull either', async ($, on) => {
+  const w = world(on, { draft: { text: 'x', cursor: 1 } })
+  await $.session.start(START)
+  await w.delivered()
+  expect(w.draftPulls.length).toBe(0)
+  expect(w.filled).toEqual([])
+})
