@@ -40,12 +40,22 @@ Hera workers (via the orchestrator's coordinator task), MCP `task_create` caller
 
 ### Requirement: Recent spawns penalize an account during routing
 
-Routing SHALL add a recent-spawn penalty of 5 usage points per spawn on the same backend and account within the last 30 minutes to that tier's measured usage, for threshold checks and headroom scoring. A spawn SHALL be recorded atomically with the resolution that produced it so concurrent spawns observe each other. Among tiers with no usable reading, the tier with the fewest recent spawns SHALL win, list order breaking ties. The penalty SHALL be deterministic given an injectable clock and SHALL be logged with a `[routing]` prefix when it changes the outcome.
+Routing SHALL always score each tier's real usage reading, and SHALL add a recent-spawn penalty of 5 usage points per spawn on the same backend and account as a short-lived placeholder for usage the next reading has not yet measured. A spawn SHALL stop counting only once a reading for that account taken at least 5 minutes after the spawn is available (a fresher reading taken sooner cannot yet reflect the spawn's usage), and SHALL never count after 30 minutes (the backstop for readings without a timestamp). The penalty applies to threshold checks and headroom scoring. A spawn SHALL be recorded atomically with the resolution that produced it so concurrent spawns observe each other. Among tiers with no usable reading, the tier with the fewest recent spawns SHALL win, list order breaking ties. The penalty SHALL be deterministic given an injectable clock and SHALL be logged with a `[routing]` prefix whenever it is applied.
 
 #### Scenario: Burst alternates between accounts
 
 - **WHEN** headroom routing sees `default` at 40% and `personal` at 38% (threshold 80) and four spawns resolve in a row
 - **THEN** the spawns do not all land on `personal`; the penalty moves later spawns to `default`
+
+#### Scenario: Fresh reading clears the penalty
+
+- **WHEN** a reading taken at least 5 minutes after the last spawn arrives for the account
+- **THEN** that spawn adds no penalty and the real reading is scored alone
+
+#### Scenario: Early reading does not clear the penalty
+
+- **WHEN** a reading arrives 2 seconds after a spawn
+- **THEN** the spawn still adds its penalty
 
 #### Scenario: Penalty expires
 
@@ -85,3 +95,32 @@ When no account is pinned, the account SHALL be resolved in this order, first ma
 
 - **WHEN** a coordinator spawns while a Codex tier has the most headroom overall
 - **THEN** the coordinator uses a Claude-capable backend
+
+### Requirement: Spawns route on fresh readings, never unknown-to-first-tier
+
+Usage readings SHALL be polled every 5 minutes. Before resolving a spawn's backend/account with a tier list configured, task creation SHALL force a fresh usage read (debounced to one probe round per 30 seconds, fail-open to cached readings on error); the spawn SHALL wait at most 5 seconds for it, even when a probe is queued behind an in-flight poll probe, and a round abandoned at the cap SHALL still count for the debounce; a TUI process SHALL obtain it through a daemon RPC and re-dial the daemon once if its connection is dead. When a tier's reading is unavailable, routing SHALL score its last known reading if younger than 6 hours and not past that reading's own window reset, instead of treating it as unknown, and SHALL log that it did. Only a tier never read, last read more than 6 hours ago, or whose last reading's window has since reset is unknown, and unknown tiers SHALL rotate by fewest recent spawns rather than resolving to the first tier in list order every time.
+
+#### Scenario: Spawn probes first
+
+- **WHEN** a task is created with tiers configured
+- **THEN** a fresh usage read runs before the account is resolved, and a burst of spawns within 30 seconds shares one probe round
+
+#### Scenario: Probe failure keeps the last known reading
+
+- **WHEN** `default` was last read at 78% and `personal` at 8%, and both probes now fail
+- **THEN** the spawn routes to `personal`
+
+#### Scenario: A reset invalidates the last known reading
+
+- **WHEN** Codex was last read at 100% with a reset an hour later, and no Codex reading is available after that reset
+- **THEN** Codex is scored as unknown, not as 100%
+
+#### Scenario: Fresh read is capped
+
+- **WHEN** the fresh read's probe is still blocked after 5 seconds
+- **THEN** the spawn stops waiting and routes on the cached or last known readings
+
+#### Scenario: Dead TUI connection
+
+- **WHEN** the TUI's daemon connection was lost to a daemon restart
+- **THEN** routing re-dials once and uses the daemon's readings instead of treating every tier as unknown
