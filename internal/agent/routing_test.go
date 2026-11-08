@@ -301,3 +301,40 @@ func TestCreateAndStartFreshensUsageOnlyWhenTiersConfigured(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, calls, 1)
 }
+
+// Live burst shape: a project with no backend, claude (80) + codex (95) tiers.
+// Step 2 scans every tier when no backend is set (the global default does not
+// count as a project backend), so the roomiest backend wins and is labelled
+// best-overall.
+func TestNoProjectBackendRoutesAcrossBackends(t *testing.T) {
+	cfg := config.Config{
+		Backends: map[string]config.Backend{"claude": {Command: "claude"}, "codex": {Command: "codex"}},
+		Defaults: config.Defaults{Backend: "claude"},
+		Projects: map[string]config.Project{"p": {}},
+		BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
+			{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+			{Backend: "codex", Probe: config.ProbeCodexUsage, ThresholdPct: 95},
+		}},
+	}
+	for _, tc := range []struct {
+		name          string
+		claude, codex float64
+		want          string
+	}{
+		{"claude roomier", 9, 40, "claude"},
+		{"codex roomier", 70, 10, "codex"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backendtier.ResetSpawnLedger()
+			defer backendtier.SetUsageSource(func() (backendtier.Usage, error) {
+				return backendtier.Usage{
+					Claude: map[string]usagebudget.Reading{"default": {Percentage: tc.claude}},
+					Codex:  &usagebudget.Reading{Percentage: tc.codex},
+				}, nil
+			})()
+			c := resolveTaskChoice("", "p", cfg, "", false)
+			testutil.Equal(t, c.Backend, tc.want)
+			testutil.Equal(t, c.Step, "best-overall")
+		})
+	}
+}

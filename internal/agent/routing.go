@@ -33,6 +33,11 @@ func resolveTaskChoiceLocked(explicit, project string, cfg config.Config, accoun
 	step := "pinned-account"
 	if pin == "" {
 		step = "backend-best"
+		if backend == "" {
+			// No task/project backend: ResolveChoice scans every tier, so this is
+			// already the any-backend step (the global default does not count).
+			step = "best-overall"
+		}
 		if p := cfg.ProjectAccounts[project]; p != "" && cfg.ValidateAccount(p) == nil {
 			pin = p
 			step = "project-account"

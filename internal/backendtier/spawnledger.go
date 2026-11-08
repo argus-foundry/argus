@@ -14,12 +14,17 @@ import (
 // per (backend, account) in this process and ResolveChoice treats each as
 // SpawnPenaltyPct extra usage. The penalty is only a placeholder for usage the
 // next probe has not measured yet: routing always scores the REAL reading, and a
-// spawn stops counting the moment a reading newer than it arrives (the reading
-// already includes it). SpawnPenaltyWindow is the backstop for readings with
+// spawn stops counting once a reading taken at least SpawnSettle after it
+// arrives (the reading already includes its burn; a fresher-but-too-early one
+// does not). SpawnPenaltyWindow is the backstop for readings with
 // no timestamp.
 const (
 	SpawnPenaltyPct    = 5.0
 	SpawnPenaltyWindow = 30 * time.Minute
+	// SpawnSettle is how long after a spawn a reading must be taken before it
+	// is trusted to include that spawn's burn. Live sessions report constantly,
+	// so a reading seconds after a spawn cannot reflect it yet.
+	SpawnSettle = 5 * time.Minute
 )
 
 var ledger struct {
@@ -47,7 +52,7 @@ func ledgerNow() time.Time {
 }
 
 // recentSpawns counts spawns for the key inside the window and newer than since
-// (the account's latest reading time; zero = unknown), pruning window-expired
+// (the account's latest reading time; zero = unknown) by less than SpawnSettle, pruning window-expired
 // entries as it goes.
 func recentSpawns(backend, account string, since time.Time) int {
 	ledger.mu.Lock()
@@ -67,7 +72,7 @@ func recentSpawns(backend, account string, since time.Time) int {
 	ledger.spawns[key] = kept
 	n := 0
 	for _, t := range kept {
-		if t.After(since) {
+		if since.Before(t.Add(SpawnSettle)) {
 			n++
 		}
 	}

@@ -107,8 +107,12 @@ func TestPenaltyClearsOnFreshReading(t *testing.T) {
 	WithReservation(func() Choice { return ResolveChoice(cfg, "claude", "") })
 	// Reading is older than the spawn: still penalized, so default wins.
 	testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "default")
-	// A reading taken after the spawn already includes it: penalty gone.
-	*now = now.Add(time.Minute)
+	// A reading seconds after the spawn cannot include its burn yet: still penalized.
+	*now = now.Add(2 * time.Second)
+	readingAt = *now
+	testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "default")
+	// A reading taken SpawnSettle+ after the spawn includes it: penalty gone.
+	*now = now.Add(6 * time.Minute)
 	readingAt = *now
 	testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "personal")
 }
@@ -127,7 +131,7 @@ func TestPenaltyClearsOnFreshDaemonReading(t *testing.T) {
 	}}}
 	WithReservation(func() Choice { return ResolveChoice(cfg, "claude", "") })
 	testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "default")
-	*now = now.Add(time.Minute)
+	*now = now.Add(6 * time.Minute)
 	for k, r := range usage.Claude {
 		r.LastProbedAt = *now
 		usage.Claude[k] = r

@@ -243,7 +243,7 @@ Hera workers (via the orchestrator's coordinator task), MCP `task_create` caller
 
 ### Requirement: Recent spawns penalize an account during routing
 
-Routing SHALL always score each tier's real usage reading, and SHALL add a recent-spawn penalty of 5 usage points per spawn on the same backend and account as a short-lived placeholder for usage the next reading has not yet measured. A spawn SHALL stop counting as soon as a reading for that account newer than the spawn is available, and SHALL never count after 30 minutes (the backstop for readings without a timestamp). The penalty applies to threshold checks and headroom scoring. A spawn SHALL be recorded atomically with the resolution that produced it so concurrent spawns observe each other. Among tiers with no usable reading, the tier with the fewest recent spawns SHALL win, list order breaking ties. The penalty SHALL be deterministic given an injectable clock and SHALL be logged with a `[routing]` prefix when it changes the outcome.
+Routing SHALL always score each tier's real usage reading, and SHALL add a recent-spawn penalty of 5 usage points per spawn on the same backend and account as a short-lived placeholder for usage the next reading has not yet measured. A spawn SHALL stop counting only once a reading for that account taken at least 5 minutes after the spawn is available (a fresher reading taken sooner cannot yet reflect the spawn's usage), and SHALL never count after 30 minutes (the backstop for readings without a timestamp). The penalty applies to threshold checks and headroom scoring. A spawn SHALL be recorded atomically with the resolution that produced it so concurrent spawns observe each other. Among tiers with no usable reading, the tier with the fewest recent spawns SHALL win, list order breaking ties. The penalty SHALL be deterministic given an injectable clock and SHALL be logged with a `[routing]` prefix when it changes the outcome.
 
 #### Scenario: Burst alternates between accounts
 
@@ -252,8 +252,13 @@ Routing SHALL always score each tier's real usage reading, and SHALL add a recen
 
 #### Scenario: Fresh reading clears the penalty
 
-- **WHEN** a reading newer than the last spawn arrives for the account
+- **WHEN** a reading taken at least 5 minutes after the last spawn arrives for the account
 - **THEN** that spawn adds no penalty and the real reading is scored alone
+
+#### Scenario: Early reading does not clear the penalty
+
+- **WHEN** a reading arrives 2 seconds after a spawn
+- **THEN** the spawn still adds its penalty
 
 #### Scenario: Penalty expires
 
