@@ -109,16 +109,42 @@ func TestFreshenUsageCapIsHard(t *testing.T) {
 
 	// Fail (not hang the package) if the cap regresses to an unbounded wait.
 	returned := make(chan struct{})
+	start := time.Now()
 	go func() { d.freshenUsage(); close(returned) }()
 	select {
 	case <-returned:
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("freshenUsage blocked past its cap")
 	}
-	<-codexRan // round 1 has started both probes
+	testutil.Equal(t, time.Since(start) < 2*time.Second, true) // the 50ms override, not 5s
+	select {
+	case <-codexRan: // round 1 has started both probes
+	case <-time.After(5 * time.Second):
+		t.Fatal("round 1 never ran the codex probe")
+	}
 
 	// The abandoned round still debounces: a follow-up spawn does not stack a
 	// second blocked round.
 	d.freshenUsage()
 	testutil.Equal(t, rounds.Load(), int32(1))
+}
+
+// A spawn queued on freshenMu while the daemon stops must not start a round.
+func TestFreshenUsageQueuedSpawnSkipsAfterShutdown(t *testing.T) {
+	d, _ := testDaemon(t)
+	var probed atomic.Int32
+	d.usageBudgetProbe = func(context.Context) error { probed.Add(1); return nil }
+	d.codexProbe = func(context.Context) error { probed.Add(1); return nil }
+	d.freshenMu.Lock()
+	returned := make(chan struct{})
+	go func() { d.freshenUsage(); close(returned) }()
+	time.Sleep(20 * time.Millisecond) // let it pass the entry check and queue
+	close(d.done)
+	d.freshenMu.Unlock()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("freshenUsage did not return")
+	}
+	testutil.Equal(t, probed.Load(), int32(0))
 }

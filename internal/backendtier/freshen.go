@@ -45,8 +45,8 @@ func FreshenBeforeSpawn() {
 
 // Last-known readings. A tier whose reading is currently unavailable (probe
 // failing, daemon unreachable) is scored on the last reading seen for it, up to
-// StaleReadingMaxAge and never past the reading's own window reset (after a
-// reset the old percentage says nothing), instead of fail-open "unknown",
+// StaleReadingMaxAge, scoring the fullest of its windows that has not reset
+// (a reset window's old percentage says nothing), instead of fail-open "unknown",
 // which used to resolve to the first tier in list order regardless of how
 // depleted it was.
 const StaleReadingMaxAge = 6 * time.Hour
@@ -57,9 +57,8 @@ var lastKnown struct {
 }
 
 type staleReading struct {
-	pct   float64
-	at    time.Time
-	reset time.Time // zero = unknown
+	at      time.Time
+	windows []windowReading // each window's percentage and reset (zero = unknown)
 }
 
 func readingKey(probe, account string) string {
@@ -69,15 +68,25 @@ func readingKey(probe, account string) string {
 	return probe + "\x00" + account
 }
 
-func rememberReading(probe, account string, pct float64, reset time.Time) {
+// rememberReading stores the live reading per window. A reading without
+// windows (Codex, or a stubbed percentage) is one window: the live pct with
+// the reading's reset.
+func rememberReading(probe, account string, pct float64, t readingTimes) {
+	windows := t.windows
+	if len(windows) == 0 {
+		windows = []windowReading{{pct: pct, reset: t.reset}}
+	}
 	lastKnown.mu.Lock()
 	defer lastKnown.mu.Unlock()
 	if lastKnown.m == nil {
 		lastKnown.m = map[string]staleReading{}
 	}
-	lastKnown.m[readingKey(probe, account)] = staleReading{pct: pct, at: ledgerNow(), reset: reset}
+	lastKnown.m[readingKey(probe, account)] = staleReading{at: ledgerNow(), windows: windows}
 }
 
+// recallReading returns the fullest remembered window that has not reset yet,
+// if the reading was last available within StaleReadingMaxAge. Every window
+// reset means the old percentages say nothing: unknown.
 func recallReading(probe, account string) (float64, time.Duration, bool) {
 	lastKnown.mu.Lock()
 	defer lastKnown.mu.Unlock()
@@ -90,12 +99,18 @@ func recallReading(probe, account string) (float64, time.Duration, bool) {
 	if age > StaleReadingMaxAge {
 		return 0, 0, false
 	}
-	if !r.reset.IsZero() && !now.Before(r.reset) {
-		uxlog.Log("[routing] last known reading probe=%s account=%q expired at its window reset %s; treating as unknown", probe, account, r.reset.Format(time.RFC3339))
+	pct, live := 0.0, false
+	for _, w := range r.windows {
+		if (w.reset.IsZero() || now.Before(w.reset)) && (!live || w.pct > pct) {
+			pct, live = w.pct, true
+		}
+	}
+	if !live {
+		uxlog.Log("[routing] last known reading probe=%s account=%q: every window has reset since; treating as unknown", probe, account)
 		return 0, 0, false
 	}
-	uxlog.Log("[routing] reading unavailable probe=%s account=%q; using last known %.2f (%s old)", probe, account, r.pct, age.Round(time.Second))
-	return r.pct, age, true
+	uxlog.Log("[routing] reading unavailable probe=%s account=%q; using last known %.2f (%s old)", probe, account, pct, age.Round(time.Second))
+	return pct, age, true
 }
 
 // ResetLastKnown forgets remembered readings. Test seam, like ResetSpawnLedger.

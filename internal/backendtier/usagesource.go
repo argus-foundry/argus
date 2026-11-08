@@ -52,21 +52,31 @@ type readings struct {
 	codexAt  func() readingTimes
 }
 
-// readingTimes is when a reading was measured and when it stops saying
-// anything (the latest reset among its windows; zero = unknown).
-type readingTimes struct{ probed, reset time.Time }
+// readingTimes is when a reading was measured and, per quota window, its
+// percentage and reset (empty = a single-window reading: the live percentage
+// with reset).
+type readingTimes struct {
+	probed, reset time.Time
+	windows       []windowReading
+}
 
-// timesOf uses the LATEST window reset, not the selected window's: when the
-// 5-hour window resets, a remembered reading still reflects a weekly window
-// that has not, so it stays (pessimistically) known until every window reset.
+// windowReading is one quota window's percentage and reset (zero = unknown).
+type windowReading struct {
+	pct   float64
+	reset time.Time
+}
+
+// timesOf keeps every Claude window separately, so a last-known recall can
+// score whichever window has not reset yet instead of pairing one window's
+// percentage with another's reset.
 func timesOf(r usagebudget.Reading) readingTimes {
-	reset := r.ResetAt
+	t := readingTimes{probed: r.LastProbedAt, reset: r.ResetAt}
 	for _, w := range []*usagebudget.Window{r.FiveHour, r.SevenDay} {
-		if w != nil && w.ResetAt.After(reset) {
-			reset = w.ResetAt
+		if w != nil {
+			t.windows = append(t.windows, windowReading{pct: w.Percentage, reset: w.ResetAt})
 		}
 	}
-	return readingTimes{probed: r.LastProbedAt, reset: reset}
+	return t
 }
 
 // currentReadings returns the reading functions for one resolution: a single
@@ -126,7 +136,7 @@ func currentReadings() readings {
 		},
 		codexAt: func() readingTimes {
 			r, _ := CachedReading()
-			return readingTimes{probed: r.LastProbedAt, reset: r.ResetAt}
+			return timesOf(usagebudget.Reading{LastProbedAt: r.LastProbedAt, ResetAt: r.ResetAt})
 		},
 	}
 }

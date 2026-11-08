@@ -74,7 +74,7 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 		}
 		if tier.Probe == config.ProbeClaudeUsage || tier.Probe == config.ProbeCodexUsage {
 			if known {
-				rememberReading(string(tier.Probe), selected, pct, at.reset)
+				rememberReading(string(tier.Probe), selected, pct, at)
 			} else if stale, _, ok := recallReading(string(tier.Probe), selected); ok {
 				pct, known = stale, true
 			}

@@ -98,7 +98,7 @@ When no account is pinned, the account SHALL be resolved in this order, first ma
 
 ### Requirement: Spawns route on fresh readings, never unknown-to-first-tier
 
-Usage readings SHALL be polled every 5 minutes. Before resolving a spawn's backend/account with a tier list configured, task creation SHALL force a fresh usage read (debounced to one probe round per 30 seconds, fail-open to cached readings on error); the spawn SHALL wait at most 5 seconds for it, even when a probe is queued behind an in-flight poll probe, and a round abandoned at the cap SHALL still count for the debounce; a TUI process SHALL obtain it through a daemon RPC and re-dial the daemon once if its connection is dead. When a tier's reading is unavailable, routing SHALL score its last known reading if it was last available to routing less than 6 hours ago and not every one of that reading's windows has since reset, instead of treating it as unknown, and SHALL log that it did. Only a tier never read, last available more than 6 hours ago, or whose last reading's windows have all since reset is unknown, and unknown tiers SHALL rotate by fewest recent spawns rather than resolving to the first tier in list order every time.
+Usage readings SHALL be polled every 5 minutes. Before resolving a spawn's backend/account with a tier list configured, task creation SHALL force a fresh usage read (debounced to one probe round per 30 seconds, fail-open to cached readings on error); the spawn SHALL wait at most 5 seconds for it, even when a probe is queued behind an in-flight poll probe, and a round abandoned at the cap SHALL still count for the debounce; a TUI process SHALL obtain it through a daemon RPC and re-dial the daemon once if its connection is dead. When a tier's reading is unavailable, routing SHALL score its last known reading if it was last available to routing at most 6 hours ago, instead of treating it as unknown, and SHALL log that it did; each of that reading's quota windows is remembered with its own reset, and the recall scores the fullest window that has not reset yet. Only a tier never read, last available more than 6 hours ago, or whose remembered windows have all since reset is unknown, and unknown tiers SHALL rotate by fewest recent spawns rather than resolving to the first tier in list order every time.
 
 #### Scenario: Spawn probes first
 
@@ -114,6 +114,11 @@ Usage readings SHALL be polled every 5 minutes. Before resolving a spawn's backe
 
 - **WHEN** Codex was last read at 100% with a reset an hour later, and no Codex reading is available after that reset
 - **THEN** Codex is scored as unknown, not as 100%
+
+#### Scenario: A refilled window stops counting
+
+- **WHEN** an account was last read with its 5-hour window at 95% and its weekly window at 85%, and its 5-hour window has since reset
+- **THEN** it is scored at 85%, until the weekly window resets too
 
 #### Scenario: Fresh read is capped
 

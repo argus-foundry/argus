@@ -114,18 +114,18 @@ func TestLastKnownReadingAgeBoundary(t *testing.T) {
 	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=false")
 }
 
-// Claude readings carry two windows. The remembered reading survives until
-// the LAST window resets: a 5-hour reset alone must not turn an account that is
-// still deep into its weekly window into "unknown" (which beats over-threshold
-// tiers).
-func TestLastKnownClaudeReadingLivesUntilLastWindowReset(t *testing.T) {
+// Claude readings carry two windows; each is remembered with its own reset.
+// Recall scores the fullest window that has not reset: a refilled 5-hour
+// window stops dragging the account down, while a weekly window still deep in
+// use keeps it known, until that window resets too.
+func TestLastKnownClaudeReadingRecallsPerWindow(t *testing.T) {
 	now := resetLedger(t)
 	t.Cleanup(ResetLastKnown)
 	start := *now
 	r := usagebudget.Reading{
 		Percentage: 95, ResetAt: start.Add(30 * time.Minute),
 		FiveHour: &usagebudget.Window{Percentage: 95, ResetAt: start.Add(30 * time.Minute)},
-		SevenDay: &usagebudget.Window{Percentage: 85, ResetAt: start.Add(72 * time.Hour)},
+		SevenDay: &usagebudget.Window{Percentage: 85, ResetAt: start.Add(3 * time.Hour)},
 	}
 	usage := Usage{Claude: map[string]usagebudget.Reading{"default": r}}
 	defer SetUsageSource(func() (Usage, error) { return usage, nil })()
@@ -134,28 +134,35 @@ func TestLastKnownClaudeReadingLivesUntilLastWindowReset(t *testing.T) {
 	}}}
 	ResolveChoice(cfg, "claude", "")
 	usage.Claude = map[string]usagebudget.Reading{}
-	*now = start.Add(time.Hour) // past the 5-hour reset only
-	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=true")
-	// Refreshed by that resolution; once the weekly window resets too, unknown.
-	*now = start.Add(72 * time.Hour)
+	*now = start.Add(29 * time.Minute) // both windows live: the fuller one
+	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=true usage=95.00")
+	*now = start.Add(time.Hour) // 5-hour reset: the weekly one
+	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=true usage=85.00")
+	*now = start.Add(3 * time.Hour) // every window reset (inside the 6h age cap)
 	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=false")
 }
 
-// Local-cache path: a Claude bridge reading's reset expires the remembered
-// reading exactly at the reset instant.
+// Local-cache path: a Claude bridge reading's windows are remembered the same
+// way, each expiring exactly at its reset instant.
 func TestLastKnownLocalClaudeReadingExpiresAtReset(t *testing.T) {
 	now := resetLedger(t)
 	start := *now
 	pct, ok := 95.0, true
 	withCachedPct(t, func() (float64, bool) { return pct, ok }, unknown())
 	t.Cleanup(usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
-		return usagebudget.Reading{Percentage: pct, ResetAt: start.Add(time.Hour)}, ok
+		return usagebudget.Reading{
+			Percentage: 95, ResetAt: start.Add(30 * time.Minute),
+			FiveHour: &usagebudget.Window{Percentage: 95, ResetAt: start.Add(30 * time.Minute)},
+			SevenDay: &usagebudget.Window{Percentage: 60, ResetAt: start.Add(time.Hour)},
+		}, ok
 	}))
 	cfg := config.Config{Backends: testBackends(), BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
 		{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
 	}}}
 	ResolveChoice(cfg, "claude", "")
 	ok = false
+	*now = start.Add(45 * time.Minute)
+	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=true usage=60.00")
 	*now = start.Add(time.Hour - time.Second)
 	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=true")
 	*now = start.Add(time.Hour)
