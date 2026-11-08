@@ -277,19 +277,19 @@ func TestReplayKick(t *testing.T) {
 		{"within window of tail build is quiet", mk(true, false), true, 100, 30, kickNone},
 		{"near bottom of non-tail window slides forward", mk(true, true), true, 100, 10, kickForward},
 		{"near bottom of tail build is quiet", mk(true, false), true, 100, 10, kickNone},
-		{"dead session never kicks", mk(true, true), false, 100, 80, kickNone},
+		{"dead session slides back too", mk(true, true), false, 100, 80, kickBack},
 		{"dimension change wants fresh read", mk(true, true), true, 120, 80, kickNone},
 		{"live (offset 0) never kicks", mk(true, true), true, 100, 0, kickNone},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			testutil.Equal(t, c.tp.replayKickLocked(c.alive, c.cols, 20, c.offset, 24), c.want)
+			testutil.Equal(t, c.tp.replayKickLocked(c.cols, 20, c.offset, 24), c.want)
 		})
 	}
 	t.Run("no log-backed first byte cannot slide back", func(t *testing.T) {
 		tp := mk(true, false)
 		tp.replayEmuFirstByte = 0
-		testutil.Equal(t, tp.replayKickLocked(true, 100, 20, 80, 24), kickNone)
+		testutil.Equal(t, tp.replayKickLocked(100, 20, 80, 24), kickNone)
 	})
 }
 

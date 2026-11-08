@@ -326,6 +326,7 @@ type TerminalPane struct {
 	replayEmuAtBudget    bool
 	replayEmuNonTail     bool
 	replayEmuEnd         int64
+	deadEnd              deadEndCache // dead-session replay bound (tp.mu)
 	replayEmuCheckpoints []replayCheckpoint
 	// replayPendingShift is the scrollOffset adjustment (new content line under
 	// the cursor minus the offset at kick time) a slid rebuild hands to the
@@ -1158,6 +1159,14 @@ func (tp *TerminalPane) statLogSize() int64 {
 // the stream and is NOT escape-sequence aligned — pass through
 // AlignToEscBoundary before feeding into a fresh terminal emulator.
 func readLogTailForTask(taskID string, size int64) ([]byte, int64) {
+	return readLogTailEndingAt(taskID, 0, size)
+}
+
+// readLogTailEndingAt is readLogTailForTask for the byte range [end-size, end)
+// of the log; end <= 0 or past EOF means EOF. A dead session's replay ends at
+// its final alt-screen exit (deadLogEnd), not at EOF. The returned fileSize is
+// always the on-disk size.
+func readLogTailEndingAt(taskID string, end, size int64) ([]byte, int64) {
 	logPath := agent.SessionLogPath(taskID)
 	f, err := os.Open(logPath)
 	if err != nil {
@@ -1171,12 +1180,15 @@ func readLogTailForTask(taskID string, size int64) ([]byte, int64) {
 	}
 
 	fileSize := fi.Size()
+	if end <= 0 || end > fileSize {
+		end = fileSize
+	}
 	readSize := size
-	if readSize > fileSize {
-		readSize = fileSize
+	if readSize > end {
+		readSize = end
 	}
 
-	offset := fileSize - readSize
+	offset := end - readSize
 	buf := make([]byte, readSize)
 	n, err := f.ReadAt(buf, offset)
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -1415,6 +1427,12 @@ func replayEmuDims(sess agentview.TerminalAdapter, taskID string, paneCols, pane
 // output (BUG-E). Capped at replayRebuildMaxBytes (64MB) to bound a single
 // synchronous read.
 func replayRebuildReadSize(taskID string, scrollOffset, viewportHeight, ptyCols int, prevFirstByte int64, extend bool) int64 {
+	return replayRebuildReadSizeTo(taskID, scrollOffset, viewportHeight, ptyCols, prevFirstByte, extend, 0)
+}
+
+// replayRebuildReadSizeTo is replayRebuildReadSize for a read that ends at log
+// offset end (0 = EOF) instead of the file size.
+func replayRebuildReadSizeTo(taskID string, scrollOffset, viewportHeight, ptyCols int, prevFirstByte int64, extend bool, end int64) int64 {
 	needed := int64(scrollOffset+viewportHeight) * int64(ptyCols) * 3
 	if needed < 8*1024*1024 {
 		needed = 8 * 1024 * 1024
@@ -1424,8 +1442,12 @@ func replayRebuildReadSize(taskID string, scrollOffset, viewportHeight, ptyCols 
 		// so readSize >= fileSize - prevFirstByte forces the start back to
 		// the previous build's first byte.
 		if fi, err := os.Stat(agent.SessionLogPath(taskID)); err == nil {
-			if fi.Size() > prevFirstByte {
-				needForMono := fi.Size() - prevFirstByte
+			readEnd := fi.Size()
+			if end > 0 && end < readEnd {
+				readEnd = end
+			}
+			if readEnd > prevFirstByte {
+				needForMono := readEnd - prevFirstByte
 				if extend {
 					// Ceiling hit: pull a whole extra chunk before the previous
 					// window's first byte so scrollback advances even when the
@@ -2100,12 +2122,16 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 				// never a rebuild (a tail rebuild would teleport to the log's end).
 				atLogStart := tp.replayEmuNonTail && tp.replayEmuFirstByte == 0
 				if (tp.scrollOffset <= tp.replayEmuMaxScroll || atLogStart) &&
-					tp.replayKickLocked(alive, replayCols, replayRows, tp.scrollOffset, height) == kickNone {
+					tp.replayKickLocked(replayCols, replayRows, tp.scrollOffset, height) == kickNone {
 					cacheValid = true
 				}
 			} else if tp.taskID != "" {
+				// A dead session's log no longer changes, so a size match means the
+				// published window still reflects it — unless the scroll position
+				// now asks for a slide (the window is a bounded view of the log).
 				logSize := tp.statLogSize()
-				if logSize > 0 && logSize == tp.replayEmuLogSize {
+				if logSize > 0 && logSize == tp.replayEmuLogSize &&
+					tp.replayKickLocked(replayCols, replayRows, tp.scrollOffset, height) == kickNone {
 					cacheValid = true
 				}
 			} else if tp.replayEmuLogSize == 0 {
@@ -2158,7 +2184,7 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 			// size, not a further-back extend. Reading strictly further back
 			// each ceiling hit breaks the density-underestimate stall where
 			// scrollOffset is clamped to a maxScroll the heuristic can't grow.
-			kick := tp.replayKickLocked(alive, replayCols, replayRows, scrollOffset, height)
+			kick := tp.replayKickLocked(replayCols, replayRows, scrollOffset, height)
 			extend := kick == kickExtend
 			var win *replayWindowReq
 			if kick == kickBack || kick == kickForward {
@@ -2310,13 +2336,23 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 	var raw []byte
 	var logSize int64
 
+	// A DEAD session's replay ends at its final alt-screen exit (the settled
+	// "last known output"), found once per (session, log size) and cached, so
+	// every window — tail or slid — is bounded to [0, limit). 0 = the log's end.
+	var limit int64
+	if finalFrame && taskID != "" {
+		limit = tp.deadLogEnd(taskID)
+	}
+	fromLog := false
+
 	// A slid window (win != nil) reads the log itself in chunks; every other
 	// build reads a tail and feeds it.
 	if win == nil || taskID == "" {
 		if taskID != "" {
-			needed := replayRebuildReadSize(taskID, scrollOffset, viewportHeight, ptyCols, prevFirstByte, extend)
+			needed := replayRebuildReadSizeTo(taskID, scrollOffset, viewportHeight, ptyCols, prevFirstByte, extend, limit)
 			// Use taskID parameter (not tp.taskID) to avoid data race with SetTaskID.
-			raw, logSize = readLogTailForTask(taskID, needed)
+			raw, logSize = readLogTailEndingAt(taskID, limit, needed)
+			fromLog = len(raw) > 0
 			if extend {
 				uxlog.Log("[terminalpane] scrollback extend %s: read %d bytes, firstByte %d -> %d (scrollOffset=%d)",
 					taskID, len(raw), prevFirstByte, logSize-int64(len(raw)), scrollOffset)
@@ -2344,7 +2380,9 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 			return
 		}
 
-		if finalFrame {
+		// A log read that already ends at deadLogEnd is exactly the truncated
+		// replay; truncating it again would cut at an EARLIER alt-screen exit.
+		if finalFrame && (!fromLog || limit <= 0) {
 			raw = truncateAtFinalAltScreenExit(raw)
 		}
 	}
@@ -2370,8 +2408,8 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 	)
 	if win != nil && taskID != "" {
 		var ok bool
-		var limit int64
-		windowEnd, limit, cps, ok = buildWindow(emu, taskID, win, ptyCols, ptyRows)
+		var fileSize, lim int64
+		windowEnd, fileSize, lim, cps, ok = buildWindow(emu, taskID, win, ptyCols, ptyRows, limit)
 		if !ok {
 			uxlog.Log("[terminalpane] replay window %s: log unreadable at start=%d, keeping current window", taskID, win.start)
 			tp.mu.Lock()
@@ -2379,10 +2417,10 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 			tp.mu.Unlock()
 			return // deferred release parks `held`
 		}
-		logSize = limit
+		logSize = fileSize
 		firstByte = win.start
 		bytesFed = uint64(windowEnd - win.start) //nolint:gosec // G115: windowEnd >= win.start (feed only advances)
-		nonTail = windowEnd < limit
+		nonTail = windowEnd < lim
 		atBudget = scrollbackCells(emu) >= replayScrollbackCellBudget
 	} else {
 		// Tail slices begin at arbitrary byte positions — see AlignToEscBoundary
@@ -2394,7 +2432,11 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 		// window title can't leak onto the scrollback view.
 		var origin int64
 		if logSize > 0 {
-			origin = logSize - int64(len(raw))
+			tailEnd := logSize
+			if fromLog && limit > 0 && limit < tailEnd {
+				tailEnd = limit
+			}
+			origin = tailEnd - int64(len(raw))
 		}
 		windowEnd, cps = feedReplayChunks(emu, bytes.NewReader(raw), 0, int64(len(raw)), origin, ptyCols, ptyRows, 0, true)
 		bytesFed = uint64(len(raw))
