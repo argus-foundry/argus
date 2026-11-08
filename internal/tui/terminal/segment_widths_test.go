@@ -133,3 +133,41 @@ func TestInterimView_ScrollReplayHonorsSizesIndex(t *testing.T) {
 		t.Fatalf("control: without the index the log is emulated at one width:\n%s", without)
 	}
 }
+
+// A DEAD session's replay stops at its final alt-screen exit (#1174's whole-log
+// bound) AND honors the width index: the segments before the bound are
+// emulated at their authored widths, and nothing after the bound is fed.
+func TestInterimView_DeadSessionBoundComposesWithSizesIndex(t *testing.T) {
+	log, widenAt := segLog()
+	log += "\x1b[?1049l" + "RESUME-HINT-AFTER-EXIT"
+	setupTaskLog(t, "deadsegs", log)
+	agent.SaveSessionSize("deadsegs", 40, 8) // dead session: width comes from the .size sidecar
+	agent.ResetSessionSizes("deadsegs", 20, 8)
+	agent.AppendSessionSizeMark("deadsegs", widenAt, 40, 8)
+
+	sim := newSim(t, 42, 12)
+	tp := NewTerminalPane()
+	tp.SetRect(0, 0, 42, 12)
+	tp.SetTaskID("deadsegs") // no session: the dead-session replay path
+	tp.Draw(sim)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		tp.mu.Lock()
+		building := tp.replayBuilding
+		tp.mu.Unlock()
+		if !building {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	tp.Draw(sim)
+	screen := readScreen(sim)
+
+	if strings.Contains(screen, "RESUME-HINT") {
+		t.Fatalf("dead replay must stop at the final alt-screen exit:\n%s", screen)
+	}
+	if strings.Contains(screen, strings.Repeat("B", 30)) || !strings.Contains(screen, strings.Repeat("B", 20)) {
+		t.Fatalf("segment 1 should replay at its authored 20 cols before the bound:\n%s", screen)
+	}
+	testutil.Contains(t, screen, "TAIL "+strings.Repeat("C", 30))
+}
