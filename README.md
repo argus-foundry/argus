@@ -210,7 +210,7 @@ below. The `?` overlay always shows your active bindings.
 
 #### Agent View
 
-Settings → Appearance → **Persistent task rail** (`[ui] tasks_rail = true`, default off) keeps a 34-column project task list visible beside the agent. Browse existing sessions without starting them; Enter enters the selected task. Tab enters the selected terminal, terminal Tab/Shift+Tab stay agent input, Ctrl+Q returns focus to the rail, and Cmd+Left/Right traverse the rail and visible content panes. Space/Enter focuses and expands a project header, or toggles Archive. `F` keeps all projects open until pressed again. Agent zoom keeps the rail visible.
+Settings → Appearance → **Persistent task rail** (`[ui] tasks_rail = true`, default off) keeps a 34-column project task list visible beside the agent. Browse existing sessions without starting them; Enter enters the selected task. Tab enters the selected terminal, terminal Tab/Shift+Tab stay agent input, Ctrl+Q returns focus to the rail, and Cmd+Left/Right traverse the rail and visible content panes. Navigation skips headers and expands the destination project; entering Archive opens it. Headers have no manual fold action. `F` keeps all projects open until pressed again. Agent zoom keeps the rail visible.
 
 | Key                   | Action                                                                    |
 | --------------------- | ------------------------------------------------------------------------- |

@@ -1,5 +1,7 @@
 ## Task List & UI
 
+- **Tasks rail selection must finish on a task, never a project or section header.** Traversal may temporarily restore headers while expanding a destination, but public rebuild paths must clamp afterward; focus-fold can change the selected task without changing its row index, so cursor callbacks must compare the task as well as the index (BUG-086).
+
 - **The optional Tasks rail reuses the main task list and agent pane; never draw either primitive in both the legacy and rail pages in one frame.** Rail browsing binds without auto-start or a daemon focus claim; terminal entry claims focus, while Ctrl+Q clears it and leaves the pane visible.
 
 - **Reconcile Tasks rail selection after refresh releases `App.mu`, never from `Draw`.** Binding can switch pages and restore focus; tview holds its application lock while painting, so a draw-time page/focus change can deadlock. Narrow-window painting only updates logical region state; input routing repairs an obsolete focused child before forwarding the next event.
@@ -107,3 +109,9 @@
 ## Status bar task counts
 
 - **The bottom status bar counts the full `Tasks()` snapshot by stored status, including archived tasks; session liveness does not gate `in_progress`/active.** `in_review` needs its own count, or the four displayed counts no longer add up to the task rows that exist. When the count summary leaves little room, keep whole keybinding hints and reserve the final help/quit hint rather than clipping it mid-word.
+
+- **The persistent Tasks rail embeds `agentPanels`, not the classic `agentPage` header wrapper.** Its only outer rows are the root tabs and status bar; `computePTYSize` must deduct two rows before the terminal borders, or startup geometry loses the row reclaimed by omitting the duplicate task-name chip (BUG-085).
+
+- **The Tasks rail cursor is never dimmed when the terminal takes focus (BUG-087).** `SetCursorDimmed(true)` renders the row unselected with a dim `›` and exists only for the jump switcher's inactive column; the rail must keep the selected style so the task you are in stays visible, and signal focus via `SetFocused` (border) alone.
+
+- **The Tasks rail's selected task row must draw `theme.RailCaret` itself (BUG-088).** `drawTaskRow` is not covered by the `drawRailCursor` calls in `Draw` (those only run for project/archive rows), so a task row got the pink name but no `›` gutter until `drawTaskRow` called it; the glyph is one shared constant with the Hera rail so the two cannot drift. Test cell positions by rune index, not `strings.Index` byte offset, since `›` is multi-byte.
