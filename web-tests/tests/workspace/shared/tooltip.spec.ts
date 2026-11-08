@@ -309,7 +309,7 @@ test('fully visible ws-composer-polish rail name stays quiet beside its worker s
     name = row.locator('.task-name'),
     bubble = page.getByRole('tooltip');
   assert.equal(await name.evaluate(element => element.scrollWidth <= element.clientWidth), true);
-  assert.match(await row.textContent(), /working/);
+  assert.match(await row.textContent(), /stopped/);
   await name.hover();
   await page.waitForTimeout(500);
   assert.equal(await bubble.isVisible(), false);

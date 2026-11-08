@@ -189,3 +189,11 @@ Hera doorbells SHALL use the shared bridge delivery route when eligible and SHAL
 - **WHEN** hera_inbox returns a message whose doorbell is claimed but not authorized
 - **THEN** the claim cannot subsequently authorize a prompt and the message is marked read
 
+### Requirement: Paged read-only task history
+
+The store SHALL provide a cursor-paged, id-ordered, read-only history of messages addressed to a task's roles, including ended bindings.
+
+#### Scenario: Stable paging with identical timestamps
+
+- **WHEN** messages share a `sent_at`
+- **THEN** pages are ordered and cursored by id without gaps or repeats

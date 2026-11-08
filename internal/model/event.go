@@ -30,6 +30,7 @@ const (
 	EventTypeTaskArchived      = "task.archived"
 	EventTypeTaskDeleted       = "task.deleted"
 	EventTypeTaskRenamed       = "task.renamed"
+	EventTypeTaskUpdated       = "task.updated"
 	EventTypeTaskForked        = "task.forked"
 	EventTypeMessageSent       = "message.sent"
 	EventTypeMessageAcked      = "message.acked"
@@ -53,9 +54,68 @@ const (
 	// event types; consumed by SSE subscribers.
 	EventTypeSessionFocus = "session.focus"
 
+	// EventTypeTaskContextChanged invites a GET /api/tasks/{id}/context after a
+	// fresh context measurement. Payload: {"session_id":"s","measured_at":"RFC3339"};
+	// identity and timing only, never the counts themselves.
+	EventTypeTaskContextChanged = "task.context_changed"
+
+	// EventTypeTaskSuggestionChanged invites a GET /api/tasks/{id}/bridge when
+	// the provider's suggested next prompt appears or is cleared. Payload:
+	// {"session_id":"s","available":true,"recorded_at":"RFC3339"}; never the text.
+	EventTypeTaskSuggestionChanged = "task.suggestion_changed"
+
+	// EventTypeHeraBoardChanged fires after a committed human-board post,
+	// material edit, read-state change or resolution. Payload:
+	// {"role_id":2,"item_id":3,"unread_count":1,"operation":"posted|updated|read_state|resolved"}.
+	// Never carries item bodies; TaskID is the coordinator's bound task when known.
+	EventTypeHeraBoardChanged = "hera.board_changed"
+
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.
 	// It is never persisted in the events table — clients seeing it should
 	// resnapshot the daemon's current state.
 	EventTypeResync = "resync"
 )
+
+// Field names carried in a task.updated payload's changed_fields array. The
+// payload is identity plus this aggregate only — never prompt, result, or
+// credential content — so clients treat the event as an invalidation and
+// re-read the task over REST.
+const (
+	TaskFieldName     = "name"
+	TaskFieldStatus   = "status"
+	TaskFieldArchived = "archived"
+	TaskFieldPinned   = "pinned"
+	TaskFieldRuntime  = "runtime"
+	TaskFieldAccount  = "account"
+	TaskFieldResult   = "result"
+	TaskFieldPR       = "pr"
+)
+
+// TaskUpdatedFields is the canonical, ordered changed_fields vocabulary.
+var TaskUpdatedFields = []string{
+	TaskFieldName, TaskFieldStatus, TaskFieldArchived, TaskFieldPinned,
+	TaskFieldRuntime, TaskFieldAccount, TaskFieldResult, TaskFieldPR,
+}
+
+// ChangedTaskFields reports which task.updated fields differ between two task
+// snapshots. runtime covers backend, model, and session identity.
+func ChangedTaskFields(old, cur *Task) []string {
+	if old == nil || cur == nil {
+		return nil
+	}
+	var out []string
+	add := func(changed bool, f string) {
+		if changed {
+			out = append(out, f)
+		}
+	}
+	add(old.Name != cur.Name, TaskFieldName)
+	add(old.Status != cur.Status, TaskFieldStatus)
+	add(old.Archived != cur.Archived, TaskFieldArchived)
+	add(old.Pinned != cur.Pinned, TaskFieldPinned)
+	add(old.Backend != cur.Backend || old.Model != cur.Model || old.SessionID != cur.SessionID, TaskFieldRuntime)
+	add(old.Account != cur.Account || old.AccountRouted != cur.AccountRouted, TaskFieldAccount)
+	add(old.Result != cur.Result, TaskFieldResult)
+	return out
+}

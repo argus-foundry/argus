@@ -235,7 +235,7 @@ test('project rail keeps compact rows, role tags, actions and coordinator select
   assert.equal(await page.locator('.task-row[data-task-id="p"]').count(), 1);
   assert.equal(await page.locator('.task-row[data-task-id="n"] .task-role-tag').textContent(), 'ready');
   assert.equal(await page.locator('.task-row[data-task-id="p"] .task-role-tag').count(), 0);
-  assert.equal(await page.locator('.task-row[data-task-id="f"] .task-role-tag').textContent(), 'working');
+  assert.equal(await page.locator('.task-row[data-task-id="f"] .task-role-tag').textContent(), 'ready');
   const rows = await page.locator('#task-groups .task-row').evaluateAll(rows => rows.map(row => ({
     height: row.getBoundingClientRect().height,
     whiteSpace: getComputedStyle(row.querySelector('.task-name')).whiteSpace

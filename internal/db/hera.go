@@ -1107,6 +1107,45 @@ func (d *DB) TaskHoldsLiveHeraWorkerOrFreelanceBinding(taskID string) (bool, err
 	return n > 0, nil
 }
 
+// HeraKeepAliveBinding describes a live coordinator- or freelance-kind binding
+// that must keep its task's session running regardless of the task's status.
+type HeraKeepAliveBinding struct {
+	BindingID      int64
+	RoleID         int64
+	RoleName       string
+	Kind           HeraRoleKind
+	OrchestratorID int64
+}
+
+// LiveHeraKeepAliveBinding returns the oldest live coordinator- or
+// freelance-kind binding on taskID, or nil when there is none. Coordinators
+// and freelancers idle between messages by design, so an idle session is not
+// evidence the task is done; the finished-session reaper uses this to never
+// stop such a session even when the task row says complete (fix-bounce-false-
+// complete). Worker bindings do not count: an accepted worker's session is
+// reaped on purpose. A query error is returned so the caller can fail closed.
+func (d *DB) LiveHeraKeepAliveBinding(taskID string) (*HeraKeepAliveBinding, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out HeraKeepAliveBinding
+	var kind string
+	err := d.conn.QueryRow(
+		`SELECT b.id, b.role_id, r.name, r.kind, b.orchestrator_id
+		 FROM hera_bindings b JOIN hera_roles r ON r.id = b.role_id
+		 WHERE b.argus_task_id=? AND b.ended_at IS NULL AND r.kind IN (?, ?)
+		 ORDER BY b.started_at ASC, b.id ASC LIMIT 1`,
+		taskID, string(HeraKindCoordinator), string(HeraKindFreelance)).
+		Scan(&out.BindingID, &out.RoleID, &out.RoleName, &kind, &out.OrchestratorID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("live hera keep-alive binding: %w", err)
+	}
+	out.Kind = HeraRoleKind(kind)
+	return &out, nil
+}
+
 // ManagedTaskIDs returns the set of argus task IDs that currently hold at least
 // one live hera binding (ended_at IS NULL) to a coordinator- or worker-kind
 // role. Freelance-kind bindings do NOT count. Used by the Tasks tab

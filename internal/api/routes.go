@@ -43,6 +43,9 @@ func (s *Server) routes() *http.ServeMux {
 	// plus freelance roles. Read-only; feeds the webapp's Hera tab.
 	mux.HandleFunc("GET /api/hera", s.handleHera)
 	mux.HandleFunc("GET /api/hera/roles/{id}/board", s.handleHeraBoard)
+	mux.HandleFunc("PUT /api/hera/roles/{role_id}/board/{item_id}/read-state", s.handleHeraBoardReadState)
+	mux.HandleFunc("POST /api/hera/roles/{role_id}/board/{item_id}/dismiss", s.handleHeraBoardDismiss)
+	mux.HandleFunc("GET /api/tasks/{id}/hera-messages", s.handleTaskHeraMessages)
 	// Hera mutations; nuke is master-gated inside its handlers.
 	mux.HandleFunc("GET /api/hera/orchestrators/{id}/nuke-preview", s.handleHeraNukePreview)
 	mux.HandleFunc("POST /api/hera/orchestrators/{id}/nuke", s.handleHeraNukeOrch)
@@ -68,6 +71,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.handleDeleteTask)
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/events", s.handleBridgeEvents)
 	mux.HandleFunc("GET /api/tasks/{id}/bridge", s.handleBridgeState)
+	mux.HandleFunc("GET /api/tasks/{id}/context", s.handleTaskContext)
 	mux.HandleFunc("GET /api/tasks/{id}/bridge/ui", s.handleBridgeUI)
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/deliveries", s.handleBridgeDeliveries)
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/deliveries/authorize", s.handleBridgeAuthorize)
@@ -85,6 +89,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/tasks/{id}/archive", s.handleArchiveTask)
 	mux.HandleFunc("POST /api/tasks/{id}/unarchive", s.handleUnarchiveTask)
 	mux.HandleFunc("POST /api/tasks/{id}/rename", s.handleRenameTask)
+	mux.HandleFunc("POST /api/tasks/{id}/pin", s.handlePinTask)
 	mux.HandleFunc("POST /api/tasks/{id}/status", s.handleSetStatus)
 	mux.HandleFunc("POST /api/tasks/{id}/fork", s.handleForkTask)
 	// Claude session listing/switching (openspec add-mac-keybinding-parity

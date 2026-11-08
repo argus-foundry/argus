@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/drn/argus/internal/events"
+	"github.com/drn/argus/internal/model"
 )
 
 // ErrMetaInvalidKey rejects writes with an empty task_id, namespace, or key.
@@ -146,8 +149,13 @@ func (d *DB) SetMetaBatchIfChanged(taskID, namespace string, entries map[string]
 		wrote = true
 		return nil
 	})
+	if wrote && err == nil && namespace == prMetaNamespace {
+		events.EmitTaskUpdated(taskID, model.TaskFieldPR)
+	}
 	return wrote && err == nil, err
 }
+
+const prMetaNamespace = "pr"
 
 // ListMeta returns every metadata row for taskID. When namespace is non-empty
 // the result is scoped to that namespace only; otherwise rows from every

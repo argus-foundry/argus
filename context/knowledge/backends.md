@@ -26,6 +26,7 @@ commands get `customFamily`. To add one, follow `.agents/skills/add-backend/SKIL
 | Session switcher | yes | — | — | — | — | — | — | yes |
 | Bridge mod | `--plugin-dir` | — | — | — | — | — | — | — |
 | Prelaunch | — | — | ollama warmup (20s Start RPC) | — | — | — | — | — |
+| Context source | Claude bridge | `ContextReader` rollout | — | — | — | — | — | — |
 | Cost source | Stop hook + bridge mod | daemon rollout sweeper | — (n/a) | — (n/a) | — (n/a) | — (n/a) | — (n/a) | Stop hook |
 
 Rows map to `Family` fields: Session ID → `PinsSessionID`, Resume → `ResumeFlag`/`ResumeCmd`,
@@ -34,7 +35,7 @@ Capture → `Capture`, Recapture → `RecaptureEveryExit`, Resume availability �
 `PermissionFlags`/`PermissionFlagTokens`, Launch flag → `LaunchFlag`, MCP → `MCPFlag`/`InjectGlobal`,
 Skills → `SkillDelivery`, Routing → `RoutingDelivery`, Sandbox grant → `SandboxGrants`/
 `SandboxGrantsLaunchOnly`/`PrecreateSandboxGrants`, Session switcher → `SessionSwitcher`,
-Prelaunch → `Prelaunch`/`StartTimeout`, Bridge mod → `BridgeMod`, Cost source → `CostSource`.
+Prelaunch → `Prelaunch`/`StartTimeout`, Bridge mod → `BridgeMod`, Cost source → `CostSource`, Context source → `ContextReader`/`ContextProvider`/`ContextSource`.
 
 ## Why the non-obvious cells are what they are
 

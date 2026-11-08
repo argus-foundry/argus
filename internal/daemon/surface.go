@@ -195,7 +195,14 @@ const (
 	// 35: sandbox profile allows file-read-metadata on ~/.aws so omp's startup
 	//     stat no longer fails with EPERM. A stale supervisor spawns omp with the
 	//     old profile and it crashes on launch.
-	SupervisorSpawnSurface = 35
+	// 36: the bridge mod reads context categories after throttle selection,
+	//     in background single-flight work with a deadline. A stale supervisor
+	//     spawns sessions with the older mod, whose measurements carry no
+	//     categories.
+	// 37: the bridge mod hooks prompt.suggest and reports the engine's suggested
+	//     next prompt. A stale supervisor spawns sessions with the older mod,
+	//     which never reports a suggestion.
+	SupervisorSpawnSurface = 37
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -250,7 +257,12 @@ const (
 	//     exit (which skipped the daemon's status flip).
 	//   - v14: SessionStatus/ListSessions expose the immutable bridge launch
 	//     generation so a resumed transcript cannot inherit old authority.
-	SupervisorStreamSurface = 14
+	//   - v15: GetExitInfo answers StreamLost=true (never a zero, clean-looking
+	//     ExitInfo) when it has no recorded exit for the reader, and
+	//     SessionStatus surfaces a failed supervisor probe as an error instead
+	//     of Alive=false — a post-restart probe can no longer manufacture a
+	//     clean exit that completes a live coordinator.
+	SupervisorStreamSurface = 15
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -488,8 +500,8 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "2e4caef2ae96180ce80b2cf725b7403bdab4ac1f3523ed9548325919e6a8e997"
-	StreamSurfaceDigest = "4db586fb7dcaf62899cb2ebc82bbaa7fcc325d7cf99611f5f7942c44f9bc9467"
+	SpawnSurfaceDigest  = "2403bd9a61a2b9a3272486c1d484baae78fd45df936a93aa0ea0ba6d2755f7b0"
+	StreamSurfaceDigest = "11024ea57e1c40147b4c52d778af95da81fd73b07eccf004cf014df871efd1be"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

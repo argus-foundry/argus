@@ -7,10 +7,56 @@ export type MeasureInput = {
   cost?: { usd: number }
 }
 
-export function measureFields(m: MeasureInput): Record<string, unknown> {
+export type BreakdownRow = { name: string; tokens: number; kind: string }
+
+// The engine labels breakdown rows as /context prints them and types only
+// used/free/buffer/deferred, so a row maps by its label and an unknown label
+// stays unmapped (null on the wire) rather than guessed.
+const CATEGORY_BY_LABEL: Record<string, string> = {
+  'system prompt': 'system',
+  'system tools': 'tools',
+  'mcp tools': 'tools',
+  'custom agents': 'agents',
+  'memory files': 'memory',
+  skills: 'skills',
+  messages: 'messages',
+}
+
+/** Sums used rows into the wire categories; the compaction reserve is the buffer row. */
+export function categoriesFromBreakdown(rows: ReadonlyArray<BreakdownRow> | undefined): Record<string, number> | undefined {
+  if (!rows) return undefined
+  const out: Record<string, number> = {}
+  for (const r of rows) {
+    if (typeof r.tokens !== 'number' || !Number.isFinite(r.tokens) || r.tokens < 0) continue
+    const key = r.kind === 'buffer' ? 'compaction' : r.kind === 'used' ? CATEGORY_BY_LABEL[r.name.trim().toLowerCase()] : undefined
+    if (key) out[key] = (out[key] ?? 0) + r.tokens
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+const MAX_SUGGESTION_BYTES = 4096
+
+/** The wire fields of a suggestion.changed event, or undefined when the text must not be reported. */
+export function suggestionFields(text: string): { text: string } | undefined {
+  if (typeof text !== 'string' || text.trim() === '' || text.includes('\0')) return undefined
+  let bytes = 0
+  for (const ch of text) {
+    const c = ch.codePointAt(0) as number
+    bytes += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4
+    if (bytes > MAX_SUGGESTION_BYTES) return undefined
+  }
+  return { text }
+}
+
+/** Only text the engine itself proposed and the prompt box can show is the provider's suggestion. */
+export function suggestionToReport(origin: { kind: string }, isShown: boolean, text: string): { text: string } | undefined {
+  return origin.kind === 'suggestion' && isShown ? suggestionFields(text) : undefined
+}
+
+export function measureFields(m: MeasureInput, categories?: Record<string, number>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   if (m.context) {
-    out.context = { tokens: m.context.tokens, percent: m.context.percent, window: m.context.window }
+    out.context = { tokens: m.context.tokens, percent: m.context.percent, window: m.context.window, categories }
   }
   if (m.cost) out.cost_usd = m.cost.usd
   out.rate_limits = (m.rateLimits ?? []).map(r => ({

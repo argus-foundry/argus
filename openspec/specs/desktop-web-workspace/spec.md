@@ -9,8 +9,8 @@ The optional web workspace is the client we converge on. This specification is t
 
 ### Client convergence
 
-- `native-workspace-rebuild` rebuilds the Mac client from this specification, covering the unified nested project rail, arbitrary task split, compact header, retained terminals, composer and attachments, measured context, archive context retention, Changes and split diffs, registered artifacts, full Settings breadth, live tools, attention and accessibility. Native credentials, notifications, Finder and window integration remain platform choices.
-- `tui-workspace-interaction-parity` evaluates the unified task hierarchy, arbitrary split, per-task draft and attachment composer, measured context, archive viewer retention, resize policy, surgical Ctrl+Z handling, attention rollups, live review updates and corresponding accessible controls for the TUI. Each difference receives an implementation or explicit terminal-specific disposition.
+- `native-workspace-rebuild` rebuilds the Mac client from this specification, covering the unified nested project rail, arbitrary task split, compact header, retained terminals, composer and attachments, provider suggestion hints, measured context, archive context retention, Changes and split diffs, registered artifacts, full Settings breadth, live tools, attention and accessibility. Native credentials, notifications, Finder and window integration remain platform choices.
+- `tui-workspace-interaction-parity` evaluates the unified task hierarchy, arbitrary split, per-task draft and attachment composer, provider suggestion hints, measured context, archive viewer retention, resize policy, surgical Ctrl+Z handling, attention rollups, live review updates and corresponding accessible controls for the TUI. Each difference receives an implementation or explicit terminal-specific disposition.
 - `legacy-spa-workspace-convergence` decides replacement or selective porting of workspace navigation/history, layout, composer and submission behavior, review controls, retained terminals, attention, settings navigation and accessibility into the original SPA. The original SPA remains available during this transition.
 - `workspace-plugin-settings` evaluates existing plugin forms and bridge-budget editing through supported operations.
 - `workspace-backend-management` evaluates existing master-only backend CRUD and permission defaults. Agents and accounts remain read-only in this change.
@@ -29,7 +29,7 @@ Browser drawers, DOM tooltips and their pixel geometry do not require literal na
 
 ### Backend contracts deferred
 
-The numbered references identify the existing 20-item backend tally. They record scope, not completed fixes.
+The numbered references retain the original backend tally identifiers and record remaining scope.
 
 1. `task-runtime-state-all-statuses` exposes live/idle state for every task with a session. Until then, activity outside in_progress is incomplete.
 2. `task-failure-state` exposes task failure independently of workflow status. Until then, only failed Hera roles support a failure indicator.
@@ -37,8 +37,7 @@ The numbered references identify the existing 20-item backend tally. They record
 4. `preserve-project-diligence-profile` preserves profile assignment on REST project edits. The current editor warns about the inherited loss.
 5. `rest-account-management` defines authenticated account CRUD. Existing account selection does not imply account management.
 6. `safe-runtime-model-switch` defines model changes for running tasks. The composer model label remains read-only.
-7. `provider-context-usage-contract` exposes scoped context categories, provider identity, Codex quota/account details and per-session/turn telemetry. Unknown fields remain omitted and historical totals stay separate.
-8. `agent-prompt-suggestions` exposes verified provider suggestions before adding suggested composer text.
+7. `provider-context-usage-contract` exposes remaining provider identity, Codex quota/account details and per-session/turn telemetry beyond the measured Claude category endpoint. Unknown fields remain omitted and historical totals stay separate.
 9. `targeted-task-runtime-edits` defines safe backend, model, sandbox and prompt transitions. Generic full-record PUT is not a runtime editor.
 10. `cross-backend-account-move` defines account movement beyond Claude. Existing movement remains Claude-only.
 11. `durable-task-pr-association` defines manual PR links that coexist with the branch poller. This client reads existing PR links only.
@@ -327,7 +326,7 @@ Task rows SHALL display a single compact line with a status icon, task name and 
 - **AND** an idle task in review without cached PR state SHALL remain gray and labeled In review, since workflow status alone does not establish a PR
 
 ### Requirement: Conductor composer layout
-The optional workspace SHALL show a large rounded draft box with no placeholder text above a bottom bar. Backend/model identity SHALL be read-only; context, attach and send controls SHALL be aligned on the right. A file picker SHALL reuse the existing upload path and attachment constraints. Attachment instructions SHALL appear only for errors, while chips and existing paste/drop behavior remain.
+The optional workspace SHALL show a large rounded draft box with no default placeholder text, except a verified provider suggestion while the draft is empty under Empty composer suggestion. Backend/model identity SHALL be read-only; context, attach and send controls SHALL be aligned on the right. A file picker SHALL reuse the existing upload path and attachment constraints. Attachment instructions SHALL appear only for errors, while chips and existing paste/drop behavior remain.
 
 #### Scenario: Native composer actions
 - **WHEN** a task is selected and files are chosen with the attach button
@@ -335,16 +334,16 @@ The optional workspace SHALL show a large rounded draft box with no placeholder 
 - **AND** native paste, dictation, IME and per-task drafts preserve existing behavior
 
 ### Requirement: Measured context popover
-The context control SHALL open an accessible dismissible popover, show only sourced existing REST values with their correct scope, and indicate unavailable context without fabricating a fill or percent. The popover SHALL retain Claude plan, email, organization and usage limit windows when available, while Account and historical role token totals SHALL remain in task Info and SHALL NOT appear in the composer popover. The composer SHALL NOT fetch the Hera roster for context readings. Unsupported backend fields SHALL be omitted. Switching tasks and disconnecting SHALL cancel reads and reject late results.
+The context control SHALL open an accessible dismissible popover, show only sourced existing REST values with their correct scope, and indicate unavailable context without fabricating a fill or percent. The popover SHALL retain Claude plan, email, organization and usage limit windows when available, while Account and historical role token totals SHALL remain in task Info and SHALL NOT appear in the composer popover. The composer SHALL NOT fetch the Hera roster for context readings. Unsupported backend fields SHALL be omitted. Switching tasks and disconnecting SHALL cancel reads and reject late results. Bridge and Hera metadata context readings SHALL be fallback only when the task context route is unsupported.
 
 #### Scenario: Backend measurements are partial
 - **WHEN** REST exposes account usage but no context-window measurement
 - **THEN** usage is shown only for the task's matching account and backend
 - **AND** the context ring remains unknown rather than displaying quota as context
-#### Scenario: Live bridge and recorded stamp availability
-- **WHEN** the selected task has a live bridge context with a measured percent or measured tokens/window
+#### Scenario: Legacy bridge and recorded stamp availability
+- **WHEN** the daemon lacks the task context route and the selected task has a live bridge context with a measured percent or measured tokens/window
 - **THEN** the ring displays that context percentage and the popover shows available token/window values
-- **WHEN** only Hera metadata is present
+- **WHEN** that older daemon has only Hera metadata
 - **THEN** the popover labels the values as recorded, shows record time and pairs percent with tokens only for equal timestamps
 - **AND** a configured recycle budget and historical role token totals never supply an inferred window
 
@@ -563,7 +562,7 @@ The workspace SHALL always group tasks by project with coordinator nesting. Comp
 
 Search, archive, pin, actions and needs-input emphasis with collapsed-parent rollup SHALL remain available. Every task SHALL remain reachable regardless of Hera binding or project. Cross-project workers SHALL follow their visible coordinator, and filtering out a parent SHALL promote matching descendants. Selecting a coordinator SHALL open the normal task view unless split was explicitly enabled. Roster polling SHALL run only when role tags, nesting or split presentation use it, without an orchestration-grouping condition.
 
-Role tags SHALL show blocked or failed first, then working, then ready when the task carries ready_to_close, then the role status. A working role SHALL never show ready from a stale ready_to_close mark, and when a task has several live bindings the rail SHALL pick the binding by the same precedence.
+Role tags SHALL show blocked or failed first, then working, then ready when the role carries ready_to_close, then the role status. A working role with a live, non-idle bound task SHALL take precedence over a retained ready_to_close mark, and when a task has several live bindings the rail SHALL pick the binding by the same precedence. A row's working tag SHALL require its bound task to be live and not idle, because a self-reported working status never resets on its own. Otherwise the tag SHALL show ready when the role carries ready_to_close, idle while the session is live and stopped when it is not or the bound task is missing.
 
 #### Scenario: Ignore obsolete rail preferences
 
@@ -574,9 +573,21 @@ Role tags SHALL show blocked or failed first, then working, then ready when the 
 
 #### Scenario: Resumed worker does not show ready
 
-- **WHEN** a live role reports working while its task still carries ready_to_close
+- **WHEN** a live role reports working with ready_to_close set while its bound task is live and not idle
 - **THEN** its role tag SHALL show working, not ready
 - **AND** a done or idle role with ready_to_close SHALL still show ready
+
+#### Scenario: Stale working status on an idle session
+
+- **WHEN** a live role still reports working while its bound task is live and idle
+- **THEN** its row tag SHALL show idle, or ready when the role carries ready_to_close
+- **AND** the tag SHALL show working again once the session is running
+
+#### Scenario: Missing bound task
+
+- **WHEN** a live role reports working but its bound task is absent from the task snapshot
+- **THEN** its tag SHALL show stopped, or ready when ready_to_close is set
+- **AND** an unavailable split roster row SHALL remain disabled
 
 #### Scenario: Failed binding remains visible among competing live bindings
 
@@ -660,13 +671,67 @@ The workspace SHALL subscribe to existing daemon events before reading its task 
 
 ### Requirement: Surgical terminal Ctrl+Z guard
 
-The workspace SHALL strip SUB (0x1A) at the outbound terminal-input chokepoint, log dropped byte counts and preserve every other byte in order. A payload consisting only of SUB SHALL issue no request and SHALL not disable input. Composer validation SHALL continue to reject control-character messages before any submit.
+The workspace SHALL strip SUB (0x1A) at the outbound terminal-input chokepoint, log dropped byte counts and preserve every other byte in order, subject to the Claude-family focus-out guard. A payload consisting only of SUB SHALL issue no request and SHALL not disable input. Composer validation SHALL continue to reject control-character messages before any submit.
 
 #### Scenario: Embedded suspend byte
 
 - **WHEN** terminal input contains ordinary bytes and Ctrl+Z
 - **THEN** the daemon receives only the remaining bytes in their original order
-- **AND** Ctrl+C, Ctrl+Y and escape sequences remain unchanged
+- **AND** Ctrl+C, Ctrl+Y and escape sequences remain unchanged except the exact Claude-family focus-out payload
+
+### Requirement: Terminal focus-out reports stay in the browser
+
+The workspace SHALL prefetch the task's backend family when terminal input is attached, outside the serialized input path. A matched backend roster entry with kind `claude` or an explicitly empty kind `""` (the custom family on the wire) SHALL suppress an exact focus-out payload ESC [ O, matching the daemon's Claude-family session capabilities. It SHALL log the drop and issue no input request. Other resolved backend kinds, missing kind fields or missing backend matches SHALL forward focus-out unchanged. Focus-in reports and every other payload SHALL retain their bytes subject to the surgical Ctrl+Z guard. Leaving a Claude-family terminal for the composer SHALL not report blur, which suppresses Claude Code's suggested next prompt.
+
+While classification is pending or unknown after failure, the workspace SHALL hold at most one exact focus-out report for at most two seconds, without awaiting classification on the input path. Repeated reports without intervening input SHALL NOT extend the deadline. Every other byte SHALL flow through the existing input queue immediately and in order. Any subsequently posted input SHALL mark the held report stale, and a newer focus-out MAY replace that stale report. When classification settles, the client SHALL discard held reports for Claude-family backends. For other resolved families, or an unresolved family after the two-second deadline, it SHALL forward the held report only if no input was posted after it was held, otherwise discard it as stale.
+
+A failed prefetch SHALL log the failure and retry asynchronously after 250 ms and then one second, for at most three total attempts, adopting any successful shared API cache result. Keystrokes SHALL NOT trigger retries. Task-switch cancellation SHALL fence classification publication after the awaited read, cancel retry and hold timers, and discard held reports without canceling a shared API roster read needed by the next task.
+
+#### Scenario: Composer focus after the terminal
+
+- **WHEN** a resolved Claude-family agent enabled focus reporting and the terminal loses focus to the composer
+- **THEN** no input request is sent for the focus-out report
+- **AND** a later focus-in report is still forwarded
+
+#### Scenario: Non-Claude focus handling
+
+- **WHEN** a terminal for another resolved backend kind emits ESC [ O
+- **THEN** the focus-out report SHALL reach the daemon unchanged
+- **AND** a resolved roster with a missing backend match or kind field SHALL also preserve the report
+
+#### Scenario: Classification is pending during input
+
+- **WHEN** the backend roster read is pending and focus-out, ordinary bytes, Ctrl+C and composer input arrive
+- **THEN** focus-out SHALL be held without delaying the other input
+- **AND** the other input SHALL retain its order and make the held report stale
+- **AND** once classification resolves, later focus-out reports SHALL follow the resolved family policy
+
+#### Scenario: Cold live-stream focus reporting and composer blur
+
+- **WHEN** a cold roster is pending while the first live output frame enables focus reporting or the interactive terminal loses focus to the composer
+- **THEN** generated focus-out reports SHALL remain held in the browser
+- **AND** Claude-family classification SHALL discard them
+- **AND** initial snapshot replay SHALL retain its existing disabled-input fence
+
+#### Scenario: Held report settles or reaches its deadline
+
+- **WHEN** an exact focus-out was held and no later input was posted
+- **THEN** Claude-family classification SHALL discard it and non-Claude classification SHALL forward it once
+- **AND** an unresolved classification SHALL forward it once after two seconds
+- **AND** stale reports or reports held by a detached input SHALL never be forwarded
+
+#### Scenario: Transient classification failure
+
+- **WHEN** the first prefetch fails and a later consumer successfully warms the shared backend cache
+- **THEN** the next bounded asynchronous retry SHALL adopt that result for the same attached input
+- **AND** ordinary input SHALL remain responsive throughout failure and retry
+- **AND** repeated failures SHALL stop after three total attempts until input is reattached
+
+#### Scenario: Task switch during shared classification
+
+- **WHEN** a task is detached while its backend read is shared with the next task, including between promise fulfillment and continuation
+- **THEN** the canceled task SHALL neither publish classification nor post late held input
+- **AND** the next task SHALL continue using the shared read and its own backend match
 
 ### Requirement: Browser attention parity
 
@@ -1123,3 +1188,70 @@ Large-batch confirmation SHALL have a fixed height, a one-line effects summary, 
 - **THEN** selection SHALL exit with a short notice and focus SHALL reach a surviving row or current filter
 - **AND** partial failures SHALL stay selected with an alert naming task failures and their reasons; not-started tasks SHALL remain available for explicit continuation
 - **AND** deletion of the open task SHALL select a sensible neighbor without discarding other drafts
+
+### Requirement: Task context categories in the composer
+Theia SHALL prefer GET /api/tasks/{id}/context over bridge/meta measurements when the route is supported. It SHALL render measured category token counts for messages, memory, tools, agents, skills, system and compaction. Null categories SHALL be absent, never coerced to zero. Historical role totals SHALL NOT supply categories. A supported response with context=null SHALL show unavailable context, without substituting older bridge/meta data.
+
+#### Scenario: Measured counts and age
+- **WHEN** the task context response contains category measurements
+- **THEN** the popover shows each measured count, including measured zero, and omits null categories
+- **AND** measured_at appears as measurement age and a timestamp
+- **AND** live=false is labeled last recorded while live=true remains measured regardless of age
+
+#### Scenario: Old daemon
+- **WHEN** the context route returns 404 or HTML through a successful GET fallback
+- **THEN** the composer quietly retains its existing bridge/meta context behavior
+- **AND** other context read failures clear optional measurements rather than substituting old data
+
+#### Scenario: Context refresh and selection fencing
+- **WHEN** the selected task emits task.context_changed on the daemon event stream
+- **THEN** Theia refetches its context, also retaining popover-open and foreground 15 second polling refreshes
+- **AND** task/session switches and disconnect cancel or ignore superseded reads and clear prior measurements
+- **AND** events buffered during a task snapshot also invalidate selected context
+
+### Requirement: Keyboard scrolling of context details
+The named context and usage popover SHALL be keyboard focusable and receive focus on opening without trapping Tab navigation. Native keyboard scrolling SHALL reach overflowing content at narrow viewport sizes. Refresh SHALL preserve panel focus and scroll position, and Escape SHALL dismiss the popover and return focus to its trigger.
+
+#### Scenario: Overflow at a narrow viewport
+- **WHEN** context categories, quotas and account details overflow at 320 by 600 pixels
+- **THEN** keyboard opening focuses the named scroll region
+- **AND** PageDown scrolls it and End reaches its lower content
+- **AND** refreshing category values retains panel focus and scroll
+- **AND** Escape closes the popover and focuses the trigger
+
+### Requirement: Independent coalesced context refresh
+Context measurement reads SHALL publish independently of auxiliary account, backend and bridge usage reads. Same-session context events SHALL retain valid displayed measurements while refetching, debounce bursts and share overlapping reads. Context events SHALL NOT refetch auxiliary usage. Auxiliary data SHALL retain its existing foreground cadence and explicit-open refresh. Legacy Hera metadata SHALL be fetched only for unsupported context routes. Task or session replacement SHALL still cancel old reads and clear prior measurements immediately. Supported empty or failed context reads SHALL still clear measurements. Shared reads SHALL have a bounded deadline so a hung request cannot prevent later refreshes.
+
+#### Scenario: Slow accounts
+- **WHEN** an account request is still pending and a context result arrives
+- **THEN** the context categories publish immediately without awaiting the account read
+
+#### Scenario: Burst and overlapping triggers
+- **WHEN** ten same-session context events arrive twenty milliseconds apart
+- **THEN** they coalesce into a bounded context-only refresh without blanking displayed categories
+- **AND** overlapping open and poll refreshes share in-flight reads
+
+### Requirement: Empty composer suggestion
+
+The workspace SHALL read the selected task's suggestion from GET /api/tasks/{id}/bridge and display it as a plain-text textarea placeholder only while the draft is empty and the bridge is live authority for that session and generation. Suggestions SHALL never replace typed or restored drafts, fill the draft automatically or send input. Unsupported providers and unavailable bridge state SHALL retain the normal empty hint.
+
+#### Scenario: Suggestion and draft preservation
+- **WHEN** a live suggestion arrives while a draft is empty or contains typed or restored text
+- **THEN** only the empty draft shows the suggestion, the draft value remains unchanged and nothing is sent
+
+#### Scenario: Suggestion invalidation
+- **WHEN** the provider clears the suggestion, a new turn starts, the session changes or bridge authority expires or becomes unavailable
+- **THEN** the suggestion placeholder clears and the normal empty hint returns
+
+#### Scenario: Refresh from events
+- **WHEN** task.suggestion_changed arrives for the selected task
+- **THEN** the client refreshes GET /bridge without reading suggestion text from the event or terminal
+
+#### Scenario: Selection and disconnect fencing
+- **WHEN** task selection, disconnect or a newer refresh supersedes an in-flight bridge read
+- **THEN** the prior hint clears synchronously, the request is canceled and late results cannot populate the current composer
+
+#### Scenario: Bounded authority checks and accessibility
+- **WHEN** a suggestion is visible in an empty draft and the page is visible
+- **THEN** authority checks run at approximately 15-second intervals with one request in flight and a bounded read deadline
+- **AND** no polling runs without a visible suggestion, event bursts are debounced, the existing textarea label remains and no aria-live region is added

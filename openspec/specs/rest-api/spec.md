@@ -772,3 +772,167 @@ The API SHALL serve `GET /api/sandbox/proposals` (optional `status` filter) and 
 
 - **WHEN** the master token approves an already-approved proposal
 - **THEN** the response is 409 and config is unchanged
+
+### Requirement: Task context endpoint
+`GET /api/tasks/{id}/context` SHALL return `{task_id, session_id, provider, live, measured_at, source, context}` where `context` is `{used_tokens, window_tokens, percent, categories}` and `categories` always lists `messages`, `memory`, `tools`, `agents`, `skills`, `system`, `compaction` with `null` for unmeasured values. It SHALL return 404 for a missing task and 200 with `live=false` and `context=null` for a task without a measurement or whose recorded measurement belongs to a replaced launch. The `live` flag SHALL reflect current process authority and bridge health, not measurement age. Unchanged context is deduplicated, so an old measurement with fresh heartbeats from the current launch SHALL remain `live=true`. Clients MAY use `measured_at` to display age. Replacing the session, process generation or account launch SHALL invalidate the old context. When the bridge is no longer live without a known replacement, recorded data SHALL return with `live=false`. It SHALL require authentication and expose aggregate counts only. After a live measurement the daemon SHALL emit `task.context_changed` with `{session_id, measured_at}` and no counts. For a Codex task the daemon SHALL read the recorded session's rollout (`provider` `openai`, `source` `codex_rollout`), report the latest `last_token_usage.total_tokens` (including compaction estimates) with `categories` all `null`, and leave window and percent `null` when no window was recorded. An absent, null, negative or malformed last total SHALL be unmeasured rather than manufactured zero. The read SHALL be bounded and read-only and SHALL NOT launch a Codex CLI or model turn. The daemon SHALL emit `task.context_changed` when a running reader-backed task's measurement time advances, with the same identity-only payload. Unpinned selection SHALL exclude subagents and reject conversations created before the current process launch. Rollouts SHALL be regular files in the task account's source-home or exact derived Argus overlay session storage and their session metadata SHALL match the selected session ID and worktree.
+
+#### Scenario: Live measurement
+- **WHEN** the current launch reports a measurement
+- **THEN** GET returns `live=true` with its counts and one `task.context_changed` event was emitted
+
+#### Scenario: Replaced session
+- **WHEN** the running process's generation differs from the recorded measurement's
+- **THEN** GET returns `live=false` and `context=null`
+
+#### Scenario: Unchanged context remains live with fresh heartbeats
+- **WHEN** a ten-minute-old context measurement belongs to the current launch and a fresh heartbeat arrives
+- **THEN** GET returns `live=true` with the original counts and original `measured_at`
+
+#### Scenario: Account replacement invalidates old context
+- **WHEN** a task moves from account A to account B with a replacement process generation
+- **THEN** GET hides A's context until B reports its own measurement, then returns B's session identity and category counts
+
+#### Scenario: Codex measured context
+- **WHEN** a Codex task's recorded rollout holds a token_count event with a window
+- **THEN** GET returns `provider=openai`, `source=codex_rollout`, `used_tokens` from the last call, the window and a derived percent
+
+#### Scenario: Codex session replaced or unmeasured
+- **WHEN** the task's recorded session id has no thread in its worktree, or the rollout has no usable event
+- **THEN** GET returns 200 with `context=null`
+
+#### Scenario: Codex compaction estimate
+- **WHEN** the latest last-token usage has zero input and output with `total_tokens=200000`
+- **THEN** GET reports `used_tokens=200000`, matching Codex's context meter
+
+Codex meter semantics are pinned to [upstream TokenUsage and TokenUsageInfo](https://github.com/openai/codex/blob/748ab55ca7de0b647d9a7a9d9a8e70e00f28666d/codex-rs/protocol/src/protocol.rs#L2493-L2625) and [context history](https://github.com/openai/codex/blob/748ab55ca7de0b647d9a7a9d9a8e70e00f28666d/codex-rs/core/src/context_manager/history.rs#L1143-L1158).
+
+### Requirement: Bridge state carries the suggested next prompt
+`GET /api/tasks/{id}/bridge` SHALL include `suggestion`, either `null` or `{text, session_id, generation, recorded_at}`. It SHALL be `null` when the provider offered none, the provider has no suggestion support, the suggestion was cleared or replaced, or the bridge is not live authority for the running launch. The existing 404 without bridge state SHALL be preserved. When the stored suggestion appears, changes or clears the daemon SHALL emit `task.suggestion_changed` with `{session_id, available, recorded_at}` and no text.
+
+#### Scenario: Current suggestion
+- **WHEN** the current launch reports a suggestion
+- **THEN** GET returns it with session identity and timestamp and one `task.suggestion_changed` event with `available=true` was emitted
+
+#### Scenario: Lost authority
+- **WHEN** the running process's generation differs from the recorded one
+- **THEN** GET returns `suggestion=null` with `live=false`
+
+### Requirement: Read-only Hera message history
+
+The system SHALL expose `GET /api/tasks/{id}/hera-messages` returning mail addressed to every role the task is or was bound to, paged by message id (`limit` 1-500 default 100, exclusive `before_id`), oldest first within a page, with `next_before_id`. It SHALL NOT mark messages read, alter delivery state or advance role tree cursors. Store failures SHALL return HTTP 500 with a generic error message; detailed diagnostics SHALL be logged on the server.
+
+#### Scenario: History does not consume mail
+
+- **WHEN** a client reads the history
+- **THEN** no `read_at`, delivery state or unread count changes
+
+#### Scenario: Invalid cursor
+
+- **WHEN** `limit` or `before_id` is invalid
+- **THEN** the response is 400
+
+#### Scenario: History store failure
+
+- **WHEN** task lookup or history retrieval fails because the store is unavailable
+- **THEN** the response is 500 with `internal server error` and the store diagnostic appears only in server logs
+
+### Requirement: Human board read-state and dismissal
+
+The system SHALL expose `PUT /api/hera/roles/{role_id}/board/{item_id}/read-state` and `POST .../dismiss`, each requiring `expected_updated_at`, returning `{item, unread_count}`, and failing with coded errors `invalid_request`, `board_item_not_found`, `revision_conflict`, `item_resolved` or `board_write_failed`. Dismissal notes SHALL allow up to 64 KiB of decoded UTF-8 bytes, including JSON-escaped content, while the encoded request body remains bounded. A read-state conditional UPDATE that affects no row SHALL return the current missing, resolved or revision-conflicted error rather than success, and SHALL NOT emit a success event. REST and strict store mutations SHALL reject zero expected revision timestamps. Existing legacy resolution without an expected revision SHALL remain unchanged. Both REST handlers SHALL require exactly one JSON value and consume the bounded body through EOF before any mutation, including trailing whitespace in the encoded allowance.
+
+#### Scenario: Stale revision
+
+- **WHEN** the item changed since `expected_updated_at`
+- **THEN** the response is 409 `revision_conflict` and the item stays unread and open
+
+#### Scenario: Repeated dismissal
+
+- **WHEN** an identical dismissal is repeated
+- **THEN** the resolved item is returned and no second coordinator notice is written
+
+#### Scenario: Escaped note at the limit
+
+- **WHEN** a dismissal contains a valid note of at most 64 KiB decoded bytes, even when JSON escaping expands its encoded size
+- **THEN** the dismissal succeeds and preserves the complete note
+
+#### Scenario: Oversized dismissal
+
+- **WHEN** the decoded note exceeds 64 KiB or the encoded request exceeds its bounded transport allowance
+- **THEN** the response is 400 and the item remains unchanged
+
+#### Scenario: Independent writer edits during acknowledgment
+
+- **WHEN** another connection commits a revision change between read-state validation and its conditional UPDATE
+- **THEN** the response is 409 `revision_conflict`, the edited item stays unread and no read-state success event is emitted
+
+#### Scenario: Independent writer resolves or deletes during acknowledgment
+
+- **WHEN** another connection resolves or deletes the item between read-state validation and its conditional UPDATE
+- **THEN** the response is 409 `item_resolved` or 404 `board_item_not_found` respectively, with no successful item/count response or read-state event
+
+#### Scenario: Zero expected revision
+
+- **WHEN** either REST mutation or strict store mutation receives a zero expected revision timestamp
+- **THEN** it fails as invalid input, REST returns 400 `invalid_request`, and the item, notices and events remain unchanged
+
+#### Scenario: Trailing invalid input
+
+- **WHEN** a valid board mutation object is followed by garbage or another JSON value
+- **THEN** the response is 400 `invalid_request` and no item, notice or event is changed
+
+#### Scenario: Trailing whitespace exceeds allowance
+
+- **WHEN** trailing whitespace takes the entire encoded mutation body above its route's allowance
+- **THEN** the response is 400 `invalid_request` before mutation, while whitespace within the allowance remains valid
+
+### Requirement: Board change event
+
+The system SHALL emit `hera.board_changed` after each committed board post, material edit, read-state change or resolution in the daemon process, with payload `{role_id, item_id, unread_count, operation}` and no item bodies. Forwarding TUI-originated events across the process boundary to daemon SSE is deferred to ENG-1125; those writes remain durable and clients can refetch the roster for `board_unread`.
+
+#### Scenario: Event follows commit
+
+- **WHEN** a board mutation commits
+- **THEN** one event is emitted with the updated unread count
+
+#### Scenario: Reopening an acknowledged item
+
+- **WHEN** a legacy reader acknowledges the same open board item more than once without an intervening unread transition
+- **THEN** only the first unread to read transition emits an event
+
+### Requirement: Recipient-indexed Hera history
+
+History paging SHALL use a full recipient/message-id index covering both read and unread messages, with separate first-page and cursor queries so a cursor supplies a direct exclusive id range. Historical and current bindings SHALL retain the same message selection and ordering.
+
+#### Scenario: History with unrelated read mail
+
+- **WHEN** a task's ended and active roles have matching mail amid substantial unrelated read history
+- **THEN** each page seeks the matching recipients, cursor pages also seek `id < before_id`, and returned IDs remain oldest first within the selected newest page
+
+### Requirement: Targeted task pin action
+
+The system SHALL expose `POST /api/tasks/{id}/pin` accepting `{"pinned":<bool>}` and returning 200 `{"task_id","pinned","archived"}` reflecting the stored flags. It SHALL write only the pinned and archived columns using SetPinned semantics (pinning clears archived; unpinning leaves archived alone) and SHALL NOT overwrite any other task field or start or stop a session. A request that changes nothing SHALL succeed without emitting `task.updated`. The endpoint SHALL return 400 for malformed JSON, a missing, null or non-boolean `pinned`, unknown fields, trailing non-whitespace, multiple JSON values, or a body over 1 KiB (including trailing whitespace); 404 for an unknown task; 500 for a store failure; and SHALL be open to any authenticated token.
+
+#### Scenario: Pin preserves concurrent edits
+
+- **WHEN** a task is renamed and its status changed, then pinned via the endpoint
+- **THEN** the stored name and status are the newer values and only pinned changed
+
+#### Scenario: Pin restores an archived task
+
+- **WHEN** an archived task is pinned
+- **THEN** the response has `pinned:true, archived:false` and the stored row matches
+
+#### Scenario: Invalid body
+
+- **WHEN** the body is `{"pinned":"yes"}` or `{}` or contains an unknown field
+- **THEN** the response is 400 and nothing is stored or emitted
+
+#### Scenario: Complete pin request validation
+
+- **WHEN** a valid pin object is followed by garbage, another JSON value, or whitespace that takes the complete body above 1 KiB
+- **THEN** the response is 400 and no task field or event is changed
+
+#### Scenario: Pin body at the limit
+
+- **WHEN** exactly one valid pin object and optional whitespace occupy at most 1 KiB through EOF
+- **THEN** the request succeeds with the stored flags

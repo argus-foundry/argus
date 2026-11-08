@@ -1307,3 +1307,37 @@ func TestClearBlockedRoleStatus(t *testing.T) {
 		testutil.Equal(t, got.Status, HeraStatusWorking)
 	})
 }
+
+func TestLiveHeraKeepAliveBinding(t *testing.T) {
+	d := testDB(t)
+	got, err := d.LiveHeraKeepAliveBinding("none")
+	testutil.NoError(t, err)
+	testutil.True(t, got == nil)
+
+	o, err := d.CreateHeraOrchestrator("o-keep", "")
+	testutil.NoError(t, err)
+	mk := func(name string, kind HeraRoleKind, task string) *HeraBinding {
+		r, err := d.CreateHeraRole(CreateHeraRoleInput{OrchestratorID: o.ID, Name: name, Kind: kind, ArgusProject: "p"})
+		testutil.NoError(t, err)
+		b, err := d.CreateHeraBinding(CreateHeraBindingInput{RoleID: r.ID, ArgusTaskID: task, WorktreePath: "/wt/" + task})
+		testutil.NoError(t, err)
+		return b
+	}
+	mk("w", HeraKindWorker, "tw")
+	got, err = d.LiveHeraKeepAliveBinding("tw")
+	testutil.NoError(t, err)
+	testutil.True(t, got == nil) // workers do not keep a session alive
+
+	mk("c", HeraKindCoordinator, "tc")
+	got, err = d.LiveHeraKeepAliveBinding("tc")
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.RoleName, "c")
+	testutil.Equal(t, got.Kind, HeraKindCoordinator)
+	testutil.Equal(t, got.OrchestratorID, o.ID)
+
+	b := mk("f", HeraKindFreelance, "tf")
+	testutil.NoError(t, d.EndHeraBinding(b.ID, "test"))
+	got, err = d.LiveHeraKeepAliveBinding("tf")
+	testutil.NoError(t, err)
+	testutil.True(t, got == nil) // ended binding no longer counts
+}

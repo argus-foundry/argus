@@ -11,6 +11,8 @@ import (
 
 	"github.com/drn/argus/internal/agent"
 	"github.com/drn/argus/internal/db"
+	"github.com/drn/argus/internal/events"
+	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/usagebudget"
 
 	"github.com/drn/argus/internal/bridge"
@@ -41,9 +43,32 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body", err)
 		return
 	}
+	if !validBridgeUnicode(body) {
+		uxlog.Log("[bridge] invalid Unicode task=%s", id)
+		slog.Warn("[bridge] invalid Unicode", "task", task.ID) //nolint:gosec // G706: task.ID is DB-derived; slog encodes attributes.
+		writeErr(w, http.StatusBadRequest, "invalid Unicode in JSON body", nil)
+		return
+	}
+	for _, ev := range batch.Events {
+		if err := ev.ValidateSuggestion(); err != nil {
+			uxlog.Log("[bridge] invalid suggestion task=%s: %v", id, err)
+			slog.Warn("[bridge] invalid suggestion", "task", task.ID, "err", err) //nolint:gosec // G706: task.ID is a DB lookup result; slog encodes attributes.
+			writeErr(w, http.StatusBadRequest, "invalid suggestion", err)
+			return
+		}
+	}
 	s.bridgeIngestMu.Lock()
 	accepted := 0
+	invalid := 0
+	invalidReason := ""
 	for _, ev := range batch.Events {
+		if err := ev.Context.Validate(); ev.Type == bridge.TypeMeasure && err != nil {
+			invalid++
+			if invalidReason == "" {
+				invalidReason = err.Error()
+			}
+			continue
+		}
 		// Buffered posts from an exited process must never replace the current
 		// process's reports. Legacy generation-less reports remain diagnostic.
 		if ev.Generation != "" {
@@ -52,19 +77,37 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
+		if ev.Type == bridge.TypeSuggestionChanged && ev.Generation == "" {
+			continue
+		}
+		before := s.bridgeSuggestion(id)
 		n := s.bridgeHub.Ingest(id, []bridge.Event{ev}, time.Now())
 		accepted += n
+		if n > 0 {
+			s.emitSuggestionChange(id, before, s.bridgeSuggestion(id))
+		}
 		if n > 0 && ev.Type == bridge.TypeMeasure {
 			if st, live := s.bridgeState(id, time.Now()); live {
 				s.stampBridgeMeasurement(id, st)
+				if st.Context != nil {
+					events.Emit(model.EventTypeTaskContextChanged, id, map[string]string{
+						"session_id":  st.SessionID,
+						"measured_at": st.LastMeasureAt.UTC().Format(time.RFC3339Nano),
+					})
+				}
 			}
 		}
 	}
 	s.bridgeIngestMu.Unlock()
+	if invalid > 0 {
+		uxlog.Log("[bridge] invalid measurements task=%s count=%d: %s", id, invalid, invalidReason)
+		//nolint:gosec // G706: task.ID is DB-derived; the validation reason is a constant.
+		slog.Warn("[bridge] invalid measurements", "task", task.ID, "invalid", invalid, "err", invalidReason)
+	}
 	if accepted < len(batch.Events) {
 		// uxlog is a no-op in the daemon (it never calls uxlog.Init), so also
 		// log through slog, which does reach daemon.log.
-		uxlog.Log("[bridge] ingest task=%s accepted=%d of %d (duplicates/unknown types dropped)", id, accepted, len(batch.Events))
+		uxlog.Log("[bridge] ingest task=%s accepted=%d of %d (invalid measurements/duplicates/unknown types dropped)", id, accepted, len(batch.Events))
 		//nolint:gosec // G706: task.ID comes from the db.Get lookup above and slog encodes attributes, escaping control characters.
 		slog.Info("[bridge] ingest partial", "task", task.ID, "accepted", accepted, "received", len(batch.Events))
 	}
@@ -83,6 +126,9 @@ func (s *Server) handleBridgeState(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no bridge state for task", nil)
 		return
+	}
+	if !live {
+		st.Suggestion = nil
 	}
 	writeJSON(w, http.StatusOK, struct {
 		bridge.State
