@@ -64,7 +64,11 @@ tmp="$dest.new.$$"
 # Remove the temp (and any codesign sidecar like $tmp.cstemp) on EVERY exit
 # path: die(), codesign timeout, or a signal. INT/TERM must `exit` — a trap
 # that only cleans would let the script resume after the signal.
-cleanup() { rm -f "$tmp" "$tmp".*; }
+cleanup() {
+	[ -n "${cpid:-}" ] && kill "$cpid" 2>/dev/null
+	[ -n "${wpid:-}" ] && kill "$wpid" 2>/dev/null
+	rm -f "$tmp" "$tmp".*
+}
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM

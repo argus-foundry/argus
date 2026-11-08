@@ -7,6 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -28,6 +31,7 @@ esac
 
 const fakeCodesign = `#!/bin/sh
 echo "$@" >> "$FAKE_LOG"
+echo $$ > "$FAKE_PIDFILE"
 case "$FAKE_CODESIGN" in
 hang) exec sleep 30 ;;
 fail) exit 1 ;;
@@ -48,7 +52,12 @@ type result struct {
 	elapsed time.Duration
 }
 
-func run(t *testing.T, env ...string) result {
+type fixture struct {
+	dir, dest, logp, pidp string
+	cmd                   *exec.Cmd
+}
+
+func newFixture(t *testing.T, env ...string) *fixture {
 	t.Helper()
 	dir := t.TempDir()
 	fb := filepath.Join(dir, "fakebin")
@@ -60,30 +69,90 @@ func run(t *testing.T, env ...string) result {
 	write(filepath.Join(fb, "codesign"), fakeCodesign)
 	build := filepath.Join(dir, "build.sh")
 	write(build, fakeBuild)
-	dest := filepath.Join(dir, "bin", "argus")
-	testutil.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
-	write(dest, "OLD\n")
-	logp := filepath.Join(dir, "codesign.log")
-
+	f := &fixture{dir: dir, dest: filepath.Join(dir, "bin", "argus"),
+		logp: filepath.Join(dir, "codesign.log"), pidp: filepath.Join(dir, "codesign.pid")}
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(f.dest), 0o755))
+	write(f.dest, "OLD\n")
 	script, err := filepath.Abs("../install-signed.sh")
 	testutil.NoError(t, err)
-	cmd := exec.Command("/bin/sh", script)
-	cmd.Env = append([]string{
+	f.cmd = exec.Command("/bin/sh", script)
+	f.cmd.Env = append([]string{
 		"PATH=" + fb + ":/usr/bin:/bin",
 		"TMPDIR=" + dir,
-		"ARGUS_INSTALL_BIN=" + dest,
+		"ARGUS_INSTALL_BIN=" + f.dest,
 		"ARGUS_BUILD_CMD=" + build,
 		"ARGUS_SIGN_TIMEOUT=1",
-		"FAKE_LOG=" + logp,
+		"FAKE_LOG=" + f.logp,
+		"FAKE_PIDFILE=" + f.pidp,
 	}, env...)
+	return f
+}
+
+// assertNoTemp checks no temp file is left next to the destination.
+func (f *fixture) assertNoTemp(t *testing.T) {
+	t.Helper()
+	left, _ := filepath.Glob(f.dest + ".new.*")
+	testutil.Equal(t, len(left), 0)
+}
+
+// codesignAlive reports whether the fake codesign recorded in the pidfile still runs.
+func (f *fixture) codesignAlive() bool {
+	b, err := os.ReadFile(f.pidp)
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return false
+	}
+	return syscall.Kill(pid, 0) == nil
+}
+
+func run(t *testing.T, env ...string) result {
+	t.Helper()
+	f := newFixture(t, env...)
 	start := time.Now()
-	out, runErr := cmd.CombinedOutput()
+	out, runErr := f.cmd.CombinedOutput()
 	el := time.Since(start)
-	b, _ := os.ReadFile(dest)
-	lg, _ := os.ReadFile(logp)
-	left, _ := filepath.Glob(dest + ".new.*")
-	testutil.Equal(t, len(left), 0) // temp file cleaned on every path
+	b, _ := os.ReadFile(f.dest)
+	lg, _ := os.ReadFile(f.logp)
+	f.assertNoTemp(t) // temp file cleaned on every path
+	if f.codesignAlive() {
+		t.Errorf("codesign process still running after script exit")
+	}
 	return result{string(out), runErr, string(b), string(lg), el}
+}
+
+// TestSignalCleansUp: SIGTERM mid-codesign must exit, kill codesign, and remove
+// the temp — not resume the script or leave a half-deploy.
+func TestSignalCleansUp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns shell + sleeps")
+	}
+	f := newFixture(t, "FAKE_CODESIGN=hang", "ARGUS_SIGN_TIMEOUT=60")
+	testutil.NoError(t, f.cmd.Start())
+	deadline := time.Now().Add(10 * time.Second)
+	for !f.codesignAlive() {
+		if time.Now().After(deadline) {
+			t.Fatal("codesign never started")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	testutil.NoError(t, f.cmd.Process.Signal(syscall.SIGTERM))
+	done := make(chan error, 1)
+	go func() { done <- f.cmd.Wait() }()
+	select {
+	case err := <-done:
+		testutil.Equal(t, err != nil, true)
+	case <-time.After(15 * time.Second):
+		_ = f.cmd.Process.Kill()
+		t.Fatal("script did not exit after SIGTERM")
+	}
+	b, _ := os.ReadFile(f.dest)
+	testutil.Equal(t, string(b), "OLD\n")
+	f.assertNoTemp(t)
+	time.Sleep(200 * time.Millisecond)
+	testutil.Equal(t, f.codesignAlive(), false)
 }
 
 func TestInstallSigned(t *testing.T) {
