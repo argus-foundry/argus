@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/drn/argus/internal/agent"
 	"github.com/drn/argus/internal/daemon"
 	dclient "github.com/drn/argus/internal/daemon/client"
 	"github.com/drn/argus/internal/testutil"
@@ -85,7 +86,7 @@ func TestGracefulShutdown_Calls(t *testing.T) {
 	c, err := dclient.Connect(fd.sock)
 	testutil.NoError(t, err)
 
-	gracefulDaemonShutdown(c)
+	gracefulDaemonShutdown(c, fd.sock)
 
 	testutil.Equal(t, fd.shutdownCalls.Load(), int32(1))
 }
@@ -99,7 +100,60 @@ func TestGracefulShutdown_Fails(t *testing.T) {
 	testutil.NoError(t, err)
 
 	// Must not panic or hang even though the daemon reports a Shutdown error.
-	gracefulDaemonShutdown(c)
+	gracefulDaemonShutdown(c, fd.sock)
+
+	// Own connection + the fresh-connection retry.
+	testutil.Equal(t, fd.shutdownCalls.Load(), int32(2))
+}
+
+// TestGracefulShutdown_FreshConn pins the loop fix's shutdown half: when the
+// TUI's own connection is dead (Shutdown over it fails) but a live daemon
+// still owns the socket, the daemon must still be told to exit via a fresh
+// connection — otherwise AutoStart connects to it and the loop re-arms.
+func TestGracefulShutdown_FreshConn(t *testing.T) {
+	fd := newFakeShutdownDaemon(t, false)
+	c, err := dclient.Connect(fd.sock)
+	testutil.NoError(t, err)
+	c.Close() //nolint:errcheck // simulate our connection dying
+
+	gracefulDaemonShutdown(c, fd.sock)
 
 	testutil.Equal(t, fd.shutdownCalls.Load(), int32(1))
+}
+
+// TestReconnectLive_Adopts: a live daemon answers on a fresh connection, so
+// the App swaps clients, resets the failure streak, and reports true (the
+// caller then spawns nothing).
+func TestReconnectLive_Adopts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	fd := newFakeShutdownDaemon(t, false)
+	app := New(testDB(t), agent.NewRunner(nil), true)
+	app.sockPathFn = func() string { return fd.sock }
+	app.daemonFailures = 5
+	_, stop := wireApp(t, app)
+	defer stop()
+
+	if !app.reconnectLiveDaemon() {
+		t.Fatal("reconnectLiveDaemon = false, want true with a live daemon")
+	}
+	syncUI(t, app.tapp)
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	testutil.Equal(t, app.daemonFailures, 0)
+	if app.daemonClient == nil || app.restartedClient == nil {
+		t.Fatal("daemonClient not swapped to the fresh connection")
+	}
+	testutil.Equal(t, fd.shutdownCalls.Load(), int32(0))
+}
+
+// TestReconnectLive_NoDaemon: nothing answers → false, state untouched.
+func TestReconnectLive_NoDaemon(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := New(testDB(t), agent.NewRunner(nil), true)
+	app.sockPathFn = func() string { return filepath.Join(t.TempDir(), "n.sock") }
+	app.daemonFailures = 4
+	if app.reconnectLiveDaemon() {
+		t.Fatal("reconnectLiveDaemon = true with no daemon")
+	}
+	testutil.Equal(t, app.daemonFailures, 4)
 }

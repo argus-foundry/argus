@@ -508,6 +508,10 @@ type App struct {
 	// to avoid forking the test binary as a fake daemon (see ErrTestBinary
 	// in internal/daemon/client/client.go for the failure mode).
 	restartDaemonFn func()
+	// sockPathFn resolves the daemon socket for health-check reconnects and
+	// restarts. Defaults to daemon.DefaultSocketPath; tests point it at a
+	// fake daemon under t.TempDir() so they never touch the real ~/.argus.
+	sockPathFn func() string
 
 	// restartSupervisorFn is the function invoked to bounce the session-
 	// supervisor. Defaults to a.restartSupervisor. Tests override it to avoid
@@ -780,6 +784,7 @@ func New(database store.Store, runner agent.SessionProvider, daemonConnected boo
 		app.skewProvider = dc
 	}
 	app.restartDaemonFn = app.restartDaemon
+	app.sockPathFn = daemon.DefaultSocketPath
 	app.restartSupervisorFn = app.restartSupervisor
 	app.agentCountFn = app.liveAgentCount
 	app.maintenanceClientFactory = app.newLocalMaintenanceClient
@@ -2109,11 +2114,55 @@ func (a *App) toggleAutoStart(installed bool) {
 // Shutdown failure (e.g. the connection is already dead) is logged and
 // swallowed: the caller proceeds to close the local connection and start a
 // replacement regardless, unchanged from before this function existed.
-func gracefulDaemonShutdown(c *dclient.Client) {
+func gracefulDaemonShutdown(c *dclient.Client, sockPath string) {
 	if serr := c.Shutdown(); serr != nil {
 		uxlog.Log("[tui] daemon shutdown RPC error: %v", serr)
+		// Our own connection may be the dead part while the daemon is alive and
+		// still owns the socket. Ask it again over a fresh connection, else it
+		// is never told to exit and AutoStart would connect to it.
+		if fresh, cerr := dclient.ConnectLive(sockPath); cerr == nil {
+			if serr2 := fresh.Shutdown(); serr2 != nil {
+				uxlog.Log("[tui] daemon shutdown over fresh connection failed: %v", serr2)
+			} else {
+				uxlog.Log("[tui] daemon shutdown delivered over fresh connection")
+			}
+			fresh.Close() //nolint:errcheck // short-lived shutdown client
+		}
 	}
 	c.Close() //nolint:errcheck // best-effort local teardown; close error is non-actionable
+}
+
+// reconnectLiveDaemon distinguishes "my connection died" from "the daemon
+// died": it dials a fresh connection and, if a live daemon answers, swaps the
+// App onto that client and resets the failure streak. Returns true when it
+// adopted a live daemon (the caller must then NOT restart anything). Runs on
+// the tick goroutine (it does RPC).
+func (a *App) reconnectLiveDaemon() bool {
+	fresh, err := dclient.ConnectLive(a.sockPathFn())
+	if err != nil {
+		return false
+	}
+	uxlog.Log("[tui] daemon alive on fresh connection; reconnected without restart")
+	fresh.OnSessionExit(func(taskID string, info daemon.ExitInfo) {
+		a.HandleSessionExit(taskID, info)
+	})
+	a.tapp.QueueUpdateDraw(func() {
+		a.mu.Lock()
+		old := a.daemonClient
+		a.daemonFailures = 0
+		a.daemonClient = fresh
+		a.skewProvider = fresh
+		a.runner = fresh
+		a.restartedClient = fresh
+		a.mu.Unlock()
+		if old != nil && old != fresh {
+			old.Close() //nolint:errcheck // superseded dead connection
+		}
+	})
+	a.mu.Lock()
+	a.daemonFailures = 0
+	a.mu.Unlock()
+	return true
 }
 
 // restartDaemon kills the old daemon, auto-starts a new one, and reconnects.
@@ -2123,10 +2172,10 @@ func (a *App) restartDaemon() {
 
 	// Ask the daemon to exit via RPC before tearing down our local connection.
 	if a.daemonClient != nil {
-		gracefulDaemonShutdown(a.daemonClient)
+		gracefulDaemonShutdown(a.daemonClient, a.sockPathFn())
 	}
 
-	sockPath := daemon.DefaultSocketPath()
+	sockPath := a.sockPathFn()
 	dclient.WaitForShutdown(sockPath, 3*time.Second)
 
 	// Auto-start new daemon.
