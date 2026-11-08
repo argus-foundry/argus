@@ -1873,7 +1873,10 @@ healthCheck:
 				failures := a.daemonFailures
 				cooldownOK := time.Since(a.lastDaemonRestart) >= 30*time.Second
 				a.mu.Unlock()
-				if failures >= 3 && cooldownOK {
+				if failures >= 3 && a.reconnectLiveDaemon() {
+					// A live daemon answered on a fresh connection: only OUR
+					// connection had died. No spawn, no restart.
+				} else if failures >= 3 && cooldownOK {
 					uxlog.Log("[tui] daemon unreachable after %d pings, restarting...", failures)
 					a.mu.Lock()
 					a.daemonRestarting = true
