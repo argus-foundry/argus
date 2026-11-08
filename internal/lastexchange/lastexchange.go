@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"regexp"
@@ -108,7 +109,7 @@ func Extract(r io.Reader) (Exchange, error) {
 			}
 		}
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return finish(human, replies), err
@@ -141,7 +142,7 @@ func readLine(br *bufio.Reader) ([]byte, error) {
 				buf = append(buf, part...)
 			}
 		}
-		if err == bufio.ErrBufferFull {
+		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
 		if over {
