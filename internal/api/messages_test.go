@@ -48,6 +48,27 @@ func TestAPI_ListInbox_Empty(t *testing.T) {
 	testutil.Equal(t, resp.UnreadCount, 0)
 }
 
+func TestAPI_ListInbox_SystemNotesNotUnread(t *testing.T) {
+	srv, d := testServer(t)
+	task := &model.Task{Name: "t"}
+	testutil.NoError(t, d.Add(task))
+	for _, typ := range []string{"ARGUS_BOUNCED", "ARGUS_HOST_SUSPENDED"} {
+		_, err := d.InsertSystemMessage(&model.TaskMessage{From: model.SystemTaskID, To: task.ID, Kind: model.KindNote, Body: `{"type":"` + typ + `"}`})
+		testutil.NoError(t, err)
+	}
+
+	w := httptest.NewRecorder()
+	srv.routes().ServeHTTP(w, authedReq("GET", "/api/tasks/"+task.ID+"/inbox", ""))
+	testutil.Equal(t, w.Code, http.StatusOK)
+	var resp struct {
+		Messages    []model.TaskMessage `json:"messages"`
+		UnreadCount int                 `json:"unread_count"`
+	}
+	testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	testutil.Equal(t, resp.UnreadCount, 0)
+	testutil.Equal(t, len(resp.Messages), 2) // still listed for agents
+}
+
 func TestAPI_SendMessage_Happy(t *testing.T) {
 	srv, d := testServer(t)
 	from := &model.Task{Name: "from"}

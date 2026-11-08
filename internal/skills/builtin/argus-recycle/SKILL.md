@@ -23,6 +23,7 @@ This is a manually-triggered action. Only run it when the user asks for it, or w
    - **In progress**: what's partially done, and exactly where it was left off.
    - **Key decisions**: choices made and why, especially anything non-obvious a fresh session might otherwise second-guess or redo.
    - **Next step**: the single concrete next action — not a vague "continue the work."
+   - **Open with the user**: REQUIRED section. The user's last unresolved question or request, your latest answer or thinking on it, and any decision the user still owes. Write `none` if nothing is open. The fresh session relays a non-empty section to the user as its first reply, so a recycle never swallows an answer.
 
    Be specific: file paths, function/variable names, command output, error messages. The fresh session will treat this note as its primary source of truth and the task's original prompt as background only — anything you don't include here is effectively lost.
 

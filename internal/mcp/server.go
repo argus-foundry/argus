@@ -810,7 +810,7 @@ var taskRecycleToolDefs = []Tool{
 		Name: "task_recycle",
 		Description: `Reset this task's context window while continuing the same work: kills the current agent session and starts a brand-new one on the identical task/worktree/branch, with empty context (no prior conversation carried over), seeded by handoff_note plus the task's original prompt as background.
 
-Use this when the conversation has grown large enough that a fresh context window would help, while the underlying task (worktree, branch, in-progress changes) should continue unchanged — the manually-triggered equivalent of a built-in /compact that also hands off to a genuinely new session. The restart is deferred until this session goes idle — this call itself returns immediately, but STOP WORKING right after it: report the result in one line and end the turn, since the fresh session picks up only what's in handoff_note, and continuing to work risks the wait timing out with no fresh session starting at all. Write handoff_note as if briefing a new engineer picking up mid-task: what's done, what's in progress, key decisions and why, and the concrete next step.
+Use this when the conversation has grown large enough that a fresh context window would help, while the underlying task (worktree, branch, in-progress changes) should continue unchanged — the manually-triggered equivalent of a built-in /compact that also hands off to a genuinely new session. The restart is deferred until this session goes idle — this call itself returns immediately, but STOP WORKING right after it: report the result in one line and end the turn, since the fresh session picks up only what's in handoff_note, and continuing to work risks the wait timing out with no fresh session starting at all. Write handoff_note as if briefing a new engineer picking up mid-task: what's done, what's in progress, key decisions and why, and the concrete next step. It MUST also include an "Open with the user" section: the user's last unresolved question or request, your latest answer or thinking on it, and any decision the user still owes (write "none" if nothing is open); the fresh session relays it to the user first.
 
 The agent process does not know its own task ID, so identify yourself by passing either ` + "`id`" + ` (from the ` + "`ARGUS_TASK_ID`" + ` env var) or ` + "`cwd`" + ` (Argus resolves to the task whose worktree the cwd lives under).`,
 		InputSchema: map[string]interface{}{
@@ -818,7 +818,7 @@ The agent process does not know its own task ID, so identify yourself by passing
 			"properties": map[string]interface{}{
 				"id":           map[string]interface{}{"type": "string", "description": "Task ID. If omitted, cwd is used to resolve the task."},
 				"cwd":          map[string]interface{}{"type": "string", "description": "Working directory inside the task's worktree. Used when id is omitted."},
-				"handoff_note": map[string]interface{}{"type": "string", "description": "Free-text handoff for the fresh session: progress, key decisions and why, and the concrete next step. Required."},
+				"handoff_note": map[string]interface{}{"type": "string", "description": "Free-text handoff for the fresh session: progress, key decisions and why, the concrete next step, and an \"Open with the user\" section (user's last unresolved question/request, your latest answer or thinking, any decision they owe, or \"none\"). Required."},
 			},
 			"required": []string{"handoff_note"},
 		},

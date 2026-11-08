@@ -31,7 +31,7 @@ func seedRecyclePlainTask(t *testing.T, database *db.DB, worktree, prompt string
 }
 
 func TestBuildTaskRecycleSeedPrompt(t *testing.T) {
-	got := buildTaskRecycleSeedPrompt("original mission text", "did X, next do Y")
+	got := buildTaskRecycleSeedPrompt("original mission text", "did X, next do Y", "")
 
 	testutil.Contains(t, got, "did X, next do Y")
 	testutil.Contains(t, got, "original mission text")
@@ -61,7 +61,7 @@ func TestTaskRecycleRunner_Restart_ClearsSessionAndSeedsPrompt(t *testing.T) {
 	t.Cleanup(runner.StopAll)
 
 	r := newTaskRecycleRunner(database, runner, func() config.Config { return cfg })
-	testutil.NoError(t, r.restart(task.ID, "the seed prompt"))
+	testutil.NoError(t, r.restart(task.ID, func(*model.Task) string { return "the seed prompt" }))
 
 	updated, err := database.Get(task.ID)
 	testutil.NoError(t, err)
@@ -94,7 +94,7 @@ func TestTaskRecycleRunner_Restart_NoLiveSession_StartsFresh(t *testing.T) {
 	cfg := recycleTestConfig()
 	r := newTaskRecycleRunner(database, runner, func() config.Config { return cfg })
 
-	testutil.NoError(t, r.restart(task.ID, "the seed prompt"))
+	testutil.NoError(t, r.restart(task.ID, func(*model.Task) string { return "the seed prompt" }))
 	t.Cleanup(runner.StopAll)
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -116,7 +116,7 @@ func TestTaskRecycleRunner_Restart_UnknownTaskErrors(t *testing.T) {
 	cfg := recycleTestConfig()
 	r := newTaskRecycleRunner(database, runner, func() config.Config { return cfg })
 
-	if err := r.restart("no-such-task", "seed"); err == nil {
+	if err := r.restart("no-such-task", func(*model.Task) string { return "seed" }); err == nil {
 		t.Fatal("expected an error for an unknown task")
 	}
 }
@@ -139,7 +139,7 @@ func TestTaskRecycleRunner_AwaitIdleAndRestart_NoSessionRestartsImmediately(t *t
 	r := newTaskRecycleRunner(database, runner, func() config.Config { return cfg })
 	r.sleep = func(time.Duration) {}
 
-	r.awaitIdleAndRestart(task.ID, "the seed prompt")
+	r.awaitIdleAndRestart(task.ID, func(*model.Task) string { return "the seed prompt" })
 	t.Cleanup(runner.StopAll)
 
 	updated, err := database.Get(task.ID)
@@ -180,7 +180,7 @@ func TestTaskRecycleRunner_AwaitIdleAndRestart_NeverIdleGivesUp(t *testing.T) {
 	r.sleep = func(time.Duration) {}
 	r.idleTimeout = 0 // expire on the very first deadline check
 
-	r.awaitIdleAndRestart(task.ID, "the seed prompt")
+	r.awaitIdleAndRestart(task.ID, func(*model.Task) string { return "the seed prompt" })
 
 	// Restart must NOT have happened: SessionID/Prompt unchanged.
 	updated, err := database.Get(task.ID)
