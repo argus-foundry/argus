@@ -9,17 +9,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestOrphanBrowserSeamsDisabledUnderTest(t *testing.T) {
+func TestBrowserSeamsDisabledUnderTest(t *testing.T) {
 	t.Parallel()
 	procs, err := browserSnapshot()
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(procs), 0)
-	testutil.Error(t, browserKill(1, 0))
 	_, _, err = browserProcArgs(1)
 	testutil.Error(t, err)
-	_, _, err = browserProcByPID(1)
-	testutil.Error(t, err)
-	testutil.Equal(t, len(NewBrowserScanner().cache), 0)
+	got, err := NewBrowserScanner().Scan()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(got), 0)
 }
 
 func TestKinfoToBrowserProc(t *testing.T) {
