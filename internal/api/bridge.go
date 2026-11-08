@@ -43,6 +43,7 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body", err)
 		return
 	}
+	keepPlace := s.db.Config().UI.RerenderKeepPlace
 	if !validBridgeUnicode(body) {
 		uxlog.Log("[bridge] invalid Unicode task=%s", id)
 		slog.Warn("[bridge] invalid Unicode", "task", task.ID) //nolint:gosec // G706: task.ID is DB-derived; slog encodes attributes.
@@ -62,6 +63,11 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 	invalid := 0
 	invalidReason := ""
 	for _, ev := range batch.Events {
+		// kick-timing-keep-place: with the setting off the daemon neither keeps
+		// nor hands back composer drafts.
+		if ev.Type == bridge.TypeDraft && !keepPlace {
+			continue
+		}
 		if err := ev.Context.Validate(); ev.Type == bridge.TypeMeasure && err != nil {
 			invalid++
 			if invalidReason == "" {
@@ -83,6 +89,12 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		before := s.bridgeSuggestion(id)
 		n := s.bridgeHub.Ingest(id, []bridge.Event{ev}, time.Now())
 		accepted += n
+		if n > 0 && ev.Type == bridge.TypeDraft && ev.Reason != "" {
+			// The mod's outcome for a draft handed back after a kick. uxlog is
+			// a no-op in the daemon, so this goes through slog (daemon.log).
+			//nolint:gosec // G706: task.ID comes from the db.Get lookup above and slog encodes attributes, escaping control characters.
+			slog.Info("[bridge] draft restore outcome", "task", task.ID, "outcome", ev.Reason, "chars", len(ev.Text))
+		}
 		if n > 0 {
 			s.emitSuggestionChange(id, before, s.bridgeSuggestion(id))
 		}
@@ -302,4 +314,56 @@ func (s *Server) observeBridge(now time.Time, running []string, idle, needs map[
 		return
 	}
 	s.bridgeShadow.Observe(now, running, idle, needs, s.bridgeState)
+}
+
+// bridgeDraftRequest is the body of POST /api/tasks/{id}/bridge/draft.
+type bridgeDraftRequest struct {
+	Generation string `json:"generation"`
+	Boot       string `json:"boot"`
+}
+
+// handleBridgeDraft hands a freshly booted mod the composer draft its
+// predecessor process reported before a kick killed it (kick-timing-keep-place).
+// One-shot: the draft is removed when returned. Only the CURRENT launch of a
+// live session may ask, and nothing is returned while ui.rerender_keep_place is off.
+func (s *Server) handleBridgeDraft(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	task, err := s.db.Get(id)
+	if err != nil || task == nil {
+		writeErr(w, http.StatusNotFound, "task not found", nil)
+		return
+	}
+	var req bridgeDraftRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil || req.Generation == "" || req.Boot == "" {
+		writeErr(w, http.StatusBadRequest, "invalid bridge draft request", err)
+		return
+	}
+	none := map[string]any{"draft": nil}
+	if !s.db.Config().UI.RerenderKeepPlace || s.runner == nil {
+		writeJSON(w, http.StatusOK, none)
+		return
+	}
+	sess := s.runner.Get(id)
+	if sess == nil || !sess.Alive() || agent.SessionBridgeGeneration(sess) != req.Generation {
+		writeJSON(w, http.StatusOK, none)
+		return
+	}
+	d, ok := s.bridgeHub.TakeDraft(id, req.Boot, time.Now())
+	if !ok {
+		writeJSON(w, http.StatusOK, none)
+		return
+	}
+	//nolint:gosec // G706: task.ID comes from the db.Get lookup above and slog encodes attributes, escaping control characters.
+	slog.Info("[bridge] draft handed to resumed session", "task", task.ID, "chars", len(d.Text))
+	writeJSON(w, http.StatusOK, map[string]any{"draft": map[string]any{"text": d.Text, "cursor": d.Cursor}})
+}
+
+// bridgeDraftPending reports whether the task's live bridge says the composer
+// holds unsent text and the keep-place setting is on.
+func (s *Server) bridgeDraftPending(id string) bool {
+	if !s.db.Config().UI.RerenderKeepPlace {
+		return false
+	}
+	st, live := s.bridgeState(id, time.Now())
+	return live && st.HasDraft
 }

@@ -36,6 +36,7 @@ type DefaultsJSON struct {
 // SettingsResp is the full /api/settings shape.
 type SettingsResp struct {
 	Bridge   BridgeSettingsJSON `json:"bridge"`
+	UI       UISettingsJSON     `json:"ui"`
 	Sandbox  SandboxJSON        `json:"sandbox"`
 	KB       KBJSON             `json:"kb"`
 	API      APISettingsJSON    `json:"api"`
@@ -50,12 +51,22 @@ type BridgeSettingsJSON struct {
 	Toasts   bool `json:"toasts"`
 }
 
+// UISettingsJSON mirrors api.uiSettings.
+type UISettingsJSON struct {
+	RerenderKeepPlace bool `json:"rerender_keep_place"`
+}
+
 // BridgeUpdate is a partial update; nil fields remain unchanged.
 type BridgeUpdate struct {
 	Enabled  *bool `json:"enabled,omitempty"`
 	Delivery *bool `json:"delivery,omitempty"`
 	Band     *bool `json:"band,omitempty"`
 	Toasts   *bool `json:"toasts,omitempty"`
+}
+
+// UIUpdate is a partial update; nil fields remain unchanged.
+type UIUpdate struct {
+	RerenderKeepPlace *bool `json:"rerender_keep_place,omitempty"`
 }
 
 // SandboxUpdate is the partial-update payload for the sandbox section.
@@ -88,6 +99,7 @@ type DefaultsUpdate struct {
 // a pointer so callers can update one section without round-tripping the rest.
 type SettingsUpdate struct {
 	Bridge   *BridgeUpdate   `json:"bridge,omitempty"`
+	UI       *UIUpdate       `json:"ui,omitempty"`
 	Sandbox  *SandboxUpdate  `json:"sandbox,omitempty"`
 	KB       *KBUpdate       `json:"kb,omitempty"`
 	API      *APIUpdate      `json:"api,omitempty"`

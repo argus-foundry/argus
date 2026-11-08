@@ -110,6 +110,7 @@ func (d *DB) Config() config.Config {
 		{"ui.show_elapsed", &cfg.UI.ShowElapsed},
 		{"ui.show_icons", &cfg.UI.ShowIcons},
 		{"ui.default_agent_zoom", &cfg.UI.DefaultAgentZoom},
+		{"ui.rerender_keep_place", &cfg.UI.RerenderKeepPlace},
 		{"ui.cross_tab_arrows", &cfg.UI.CrossTabArrows},
 		{"ui.tasks_rail", &cfg.UI.TasksRail},
 		{"ui.project_first", &cfg.UI.ProjectFirst},

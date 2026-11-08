@@ -39,3 +39,19 @@ func TestSettingsBridgeToggle(t *testing.T) {
 		})
 	}
 }
+
+func TestSettingsRerenderKeepPlaceToggle(t *testing.T) {
+	sv := testSettingsView(t)
+	key := "ui.rerender_keep_place"
+	selectRowInCategory(t, sv, catBridge, srBridge, key)
+	testutil.Contains(t, sv.SelectedRow().label, "ON")
+	testutil.True(t, sv.handleEnter())
+	sv.Refresh()
+	testutil.False(t, sv.database.Config().UI.RerenderKeepPlace)
+	testutil.True(t, sv.database.Config().Bridge.Toasts)
+	selectRowInCategory(t, sv, catBridge, srBridge, key)
+	testutil.Contains(t, sv.SelectedRow().label, "OFF")
+	testutil.True(t, sv.handleEnter())
+	sv.Refresh()
+	testutil.True(t, sv.database.Config().UI.RerenderKeepPlace)
+}
