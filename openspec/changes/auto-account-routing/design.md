@@ -16,7 +16,8 @@
    - *Alternative:* count tasks from the DB across processes. Rejected: ResolveChoice is config-only today, and bursts come from the daemon (hera/MCP/schedules), where one process sees them all. TUI-process spawns are human-paced; limitation noted.
    - *Alternative:* count only spawns since the reading's probe time. Rejected: readings expose only a percentage; a fixed 30-min window (= probe TTL) slightly over-penalizes, which only spreads more.
 4. **Forks** inherit a routable account when the source was routed/blank; `PinnedAccount` remains for pinned sources.
-5. **Codex threshold skew**: out of scope (see proposal). **Existing pinned rows**: no migration code.
+5. **Unpinned resolution order** (Aaron's input): project account → backend-restricted `ResolveChoice` (step 2, today's behavior) → unrestricted `ResolveChoice` as a new step 3. In step 3 the backend is never changed when one was explicitly or project-configured; the account is adopted only if `AccountSupports` the backend. With no configured backend the tier's backend+account are adopted together. Interpretation of "best overall" — flag if a different meaning was intended.
+6. **Codex threshold skew**: out of scope (see proposal). **Existing pinned rows**: no migration code.
 
 ## Risks / Trade-offs
 

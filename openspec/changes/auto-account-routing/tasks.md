@@ -9,6 +9,7 @@
 
 - [ ] 2.1 Spawn ledger + `ResolveAndReserve` with injectable clock and `[routing]` logs
 - [ ] 2.2 `create.go`/`routing.go`: reserve, routed flag, `[routing]` pin/auto log
+- [ ] 2.2b `routing.go`: add step-3 best-overall fallback with `[routing]` step log + tests
 - [ ] 2.3 `resolveOrchestratorAccount`, fork account helper (`app.go`, `handlers.go`)
 - [ ] 2.4 MCP `taskCreateAccount` blank/routed callers route
 
