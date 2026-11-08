@@ -656,10 +656,14 @@ func TestDB_CollapseSystemNotices(t *testing.T) {
 	testutil.Equal(t, n, 0)
 }
 
-// TestDB_MigrateCollapsesSystemNotices pins the startup wiring: migrate() (run on
-// every Open) must collapse a legacy system-note backlog.
-func TestDB_MigrateCollapsesSystemNotices(t *testing.T) {
-	d := testDB(t)
+// TestDB_MigrateLegacySystemNotices pins the one-shot startup wiring: migrate()
+// collapses the legacy backlog and marks survivors read exactly once; a note
+// inserted afterwards stays unread across later migrate() calls.
+func TestDB_MigrateLegacySystemNotices(t *testing.T) {
+	d := testDB(t) // first migrate ran on an empty DB and set the marker
+	// Simulate a pre-upgrade DB: clear the marker, add legacy rows.
+	_, err := d.conn.Exec(`DELETE FROM config WHERE key=?`, legacySystemNoticesMigratedKey)
+	testutil.NoError(t, err)
 	for i := range 3 {
 		_, err := d.conn.Exec(`INSERT INTO task_messages (id, from_task_id, to_task_id, kind, body, in_reply_to, created_at, read_at) VALUES (?,?,?,?,?,?,?,?)`,
 			fmt.Sprintf("m%d", i), model.SystemTaskID, "T", "note", `{"type":"ARGUS_HOST_SUSPENDED"}`, "", formatTime(time.Now().Add(time.Duration(i)*time.Second)), "")
@@ -670,4 +674,38 @@ func TestDB_MigrateCollapsesSystemNotices(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(msgs), 1)
 	testutil.Equal(t, msgs[0].ID, "m2")
+	testutil.False(t, msgs[0].ReadAt.IsZero()) // survivor marked read
+
+	// One-shot: a fresh (post-upgrade) note is NOT touched by later starts.
+	fresh, err := d.InsertSystemMessage(sysNote("ARGUS_HOST_SUSPENDED"))
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.migrate())
+	unread, err := d.Inbox("T", InboxFilter{UnreadOnly: true})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(unread), 1)
+	testutil.Equal(t, unread[0].ID, fresh.ID)
+}
+
+func TestDB_MigrateLegacySystemNotices_RetriesAfterFailure(t *testing.T) {
+	d := testDB(t)
+	_, err := d.conn.Exec(`DELETE FROM config WHERE key=?`, legacySystemNoticesMigratedKey)
+	testutil.NoError(t, err)
+	_, err = d.conn.Exec(`INSERT INTO task_messages (id, from_task_id, to_task_id, kind, body, in_reply_to, created_at, read_at) VALUES ('x',?,?,?,?,?,?,?)`,
+		model.SystemTaskID, "T", "note", `{"type":"A"}`, "", formatTime(time.Now()), "")
+	testutil.NoError(t, err)
+	// Break the mark step: a read-only trigger makes the UPDATE fail.
+	_, err = d.conn.Exec(`CREATE TRIGGER block_mark BEFORE UPDATE ON task_messages BEGIN SELECT RAISE(ABORT,'blocked'); END`)
+	testutil.NoError(t, err)
+	_, _, err = d.MigrateLegacySystemNotices()
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	v, err := d.GetConfigValue(legacySystemNoticesMigratedKey)
+	testutil.NoError(t, err)
+	testutil.Equal(t, v, "") // marker NOT set, so it retries
+	_, err = d.conn.Exec(`DROP TRIGGER block_mark`)
+	testutil.NoError(t, err)
+	_, marked, err := d.MigrateLegacySystemNotices()
+	testutil.NoError(t, err)
+	testutil.Equal(t, marked, 1)
 }

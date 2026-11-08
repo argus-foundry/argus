@@ -85,7 +85,7 @@ func (d *DB) insertMessageLocked(m *model.TaskMessage) (*model.TaskMessage, erro
 
 	// Inbox-full check (per-recipient unread count).
 	var unread int
-	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM task_messages WHERE to_task_id=? AND read_at='' AND from_task_id<>?`, m.To, model.SystemTaskID).Scan(&unread); err != nil {
+	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM task_messages WHERE to_task_id=? AND read_at='' AND `+notSystemSenderSQL, m.To, model.SystemTaskID).Scan(&unread); err != nil {
 		return nil, fmt.Errorf("count unread: %w", err)
 	}
 	if unread >= MaxUnreadPerRecipient {
@@ -168,7 +168,7 @@ func (d *DB) Inbox(toID string, f InboxFilter) ([]*model.TaskMessage, error) {
 		q += ` AND read_at=''`
 	}
 	if f.ExcludeSystem {
-		q += ` AND from_task_id<>?`
+		q += ` AND ` + notSystemSenderSQL
 		args = append(args, model.SystemTaskID)
 	}
 	if f.Sender != "" {
@@ -256,7 +256,7 @@ func (d *DB) UnreadCount(toID string) (int, error) {
 	defer d.mu.Unlock()
 
 	var n int
-	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM task_messages WHERE to_task_id=? AND read_at='' AND from_task_id<>?`, toID, model.SystemTaskID).Scan(&n); err != nil {
+	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM task_messages WHERE to_task_id=? AND read_at='' AND `+notSystemSenderSQL, toID, model.SystemTaskID).Scan(&n); err != nil {
 		return 0, fmt.Errorf("unread count: %w", err)
 	}
 	return n, nil
@@ -404,6 +404,11 @@ func scanMessage(row scanner) (*model.TaskMessage, error) {
 	return m, nil
 }
 
+// notSystemSenderSQL is the single predicate (bound to model.SystemTaskID) that
+// every unread count, the inbox-full cap and the ExcludeSystem filter share, so
+// they cannot drift apart.
+const notSystemSenderSQL = `from_task_id<>?`
+
 // systemTypeExpr extracts the JSON "type" of a system note body in SQL.
 const systemTypeExpr = `CASE WHEN json_valid(body) THEN json_extract(body,'$.type') END`
 
@@ -443,4 +448,36 @@ func (d *DB) CollapseSystemNotices() (int, error) {
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// legacySystemNoticesMigratedKey marks the one-shot legacy-backlog migration done.
+const legacySystemNoticesMigratedKey = "migration.system_notices_v1"
+
+// MigrateLegacySystemNotices is the ONE-SHOT cleanup of the pre-coalescing
+// system-note backlog: collapse to the newest unread note per (task, type) and
+// mark the survivors read (they are all stale). Newly inserted notes stay unread
+// by design, which is why this must not run on every start. Guarded by a config
+// marker set only after success, so a failure retries on the next start.
+// Returns the rows removed and the survivors marked read.
+func (d *DB) MigrateLegacySystemNotices() (removed, marked int, err error) {
+	if v, gerr := d.GetConfigValue(legacySystemNoticesMigratedKey); gerr != nil {
+		return 0, 0, gerr
+	} else if v != "" {
+		return 0, 0, nil
+	}
+	if removed, err = d.CollapseSystemNotices(); err != nil {
+		return 0, 0, err
+	}
+	d.mu.Lock()
+	res, merr := d.conn.Exec(`UPDATE task_messages SET read_at=? WHERE from_task_id=? AND read_at=''`,
+		formatTime(time.Now()), model.SystemTaskID)
+	d.mu.Unlock()
+	if merr != nil {
+		return removed, 0, fmt.Errorf("mark legacy system notices read: %w", merr)
+	}
+	n, _ := res.RowsAffected()
+	if err = d.SetConfigValue(legacySystemNoticesMigratedKey, formatTime(time.Now())); err != nil {
+		return removed, int(n), err
+	}
+	return removed, int(n), nil
 }

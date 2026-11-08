@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -441,4 +442,61 @@ func heraMessagesPageQuery(taskID string, limit int, beforeID int64) (string, []
 	}
 	query += ` ORDER BY id DESC LIMIT ?`
 	return query, append(args, limit+1)
+}
+
+// sqlExecer is the Exec surface shared by *sql.DB and *sql.Tx.
+type sqlExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// isTerminalHeraEndReason reports whether a binding ended because its role can
+// never read mail again. Non-terminal ends (hera_rebind, reparented, materialize
+// failures) keep mail unread: role-addressed mail waits for a later binding.
+func isTerminalHeraEndReason(reason string) bool {
+	switch reason {
+	case HeraEndReasonUserDeleted, heraEndReasonTaskDeleted, HeraEndReasonTaskMissing, HeraEndReasonMoved:
+		return true
+	}
+	return false
+}
+
+// clearDeadRoleMail marks read every unread message addressed to a role with no
+// live binding that is nuked or whose most recent binding ended terminally.
+// Never-bound roles (planned nodes) are untouched. Idempotent. Best-effort
+// callers log and continue on error.
+func clearDeadRoleMail(x sqlExecer) (int, error) {
+	res, err := x.Exec(`
+		UPDATE hera_messages SET read_at=?
+		WHERE read_at IS NULL AND to_role_id IN (
+			SELECT r.id FROM hera_roles r
+			WHERE NOT EXISTS (SELECT 1 FROM hera_bindings b WHERE b.role_id=r.id AND b.ended_at IS NULL)
+			  AND ((r.nuked_at IS NOT NULL AND r.nuked_at<>'')
+			       OR (SELECT b.end_reason FROM hera_bindings b WHERE b.role_id=r.id ORDER BY b.id DESC LIMIT 1) IN (?,?,?,?))
+		)`,
+		formatTime(time.Now()),
+		HeraEndReasonUserDeleted, heraEndReasonTaskDeleted, HeraEndReasonTaskMissing, HeraEndReasonMoved)
+	if err != nil {
+		return 0, fmt.Errorf("clear dead-role hera mail: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// clearDeadRoleMailAfterEnd runs the sweep after a binding end when the reason
+// is terminal. Best-effort: a failure is logged, never propagated.
+func clearDeadRoleMailAfterEnd(x sqlExecer, reason string) {
+	if !isTerminalHeraEndReason(reason) {
+		return
+	}
+	if _, err := clearDeadRoleMail(x); err != nil {
+		slog.Warn("db: clear hera mail after binding end failed", "reason", reason, "err", err)
+	}
+}
+
+// ClearDeadRoleMail is the idempotent startup sweep for mail left unread on
+// roles that are permanently gone. Returns the number of messages marked read.
+func (d *DB) ClearDeadRoleMail() (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return clearDeadRoleMail(d.conn)
 }
