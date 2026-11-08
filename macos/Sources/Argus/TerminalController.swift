@@ -65,6 +65,12 @@ final class TerminalController {
     @ObservationIgnored private var inputPump: _Concurrency.Task<Void, Never>?
     @ObservationIgnored private let inputContinuation: AsyncStream<Data>.Continuation
     @ObservationIgnored private var lastSentSize: (cols: Int, rows: Int)?
+    // kick-timing-keep-place: what the daemon cannot see about this terminal.
+    @ObservationIgnored private var composerTyped = false
+    @ObservationIgnored private var lastScrollPosition = 1.0
+    /// Non-empty while the daemon is holding a size-drift kick for us.
+    @ObservationIgnored private var deferredReason = ""
+    @ObservationIgnored private var retryTask: _Concurrency.Task<Void, Never>?
 
     private static let log = Logger(subsystem: "com.argus.mac", category: "terminal")
 
@@ -173,6 +179,7 @@ final class TerminalController {
         initialTask?.cancel()
         streamTask?.cancel()
         resizeTask?.cancel()
+        retryTask?.cancel()
         toastTask?.cancel()
         inputPump?.cancel()
         inputContinuation.finish()
@@ -259,6 +266,7 @@ final class TerminalController {
     /// out of order and corrupt input).
     func enqueueInput(_ data: Data) {
         guard !data.isEmpty else { return }
+        composerTyped = KeepPlace.composerTyped(composerTyped, [UInt8](data))
         inputContinuation.yield(data)
     }
 
@@ -286,20 +294,65 @@ final class TerminalController {
     /// Skips a POST when the size matches the last one sent.
     func terminalSizeChanged(cols: Int, rows: Int) {
         resizeTask?.cancel()
+        retryTask?.cancel() // a retry of the old size must not race the new one
         resizeTask = _Concurrency.Task { [weak self] in
             try? await _Concurrency.Task.sleep(for: .milliseconds(250))
             if _Concurrency.Task.isCancelled { return }
             guard let self else { return }
             if let last = self.lastSentSize, last.cols == cols, last.rows == rows { return }
             self.lastSentSize = (cols, rows)
-            do {
-                _ = try await self.client.resize(taskID: self.taskID,
+            await self.postResize(cols: cols, rows: rows)
+        }
+    }
+
+    /// POSTs `/resize` with the keep-place signals. When the daemon holds the
+    /// size-drift kick (`deferred`), re-sends the SAME size on a timer and when
+    /// the pane returns to the bottom; the retry stops as soon as the daemon
+    /// reports no deferral, the view is detached, or this controller is torn down.
+    private func postResize(cols: Int, rows: Int) async {
+        let scrolledUp = KeepPlace.isScrolledUp(position: lastScrollPosition, canScroll: terminalView.canScroll)
+        do {
+            let result = try await client.resize(taskID: taskID,
                                                  rows: UInt16(clamping: rows),
-                                                 cols: UInt16(clamping: cols))
-                Self.log.info("[terminal] resize task=\(self.taskID, privacy: .public) cols=\(cols) rows=\(rows)")
-            } catch {
-                Self.log.error("[terminal] resize failed task=\(self.taskID, privacy: .public) err=\(String(describing: error), privacy: .public)")
+                                                 cols: UInt16(clamping: cols),
+                                                 scrolledUp: scrolledUp,
+                                                 composerDirty: composerTyped)
+            Self.log.info("[terminal] resize task=\(self.taskID, privacy: .public) cols=\(cols) rows=\(rows) scrolledUp=\(scrolledUp) dirty=\(self.composerTyped) deferred=\(result.deferred, privacy: .public) rerendered=\(result.rerendered)")
+            deferredReason = result.deferred
+            scheduleDeferredRetry(cols: cols, rows: rows)
+        } catch {
+            deferredReason = ""
+            Self.log.error("[terminal] resize failed task=\(self.taskID, privacy: .public) err=\(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func scheduleDeferredRetry(cols: Int, rows: Int) {
+        retryTask?.cancel()
+        guard KeepPlace.shouldKeepRetrying(deferred: deferredReason, attached: terminalView.window != nil) else {
+            if !deferredReason.isEmpty {
+                Self.log.info("[terminal] resize retry stopped task=\(self.taskID, privacy: .public): view detached")
+                deferredReason = ""
             }
+            return
+        }
+        retryTask = _Concurrency.Task { [weak self] in
+            try? await _Concurrency.Task.sleep(for: KeepPlace.retryInterval)
+            if _Concurrency.Task.isCancelled { return }
+            guard let self else { return }
+            Self.log.info("[terminal] resize retry task=\(self.taskID, privacy: .public) reason=\(self.deferredReason, privacy: .public)")
+            await self.postResize(cols: cols, rows: rows)
+        }
+    }
+
+    /// SwiftTerm scroll callback: remembers the position, and when a deferred
+    /// kick was waiting on the user returning to the bottom, re-sends at once.
+    func terminalScrolled(position: Double) {
+        lastScrollPosition = position
+        guard deferredReason == "scrolled", let size = lastSentSize,
+              !KeepPlace.isScrolledUp(position: position, canScroll: terminalView.canScroll) else { return }
+        retryTask?.cancel()
+        retryTask = _Concurrency.Task { [weak self] in
+            await self?.postResize(cols: size.cols, rows: size.rows)
         }
     }
 
@@ -454,7 +507,10 @@ final class TerminalCoordinator: TerminalViewDelegate {
     // Unused callbacks — required by the protocol (no default macOS impls).
     func setTerminalTitle(source: TerminalView, title: String) {}
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-    func scrolled(source: TerminalView, position: Double) {}
+    func scrolled(source: TerminalView, position: Double) {
+        let controller = self.controller
+        MainActor.assumeIsolated { controller?.terminalScrolled(position: position) }
+    }
     func bell(source: TerminalView) {}
     func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
