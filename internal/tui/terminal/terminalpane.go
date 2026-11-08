@@ -301,11 +301,21 @@ type TerminalPane struct {
 	// window jumps forward as new agent output pushes the 8MB read window
 	// past the bytes the previous build had cached (defect 5).
 	replayEmuFirstByte int64
-	// replayEmuTrimmed records that the current replayEmu's scrollback was
-	// trimmed to replayScrollbackCellBudget. A trimmed build is as deep as the
-	// bound allows, so scroll-past-top "extend" (BUG-E) must not re-read the
-	// log for more: it would be trimmed straight back every frame.
-	replayEmuTrimmed bool
+	// Sliding-window state (see replaywindow.go). replayEmuAtBudget: the build
+	// hit replayScrollbackCellBudget, so reaching further back means SLIDING
+	// the window rather than extending it. replayEmuNonTail: the window ends
+	// before the log's end, so scrolling to its bottom slides it forward.
+	// replayEmuEnd is the log offset fed through; replayEmuCheckpoints maps
+	// scrollback lines to log byte ranges for cursor-stable slides.
+	replayEmuAtBudget    bool
+	replayEmuNonTail     bool
+	replayEmuEnd         int64
+	replayEmuCheckpoints []replayCheckpoint
+	// replayPendingShift is the scrollOffset adjustment (new content line under
+	// the cursor minus the offset at kick time) a slid rebuild hands to the
+	// main goroutine; the consume block applies it exactly once.
+	replayPendingShift    int
+	replayPendingShiftSet bool
 
 	// lastDrawNanos is the UnixNano of the pane's last Draw, read by
 	// ReleaseIdle from the tick goroutine.
@@ -829,7 +839,7 @@ func (tp *TerminalPane) EagerReplayBuild() {
 	onDone := tp.OnNeedRedraw
 	tp.mu.Unlock()
 
-	go tp.asyncReplayRebuildAt(gen, taskID, 0, rows, cols, rows, nil, nil, 0, false, true, onDone)
+	go tp.asyncReplayRebuildAt(gen, taskID, 0, rows, cols, rows, nil, nil, 0, false, true, nil, onDone)
 }
 
 // ResetVT clears all terminal state (on resize or task switch).
@@ -848,7 +858,7 @@ func (tp *TerminalPane) ResetVT() {
 	tp.replayEmuMaxScroll = 0
 	tp.replayEmuAltScreen = false
 	tp.replayEmuFirstByte = 0
-	tp.replayEmuTrimmed = false
+	tp.resetReplayWindowLocked()
 	tp.replayRebuildPending = false
 	tp.replayNoDataUntil = time.Time{}
 	tp.replayData = nil
@@ -1007,7 +1017,7 @@ func (tp *TerminalPane) invalidateReplayCache() {
 	tp.replayEmuMaxScroll = 0
 	tp.replayEmuAltScreen = false
 	tp.replayEmuFirstByte = 0
-	tp.replayEmuTrimmed = false
+	tp.resetReplayWindowLocked()
 	tp.anchorTotalLines = 0
 	// Bump the generation instead of clearing replayBuilding: an in-flight
 	// rebuild finishes (parking its emulator, since it is now stale) and its
@@ -1037,6 +1047,15 @@ func (tp *TerminalPane) consumeReplayRebuildPendingLocked() {
 	tp.replayRebuildPending = false
 	tp.anchorTotalLines = 0
 	tp.paintCacheValid = false
+	if tp.replayPendingShiftSet {
+		// A slid window re-anchored the view: keep the same content line under
+		// the cursor, preserving any scrolling done while it was building.
+		tp.replayPendingShiftSet = false
+		tp.scrollOffset += tp.replayPendingShift
+		if tp.replayEmuNonTail && tp.scrollOffset < 1 {
+			tp.scrollOffset = 1 // never fall through to live from a non-tail window
+		}
+	}
 	// Clamp scrollOffset to the fresh emu's real ceiling. ScrollUp /
 	// AccelScrollUp can't clamp (no emu yet, no maxScroll), so the user
 	// can scroll past the available scrollback. Without snapping here,
@@ -1056,6 +1075,9 @@ func (tp *TerminalPane) AccelScrollDown() int {
 	wasNonZero := tp.scrollOffset != 0
 	tp.scrollOffset -= n
 	tp.paintCacheValid = false
+	if tp.scrollOffset < 1 && tp.replayEmuNonTail && wasNonZero {
+		tp.scrollOffset = 1 // window bottom: the slide-forward rebuild runs, not live
+	}
 	if tp.scrollOffset <= 0 {
 		tp.scrollOffset = 0
 		tp.anchorTotalLines = 0
@@ -1087,6 +1109,9 @@ func (tp *TerminalPane) ScrollDown(n int) {
 	wasNonZero := tp.scrollOffset != 0
 	tp.scrollOffset -= n
 	tp.paintCacheValid = false
+	if tp.scrollOffset < 1 && tp.replayEmuNonTail && wasNonZero {
+		tp.scrollOffset = 1 // window bottom: the slide-forward rebuild runs, not live
+	}
 	if tp.scrollOffset <= 0 {
 		tp.scrollOffset = 0
 		tp.anchorTotalLines = 0
@@ -2040,7 +2065,12 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 		if tp.replayEmu != nil && tp.replayEmuCols == replayCols && tp.replayEmuRows == replayRows {
 			cacheValid := false
 			if alive && tp.scrollOffset > 0 {
-				if tp.scrollOffset <= tp.replayEmuMaxScroll {
+				// A non-tail window that already starts at the log's first byte has
+				// nothing older to load: scrolling past its top is a plain clamp,
+				// never a rebuild (a tail rebuild would teleport to the log's end).
+				atLogStart := tp.replayEmuNonTail && tp.replayEmuFirstByte == 0
+				if (tp.scrollOffset <= tp.replayEmuMaxScroll || atLogStart) &&
+					tp.replayKickLocked(alive, replayCols, replayRows, tp.scrollOffset, height) == kickNone {
 					cacheValid = true
 				}
 			} else if tp.taskID != "" {
@@ -2098,7 +2128,12 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 			// size, not a further-back extend. Reading strictly further back
 			// each ceiling hit breaks the density-underestimate stall where
 			// scrollOffset is clamped to a maxScroll the heuristic can't grow.
-			extend := tp.replayExtendWantedLocked(alive, replayCols, replayRows, scrollOffset)
+			kick := tp.replayKickLocked(alive, replayCols, replayRows, scrollOffset, height)
+			extend := kick == kickExtend
+			var win *replayWindowReq
+			if kick == kickBack || kick == kickForward {
+				win = tp.planWindowLocked(kick, replayCols, replayRows, scrollOffset, height)
+			}
 			var replayDataCopy []byte
 			if len(tp.replayData) > 0 {
 				replayDataCopy = tp.replayData
@@ -2124,7 +2159,7 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 			// known output" (see truncateAtFinalAltScreenExit); a live
 			// session's scrollback is real-time history the user is actively
 			// scrolling through and must never be trimmed.
-			go tp.asyncReplayRebuildAt(gen, taskID, scrollOffset, height, replayCols, replayRows, ringBuf, replayDataCopy, prevFirstByte, extend, !alive, onDone)
+			go tp.asyncReplayRebuildAt(gen, taskID, scrollOffset, height, replayCols, replayRows, ringBuf, replayDataCopy, prevFirstByte, extend, !alive, win, onDone)
 
 			tp.mu.Lock()
 		}
@@ -2214,7 +2249,7 @@ func (tp *TerminalPane) asyncReplayRebuild(taskID string, scrollOffset, viewport
 	tp.mu.Lock()
 	gen := tp.replayGen
 	tp.mu.Unlock()
-	tp.asyncReplayRebuildAt(gen, taskID, scrollOffset, viewportHeight, ptyCols, ptyRows, ringBuf, replayDataCopy, prevFirstByte, extend, finalFrame, onDone)
+	tp.asyncReplayRebuildAt(gen, taskID, scrollOffset, viewportHeight, ptyCols, ptyRows, ringBuf, replayDataCopy, prevFirstByte, extend, finalFrame, nil, onDone)
 }
 
 // asyncReplayRebuildAt is asyncReplayRebuild for a rebuild kicked at
@@ -2223,7 +2258,7 @@ func (tp *TerminalPane) asyncReplayRebuild(taskID string, scrollOffset, viewport
 // ONLY place it is cleared, so at most one rebuild per pane is ever in
 // flight — then fires onDone so the next Draw re-kicks for the current
 // binding when this result was discarded as stale.
-func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOffset, viewportHeight, ptyCols, ptyRows int, ringBuf, replayDataCopy []byte, prevFirstByte int64, extend, finalFrame bool, onDone func()) {
+func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOffset, viewportHeight, ptyCols, ptyRows int, ringBuf, replayDataCopy []byte, prevFirstByte int64, extend, finalFrame bool, win *replayWindowReq, onDone func()) {
 	var held *xvt.SafeEmulator // acquired but not yet published or parked
 	notify := false
 	defer func() {
@@ -2245,39 +2280,43 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 	var raw []byte
 	var logSize int64
 
-	if taskID != "" {
-		needed := replayRebuildReadSize(taskID, scrollOffset, viewportHeight, ptyCols, prevFirstByte, extend)
-		// Use taskID parameter (not tp.taskID) to avoid data race with SetTaskID.
-		raw, logSize = readLogTailForTask(taskID, needed)
-		if extend {
-			uxlog.Log("[terminalpane] scrollback extend %s: read %d bytes, firstByte %d -> %d (scrollOffset=%d)",
-				taskID, len(raw), prevFirstByte, logSize-int64(len(raw)), scrollOffset)
+	// A slid window (win != nil) reads the log itself in chunks; every other
+	// build reads a tail and feeds it.
+	if win == nil || taskID == "" {
+		if taskID != "" {
+			needed := replayRebuildReadSize(taskID, scrollOffset, viewportHeight, ptyCols, prevFirstByte, extend)
+			// Use taskID parameter (not tp.taskID) to avoid data race with SetTaskID.
+			raw, logSize = readLogTailForTask(taskID, needed)
+			if extend {
+				uxlog.Log("[terminalpane] scrollback extend %s: read %d bytes, firstByte %d -> %d (scrollOffset=%d)",
+					taskID, len(raw), prevFirstByte, logSize-int64(len(raw)), scrollOffset)
+			}
 		}
-	}
-	if len(raw) == 0 {
-		// Fallback: ring buffer snapshot or cached replay data.
-		if len(ringBuf) > 0 {
-			raw = ringBuf
-		} else if len(replayDataCopy) > 0 {
-			raw = replayDataCopy
+		if len(raw) == 0 {
+			// Fallback: ring buffer snapshot or cached replay data.
+			if len(ringBuf) > 0 {
+				raw = ringBuf
+			} else if len(replayDataCopy) > 0 {
+				raw = replayDataCopy
+			}
 		}
-	}
 
-	if len(raw) == 0 {
-		// Nothing to build. Set a short cooldown so the next Draw doesn't
-		// immediately re-kick another goroutine (defect 12) — the slow path
-		// gates on (now > replayNoDataUntil). Cooldown is brief so a session
-		// that's about to start producing output isn't blocked for long.
-		// Skip onDone: there's nothing new to repaint, and calling it would
-		// schedule another Draw that just re-enters this no-op path.
-		tp.mu.Lock()
-		tp.replayNoDataUntil = time.Now().Add(replayNoDataCooldown)
-		tp.mu.Unlock()
-		return
-	}
+		if len(raw) == 0 {
+			// Nothing to build. Set a short cooldown so the next Draw doesn't
+			// immediately re-kick another goroutine (defect 12) — the slow path
+			// gates on (now > replayNoDataUntil). Cooldown is brief so a session
+			// that's about to start producing output isn't blocked for long.
+			// Skip onDone: there's nothing new to repaint, and calling it would
+			// schedule another Draw that just re-enters this no-op path.
+			tp.mu.Lock()
+			tp.replayNoDataUntil = time.Now().Add(replayNoDataCooldown)
+			tp.mu.Unlock()
+			return
+		}
 
-	if finalFrame {
-		raw = truncateAtFinalAltScreenExit(raw)
+		if finalFrame {
+			raw = truncateAtFinalAltScreenExit(raw)
+		}
 	}
 
 	// Build the replay emulator (the expensive part — VT emulation of up to 8MB).
@@ -2286,21 +2325,63 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 		cursorVisible = visible
 	})
 	held = emu
-	// Tail slices begin at arbitrary byte positions — see AlignToEscBoundary
-	// (defect 4). Without this, partial CSI prefixes show up as orphan
-	// digits/punctuation at the top of the scrollback emulator.
-	// ClampScrollRegion neutralizes a stale DECSTBM/DECSLRM authored while
-	// the PTY was larger than this replay emulator (see marginfilter.go);
-	// FilterOSC strips OSC sequences (see oscfilter.go) so a UTF-8 window
-	// title can't leak onto the scrollback view.
-	_, _ = SafeEmuWrite(emu, FilterOSC(ClampScrollRegion(AlignToEscBoundary(raw), ptyCols, ptyRows)))
 
-	// Bound retained memory: trim oldest scrollback to the cell budget before
-	// maxScroll is derived, so the scroll range matches what is retained.
-	trimmedLines := TrimScrollbackToCells(emu, replayScrollbackCellBudget, replayScrollbackSize)
-	if trimmedLines > 0 {
-		uxlog.Log("[terminalpane] replay scrollback trimmed for %s: dropped %d oldest lines to fit %d-cell budget (kept %d)",
-			taskID, trimmedLines, replayScrollbackCellBudget, emu.ScrollbackLen())
+	// Everything below fills these for the publish step.
+	var (
+		cps        []replayCheckpoint
+		windowEnd  int64 // log offset fed through
+		firstByte  int64 // log offset the retained scrollback starts at (0 = unknown)
+		bytesFed   uint64
+		atBudget   bool
+		nonTail    bool
+		shiftSet   bool
+		shift      int
+		trimmedLns int
+	)
+	if win != nil && taskID != "" {
+		var ok bool
+		var limit int64
+		windowEnd, limit, cps, ok = buildWindow(emu, taskID, win, ptyCols, ptyRows)
+		if !ok {
+			uxlog.Log("[terminalpane] replay window %s: log unreadable at start=%d, keeping current window", taskID, win.start)
+			tp.mu.Lock()
+			tp.replayNoDataUntil = time.Now().Add(replayNoDataCooldown)
+			tp.mu.Unlock()
+			return // deferred release parks `held`
+		}
+		logSize = limit
+		firstByte = win.start
+		bytesFed = uint64(windowEnd - win.start)
+		nonTail = windowEnd < limit
+		atBudget = scrollbackCells(emu) >= replayScrollbackCellBudget
+	} else {
+		// Tail slices begin at arbitrary byte positions — see AlignToEscBoundary
+		// (defect 4): the feeder aligns the first chunk to an ESC so partial CSI
+		// prefixes can't show up as orphan digits at the top of the emulator.
+		// ClampScrollRegion neutralizes a stale DECSTBM/DECSLRM authored while
+		// the PTY was larger than this replay emulator (see marginfilter.go);
+		// the OSC filter strips OSC sequences (see oscfilter.go) so a UTF-8
+		// window title can't leak onto the scrollback view.
+		var origin int64
+		if logSize > 0 {
+			origin = logSize - int64(len(raw))
+		}
+		windowEnd, cps = feedReplayChunks(emu, bytes.NewReader(raw), 0, int64(len(raw)), origin, ptyCols, ptyRows, 0, true)
+		bytesFed = uint64(len(raw))
+		// Bound retained memory: trim oldest scrollback to the cell budget
+		// before maxScroll is derived, so the scroll range matches what is
+		// retained.
+		trimmedLns = TrimScrollbackToCells(emu, replayScrollbackCellBudget, replayScrollbackSize)
+		if trimmedLns > 0 {
+			uxlog.Log("[terminalpane] replay scrollback trimmed for %s: dropped %d oldest lines to fit %d-cell budget (kept %d)",
+				taskID, trimmedLns, replayScrollbackCellBudget, emu.ScrollbackLen())
+			atBudget = true
+		}
+		var startOff int64
+		cps, startOff = checkpointsAfterTrim(cps, trimmedLns)
+		if logSize > 0 {
+			firstByte = startOff // conservative: never later than the first retained line
+		}
 	}
 
 	// Compute max scroll from emulator's scrollback capacity.
@@ -2322,6 +2403,22 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 	maxScroll := totalLines - ptyRows
 	if maxScroll < 0 {
 		maxScroll = 0
+	}
+
+	// A slid window re-anchors the viewport: find the content that was at the
+	// top of the view and compute the offset that keeps it there.
+	if win != nil && taskID != "" && sbLen > 0 {
+		line, matched := locateAnchor(emu, cps, win.anchor, ptyCols, ptyRows, cursorVisible)
+		// Same line-numbering convention as paintEmu: offset counts up from the
+		// last addressable line, and the anchor row sits at the viewport top.
+		newOffset := totalLines - line - win.viewport
+		if newOffset < 1 {
+			newOffset = 1
+		}
+		shift = newOffset - win.anchor.eff
+		shiftSet = true
+		uxlog.Log("[terminalpane] replay window slide %s: anchor line %d (matched=%v) offset %d -> %d (total=%d)",
+			taskID, line, matched, win.anchor.eff, newOffset, totalLines)
 	}
 
 	if tp.testHookBeforePublish != nil {
@@ -2351,21 +2448,25 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 	tp.replayEmuCols = ptyCols
 	tp.replayEmuRows = ptyRows
 	tp.replayEmuLogSize = logSize
-	tp.replayEmuBytes = uint64(len(raw))
+	tp.replayEmuBytes = bytesFed
 	tp.replayEmuCursorVisible = cursorVisible
 	// Record the built emulator's alternate-screen state: for a pane with no
 	// live emulator this is the ONLY signal that the content it paints has no
 	// linear scrollback (BUG-082 — see InAltScreen).
 	tp.replayEmuAltScreen = emu.IsAltScreen()
 	tp.replayEmuMaxScroll = maxScroll
-	tp.replayEmuTrimmed = trimmedLines > 0
-	// firstByteOffset = logSize - bytes-fed. When we fed from the log,
-	// that's the position of the first byte in `raw`; when we fell back
-	// to the ring buffer (logSize=0), no monotonic clamp is possible and
-	// we leave the field at 0 (any prior log-backed build is invalidated
-	// by the dimension or session changes that drove this path).
+	tp.replayEmuAtBudget = atBudget
+	tp.replayEmuNonTail = nonTail
+	tp.replayEmuEnd = windowEnd
+	tp.replayEmuCheckpoints = cps
+	tp.replayPendingShift, tp.replayPendingShiftSet = shift, shiftSet
+	// firstByteOffset = where the retained scrollback starts in the log. When
+	// we fed from the log that is a real offset; when we fell back to the ring
+	// buffer (logSize=0), no monotonic clamp is possible and we leave the field
+	// at 0 (any prior log-backed build is invalidated by the dimension or
+	// session changes that drove this path).
 	if logSize > 0 {
-		tp.replayEmuFirstByte = logSize - int64(len(raw))
+		tp.replayEmuFirstByte = firstByte
 	} else {
 		tp.replayEmuFirstByte = 0
 	}
@@ -2981,17 +3082,7 @@ func (tp *TerminalPane) acquireReplayEmulatorForRebuild(cols, rows int, onCursor
 	return emu
 }
 
-// replayExtendWantedLocked reports whether a rebuild should read further back
-// than the loaded window (BUG-E). A TRIMMED build is already as deep as the
-// cell budget allows — extending would be trimmed straight back and re-read
-// the log every frame. Callers hold tp.mu.
-func (tp *TerminalPane) replayExtendWantedLocked(alive bool, cols, rows, scrollOffset int) bool {
-	return alive && tp.replayEmu != nil &&
-		tp.replayEmuCols == cols && tp.replayEmuRows == rows &&
-		tp.replayEmuFirstByte > 0 && !tp.replayEmuTrimmed && scrollOffset > tp.replayEmuMaxScroll
-}
-
-// ReleaseIdle shrinks the pane's replay emulators once the pane has not been
+// ReleaseIdle shrinks the pane's emulators once the pane has not been
 // drawn for idleFor (<=0 disables): spares are emptied in place and the
 // published replay emulator is retired, emptied and unpublished so the next
 // Draw rebuilds it like a first view. Emulators are never closed or dropped
@@ -3004,8 +3095,24 @@ func (tp *TerminalPane) ReleaseIdle(now time.Time, idleFor time.Duration) bool {
 	}
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
+	// The live emulator is independent of the replay rebuild. Resetting it in
+	// place and zeroing emuFedTotal makes the pane's next Draw take renderLive's
+	// freshBind branch, which replays the log tail into it BEFORE painting — the
+	// same synchronous path every Hera rail rebind already uses — so returning
+	// to the pane never shows a blank or torn frame.
+	liveReleased := false
+	if tp.emu != nil && tp.emuFedTotal > 0 {
+		tp.resetLiveEmulatorInPlace()
+		tp.emuFedTotal = 0
+		tp.anchorTotalLines = 0
+		tp.paintCacheValid = false
+		liveReleased = true
+	}
 	if tp.replayBuilding {
-		return false // the in-flight rebuild owns an emulator; retry next tick
+		if liveReleased {
+			uxlog.Log("[terminalpane] idle release for %s: live emulator reset (replay rebuild in flight, replay slots kept)", tp.taskID)
+		}
+		return liveReleased // the in-flight rebuild owns a replay emulator; retry next tick
 	}
 	released := 0
 	if tp.replayEmu != nil {
@@ -3015,7 +3122,7 @@ func (tp *TerminalPane) ReleaseIdle(now time.Time, idleFor time.Duration) bool {
 		tp.replayEmuMaxScroll = 0
 		tp.replayEmuAltScreen = false
 		tp.replayEmuFirstByte = 0
-		tp.replayEmuTrimmed = false
+		tp.resetReplayWindowLocked()
 		tp.replayGen++
 		released++
 	}
@@ -3026,11 +3133,11 @@ func (tp *TerminalPane) ReleaseIdle(now time.Time, idleFor time.Duration) bool {
 			freed++
 		}
 	}
-	if released == 0 && freed == 0 {
+	if released == 0 && freed == 0 && !liveReleased {
 		return false
 	}
-	uxlog.Log("[terminalpane] idle release for %s: published=%d spares-emptied=%d (undrawn >= %s)",
-		tp.taskID, released, freed, idleFor)
+	uxlog.Log("[terminalpane] idle release for %s: live=%v published=%d spares-emptied=%d (undrawn >= %s)",
+		tp.taskID, liveReleased, released, freed, idleFor)
 	return true
 }
 

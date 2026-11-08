@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/drn/argus/internal/agent"
 	"github.com/drn/argus/internal/testutil"
 )
 
@@ -162,7 +164,7 @@ func TestAcquireReusedSpareFreesScrollback(t *testing.T) {
 	runtime.KeepAlive(got)
 }
 
-func TestReplayRebuild_TrimsToCellBudgetAndBlocksExtend(t *testing.T) {
+func TestReplayRebuild_TrimsToCellBudgetAndMarksAtBudget(t *testing.T) {
 	old := replayScrollbackCellBudget
 	replayScrollbackCellBudget = 5000
 	defer func() { replayScrollbackCellBudget = old }()
@@ -175,7 +177,7 @@ func TestReplayRebuild_TrimsToCellBudgetAndBlocksExtend(t *testing.T) {
 	tp.asyncReplayRebuild("", 0, 20, 100, 20, []byte(b.String()), nil, 0, false, false, nil)
 
 	tp.mu.Lock()
-	emu, trimmed, maxScroll := tp.replayEmu, tp.replayEmuTrimmed, tp.replayEmuMaxScroll
+	emu, trimmed, maxScroll := tp.replayEmu, tp.replayEmuAtBudget, tp.replayEmuMaxScroll
 	tp.mu.Unlock()
 	testutil.Equal(t, emu != nil, true)
 	testutil.Equal(t, trimmed, true)
@@ -187,10 +189,11 @@ func TestReplayRebuild_TrimsToCellBudgetAndBlocksExtend(t *testing.T) {
 	// maxScroll reflects what is retained, not what was fed.
 	testutil.Equal(t, maxScroll < 100, true)
 
-	// A reset clears the trimmed latch so a fresh binding can extend again.
+	// A reset clears the window state so a fresh binding starts at the tail.
 	tp.ResetVT()
 	tp.mu.Lock()
-	testutil.Equal(t, tp.replayEmuTrimmed, false)
+	testutil.Equal(t, tp.replayEmuAtBudget, false)
+	testutil.Equal(t, tp.replayEmuCheckpoints == nil, true)
 	tp.mu.Unlock()
 }
 
@@ -247,14 +250,15 @@ func TestDrawStampsLastDraw(t *testing.T) {
 	testutil.Equal(t, tp.ReleaseIdle(time.Now(), ReplayIdleRelease), false)
 }
 
-func TestReplayExtendWanted(t *testing.T) {
-	mk := func(trimmed bool) *TerminalPane {
+func TestReplayKick(t *testing.T) {
+	mk := func(atBudget, nonTail bool) *TerminalPane {
 		tp := NewTerminalPane()
 		tp.replayEmu = newDrainedReplayEmulator(100, 20)
 		tp.replayEmuCols, tp.replayEmuRows = 100, 20
 		tp.replayEmuFirstByte = 4096
 		tp.replayEmuMaxScroll = 50
-		tp.replayEmuTrimmed = trimmed
+		tp.replayEmuAtBudget = atBudget
+		tp.replayEmuNonTail = nonTail
 		return tp
 	}
 	cases := []struct {
@@ -263,22 +267,107 @@ func TestReplayExtendWanted(t *testing.T) {
 		alive  bool
 		cols   int
 		offset int
-		want   bool
+		want   replayKick
 	}{
-		{"scrolled past top extends", mk(false), true, 100, 80, true},
-		{"within window does not", mk(false), true, 100, 50, false},
-		{"trimmed build never extends", mk(true), true, 100, 80, false},
-		{"dead session never extends", mk(false), false, 100, 80, false},
-		{"dimension change wants fresh read", mk(false), true, 120, 80, false},
+		{"past top, under budget extends", mk(false, false), true, 100, 80, kickExtend},
+		{"past top at budget slides back", mk(true, false), true, 100, 80, kickBack},
+		{"past top of non-tail window slides back", mk(true, true), true, 100, 80, kickBack},
+		{"viewport reaching the fragment rows slides back", mk(true, false), true, 100, 48, kickBack},
+		{"just short of the fragment rows is quiet", mk(true, false), true, 100, 47, kickNone},
+		{"within window of tail build is quiet", mk(true, false), true, 100, 30, kickNone},
+		{"near bottom of non-tail window slides forward", mk(true, true), true, 100, 10, kickForward},
+		{"near bottom of tail build is quiet", mk(true, false), true, 100, 10, kickNone},
+		{"dead session never kicks", mk(true, true), false, 100, 80, kickNone},
+		{"dimension change wants fresh read", mk(true, true), true, 120, 80, kickNone},
+		{"live (offset 0) never kicks", mk(true, true), true, 100, 0, kickNone},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			testutil.Equal(t, c.tp.replayExtendWantedLocked(c.alive, c.cols, 20, c.offset), c.want)
+			testutil.Equal(t, c.tp.replayKickLocked(c.alive, c.cols, 20, c.offset, 24), c.want)
 		})
 	}
-	t.Run("no log-backed first byte", func(t *testing.T) {
-		tp := mk(false)
+	t.Run("no log-backed first byte cannot slide back", func(t *testing.T) {
+		tp := mk(true, false)
 		tp.replayEmuFirstByte = 0
-		testutil.Equal(t, tp.replayExtendWantedLocked(true, 100, 20, 80), false)
+		testutil.Equal(t, tp.replayKickLocked(true, 100, 20, 80, 24), kickNone)
 	})
+}
+
+// The text-scrape emulators (PreviewVT, agent.ScreenRenderer, usage and Codex
+// probes) cap scrollback at 1 line, so x/vt's lines[:0] Clear can pin at most
+// one line there — they need no release helper. This pins that claim.
+func TestCappedScrollbackRetainsAtMostOneLine(t *testing.T) {
+	emu := newDrainedReplayEmulator(200, 40)
+	emu.Emulator.SetScrollbackSize(1)
+	base := testHeapBytes()
+	feedLines(emu, 5000, 200)
+	testutil.Equal(t, emu.ScrollbackLen(), 1)
+	_, _ = SafeEmuWrite(emu, []byte("\x1bc"))
+	emu.ClearScrollback()
+	if after := testHeapBytes(); after > base+2<<20 {
+		t.Fatalf("capped emulator retains %d bytes after RIS+Clear", after-base)
+	}
+	runtime.KeepAlive(emu)
+}
+
+func TestReleaseIdle_LiveEmulatorResetAndRebuildsOnReturn(t *testing.T) {
+	tp := NewTerminalPane()
+	base := testHeapBytes()
+	tp.emu = tp.newTrackedEmulator(200, 40)
+	feedLines(tp.emu, 1500, 200)
+	tp.emuFedTotal = 12345
+	tp.emuCols, tp.emuRows = 200, 40
+	if testHeapBytes()-base < 10<<20 {
+		t.Fatal("setup: live emulator retained too little")
+	}
+	gen := tp.emuGen.Load()
+	now := time.Now()
+	tp.lastDrawNanos.Store(now.UnixNano())
+
+	testutil.Equal(t, tp.ReleaseIdle(now.Add(time.Minute), ReplayIdleRelease), false) // recently drawn
+	testutil.Equal(t, tp.emu.ScrollbackLen() > 0, true)
+
+	testutil.Equal(t, tp.ReleaseIdle(now.Add(6*time.Minute), ReplayIdleRelease), true)
+	testutil.Equal(t, tp.emu != nil, true) // reset in place, never dropped (drain goroutines)
+	testutil.Equal(t, tp.emu.ScrollbackLen(), 0)
+	testutil.Equal(t, tp.emuFedTotal, uint64(0)) // renderLive's freshBind now fires on the next Draw
+	testutil.Equal(t, tp.emuGen.Load() > gen, true)
+	if after := testHeapBytes(); after > base+6<<20 {
+		t.Fatalf("live emulator still retains %d bytes", after-base)
+	}
+	runtime.KeepAlive(tp)
+}
+
+// End to end: after an idle release the next Draw rebuilds the live emulator
+// from the log before painting, so the returned frame has the real content.
+func TestReleaseIdle_LiveReturnPaintsContent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const taskID = "live-return"
+	testutil.NoError(t, os.MkdirAll(agent.SessionsDir(), 0o755))
+	var b strings.Builder
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&b, "L%06d some content\r\n", i)
+	}
+	testutil.NoError(t, os.WriteFile(agent.SessionLogPath(taskID), []byte(b.String()), 0o600))
+
+	tp := NewTerminalPane()
+	tp.SetRect(0, 0, 82, 26)
+	screen := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, screen.Init())
+	screen.SetSize(82, 26)
+	sess := &mockAdapter{alive: true, ptyCols: 80, ptyRows: 24, output: []byte(b.String()), totalWritten: uint64(b.Len())}
+	tp.SetSession(sess)
+	tp.SetTaskID(taskID)
+	tp.Draw(screen)
+	screen.Show()
+	before := visibleLineNumbers(screen)
+	testutil.Equal(t, len(before) > 10, true)
+
+	now := time.Now()
+	tp.lastDrawNanos.Store(now.Add(-10 * time.Minute).UnixNano())
+	testutil.Equal(t, tp.ReleaseIdle(now, ReplayIdleRelease), true)
+
+	tp.Draw(screen) // single Draw: must already show the content again
+	screen.Show()
+	testutil.DeepEqual(t, visibleLineNumbers(screen), before)
 }

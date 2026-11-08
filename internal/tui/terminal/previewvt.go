@@ -157,7 +157,7 @@ func (p *PreviewVT) rebuild(taskID string, cols, rows int) {
 	// would carry the prior task's ED-2-pushed rows into the new task and
 	// render them via the grid's sbLen>0 branch (cross-task ghosting). Drop
 	// them explicitly on every rebuild.
-	p.emu.ClearScrollback()
+	ReleaseScrollback(p.emu)
 	p.oscStrip.Reset()
 	p.fedTotal = 0
 	p.taskID = taskID

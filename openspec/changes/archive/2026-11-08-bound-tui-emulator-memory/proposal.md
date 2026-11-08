@@ -11,13 +11,14 @@ Emulators cannot be Closed or dropped (drain goroutine keeps them reachable; Clo
 ## What Changes
 
 - Scrollback release primitive that zeroes retained lines before `Clear`, used wherever an emulator is RIS-reused (replay acquire, live reset).
-- Replay emulators are bounded by a CELL budget (default 1,000,000 cells, ~112 MB), trimmed oldest-first right after each feed; line cap kept as the secondary bound. `replayRebuildMaxBytes` lowered 64 MB -> 24 MB to limit the transient peak.
-- When a build was trimmed, scroll-past-top "extend" (BUG-E) is disabled for that build (otherwise it would re-read the log every frame); scrolling clamps at the oldest retained line.
+- Replay emulators are bounded by a CELL budget (default 1,000,000 cells, ~112 MB); line cap kept as the secondary bound. `replayRebuildMaxBytes` lowered 64 MB -> 24 MB to limit the transient peak.
+- The budget is a SLIDING WINDOW over the log, so deep history stays reachable: scrolling past the top of a budget-limited window rebuilds it further back, scrolling to the bottom of a back-shifted window slides it forward. Windows are fed forward in chunks with a line-to-byte checkpoint table and a content anchor so the cursor stays on the same line across a slide. Reuses BUG-E's trigger and the single-flight rebuild.
 - Idle release: a pane not drawn for 5 minutes releases its spare slots and published replay emulator (rebuilt on return like a first view). The tick is driven by `App.onTick`, executed on the tview goroutine.
 - uxlog on every trim, release and rebuild.
 
 ## Non-goals
 
+- Dead sessions do not slide (final-frame truncation needs a whole-log scan); they get one budget-sized window.
 - Live emulator (1,000 lines) is not released when idle: rebuilding it needs a full replay and risks a blank flash.
 - No settings toggle: release only affects panes unseen for 5+ minutes.
 

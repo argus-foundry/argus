@@ -3141,6 +3141,12 @@ func TestSmoke_ReleaseIdlePaneMemory(t *testing.T) {
 
 	_, stop := wireApp(t, app)
 	defer stop()
+	app.releaseIdlePaneMemory() // loop exists but Run() hasn't enabled the hook: still a no-op
+	syncUI(t, app.tapp)
+	mu.Lock()
+	testutil.Equal(t, len(seen), 0)
+	mu.Unlock()
+	app.idleReleaseEnabled.Store(true)
 	app.releaseIdlePaneMemory()
 	syncUI(t, app.tapp)
 	mu.Lock()
