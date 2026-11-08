@@ -866,10 +866,10 @@ func (c *Client) RoutingUsage() (backendtier.Usage, error) {
 
 // RoutingUsageFresh asks the daemon to probe usage now (debounced) and returns
 // the result. It can outlast the normal RPC deadline: a probe round may take
-// ~20s.
+// several seconds (the daemon caps it at 5s).
 func (c *Client) RoutingUsageFresh() (backendtier.Usage, error) {
 	var usage backendtier.Usage
-	err := c.callWithTimeout("Daemon.RoutingUsageFresh", &daemon.Empty{}, &usage, 45*time.Second)
+	err := c.callWithTimeout("Daemon.RoutingUsageFresh", &daemon.Empty{}, &usage, 15*time.Second)
 	return usage, err
 }
 

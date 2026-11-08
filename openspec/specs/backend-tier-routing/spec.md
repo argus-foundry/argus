@@ -297,7 +297,7 @@ When no account is pinned, the account SHALL be resolved in this order, first ma
 
 ### Requirement: Spawns route on fresh readings, never unknown-to-first-tier
 
-Usage readings SHALL be polled every 5 minutes. Before resolving a spawn's backend/account with a tier list configured, task creation SHALL force a fresh usage read (debounced to one probe round per 30 seconds, bounded to 20 seconds, fail-open to cached readings on error); a TUI process SHALL obtain it through a daemon RPC and re-dial the daemon once if its connection is dead. When a tier's reading is unavailable, routing SHALL score its last known reading if younger than 6 hours instead of treating it as unknown, and SHALL log that it did. Only a tier never read, or last read more than 6 hours ago, is unknown, and unknown tiers SHALL rotate by fewest recent spawns rather than resolving to the first tier in list order every time.
+Usage readings SHALL be polled every 5 minutes. Before resolving a spawn's backend/account with a tier list configured, task creation SHALL force a fresh usage read (debounced to one probe round per 30 seconds, bounded to 5 seconds, fail-open to cached readings on error); a TUI process SHALL obtain it through a daemon RPC and re-dial the daemon once if its connection is dead. When a tier's reading is unavailable, routing SHALL score its last known reading if younger than 6 hours instead of treating it as unknown, and SHALL log that it did. Only a tier never read, or last read more than 6 hours ago, is unknown, and unknown tiers SHALL rotate by fewest recent spawns rather than resolving to the first tier in list order every time.
 
 #### Scenario: Spawn probes first
 

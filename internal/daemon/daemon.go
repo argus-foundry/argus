@@ -74,7 +74,7 @@ const (
 	// shares one probe round instead of running one each.
 	usageFreshenMinGap = 30 * time.Second
 	// usageFreshenTimeout bounds the wait a spawn pays for a fresh read.
-	usageFreshenTimeout = 20 * time.Second
+	usageFreshenTimeout = 5 * time.Second
 )
 
 // heraReclaimSweepInterval is the cadence of the periodic hera-reclaim sweep
