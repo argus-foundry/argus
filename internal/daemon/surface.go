@@ -195,7 +195,11 @@ const (
 	// 35: sandbox profile allows file-read-metadata on ~/.aws so omp's startup
 	//     stat no longer fails with EPERM. A stale supervisor spawns omp with the
 	//     old profile and it crashes on launch.
-	SupervisorSpawnSurface = 35
+	// 36: the argus-bridge mod reports the Claude composer draft and puts a
+	//     handed-back draft into a resumed session's box (kick-timing-keep-place).
+	//     A stale supervisor's sessions never report drafts, so the TUI falls
+	//     back to its typed-since-submit signal and a kick restores nothing.
+	SupervisorSpawnSurface = 36
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -416,6 +420,7 @@ var SupervisorSpawnPaths = []string{
 	"internal/bridgemod/mod/argus-bridge/.claude-plugin/plugin.json", // the mod the spawned session loads
 	"internal/bridgemod/mod/argus-bridge/hooks/hooks.json",
 	"internal/bridgemod/mod/argus-bridge/hooks/delivery.ts",
+	"internal/bridgemod/mod/argus-bridge/hooks/draft.ts",
 	"internal/bridgemod/mod/argus-bridge/hooks/measure.ts",
 	"internal/bridgemod/mod/argus-bridge/hooks/register.ts",
 	"internal/bridgemod/mod/argus-bridge/hooks/reporter.ts",
@@ -488,7 +493,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "66be1a389caaf3346c4100535ad116a744d1f16e88e9dd8a944279441ea40be3"
+	SpawnSurfaceDigest  = "a38ff8e8a2101adbb9254e978514e9e82c11c3520db911ec76478fcb55da250f"
 	StreamSurfaceDigest = "4db586fb7dcaf62899cb2ebc82bbaa7fcc325d7cf99611f5f7942c44f9bc9467"
 )
 
