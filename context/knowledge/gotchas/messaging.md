@@ -299,3 +299,21 @@ true)` and `db.Delete(id)`; entrypoints that go through `db.Update`
 - **The `i` inbox viewer must never ack or mark read** — it reads `task_messages` via `Inbox(UnreadOnly=false)` and hera messages via `HeraMessagesForTask` (all read states), never `AckMessages`/`MarkHeraMessagesRead`. Acking from a debugging view would change what the agent sees on its next `task_inbox`/`hera_inbox` and corrupt the delivery behaviour being inspected. Guarded by `TestLoadInboxEntries` + `TestSmoke_InboxModal` unread-count assertions.
 - **`HeraInbox` is unread-only, so it is useless for a history view** — `HeraMessagesForTask` resolves the task's roles with an in-SQL subquery on `hera_bindings` (ended bindings included, so a revived/moved task still shows old mail; no bound-parameter list, so no SQLite variable-limit risk), keeps the newest N, and returns them oldest-first.
 - **Every string the inbox draws goes through `stripControls`** — bodies, but also sender/recipient names, delivery text, errors, and the title: task and role names are agent-controlled, so an ESC in a name would otherwise reach the terminal when it shows up in someone else's inbox.
+
+## REST message history + board mutations (add-api-hera-history-board)
+
+- **`GET /api/tasks/{id}/hera-messages` pages by message `id`, never `sent_at`** — timestamps collide, ids are the stable cursor; `HeraMessagesPageForTask` fetches limit+1 to know whether older mail remains, and must stay read-only (never route through `HeraInbox`/`MarkHeraMessagesRead`).
+- **Board read-state and dismissal are revision-checked on `updated_at` inside the DB lock** — a stale `expected_updated_at` returns `ErrHeraBoardConflict` (409) and leaves the item unread; read-state never rewrites `updated_at`, only content edits and resolution do. An identical repeat dismissal returns the resolved item with no second notice.
+- **`hera.board_changed` is emitted by the `db` mutators themselves, after the DB lock is released** — so MCP, TUI and REST share the emission call; only daemon-process writes reach its SSE sink. The payload carries ids and the unread count only, never bodies. The sink re-enters `d.mu`, so emitting under the lock would deadlock.
+- **Hera message names are cascade-protected** — `hera_messages` rows are deleted with their role, so the "(deleted role)" fallback is defensive only; API strings go through the same control-char stripping as the TUI inbox.
+
+- **Legacy board reads must filter `is_read=0` before using SQLite `RowsAffected` to decide whether to emit.** SQLite counts matched rows even when the assigned value is unchanged; preserve successful repeat reads without publishing a second event.
+- **History store failures return a generic 500 and keep diagnostics in `[hera-messages]` logs.** History reads must also preserve each role's tree cursor, since advancing it can hide later coordinator tree updates.
+
+- **History needs a full `(to_role_id, id)` index and a direct `id < ?` cursor branch.** The unread-only inbox index cannot serve read history, and an optional-cursor OR prevents SQLite from using the cursor as an index range.
+- **The dismissal transport cap must allow six JSON bytes per decoded note byte plus the envelope.** Keep the separate 64 KiB decoded-byte check; quotes, backslashes and control characters expand on the wire.
+
+- **`d.mu` does not serialize another SQLite connection, so read-state acknowledgment must check the conditional UPDATE's `RowsAffected`.** A lost comparison must re-read the role-scoped row to distinguish conflict, resolved and missing; never update the returned item or emit success when no row matched.
+
+- **Strict board mutations must reject zero expected timestamps before `formatTime` converts them to an empty string.** The empty revision deliberately disables comparison for legacy resolution; strict callers must never reach that sentinel.
+- **Validate decoder EOF through `MaxBytesReader` before a board write.** The first JSON decode can leave garbage, another value or oversized trailing whitespace unread, bypassing validation of the full encoded body.

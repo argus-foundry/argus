@@ -802,3 +802,94 @@ The API SHALL serve `GET /api/sandbox/proposals` (optional `status` filter) and 
 #### Scenario: Lost authority
 - **WHEN** the running process's generation differs from the recorded one
 - **THEN** GET returns `suggestion=null` with `live=false`
+
+### Requirement: Read-only Hera message history
+
+The system SHALL expose `GET /api/tasks/{id}/hera-messages` returning mail addressed to every role the task is or was bound to, paged by message id (`limit` 1-500 default 100, exclusive `before_id`), oldest first within a page, with `next_before_id`. It SHALL NOT mark messages read, alter delivery state or advance role tree cursors. Store failures SHALL return HTTP 500 with a generic error message; detailed diagnostics SHALL be logged on the server.
+
+#### Scenario: History does not consume mail
+
+- **WHEN** a client reads the history
+- **THEN** no `read_at`, delivery state or unread count changes
+
+#### Scenario: Invalid cursor
+
+- **WHEN** `limit` or `before_id` is invalid
+- **THEN** the response is 400
+
+#### Scenario: History store failure
+
+- **WHEN** task lookup or history retrieval fails because the store is unavailable
+- **THEN** the response is 500 with `internal server error` and the store diagnostic appears only in server logs
+
+### Requirement: Human board read-state and dismissal
+
+The system SHALL expose `PUT /api/hera/roles/{role_id}/board/{item_id}/read-state` and `POST .../dismiss`, each requiring `expected_updated_at`, returning `{item, unread_count}`, and failing with coded errors `invalid_request`, `board_item_not_found`, `revision_conflict`, `item_resolved` or `board_write_failed`. Dismissal notes SHALL allow up to 64 KiB of decoded UTF-8 bytes, including JSON-escaped content, while the encoded request body remains bounded. A read-state conditional UPDATE that affects no row SHALL return the current missing, resolved or revision-conflicted error rather than success, and SHALL NOT emit a success event. REST and strict store mutations SHALL reject zero expected revision timestamps. Existing legacy resolution without an expected revision SHALL remain unchanged. Both REST handlers SHALL require exactly one JSON value and consume the bounded body through EOF before any mutation, including trailing whitespace in the encoded allowance.
+
+#### Scenario: Stale revision
+
+- **WHEN** the item changed since `expected_updated_at`
+- **THEN** the response is 409 `revision_conflict` and the item stays unread and open
+
+#### Scenario: Repeated dismissal
+
+- **WHEN** an identical dismissal is repeated
+- **THEN** the resolved item is returned and no second coordinator notice is written
+
+#### Scenario: Escaped note at the limit
+
+- **WHEN** a dismissal contains a valid note of at most 64 KiB decoded bytes, even when JSON escaping expands its encoded size
+- **THEN** the dismissal succeeds and preserves the complete note
+
+#### Scenario: Oversized dismissal
+
+- **WHEN** the decoded note exceeds 64 KiB or the encoded request exceeds its bounded transport allowance
+- **THEN** the response is 400 and the item remains unchanged
+
+#### Scenario: Independent writer edits during acknowledgment
+
+- **WHEN** another connection commits a revision change between read-state validation and its conditional UPDATE
+- **THEN** the response is 409 `revision_conflict`, the edited item stays unread and no read-state success event is emitted
+
+#### Scenario: Independent writer resolves or deletes during acknowledgment
+
+- **WHEN** another connection resolves or deletes the item between read-state validation and its conditional UPDATE
+- **THEN** the response is 409 `item_resolved` or 404 `board_item_not_found` respectively, with no successful item/count response or read-state event
+
+#### Scenario: Zero expected revision
+
+- **WHEN** either REST mutation or strict store mutation receives a zero expected revision timestamp
+- **THEN** it fails as invalid input, REST returns 400 `invalid_request`, and the item, notices and events remain unchanged
+
+#### Scenario: Trailing invalid input
+
+- **WHEN** a valid board mutation object is followed by garbage or another JSON value
+- **THEN** the response is 400 `invalid_request` and no item, notice or event is changed
+
+#### Scenario: Trailing whitespace exceeds allowance
+
+- **WHEN** trailing whitespace takes the entire encoded mutation body above its route's allowance
+- **THEN** the response is 400 `invalid_request` before mutation, while whitespace within the allowance remains valid
+
+### Requirement: Board change event
+
+The system SHALL emit `hera.board_changed` after each committed board post, material edit, read-state change or resolution in the daemon process, with payload `{role_id, item_id, unread_count, operation}` and no item bodies. Forwarding TUI-originated events across the process boundary to daemon SSE is deferred to ENG-1125; those writes remain durable and clients can refetch the roster for `board_unread`.
+
+#### Scenario: Event follows commit
+
+- **WHEN** a board mutation commits
+- **THEN** one event is emitted with the updated unread count
+
+#### Scenario: Reopening an acknowledged item
+
+- **WHEN** a legacy reader acknowledges the same open board item more than once without an intervening unread transition
+- **THEN** only the first unread to read transition emits an event
+
+### Requirement: Recipient-indexed Hera history
+
+History paging SHALL use a full recipient/message-id index covering both read and unread messages, with separate first-page and cursor queries so a cursor supplies a direct exclusive id range. Historical and current bindings SHALL retain the same message selection and ordering.
+
+#### Scenario: History with unrelated read mail
+
+- **WHEN** a task's ended and active roles have matching mail amid substantial unrelated read history
+- **THEN** each page seeks the matching recipients, cursor pages also seek `id < before_id`, and returned IDs remain oldest first within the selected newest page
