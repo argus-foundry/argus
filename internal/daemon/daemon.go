@@ -150,8 +150,11 @@ type Daemon struct {
 
 	// devStackScan / devStackStop override the dev-stack sweeper's process scan
 	// and stop (nil = the real agent functions). Test seams, set before Serve.
-	devStackScan       func() ([]agent.DevStackProc, error)
-	devStackStop       func(worktree string, o agent.StopOptions)
+	devStackScan func() ([]agent.DevStackProc, error)
+	devStackStop func(worktree string, o agent.StopOptions)
+	// browserScan overrides the orphaned-browser sweeper's scan (nil = the
+	// real agent.BrowserScanner). Test seam, set before Serve.
+	browserScan        func() ([]agent.OrphanBrowser, error)
 	shutdownOnce       sync.Once     // closes done exactly once across concurrent Shutdown callers
 	ready              chan struct{} // closed when Serve has set listener (or failed)
 	sockPath           string        // set by Serve, used by cleanup
@@ -1410,6 +1413,12 @@ func (d *Daemon) Serve(sockPath string) error {
 	// devbox dev stack left running in the managed worktree of a complete or
 	// archived task with no live session. Gated by devstack.stop_finished.
 	go d.runDevStackReaper()
+
+	// Orphaned-browser sweeper (reap-orphaned-playwright-browsers). Closes an
+	// automation Chrome an argus agent launched (e.g. via Playwright MCP) once
+	// its launcher has died — Playwright puts the browser in its own process
+	// group, so no session stop reaches it. Gated by browsers.close_orphaned.
+	go d.runBrowserReaper()
 
 	// Codex usage probe (add-tiered-backend-routing). Sibling of the
 	// usage-budget probe above, same cadence, refreshing internal/backendtier's

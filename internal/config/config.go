@@ -20,6 +20,7 @@ type Config struct {
 	API         APIConfig          `toml:"api"`
 	Hera        HeraConfig         `toml:"hera"`
 	DevStack    DevStackConfig     `toml:"devstack"`
+	Browsers    BrowsersConfig     `toml:"browsers"`
 	Supervisor  SupervisorConfig   `toml:"supervisor"`
 	Bridge      BridgeConfig       `toml:"bridge"`
 	Argus       ArgusConfig        `toml:"argus"`
@@ -206,6 +207,16 @@ type DevStackConfig struct {
 	// Set false to restore the old behavior of never touching them. Also
 	// stops a stack started by hand in such a worktree.
 	StopFinished bool `toml:"stop_finished"`
+}
+
+// BrowsersConfig controls the daemon's orphaned-browser sweeper
+// (reap-orphaned-playwright-browsers). config.toml-only; read live each tick.
+type BrowsersConfig struct {
+	// CloseOrphaned defaults to true (absent key => on): close an automation
+	// Chrome (launched with --remote-debugging-pipe, e.g. by Playwright MCP)
+	// that an argus agent launched once the process that launched it has
+	// died. Set false to leave such browsers running.
+	CloseOrphaned bool `toml:"close_orphaned"`
 }
 
 // HeraConfig controls the native Hera multi-agent coordination view.
@@ -558,6 +569,7 @@ func DefaultConfig() Config {
 			WorkerContextWindow:       1000000,
 		},
 		DevStack: DevStackConfig{StopFinished: true},
+		Browsers: BrowsersConfig{CloseOrphaned: true},
 		Bridge:   BridgeConfig{Enabled: true, Delivery: true, Band: true, Toasts: true},
 		Supervisor: SupervisorConfig{
 			// Default ON as of P4: agents run under the out-of-process

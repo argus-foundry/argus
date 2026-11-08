@@ -265,6 +265,19 @@ func TestBridgeConfig_DefaultEnabled(t *testing.T) {
 	}
 }
 
+func TestBrowsersConfig_DefaultOnAndTOMLOverride(t *testing.T) {
+	testutil.True(t, DefaultConfig().Browsers.CloseOrphaned)
+
+	path := filepath.Join(t.TempDir(), FileName)
+	testutil.NoError(t, os.WriteFile(path, []byte("[browsers]\nclose_orphaned = false\n"), 0o600))
+	testutil.False(t, NewFileLoader(path).Apply(DefaultConfig()).Browsers.CloseOrphaned)
+
+	// An unrelated file leaves the default on.
+	path2 := filepath.Join(t.TempDir(), FileName)
+	testutil.NoError(t, os.WriteFile(path2, []byte("[ui]\nshow_icons = true\n"), 0o600))
+	testutil.True(t, NewFileLoader(path2).Apply(DefaultConfig()).Browsers.CloseOrphaned)
+}
+
 func TestDevStackConfig_DefaultOnAndTOMLOverride(t *testing.T) {
 	testutil.True(t, DefaultConfig().DevStack.StopFinished)
 
