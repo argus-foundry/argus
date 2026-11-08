@@ -171,3 +171,36 @@ func TestHostSuspendTick(t *testing.T) {
 	d.hostSuspendTick(next, next.Add(hostSuspendInterval))
 	testutil.Equal(t, runningInboxCount(t, d.db, ids), len(ids))
 }
+
+// TestSendHostSuspendSignals_Coalesces: repeated suspends leave exactly one
+// unread host-suspend note per task (the latest), and a bounce note coexists.
+func TestSendHostSuspendSignals_Coalesces(t *testing.T) {
+	d := openBounceTestDB(t)
+	task := &model.Task{Name: "t", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	testutil.Equal(t, sendBounceSignals(d, []string{task.ID}), 1)
+	for i := 1; i <= 3; i++ {
+		testutil.Equal(t, sendHostSuspendSignals(d, []string{task.ID}, time.Duration(i)*10*time.Minute), 1)
+	}
+	msgs, err := d.Inbox(task.ID, db.InboxFilter{UnreadOnly: true})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 2)
+	var gotSuspend, gotBounce int
+	for _, m := range msgs {
+		var b struct {
+			Type string `json:"type"`
+		}
+		testutil.NoError(t, json.Unmarshal([]byte(m.Body), &b))
+		switch b.Type {
+		case hostSuspendMessageType:
+			gotSuspend++
+		case "ARGUS_BOUNCED":
+			gotBounce++
+		}
+	}
+	testutil.Equal(t, gotSuspend, 1)
+	testutil.Equal(t, gotBounce, 1)
+	n, err := d.UnreadCount(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 0)
+}
