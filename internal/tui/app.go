@@ -7421,7 +7421,7 @@ func (a *App) executeFork(source *model.Task, targetProject string) {
 			Prompt:  buildForkPrompt(source, ctx, proj),
 			Project: proj,
 			Backend: source.Backend,
-			Account: agent.PinnedAccount(source.Account),
+			Account: agent.InheritableAccount(source),
 			Rows:    rows,
 			Cols:    cols,
 			OnWorktreeCreated: func(wtPath string) error {

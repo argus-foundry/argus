@@ -154,7 +154,7 @@ func TestSmoke_ProjectFirst(t *testing.T) {
 						testutil.Equal(t, form.SelectedProject(), "gamma")
 						testutil.Equal(t, form.resolvedBranch(), "")
 						testutil.Equal(t, form.boundProfile(), "default")
-						testutil.Equal(t, form.Account(), "default")
+						testutil.Equal(t, form.selectedAccountName(), "default")
 						testutil.Equal(t, string(form.prompt), "keep this prompt")
 						testutil.Equal(t, form.EnteredName(), "keep-name")
 						testutil.Equal(t, form.focused, ntFieldPrompt)

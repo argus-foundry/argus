@@ -165,6 +165,7 @@ func TestSubCoordinatorRoutesAccountFromBlankParent(t *testing.T) {
 // task must land on the account with room, and when every account is over its
 // threshold on the least-used one — never silently on the default account.
 func TestResolveTaskChoiceUsesInstalledDaemonReadings(t *testing.T) {
+	backendtier.ResetSpawnLedger()
 	cfg := config.Config{
 		Backends: map[string]config.Backend{"claude": {Command: "claude"}},
 		Accounts: map[string]config.Account{"personal": {ClaudeConfigDir: t.TempDir()}},
@@ -189,7 +190,7 @@ func TestResolveTaskChoiceUsesInstalledDaemonReadings(t *testing.T) {
 				}}, nil
 			})
 			defer restore()
-			choice := resolveTaskChoice("", "", cfg, "")
+			choice := resolveTaskChoice("", "", cfg, "", false)
 			testutil.Equal(t, choice.Backend, tc.want)
 			testutil.Equal(t, choice.Account, tc.wantAccount)
 		})
@@ -228,4 +229,56 @@ func TestResolveBackend_ExplicitBackendSkipsUsageReadings(t *testing.T) {
 	_, err = ResolveBackend(&model.Task{}, cfg)
 	testutil.NoError(t, err)
 	testutil.Equal(t, reads, 1) // blank backend still routes on readings
+}
+
+func TestUnpinnedLandingOnDefaultIsStoredBlankAndRouted(t *testing.T) {
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo) // no tiers: nothing to route to, default account
+	task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "impl", Project: "proj", Backend: "test"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, task.Account, "")
+	testutil.True(t, task.AccountRouted)
+	// Its child therefore routes rather than inheriting a default pin.
+	testutil.Equal(t, InheritableAccount(task), "")
+}
+
+func TestStep3BestOverallAnyBackend(t *testing.T) {
+	extra := "[backend_routing]\nstrategy=\"headroom\"\n[[backend_routing.tier]]\nbackend=\"pi\"\nprobe=\"none\"\n"
+	t.Run("project backend without a tier adopts best overall", func(t *testing.T) {
+		repo := initGitRepo(t)
+		d := accountFileDB(t, repo, extra)
+		testutil.NoError(t, d.SetProject("proj", config.Project{Path: repo, Branch: "HEAD", Backend: "codex"}))
+		task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "s3", Project: "proj"})
+		testutil.NoError(t, err)
+		testutil.Equal(t, task.Backend, "pi")
+	})
+	t.Run("explicit backend is never changed", func(t *testing.T) {
+		repo := initGitRepo(t)
+		d := accountFileDB(t, repo, extra)
+		task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "s3x", Project: "proj", Backend: "codex"})
+		testutil.NoError(t, err)
+		testutil.Equal(t, task.Backend, "codex")
+	})
+	t.Run("pinned account skips step 3", func(t *testing.T) {
+		cfg := config.Config{Backends: map[string]config.Backend{"codex": {Command: "codex"}, "pi": {Command: "pi"}}, Projects: map[string]config.Project{"p": {Backend: "codex"}},
+			BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{{Backend: "pi", Probe: config.ProbeNone}}}}
+		testutil.Equal(t, resolveTaskChoice("", "p", cfg, "", false).Backend, "pi")
+		testutil.Equal(t, resolveTaskChoice("", "p", cfg, "default", false).Backend, "codex")
+	})
+}
+
+func TestCreateAndStartReservesAndSpreadsBurst(t *testing.T) {
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+	repo := initGitRepo(t)
+	extra := "[backend_routing]\nstrategy=\"headroom\"\n[[backend_routing.tier]]\nbackend=\"test\"\nprobe=\"none\"\n[[backend_routing.tier]]\nbackend=\"test\"\naccount=\"work\"\nprobe=\"none\"\n"
+	d := accountFileDB(t, repo, extra)
+	counts := map[string]int{}
+	for i := 0; i < 4; i++ {
+		task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "burst" + string(rune('a'+i)), Project: "proj", Backend: "test"})
+		testutil.NoError(t, err)
+		counts[task.Account]++
+	}
+	testutil.Equal(t, counts[""], 2)
+	testutil.Equal(t, counts["work"], 2)
 }

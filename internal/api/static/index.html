@@ -5411,9 +5411,9 @@ async function loadBackends() {
 
 // Accounts: the Account select lists the default account plus every account
 // that supports the selected backend's tool, and is shown only when that is
-// more than the default. Options carry the account name ("default" included):
-// a visible select is always an explicit choice, while "" (field hidden) lets
-// the daemon resolve the project / global default.
+// more than the default. Options carry the account name ("default" included).
+// Choosing a named account pins it; "default" (and a hidden field) submit ""
+// so the daemon routes by usage headroom (auto-account-routing).
 let createAccounts = [];
 // The name the user last picked; survives backend changes, reset on project change.
 let createAccountPicked = '';
@@ -5475,6 +5475,7 @@ function updateCreateAccountVisibility() {
         : 'not logged in';
     }
     opt.textContent = who ? a.name + ' - ' + who : a.name;
+    if (a.name === 'default') opt.textContent += ' (auto-routed)';
     sel.appendChild(opt);
   }
   sel.value = pickCreateAccount(usable, createAccountPicked);
@@ -5487,7 +5488,7 @@ function createAccountValue() {
   const grp = document.getElementById('create-account-group');
   const sel = document.getElementById('create-account');
   if (!grp || !sel || grp.style.display === 'none') return '';
-  return sel.value;
+  return sel.value === 'default' ? '' : sel.value;
 }
 
 // CREATE_MODEL_CUSTOM is the sentinel <option> value for the "custom…" entry.

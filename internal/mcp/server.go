@@ -677,7 +677,7 @@ var taskToolDefs = []Tool{
 
 Orchestration: pass ` + "`base_branch`" + ` to branch off a non-default ref (stacked-PR workflows where each sub-task branches off the previous task's branch). The session starts immediately — task sequencing is the coordinator's job (spawn the next worker when the prior one is done), not a declarative dependency.
 
-Account: the new task inherits the calling task's account when the caller is identifiable (pass ` + "`caller_id`" + ` from ARGUS_TASK_ID, or ` + "`cwd`" + `). Pass ` + "`account`" + ` to choose one explicitly ("default" included); an inherited account that cannot run the backend fails the call.
+Account: the new task inherits the calling task's account when the caller is identifiable and pinned to one (pass ` + "`caller_id`" + ` from ARGUS_TASK_ID, or ` + "`cwd`" + `). Pass ` + "`account`" + ` to choose one explicitly ("default" included); an unpinned caller (blank or auto-routed account) lets the new task route by usage headroom, and an inherited account that cannot run the backend fails the call.
 
 Sandbox: pass ` + "`sandbox_override`" + ` ("enabled" | "disabled") to force the new task's sandbox on or off; omit to inherit the project / global default. "disabled" requires an identified (` + "`caller_id`" + ` or ` + "`cwd`" + `), unsandboxed calling task — a sandboxed or unidentified caller is rejected.
 
@@ -691,7 +691,7 @@ Idempotency: when ` + "`name`" + ` is supplied (not auto-generated from prompt) 
 				"base_branch":      map[string]interface{}{"type": "string", "description": "Optional. Start point for the new worktree's branch (e.g. 'argus/parent-task'). Resolves to origin/<ref> / upstream/<ref> if no local match. Empty = project default (master/main)."},
 				"model":            map[string]interface{}{"type": "string", "description": "Optional. Model override for the agent session (e.g. 'sonnet', 'opus', 'gpt-6-sol', or a provider-qualified 'anthropic/claude-opus-4-5'). Delivered through the backend's supported mechanism: --model for claude/codex/pi/antigravity/cursor/omp, child-only OPENCODE_CONFIG_CONTENT for opencode (which takes provider/model ids). Empty = the backend's configured default."},
 				"upsert":           map[string]interface{}{"type": "boolean", "description": "Optional. If true and a non-archived task with the same (name, project) exists, return that task instead of erroring."},
-				"account":          map[string]interface{}{"type": "string", "description": "Optional. Configured account to run the task under ('default' or a name from config.toml [accounts]). Omit to inherit the calling task's account (when caller_id or cwd identifies it), else the project / global default."},
+				"account":          map[string]interface{}{"type": "string", "description": "Optional. Configured account to run the task under ('default' or a name from config.toml [accounts]). Omit to inherit the calling task's account when it is pinned (caller_id or cwd identifies it); an unpinned (auto-routed) caller lets the new task route by usage headroom."},
 				"caller_id":        map[string]interface{}{"type": "string", "description": "Optional. The calling task's ID (ARGUS_TASK_ID); the new task inherits its account unless account is passed."},
 				"cwd":              map[string]interface{}{"type": "string", "description": "Optional. Caller's worktree path (use $PWD); identifies the calling task when caller_id is omitted."},
 				"sandbox_override": map[string]interface{}{"type": "string", "description": "Optional. 'enabled' or 'disabled' forces the new task's sandbox; omit (or empty) to inherit the project / global default. 'disabled' is rejected unless caller_id or cwd identifies an unsandboxed calling task."},
@@ -1684,17 +1684,13 @@ func (s *Server) taskCreateAccount(explicit, callerID, cwd string) (account stri
 		log.Printf("[mcp] task_create: caller not resolved, account not inherited: %v", err)
 		return "", false, nil
 	}
-	if caller.AccountRouted {
-		log.Printf("[mcp] task_create: caller %s was routed to %q; child routes too", caller.ID, caller.Account)
+	// Blank or routed callers are unpinned (mirrors agent.InheritableAccount).
+	if caller.AccountRouted || caller.Account == "" {
+		log.Printf("[routing] task_create: caller %s is unpinned (account %q, routed=%t); child routes", caller.ID, caller.Account, caller.AccountRouted)
 		return "", false, nil
 	}
-	// A default-account caller is stored as ""; pin it so the child does not
-	// drift to the project/global default.
 	account = caller.Account
-	if account == "" {
-		account = config.DefaultAccountName
-	}
-	log.Printf("[mcp] task_create: inheriting account %q from caller %s", account, caller.ID)
+	log.Printf("[routing] task_create: inheriting pinned account %q from caller %s", account, caller.ID)
 	return account, true, nil
 }
 

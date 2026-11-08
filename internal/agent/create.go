@@ -189,16 +189,16 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	}
 
 	// Resolve the backend and account before any side effect so a bad account
-	// never leaves a worktree behind. Preserve an explicitly pinned default;
-	// an implicit default stays blank so child workers may route accounts.
+	// never leaves a worktree behind. An explicit account (named or "default")
+	// is a pin. Anything else is unpinned: routing chooses, the task is stored
+	// account_routed (blank when routing lands on default) so children route too.
 	explicitDefault := input.Account == config.DefaultAccountName
-	choice := resolveTaskChoice(input.Backend, input.Project, cfg, input.Account)
-	backend := choice.Backend
 	projectAccount := cfg.ProjectAccounts[input.Project]
-	routed := false
-	if input.Account == "" && (projectAccount == "" || cfg.ValidateAccount(projectAccount) != nil) && choice.Account != "" && cfg.AccountSupports(choice.Account, cfg.Backends[backend].Command) {
+	unpinned := input.Account == "" && (projectAccount == "" || cfg.ValidateAccount(projectAccount) != nil)
+	choice := resolveTaskChoice(input.Backend, input.Project, cfg, input.Account, true)
+	backend := choice.Backend
+	if unpinned && choice.Account != "" && cfg.AccountSupports(choice.Account, cfg.Backends[backend].Command) {
 		input.Account = choice.Account
-		routed = true
 	}
 	account, err := resolveTaskAccount(cfg, input, backend)
 	if err != nil {
@@ -207,10 +207,13 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	if account == config.DefaultAccountName && !explicitDefault {
 		account = ""
 	}
-	// A routed blank account needs no flag: children inherit blank anyway.
-	routed = routed && account != ""
-	uxlog.Log("[backendtier] spawn backend=%q account=%q reason=%s", backend, account, choice.Reason)
-	slog.Info("[backendtier] spawn", "backend", backend, "account", account, "reason", choice.Reason)
+	routed := unpinned
+	mode := "pinned"
+	if routed {
+		mode = "auto"
+	}
+	uxlog.Log("[routing] account decision mode=%s step=%s backend=%q account=%q routed=%t reason=%s", mode, choice.Step, backend, account, routed, choice.Reason)
+	slog.Info("[routing] account decision", "mode", mode, "step", choice.Step, "backend", backend, "account", account, "routed", routed, "reason", choice.Reason)
 
 	// Compensating-action stack: each successful side effect appends an undo
 	// closure. unwind runs them LIFO. We run cleanups outside any critical

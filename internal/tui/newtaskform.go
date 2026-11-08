@@ -498,10 +498,23 @@ func indexOf(names []string, want string) int {
 	return -1
 }
 
-// Account returns the account for the submitted task. A visible selector
-// always yields an explicit name, "default" included; "" means no choice was
+// Account returns the account for the submitted task. Selecting a named
+// account pins it; selecting "default" submits "" so the daemon routes by usage
+// headroom (auto-account-routing). "" is also returned when no choice was
 // offered, so the daemon resolves the project / global default.
 func (f *NewTaskForm) Account() string {
+	if !f.hasAccountField() || f.accountIdx < 0 || f.accountIdx >= len(f.accountNames) {
+		return ""
+	}
+	if n := f.accountNames[f.accountIdx]; n != config.DefaultAccountName {
+		return n
+	}
+	return ""
+}
+
+// selectedAccountName is the highlighted selector entry ("default" included),
+// for display and skill autocomplete.
+func (f *NewTaskForm) selectedAccountName() string {
 	if !f.hasAccountField() || f.accountIdx < 0 || f.accountIdx >= len(f.accountNames) {
 		return ""
 	}
@@ -512,7 +525,7 @@ func (f *NewTaskForm) Account() string {
 // the field is shown, else the project's resolved default when it supports the
 // backend, else the default account (mirroring the daemon's fallback).
 func (f *NewTaskForm) effectiveAccount() string {
-	if a := f.Account(); a != "" {
+	if a := f.selectedAccountName(); a != "" {
 		return a
 	}
 	if f.accountDefault != nil {
@@ -545,6 +558,9 @@ func (f *NewTaskForm) accountDisplayNames() []string {
 		}
 		if l != "" && l != n {
 			out[i] = n + " (" + l + ")"
+		}
+		if n == config.DefaultAccountName {
+			out[i] += " · auto-routed"
 		}
 	}
 	return out

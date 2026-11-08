@@ -9,7 +9,7 @@ import (
 )
 
 // Choice carries the identity scored by routing through to task creation.
-type Choice struct{ Backend, Account, Reason string }
+type Choice struct{ Backend, Account, Reason, Step string }
 
 // ResolveChoice optionally restricts selection to a backend and an account
 // pin. A blank account permits each tier to select its own identity.
@@ -19,6 +19,7 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 		warnUnknownStrategy(strategy)
 	}
 	var best, unread, over Choice
+	unreadSpawns := 0
 	var score, overPct float64
 	var rd readings
 	haveReadings := false
@@ -63,6 +64,13 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 		default:
 			continue
 		}
+		if known {
+			adj, n := penalized(tier.Backend, selected, pct)
+			if n > 0 {
+				uxlog.Log("[routing] burst penalty backend=%q account=%q spawns=%d usage=%.2f->%.2f", tier.Backend, selected, n, pct, adj)
+				pct = adj
+			}
+		}
 		choice.Reason = fmt.Sprintf("strategy=%s probe=%s known=%t usage=%.2f threshold=%d", strategy, tier.Probe, known, pct, tier.ThresholdPct)
 		if strategy != config.StrategyHeadroom {
 			if tier.Probe == config.ProbeNone || !known || pct < float64(tier.ThresholdPct) {
@@ -71,8 +79,10 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 			continue
 		}
 		if !known {
-			if unread.Backend == "" {
-				unread = choice
+			// Fewest recent spawns wins so a burst of unread tiers rotates;
+			// list order breaks ties (strict <).
+			if n := recentSpawns(tier.Backend, selected); unread.Backend == "" || n < unreadSpawns {
+				unread, unreadSpawns = choice, n
 			}
 			continue
 		}
