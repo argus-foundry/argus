@@ -17,7 +17,8 @@ func TestBridgeUISettingsOverlay(t *testing.T) {
 			testutil.NoError(t, err)
 			t.Cleanup(func() { _ = d.Close() })
 			value := func() bool {
-				if key == "band" {
+				switch key {
+				case "band":
 					return d.Config().Bridge.Band
 				}
 				return d.Config().Bridge.Toasts
@@ -31,4 +32,18 @@ func TestBridgeUISettingsOverlay(t *testing.T) {
 			testutil.False(t, value())
 		})
 	}
+}
+
+func TestRerenderKeepPlaceOverlay(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(filepath.Join(dir, "data.sql"))
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	testutil.True(t, d.Config().UI.RerenderKeepPlace) // default on
+	testutil.NoError(t, d.SetConfigValue("ui.rerender_keep_place", "false"))
+	testutil.False(t, d.Config().UI.RerenderKeepPlace)
+	testutil.NoError(t, d.SetConfigValue("ui.rerender_keep_place", "true"))
+	testutil.True(t, d.Config().UI.RerenderKeepPlace)
+	testutil.NoError(t, os.WriteFile(filepath.Join(dir, config.FileName), []byte("[ui]\nrerender_keep_place = false\n"), 0600))
+	testutil.False(t, d.Config().UI.RerenderKeepPlace)
 }

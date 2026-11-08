@@ -85,7 +85,9 @@ type HeraPage struct {
 	// (agent.ShouldKickRerender, via the App) for a freshly bound pane. Nil
 	// in remote mode, matching resolve — see SetRerenderKicker.
 	kickRerender RerenderKicker
-	prMeta       map[string]map[string]string
+	// keepPlace is the live ui.rerender_keep_place setting; nil means on.
+	keepPlace func() bool
+	prMeta    map[string]map[string]string
 	// needsInput is the authoritative per-task needs-input set the App pushes each
 	// tick (App.needsInputIDs — the SAME idle-gated agent.DetectNeedsInput set the
 	// task list consumes). doRefresh threads it into heramodel.BuildModel so each live role
@@ -934,7 +936,7 @@ func (p *HeraPage) Draw(screen tcell.Screen) {
 			p.agentX, p.agentW = rx+rw, 0
 			p.coordPane.SetFocused(true)
 			p.coordPane.SetRect(rx, y, rw, h)
-			p.maybeKickPaneRerender(p.coordBound, &p.coordKickedFor, rw, &p.coordKickPending)
+			p.maybeKickPaneRerender(p.coordBound, &p.coordKickedFor, rw, &p.coordKickPending, p.coordPane.ScrollOffset() > 0)
 			p.coordPane.Draw(screen)
 		case FocusAgent:
 			p.agentX, p.agentW = rx, rw
@@ -944,7 +946,7 @@ func (p *HeraPage) Draw(screen tcell.Screen) {
 			} else {
 				p.agentPane.SetFocused(true)
 				p.agentPane.SetRect(p.agentX, y, rw, h)
-				p.maybeKickPaneRerender(p.agentBound, &p.agentKickedFor, rw, &p.agentKickPending)
+				p.maybeKickPaneRerender(p.agentBound, &p.agentKickedFor, rw, &p.agentKickPending, p.agentPane.ScrollOffset() > 0)
 				p.agentPane.Draw(screen)
 			}
 		}
@@ -959,7 +961,7 @@ func (p *HeraPage) Draw(screen tcell.Screen) {
 	if coordW >= 2 {
 		p.coordPane.SetFocused(p.focus.State() == FocusCoord)
 		p.coordPane.SetRect(rx, y, coordW, h)
-		p.maybeKickPaneRerender(p.coordBound, &p.coordKickedFor, coordW, &p.coordKickPending)
+		p.maybeKickPaneRerender(p.coordBound, &p.coordKickedFor, coordW, &p.coordKickPending, p.coordPane.ScrollOffset() > 0)
 		p.coordPane.Draw(screen)
 	}
 	if agentW >= 2 {
@@ -968,7 +970,7 @@ func (p *HeraPage) Draw(screen tcell.Screen) {
 		} else {
 			p.agentPane.SetFocused(p.focus.State() == FocusAgent)
 			p.agentPane.SetRect(p.agentX, y, agentW, h)
-			p.maybeKickPaneRerender(p.agentBound, &p.agentKickedFor, agentW, &p.agentKickPending)
+			p.maybeKickPaneRerender(p.agentBound, &p.agentKickedFor, agentW, &p.agentKickPending, p.agentPane.ScrollOffset() > 0)
 			p.agentPane.Draw(screen)
 		}
 	}

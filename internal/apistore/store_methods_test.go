@@ -295,6 +295,7 @@ func TestStore_SetConfigValue_KeyMapping(t *testing.T) {
 		{"bridge.delivery", "false"},
 		{"bridge.band", "false"},
 		{"bridge.toasts", "false"},
+		{"ui.rerender_keep_place", "false"},
 		{"defaults.backend", "claude"},
 		{"default_backend", "codex"},
 		{"defaults.share_project", "argus"},
@@ -358,6 +359,25 @@ func TestStore_BridgeToggleRefreshesEffectiveCache(t *testing.T) {
 			testutil.True(t, cfg.Toasts)
 		})
 	}
+}
+
+func TestStore_RerenderKeepPlaceRefreshesEffectiveCache(t *testing.T) {
+	s, _ := newStore(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
+			var body apiclient.SettingsUpdate
+			testutil.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			testutil.Nil(t, body.Bridge)
+			testutil.NotNil(t, body.UI)
+			testutil.NotNil(t, body.UI.RerenderKeepPlace)
+			testutil.False(t, *body.UI.RerenderKeepPlace)
+			// config.toml can override the DB value; the cache must follow the
+			// daemon's effective answer, not the request.
+			_, _ = w.Write([]byte(`{"ui":{"rerender_keep_place":true}}`))
+		})
+	})
+	s.cachedConfig = config.DefaultConfig()
+	testutil.NoError(t, s.SetConfigValue("ui.rerender_keep_place", "false"))
+	testutil.True(t, s.Config().UI.RerenderKeepPlace)
 }
 
 func TestStore_SetArchived(t *testing.T) {

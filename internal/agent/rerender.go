@@ -1,6 +1,9 @@
 package agent
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // ErrResumeUnavailable leaves a rerender eligible for a later retry.
 var ErrResumeUnavailable = errors.New("resumable transcript unavailable")
@@ -8,7 +11,7 @@ var ErrResumeUnavailable = errors.New("resumable transcript unavailable")
 // Rerender decisions are the outcome of ShouldKickRerender, the shared gating
 // logic for the kick. The TUI's agent-view-entry path calls ShouldKickRerender
 // directly; the API's resize handler (Server.maybeKickRerender) inlines the
-// equivalent gates in the same order (margin → idle → BlockedOnPrompt) rather
+// equivalent gates in the same order (margin → idle → BlockedOnPrompt → unsent bridge draft) rather
 // than calling this function, so it can interleave DB lookups and cache
 // invalidation between them. Keep the two in sync: a new gate added here must
 // be mirrored in the API handler (and vice versa).
@@ -51,6 +54,13 @@ const (
 	// to answer. Defer until the user responds; the caller should invalidate
 	// any cols cache so a later resize re-evaluates once the agent moves on.
 	RerenderDeferPrompt
+	// RerenderDeferScrolled — the kick would fire while the user is scrolled up
+	// reading; the resume would lose their place. Keep the drift anchor and
+	// re-arm once the pane is back at the bottom (kick-timing-keep-place).
+	RerenderDeferScrolled
+	// RerenderDeferDraft — the composer holds unsent text the kill would
+	// discard. Re-arm once the draft clears (kick-timing-keep-place).
+	RerenderDeferDraft
 	// RerenderKick — stop the session. The exit handler is responsible for
 	// resuming via --session-id at the new dimensions.
 	RerenderKick
@@ -123,4 +133,74 @@ func ShouldKickRerender(hasSessionID bool, initCols, committedCols, panelCols in
 		return RerenderDeferPrompt
 	}
 	return RerenderKick
+}
+
+// ShouldKickRerenderKeepPlace is ShouldKickRerender plus the keep-place gates:
+// a kick that would otherwise fire is deferred while the user is scrolled up
+// (scrolledUp) or the composer holds unsent text (hasDraft). Busy and prompt
+// deferrals and Skip keep their precedence, and an unsent draft outranks a
+// scrolled pane because losing text is the worse outcome. Callers pass false
+// for both when the ui.rerender_keep_place setting is off.
+func ShouldKickRerenderKeepPlace(hasSessionID bool, initCols, committedCols, panelCols int, idle, alreadyPending, needsInput, scrolledUp, hasDraft bool) RerenderDecision {
+	d := ShouldKickRerender(hasSessionID, initCols, committedCols, panelCols, idle, alreadyPending, needsInput)
+	if d != RerenderKick {
+		return d
+	}
+	if hasDraft {
+		return RerenderDeferDraft
+	}
+	if scrolledUp {
+		return RerenderDeferScrolled
+	}
+	return RerenderKick
+}
+
+// KickDeferCap bounds how long the heuristic typed-since-submit flag may hold a
+// size-drift kick at one width. The flag cannot see Backspace emptying the box,
+// so without a cap a stale bit would defer the re-wrap forever.
+const KickDeferCap = 10 * time.Minute
+
+// DraftSource names which signal answered the composer-draft question.
+type DraftSource int
+
+const (
+	DraftNone DraftSource = iota
+	DraftFromBridge
+	DraftFromScreen
+	DraftFromFlag
+)
+
+// ComposerDraftInput carries every available composer-draft signal.
+type ComposerDraftInput struct {
+	// BridgeAware: a live bridge with a draft-aware mod reported; BridgeHas is
+	// its answer.
+	BridgeAware, BridgeHas bool
+	// ScreenFound: ScreenRenderer.InputDraft located the Claude composer;
+	// ScreenHas is whether it holds text. ScreenFound=false means "unknown".
+	ScreenFound, ScreenHas bool
+	// TypedFlag is the TUI-local typed-since-submit heuristic.
+	TypedFlag bool
+	// DeferredFor is how long kicks at this width have already been deferred.
+	DeferredFor time.Duration
+}
+
+// ComposerDraft resolves whether the composer holds unsent text, in order: the
+// mod's report, then the rendered Claude composer, then the typed flag. An
+// unknown source (screen not found) falls through — it never reads as empty.
+// Only the flag is subject to KickDeferCap; capped reports that it was
+// ignored for that reason.
+func ComposerDraft(in ComposerDraftInput) (has bool, src DraftSource, capped bool) {
+	if in.BridgeAware {
+		return in.BridgeHas, DraftFromBridge, false
+	}
+	if in.ScreenFound {
+		return in.ScreenHas, DraftFromScreen, false
+	}
+	if in.TypedFlag {
+		if in.DeferredFor >= KickDeferCap {
+			return false, DraftNone, true
+		}
+		return true, DraftFromFlag, false
+	}
+	return false, DraftNone, false
 }
