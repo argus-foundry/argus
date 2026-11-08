@@ -1133,7 +1133,7 @@ final class AppState {
             clearNeedsInput(id)
         case .sessionExited(let id, _, _):
             clearNeedsInput(id)
-        case .sessionFocus, .messageSent, .messageAcked:
+        case .taskContextChanged, .sessionFocus, .messageSent, .messageAcked:
             break // no task-list impact
         case .taskCreated, .taskForked, .resync, .unknown:
             break // resnapshot-class — never delivered as .apply

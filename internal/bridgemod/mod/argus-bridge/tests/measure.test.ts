@@ -51,15 +51,21 @@ test('categoriesFromBreakdown maps used rows by label, sums tools, and takes the
       { name: 'MCP tools', tokens: 500, kind: 'used' },
       { name: 'MCP tools (deferred)', tokens: 9000, kind: 'deferred' },
       { name: 'Memory files', tokens: 0, kind: 'used' },
+      { name: 'Custom agents', tokens: 7, kind: 'used' },
+      { name: 'Skills', tokens: 9, kind: 'used' },
       { name: 'Messages', tokens: 5000, kind: 'used' },
       { name: 'Mystery', tokens: 7, kind: 'used' },
       { name: 'Free space', tokens: 150000, kind: 'free' },
       { name: 'Autocompact buffer', tokens: 33000, kind: 'buffer' },
     ]),
-  ).toEqual({ system: 1000, tools: 2500, memory: 0, messages: 5000, compaction: 33000 })
+  ).toEqual({ system: 1000, tools: 2500, memory: 0, agents: 7, skills: 9, messages: 5000, compaction: 33000 })
 })
 
 test('categoriesFromBreakdown drops invalid counts and answers nothing when nothing maps', () => {
   expect(categoriesFromBreakdown(undefined)).toBe(undefined)
   expect(categoriesFromBreakdown([{ name: 'Messages', tokens: -1, kind: 'used' }, { name: 'Skills', tokens: NaN, kind: 'used' }])).toBe(undefined)
+})
+
+test('deferred rows stay unknown even with a recognized category label', () => {
+  expect(categoriesFromBreakdown([{ name: 'Messages', tokens: 123, kind: 'deferred' }])).toBe(undefined)
 })

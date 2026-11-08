@@ -43,20 +43,19 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body", err)
 		return
 	}
-	for _, ev := range batch.Events {
-		if ev.Type != bridge.TypeMeasure {
-			continue
-		}
-		if err := ev.Context.Validate(); err != nil {
-			uxlog.Log("[bridge] invalid measurement task=%s: %v", id, err)
-			slog.Warn("[bridge] invalid measurement", "task", task.ID, "err", err) //nolint:gosec // G706: task.ID is a DB lookup result; slog encodes attributes.
-			writeErr(w, http.StatusBadRequest, "invalid measurement", err)
-			return
-		}
-	}
+
 	s.bridgeIngestMu.Lock()
 	accepted := 0
+	invalid := 0
+	invalidReason := ""
 	for _, ev := range batch.Events {
+		if err := ev.Context.Validate(); ev.Type == bridge.TypeMeasure && err != nil {
+			invalid++
+			if invalidReason == "" {
+				invalidReason = err.Error()
+			}
+			continue
+		}
 		// Buffered posts from an exited process must never replace the current
 		// process's reports. Legacy generation-less reports remain diagnostic.
 		if ev.Generation != "" {
@@ -80,10 +79,15 @@ func (s *Server) handleBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.bridgeIngestMu.Unlock()
+	if invalid > 0 {
+		uxlog.Log("[bridge] invalid measurements task=%s count=%d: %s", id, invalid, invalidReason)
+		//nolint:gosec // G706: task.ID is DB-derived; the validation reason is a constant.
+		slog.Warn("[bridge] invalid measurements", "task", task.ID, "invalid", invalid, "err", invalidReason)
+	}
 	if accepted < len(batch.Events) {
 		// uxlog is a no-op in the daemon (it never calls uxlog.Init), so also
 		// log through slog, which does reach daemon.log.
-		uxlog.Log("[bridge] ingest task=%s accepted=%d of %d (duplicates/unknown types dropped)", id, accepted, len(batch.Events))
+		uxlog.Log("[bridge] ingest task=%s accepted=%d of %d (invalid measurements/duplicates/unknown types dropped)", id, accepted, len(batch.Events))
 		//nolint:gosec // G706: task.ID comes from the db.Get lookup above and slog encodes attributes, escaping control characters.
 		slog.Info("[bridge] ingest partial", "task", task.ID, "accepted", accepted, "received", len(batch.Events))
 	}

@@ -179,10 +179,13 @@ func TestContextValidateAndClone(t *testing.T) {
 	neg := int64(-1)
 	zero := int64(0)
 	nan := math.NaN()
+	posInf, negInf := math.Inf(1), math.Inf(-1)
 	pct := 5.0
 	for name, c := range map[string]*Context{
 		"negative tokens":   {Tokens: &neg},
 		"negative window":   {Window: -1},
+		"positive infinity": {Percent: &posInf},
+		"negative infinity": {Percent: &negInf},
 		"nan percent":       {Percent: &nan},
 		"negative category": {Categories: &ContextCategories{Skills: &neg}},
 	} {
@@ -198,4 +201,31 @@ func TestContextValidateAndClone(t *testing.T) {
 	testutil.Equal(t, *good.Tokens, int64(0))
 	testutil.True(t, cp.Categories.Agents == nil)
 	testutil.True(t, (*Context)(nil).Clone() == nil)
+}
+
+func TestContextHubCloneEveryPointer(t *testing.T) {
+	values := []int64{1, 3, 4, 5, 6, 7, 8, 9}
+	pct := 2.0
+	c := &Context{Tokens: &values[0], Percent: &pct, Categories: &ContextCategories{Messages: &values[1], Memory: &values[2], Tools: &values[3], Agents: &values[4], Skills: &values[5], System: &values[6], Compaction: &values[7]}}
+	h := NewHub()
+	testutil.Equal(t, h.Ingest("t", []Event{{Type: TypeMeasure, Seq: 1, Context: c}}, time.Now()), 1)
+	for i := range values {
+		values[i] = 99
+	}
+	pct = 99
+	for range 2 {
+		st, ok := h.Get("t")
+		testutil.True(t, ok)
+		testutil.Equal(t, *st.Context.Percent, 2.0)
+		*st.Context.Percent = 99
+		cats := st.Context.Categories
+		for i, ptr := range []*int64{st.Context.Tokens, cats.Messages, cats.Memory, cats.Tools, cats.Agents, cats.Skills, cats.System, cats.Compaction} {
+			want := int64(i + 2)
+			if i == 0 {
+				want = 1
+			}
+			testutil.Equal(t, *ptr, want)
+			*ptr = 99
+		}
+	}
 }

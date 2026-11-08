@@ -140,7 +140,7 @@ func TestTaskContext_InvalidMeasurementKeepsValidSnapshot(t *testing.T) {
 		`{"tokens":10,"window":-1}`,
 		`{"tokens":10,"percent":-3,"window":200000}`,
 	} {
-		testutil.Equal(t, postMeasure(t, s, task.ID, bad, 2), 400)
+		testutil.Equal(t, postMeasure(t, s, task.ID, bad, 2), 200)
 	}
 	st, _ := s.bridgeHub.Get(task.ID)
 	testutil.Equal(t, *st.Context.Tokens, int64(100))
@@ -148,7 +148,7 @@ func TestTaskContext_InvalidMeasurementKeepsValidSnapshot(t *testing.T) {
 	testutil.Equal(t, len(sink.ofType(model.EventTypeTaskContextChanged)), 1)
 }
 
-func TestTaskContext_StaleReturnsRecordedNotLive(t *testing.T) {
+func TestTaskContext_InactiveBridgeReturnsRecordedNotLive(t *testing.T) {
 	s, _, task := bridgeAuthorityServer(t)
 	old := time.Now().Add(-10 * time.Minute)
 	n := s.bridgeHub.Ingest(task.ID, []bridge.Event{{Type: bridge.TypeMeasure, Generation: "launch", SessionID: "session", Boot: "b", Seq: 1,

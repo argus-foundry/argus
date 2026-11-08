@@ -23,6 +23,19 @@ struct EventsStreamSessionTests {
         return ServerEvent(type: type, jsonData: Data(obj.utf8))
     }
 
+    @Test("context measurements advance the cursor without snapshot work")
+    func contextChangedDoesNotResnapshot() {
+        var session = EventsStreamSession()
+        let raw = serverEvent(id: 42, type: "task.context_changed", taskID: "t1",
+                              payload: "{\"session_id\":\"s1\",\"measured_at\":\"now\"}")
+        let decoded = EventsStreamSession.decode(raw)
+        #expect(decoded.event.taskID == "t1")
+        #expect(session.handle(raw).isEmpty)
+        #expect(session.cursor == 42)
+        #expect(session.phase == .live)
+        #expect(session.handle(serverEvent(id: 43, type: "future.event")) == [.resnapshot])
+    }
+
     // MARK: - start() / cursor seeding
 
     @Test("start opens the stream at cursor 0 and flips to connecting")
