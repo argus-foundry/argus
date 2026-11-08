@@ -59,7 +59,7 @@ Routing SHALL add a recent-spawn penalty of 5 usage points per spawn on the same
 
 ### Requirement: Unpinned account resolution order
 
-When no account is pinned, the account SHALL be resolved in this order, first match wins: (1) the project's `project_accounts` account, if valid; (2) the best account by routing strategy among the tiers of the task's backend (the explicit backend, else the project's backend, else the default backend); (3) the best account overall across all tiers, adopted only when it supports the task's backend, and, when no backend was explicitly or project-configured, together with its tier's backend. When no step yields an account the task runs on the default account (stored blank). The step that decided SHALL be logged with a `[routing]` prefix.
+When no account is pinned, the account SHALL be resolved in this order, first match wins: (1) the project's `project_accounts` account, if valid; (2) the best account by routing strategy among the tiers of the task's backend (the explicit backend, else the project's backend, else the best tier overall); (3) when the backend was not given explicitly and the project's backend has no eligible tier, the best tier overall across ANY backend, adopting that tier's backend and account together. An explicitly requested backend SHALL never be changed by step 3. Hera coordinator and sub-coordinator spawns always carry an explicit Claude-capable backend, so they SHALL never reach step 3 and always stay on Claude. When no step yields an account the task runs on the default account (stored blank). The deciding step SHALL be logged with a `[routing]` prefix.
 
 #### Scenario: Project account wins
 
@@ -71,12 +71,17 @@ When no account is pinned, the account SHALL be resolved in this order, first ma
 - **WHEN** the project has no account pin, its backend is Claude, and `personal` has more Claude headroom than `default`
 - **THEN** the task runs on `personal`
 
-#### Scenario: Backend has no tier, best overall
+#### Scenario: Project backend has no tier, best overall on any backend
 
-- **WHEN** the project's backend has no configured tier and another tier's account has the most headroom and supports that backend
-- **THEN** the task runs on that account with the project's backend unchanged
+- **WHEN** the project's configured backend has no eligible tier and a Codex tier has the most headroom overall
+- **THEN** the task adopts that tier's backend and account
 
-#### Scenario: Best overall does not support the backend
+#### Scenario: Explicit backend is never changed
 
-- **WHEN** the best overall account cannot run the task's backend
-- **THEN** it is not used and the task runs on the default account
+- **WHEN** the caller names a backend that has no eligible tier
+- **THEN** step 3 is skipped and the backend is unchanged
+
+#### Scenario: Coordinators stay on Claude
+
+- **WHEN** a coordinator spawns while a Codex tier has the most headroom overall
+- **THEN** the coordinator uses a Claude-capable backend
