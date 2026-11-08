@@ -72,3 +72,13 @@ test('session exit SSE fences selected context immediately while retaining the b
  releases[0](Response.json(previous));await old;
  assert.equal(context.data.measurement.live,false);assert.equal(context.data.measurement.context.categories.messages,77);
 });
+
+test('suggestion invalidation reaches the composer while task snapshots buffer events',async()=>{
+ const delivered=[],event={id:7,type:'task.suggestion_changed',task_id:'a',payload:{available:false}};
+ const signal=new AbortController();
+ const events=Object.assign(Object.create(WorkspaceEvents.prototype),{running:true,generation:1,cursor:0,buffering:true,pending:[],failed:error=>{throw error;},callbacks:{suggestion:value=>{delivered.push(value);signal.abort();}}});
+ const response=new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));controller.close();}}));
+ await events.consume(response,1,signal.signal);
+ assert.deepEqual(delivered,[event]);
+ assert.equal(patchEvent([{id:'a'}],event).resnapshot,false);
+});

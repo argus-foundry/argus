@@ -43,6 +43,7 @@ export class WorkspaceEvents {
    while(!signal.aborted&&generation===this.generation){const {done,value}=await reader.read();if(done)throw new Error('Event stream ended');
     for(const event of parser.feed(decoder.decode(value,{stream:true}))){
      if(Number.isSafeInteger(event.id)&&event.id>0){if(event.id<=this.cursor)continue;this.cursor=event.id;}
+     this.callbacks.suggestion?.(event);
      if(['session.started','session.exited'].includes(event.type))this.callbacks.context?.(event);
      if(event.type==='task.context_changed'){
       this.callbacks.context?.(event);

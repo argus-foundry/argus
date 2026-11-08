@@ -160,3 +160,8 @@
 - **A scrollable native popover root needs both tabindex and autofocus for keyboard entry.** Chromium can skip the root during Tab navigation even with tabindex=0, so focus it through the native opening algorithm and retain that same node across refreshes.
 
 - **Context and auxiliary usage reads need separate publication fences and must merge the latest snapshot after awaiting.** Coalesce event bursts without clearing same-session categories, queue one follow-up for events arriving during a read, and bound shared reads so a hung request cannot block polling indefinitely.
+
+- **Suggestion events carry identity and availability, never prompt text.** Forward invalidation to the composer even while task snapshots buffer events, then debounce a fenced bridge GET; only an empty draft may display the literal text as a placeholder.
+- **Bridge authority expires 45 seconds after last_event_at, not recorded_at.** Suggestions need a local expiry plus serialized 15-second checks only while their placeholder, composer and page are visible; keep the poll deadline through ordinary composer rerenders and clear on failed authority reads.
+- **Context and suggestions must share only an in-flight bridge read, never a cached snapshot.** Invalidate that read on selection, disconnect, new turn or suggestion events so a post-event refresh cannot join a pre-event response; avoid assigning unchanged placeholder attributes because they disrupt no-op composer renders.
+- **Browser-tab hide must invalidate the shared bridge transport as well as the suggestion subscriber.** Resume must start a fresh authority read rather than joining the old hidden request.
