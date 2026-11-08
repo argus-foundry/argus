@@ -1,6 +1,7 @@
 package client
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -57,4 +58,64 @@ func TestCliRoutingUsage(t *testing.T) {
 	fd.mu.Unlock()
 	_, err = c.RoutingUsage()
 	testutil.Error(t, err)
+}
+
+func TestCliRouteRedial(t *testing.T) {
+	fd := newFakeDaemon(t)
+	fd.mu.Lock()
+	fd.routing = backendtier.Usage{Claude: map[string]usagebudget.Reading{"personal": {Percentage: 8}}}
+	fd.mu.Unlock()
+	c := fakeClient(t, fd)
+
+	// Simulate the daemon bounce: this client's connection is dead for good.
+	testutil.NoError(t, c.rpc.Close())
+	_, origErr := c.RoutingUsage()
+	testutil.Error(t, origErr)
+
+	got, err := c.RoutingUsageResilient()
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Claude["personal"].Percentage, 8.0)
+
+	// Daemon gone entirely: the ORIGINAL call error surfaces (not the dial
+	// error), nothing panics.
+	c.sockPath = filepath.Join(t.TempDir(), "gone.sock")
+	_, err = c.RoutingUsageResilient()
+	testutil.Error(t, err)
+	testutil.Equal(t, err.Error(), origErr.Error())
+
+	// A live connection never takes the fallback path: one call, no new dial.
+	lfd := newFakeDaemon(t)
+	live := fakeClient(t, lfd)
+	_, err = live.RoutingUsage() // completes the dial, so it is counted
+	testutil.NoError(t, err)
+	lfd.mu.Lock()
+	acceptsBefore := lfd.accepts
+	lfd.mu.Unlock()
+	_, err = live.RoutingUsageResilient()
+	testutil.NoError(t, err)
+	lfd.mu.Lock()
+	defer lfd.mu.Unlock()
+	testutil.Equal(t, lfd.accepts, acceptsBefore)
+	testutil.Equal(t, lfd.routingCalls, 2)
+}
+
+func TestCliRouteFresh(t *testing.T) {
+	fd := newFakeDaemon(t)
+	fd.mu.Lock()
+	fd.routing = backendtier.Usage{Claude: map[string]usagebudget.Reading{"personal": {Percentage: 9}}}
+	fd.mu.Unlock()
+	c := fakeClient(t, fd)
+	got, err := c.RoutingUsageFresh()
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Claude["personal"].Percentage, 9.0)
+
+	// After a bounce the resilient variant re-dials and still probes.
+	testutil.NoError(t, c.rpc.Close())
+	got, err = c.RoutingUsageFreshResilient()
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Claude["personal"].Percentage, 9.0)
+	fd.mu.Lock()
+	calls := fd.freshCalls
+	fd.mu.Unlock()
+	testutil.Equal(t, calls, 2)
 }

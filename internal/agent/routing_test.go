@@ -165,6 +165,8 @@ func TestSubCoordinatorRoutesAccountFromBlankParent(t *testing.T) {
 // task must land on the account with room, and when every account is over its
 // threshold on the least-used one — never silently on the default account.
 func TestResolveTaskChoiceUsesInstalledDaemonReadings(t *testing.T) {
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
 	cfg := config.Config{
 		Backends: map[string]config.Backend{"claude": {Command: "claude"}},
 		Accounts: map[string]config.Account{"personal": {ClaudeConfigDir: t.TempDir()}},
@@ -189,7 +191,7 @@ func TestResolveTaskChoiceUsesInstalledDaemonReadings(t *testing.T) {
 				}}, nil
 			})
 			defer restore()
-			choice := resolveTaskChoice("", "", cfg, "")
+			choice := resolveTaskChoice("", "", cfg, "", false)
 			testutil.Equal(t, choice.Backend, tc.want)
 			testutil.Equal(t, choice.Account, tc.wantAccount)
 		})
@@ -228,4 +230,157 @@ func TestResolveBackend_ExplicitBackendSkipsUsageReadings(t *testing.T) {
 	_, err = ResolveBackend(&model.Task{}, cfg)
 	testutil.NoError(t, err)
 	testutil.Equal(t, reads, 1) // blank backend still routes on readings
+}
+
+func TestUnpinnedLandingOnDefaultIsStoredBlankAndRouted(t *testing.T) {
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo) // no tiers: nothing to route to, default account
+	task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "impl", Project: "proj", Backend: "test"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, task.Account, "")
+	testutil.True(t, task.AccountRouted)
+	// Its child therefore routes rather than inheriting a default pin.
+	testutil.Equal(t, InheritableAccount(task), "")
+}
+
+func TestStep3BestOverallAnyBackend(t *testing.T) {
+	extra := "[backend_routing]\nstrategy=\"headroom\"\n[[backend_routing.tier]]\nbackend=\"pi\"\nprobe=\"none\"\n"
+	t.Run("project backend without a tier adopts best overall", func(t *testing.T) {
+		repo := initGitRepo(t)
+		d := accountFileDB(t, repo, extra)
+		testutil.NoError(t, d.SetProject("proj", config.Project{Path: repo, Branch: "HEAD", Backend: "codex"}))
+		task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "s3", Project: "proj"})
+		testutil.NoError(t, err)
+		testutil.Equal(t, task.Backend, "pi")
+	})
+	t.Run("explicit backend is never changed", func(t *testing.T) {
+		repo := initGitRepo(t)
+		d := accountFileDB(t, repo, extra)
+		task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "s3x", Project: "proj", Backend: "codex"})
+		testutil.NoError(t, err)
+		testutil.Equal(t, task.Backend, "codex")
+	})
+	t.Run("pinned account skips step 3", func(t *testing.T) {
+		cfg := config.Config{Backends: map[string]config.Backend{"codex": {Command: "codex"}, "pi": {Command: "pi"}}, Projects: map[string]config.Project{"p": {Backend: "codex"}},
+			BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{{Backend: "pi", Probe: config.ProbeNone}}}}
+		testutil.Equal(t, resolveTaskChoice("", "p", cfg, "", false).Backend, "pi")
+		testutil.Equal(t, resolveTaskChoice("", "p", cfg, "default", false).Backend, "codex")
+	})
+}
+
+func TestCreateAndStartReservesAndSpreadsBurst(t *testing.T) {
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+	repo := initGitRepo(t)
+	extra := "[backend_routing]\nstrategy=\"headroom\"\n[[backend_routing.tier]]\nbackend=\"test\"\nprobe=\"none\"\n[[backend_routing.tier]]\nbackend=\"test\"\naccount=\"work\"\nprobe=\"none\"\n"
+	d := accountFileDB(t, repo, extra)
+	counts := map[string]int{}
+	for i := 0; i < 4; i++ {
+		task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "burst" + string(rune('a'+i)), Project: "proj", Backend: "test"})
+		testutil.NoError(t, err)
+		counts[task.Account]++
+	}
+	testutil.Equal(t, counts[""], 2)
+	testutil.Equal(t, counts["work"], 2)
+}
+
+func TestCreateAndStartFreshensUsageOnlyWhenTiersConfigured(t *testing.T) {
+	calls := 0
+	defer backendtier.SetFreshener(func() { calls++ })()
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo) // no tiers
+	_, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "nofresh", Project: "proj", Backend: "test"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, calls, 0)
+
+	repo2 := initGitRepo(t)
+	d2 := accountFileDB(t, repo2, "[backend_routing]\nstrategy=\"headroom\"\n[[backend_routing.tier]]\nbackend=\"test\"\nprobe=\"none\"\n")
+	_, _, err = CreateAndStart(d2, &fakeRunner{sessionPID: 1}, CreateInput{Name: "fresh", Project: "proj", Backend: "test"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, calls, 1)
+}
+
+// Live burst shape: a project with no backend, claude (80) + codex (95) tiers.
+// Step 2 scans every tier when no backend is set (the global default does not
+// count as a project backend), so the roomiest backend wins and is labelled
+// best-overall.
+func TestNoProjectBackendRoutesAcrossBackends(t *testing.T) {
+	cfg := config.Config{
+		Backends: map[string]config.Backend{"claude": {Command: "claude"}, "codex": {Command: "codex"}},
+		Defaults: config.Defaults{Backend: "claude"},
+		Projects: map[string]config.Project{"p": {}},
+		BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
+			{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+			{Backend: "codex", Probe: config.ProbeCodexUsage, ThresholdPct: 95},
+		}},
+	}
+	for _, tc := range []struct {
+		name          string
+		claude, codex float64
+		want          string
+	}{
+		{"claude roomier", 9, 40, "claude"},
+		{"codex roomier", 70, 10, "codex"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backendtier.ResetSpawnLedger()
+			t.Cleanup(backendtier.ResetSpawnLedger)
+			defer backendtier.SetUsageSource(func() (backendtier.Usage, error) {
+				return backendtier.Usage{
+					Claude: map[string]usagebudget.Reading{"default": {Percentage: tc.claude}},
+					Codex:  &usagebudget.Reading{Percentage: tc.codex},
+				}, nil
+			})()
+			c := resolveTaskChoice("", "p", cfg, "", false)
+			testutil.Equal(t, c.Backend, tc.want)
+			testutil.Equal(t, c.Step, "best-overall")
+		})
+	}
+}
+
+const probedTiersTOML = "[backend_routing]\nstrategy=\"headroom\"\n[[backend_routing.tier]]\nbackend=\"test\"\nprobe=\"claude_usage\"\nthreshold_pct=80\n[[backend_routing.tier]]\nbackend=\"test\"\naccount=\"work\"\nprobe=\"claude_usage\"\nthreshold_pct=80\n"
+
+func claudeUsage(def, work float64) func() (backendtier.Usage, error) {
+	return func() (backendtier.Usage, error) {
+		return backendtier.Usage{Claude: map[string]usagebudget.Reading{
+			"default": {Percentage: def}, "work": {Percentage: work},
+		}}, nil
+	}
+}
+
+// The fresh read must land BEFORE resolution: the freshener publishes readings
+// that reverse the stale snapshot, and the task follows the fresh ones.
+func TestCreateAndStartRoutesOnFreshReadingNotStaleSnapshot(t *testing.T) {
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+	t.Cleanup(backendtier.SetUsageSource(claudeUsage(5, 50))) // stale: default roomy
+	defer backendtier.SetFreshener(func() {
+		backendtier.SetUsageSource(claudeUsage(95, 10)) // fresh: default depleted
+	})()
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo, probedTiersTOML)
+	task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "freshfirst", Project: "proj", Backend: "test"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, task.Account, "work")
+	testutil.True(t, task.AccountRouted)
+}
+
+// Burst spreading through CreateAndStart on probed (known) tiers: without the
+// per-spawn penalty all four would land on work (38 < 40).
+func TestCreateAndStartSpreadsBurstOnKnownReadings(t *testing.T) {
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+	t.Cleanup(backendtier.SetUsageSource(claudeUsage(40, 38)))
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo, probedTiersTOML)
+	var got []string
+	for i := 0; i < 4; i++ {
+		task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{Name: "kb" + string(rune('a'+i)), Project: "proj", Backend: "test"})
+		testutil.NoError(t, err)
+		got = append(got, task.Account)
+	}
+	testutil.DeepEqual(t, got, []string{"work", "", "work", ""})
 }

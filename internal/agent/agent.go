@@ -171,7 +171,7 @@ func resolveDefaultBackendName(explicit, project string, cfg config.Config, acco
 	if backend != "" {
 		return backend
 	}
-	return resolveTaskChoice(explicit, project, cfg, account).Backend
+	return resolveTaskChoice(explicit, project, cfg, account, false).Backend
 }
 
 // ResolveBackend returns the backend config for a task.

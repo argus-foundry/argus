@@ -882,6 +882,51 @@ func (c *Client) RoutingUsage() (backendtier.Usage, error) {
 	return usage, err
 }
 
+// RoutingUsageFresh asks the daemon to probe usage now (debounced) and returns
+// the result. It can outlast the normal RPC deadline: a probe round may take
+// several seconds (the daemon caps it at 5s).
+func (c *Client) RoutingUsageFresh() (backendtier.Usage, error) {
+	var usage backendtier.Usage
+	err := c.callWithTimeout("Daemon.RoutingUsageFresh", &daemon.Empty{}, &usage, 15*time.Second)
+	return usage, err
+}
+
+// RoutingUsageResilient is RoutingUsage that survives a daemon bounce. This
+// client's connection is never re-dialed, so after the daemon restarts every
+// call on it fails with "connection is shut down" and tier routing in the TUI
+// silently saw every account as unknown (fail-open → the depleted default
+// account). On failure it asks the socket once through a short-lived fresh
+// connection; the original error is returned if that also fails.
+func (c *Client) RoutingUsageResilient() (backendtier.Usage, error) {
+	return c.resilientUsage((*Client).RoutingUsage)
+}
+
+// RoutingUsageFreshResilient is RoutingUsageFresh with the same
+// reconnect-once behavior as RoutingUsageResilient.
+func (c *Client) RoutingUsageFreshResilient() (backendtier.Usage, error) {
+	return c.resilientUsage((*Client).RoutingUsageFresh)
+}
+
+func (c *Client) resilientUsage(call func(*Client) (backendtier.Usage, error)) (backendtier.Usage, error) {
+	usage, err := call(c)
+	if err == nil || c == nil || c.sockPath == "" {
+		return usage, err
+	}
+	fresh, derr := Connect(c.sockPath)
+	if derr != nil {
+		uxlog.Log("[routing] usage RPC failed (%v) and fresh dial failed: %v", err, derr)
+		return usage, err
+	}
+	defer func() { _ = fresh.Close() }()
+	u2, ferr := call(fresh)
+	if ferr != nil {
+		uxlog.Log("[routing] usage RPC failed (%v) and fresh-connection retry failed: %v", err, ferr)
+		return usage, err
+	}
+	uxlog.Log("[routing] usage RPC recovered over a fresh daemon connection after: %v", err)
+	return u2, nil
+}
+
 // AccountUsageSource adapts AccountUsage for agent.SetAccountUsageSource. A
 // failed read (an older daemon, a dropped socket) logs and reports every
 // account unknown.

@@ -283,9 +283,20 @@ func runTUI() {
 		// caches it would read are empty here, so route on the daemon's.
 		// Cached + refreshed off-thread: resolution runs on the UI goroutine in
 		// per-tick Hera refresh, where a synchronous RPC froze typing.
-		routingUsage := backendtier.NewCachedUsage(client.RoutingUsage, time.Minute, 5*time.Minute)
+		routingUsage := backendtier.NewCachedUsage(client.RoutingUsageResilient, time.Minute, 5*time.Minute)
 		routingUsage.Prime()
 		defer backendtier.SetUsageSource(routingUsage.Read)()
+		// Fresh read before every spawn: ask the daemon to probe now (debounced)
+		// and publish the result so the resolution right after sees it. Runs on
+		// the spawn goroutine, never the UI one; an older daemon without the RPC
+		// just leaves the cached snapshot in place.
+		defer backendtier.SetFreshener(func() {
+			if u, ferr := client.RoutingUsageFreshResilient(); ferr == nil {
+				routingUsage.Store(u)
+			} else {
+				uxlog.Log("[routing] fresh usage read failed, routing on cached readings: %v", ferr)
+			}
+		})()
 		defer client.Close()
 	}
 

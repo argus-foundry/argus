@@ -50,6 +50,13 @@ func (c *CachedUsage) Prime() {
 	c.refresh()
 }
 
+// Store publishes u as the current snapshot, e.g. a fresh-before-spawn read.
+func (c *CachedUsage) Store(u Usage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.snap, c.fetched, c.have = u, c.now(), true
+}
+
 // Read returns the cached snapshot without ever performing I/O on the calling
 // goroutine.
 func (c *CachedUsage) Read() (Usage, error) {
