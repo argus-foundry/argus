@@ -279,3 +279,28 @@ func TestTaskRailArchiveOpenIsNotStickyWhenArchiveOnly(t *testing.T) {
 		testutil.Equal(t, id != "old", true)
 	}
 }
+
+// The user's own Archive choice survives an archive-only episode: forcing open
+// is derived, so a prior open stays open and a prior fold comes back.
+func TestTaskRailArchiveUserChoiceSurvivesArchiveOnly(t *testing.T) {
+	archived := &model.Task{ID: "old", Project: "A", Archived: true}
+	active := &model.Task{ID: "new", Project: "B"}
+	hasOld := func(tl *TaskListView) bool {
+		for _, id := range tl.VisibleTaskIDs() {
+			if id == "old" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, userOpen := range []bool{false, true} {
+		tl := NewTaskListView()
+		tl.SetRailMode(true)
+		tl.SetTasks([]*model.Task{active, archived})
+		tl.railArchiveOpen = userOpen
+		tl.SetTasks([]*model.Task{archived})
+		testutil.Equal(t, hasOld(tl), true) // forced open while archive-only
+		tl.SetTasks([]*model.Task{active, archived})
+		testutil.Equal(t, hasOld(tl), userOpen)
+	}
+}
