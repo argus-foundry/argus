@@ -644,3 +644,26 @@ func bindHeraCoordinator(t *testing.T, database *db.DB, taskID string) {
 	_, err = database.CreateHeraBinding(db.CreateHeraBindingInput{RoleID: r.ID, ArgusTaskID: taskID, WorktreePath: "/wt/" + taskID})
 	testutil.NoError(t, err)
 }
+
+// TestProbeSession: the checked probe returns the server's answer, and a dead
+// transport surfaces as an error (Get would fold both failure and not-alive
+// into nil).
+func TestProbeSession(t *testing.T) {
+	fd := newFakeDaemon(t)
+	c := fakeClient(t, fd)
+	info, err := c.ProbeSession("t")
+	testutil.NoError(t, err)
+	testutil.True(t, info.Alive)
+	testutil.Equal(t, info.TaskID, "t")
+
+	fd.mu.Lock()
+	fd.alive = false
+	fd.mu.Unlock()
+	info, err = c.ProbeSession("t")
+	testutil.NoError(t, err)
+	testutil.False(t, info.Alive)
+
+	_ = c.rpc.Close()
+	_, err = c.ProbeSession("t")
+	testutil.Error(t, err)
+}

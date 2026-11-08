@@ -82,6 +82,7 @@ func TestFinishedReaper_KeepAliveBindings(t *testing.T) {
 			for i := 0; i < 4; i++ {
 				testutil.Equal(t, len(f.tick()), 0)
 			}
+			testutil.True(t, f.state[task.ID].guarded) // the skip was logged (once)
 
 			// Once the binding ends, the same finished idle session is reaped.
 			testutil.NoError(t, d.db.EndHeraBinding(b.ID, "test"))
@@ -120,6 +121,8 @@ func TestFinishedReaper_GuardLookupErrorFailsClosed(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		testutil.Equal(t, len(f.tick()), 0)
 	}
+	testutil.True(t, f.state["a"].guarded) // the failure was logged (once)
+	testutil.Equal(t, len(r.stopped), 0)
 }
 
 func TestFinishedReaper_ArchivedCoordinatorStillReaped(t *testing.T) {
