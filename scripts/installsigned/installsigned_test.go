@@ -190,7 +190,9 @@ func TestInstallSigned(t *testing.T) {
 		testutil.Equal(t, r.elapsed < 300*time.Second, true)
 	})
 	t.Run("codesign failure leaves live binary untouched", func(t *testing.T) {
-		r := run(t, "FAKE_CODESIGN=fail")
+		// Explicit long codesign timeout: a fast exit-1 must never race a short timer
+		// into the "timed out" branch on a loaded host.
+		r := run(t, "FAKE_CODESIGN=fail", "ARGUS_CODESIGN_TIMEOUT=60")
 		testutil.Equal(t, r.err != nil, true)
 		testutil.Equal(t, r.dest, "OLD\n")
 		testutil.Contains(t, r.out, "codesign failed")
