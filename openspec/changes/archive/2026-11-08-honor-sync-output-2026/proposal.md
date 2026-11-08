@@ -20,4 +20,4 @@ Claude Code brackets every screen update with `CSI ?2026h` … `CSI ?2026l` (DEC
 - **Replay and preview are unchanged.** They rebuild whole logs offline and paint once, so only the final state matters; `x/vt` ignores the unknown private mode, so the markers are inert there.
 - Combined parameter forms (`CSI ?25;2026h`) are not recognized; Claude Code never emits them, and they degrade to today's behavior.
 - No supervisor/daemon spawn-surface, REST, or MCP change: TUI-only.
-- Frontend parity: xterm.js (web SPA) implements mode 2026 natively, so web needs nothing. The macOS app's SwiftTerm is checked in the PR description; neither client shares the Go pump.
+- Frontend parity: SwiftTerm (macOS) and xterm.js (web) both implement 2026 natively; no client change needed. Neither shares the Go pump.
