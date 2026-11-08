@@ -256,6 +256,41 @@ func (d *DB) HeraMessagesForTask(taskID string, limit int) ([]*HeraMessage, erro
 	return out, nil
 }
 
+// HeraMessagesPageForTask is the cursor-paged form of HeraMessagesForTask:
+// the newest limit messages with id < beforeID (all when beforeID <= 0),
+// returned oldest first. more reports whether older matching messages remain.
+// Read-only: never stamps read_at or touches delivery state.
+func (d *DB) HeraMessagesPageForTask(taskID string, limit int, beforeID int64) (msgs []*HeraMessage, more bool, err error) {
+	if limit <= 0 {
+		limit = HeraMaxUnreadPerRole
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	query, args := heraMessagesPageQuery(taskID, limit, beforeID)
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, false, fmt.Errorf("hera message page for task: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		m, err := scanHeraMessage(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		msgs = append(msgs, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(msgs) > limit {
+		more = true
+		msgs = msgs[:limit]
+	}
+	slices.Reverse(msgs)
+	return msgs, more, nil
+}
+
 // WaitForHeraInbox polls HeraInbox until at least one unread message exists or
 // ctx is cancelled. The immediate fast path avoids imposing the polling
 // interval when mail arrived before the wait began. HeraInbox intentionally
@@ -393,4 +428,17 @@ func scanHeraMessage(s rowScanner) (*HeraMessage, error) {
 	m.DeliveryMode = deliveryMode
 	m.DeliveredAt = nullTimePtr(deliveredAt)
 	return &m, nil
+}
+
+func heraMessagesPageQuery(taskID string, limit int, beforeID int64) (string, []any) {
+	query := `SELECT id, from_role_id, to_role_id, body, tldr, in_reply_to, sent_at, read_at, delivery_mode, delivered_at
+ FROM hera_messages
+ WHERE to_role_id IN (SELECT role_id FROM hera_bindings WHERE argus_task_id=?)`
+	args := []any{taskID}
+	if beforeID > 0 {
+		query += ` AND id<?`
+		args = append(args, beforeID)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	return query, append(args, limit+1)
 }

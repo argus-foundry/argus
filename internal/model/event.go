@@ -63,6 +63,12 @@ const (
 	// {"session_id":"s","available":true,"recorded_at":"RFC3339"}; never the text.
 	EventTypeTaskSuggestionChanged = "task.suggestion_changed"
 
+	// EventTypeHeraBoardChanged fires after a committed human-board post,
+	// material edit, read-state change or resolution. Payload:
+	// {"role_id":2,"item_id":3,"unread_count":1,"operation":"posted|updated|read_state|resolved"}.
+	// Never carries item bodies; TaskID is the coordinator's bound task when known.
+	EventTypeHeraBoardChanged = "hera.board_changed"
+
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.
 	// It is never persisted in the events table — clients seeing it should

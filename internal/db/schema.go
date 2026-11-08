@@ -733,6 +733,7 @@ func (d *DB) createHeraTables() error {
 		-- cap queries. sent_at + id provide a stable oldest-first ordering within
 		-- the partial scan.
 		CREATE INDEX IF NOT EXISTS idx_hera_msg_inbox ON hera_messages(to_role_id, sent_at, id) WHERE read_at IS NULL;
+		CREATE INDEX IF NOT EXISTS idx_hera_msg_history ON hera_messages(to_role_id, id);
 		-- Sender index covers the rate-limit rolling-window COUNT query.
 		CREATE INDEX IF NOT EXISTS idx_hera_msg_sent  ON hera_messages(from_role_id, sent_at);
 
