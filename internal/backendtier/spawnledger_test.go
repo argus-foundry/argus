@@ -209,3 +209,19 @@ func TestPenaltyClearsOnFreshCodexReading(t *testing.T) {
 	usage.Codex = &usagebudget.Reading{Percentage: 40, LastProbedAt: *now}
 	testutil.Equal(t, ResolveChoice(cfg, "", "").Backend, "codex")
 }
+
+func TestReleaseSpawnRemovesNewestReservation(t *testing.T) {
+	ResetSpawnLedger()
+	t.Cleanup(ResetSpawnLedger)
+	RecordSpawn("b", "work")
+	RecordSpawn("b", "work")
+	ReleaseSpawn("b", "work")
+	if got := PendingSpawns("b", "work"); got != 1 {
+		t.Fatalf("pending after one release = %d, want 1", got)
+	}
+	ReleaseSpawn("b", "work")
+	ReleaseSpawn("b", "work") // empty: no-op, no panic
+	if got := PendingSpawns("b", "work"); got != 0 {
+		t.Fatalf("pending after drain = %d, want 0", got)
+	}
+}

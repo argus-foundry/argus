@@ -90,6 +90,26 @@ func RecordSpawn(backend, account string) {
 	ledger.spawns[key] = append(ledger.spawns[key], ledgerNow())
 }
 
+// ReleaseSpawn rolls back one earlier RecordSpawn on the backend+account (the
+// newest entry), for a spawn that failed after reserving. A missing entry is a
+// no-op: it may already have expired out of the window.
+func ReleaseSpawn(backend, account string) {
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	key := ledgerKey(backend, account)
+	list := ledger.spawns[key]
+	if len(list) == 0 {
+		uxlog.Log("[routing] release spawn backend=%q account=%q: no reservation left", backend, account)
+		return
+	}
+	if len(list) == 1 {
+		delete(ledger.spawns, key)
+	} else {
+		ledger.spawns[key] = list[:len(list)-1]
+	}
+	uxlog.Log("[routing] released spawn reservation backend=%q account=%q", backend, account)
+}
+
 // WithReservation runs resolve and records the resulting spawn atomically with
 // respect to other WithReservation callers. Plain ResolveChoice stays pure so
 // previews and display lookups never reserve.
@@ -117,4 +137,10 @@ func ResetSpawnLedger() {
 	ledger.spawns = nil
 	ledger.mu.Unlock()
 	ResetLastKnown()
+}
+
+// PendingSpawns reports how many unexpired reservations the ledger holds for
+// the backend+account (diagnostics and tests).
+func PendingSpawns(backend, account string) int {
+	return recentSpawns(backend, account, time.Time{})
 }
