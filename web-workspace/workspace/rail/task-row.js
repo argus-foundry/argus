@@ -16,7 +16,7 @@ export function compactTaskRow({ task, role, selected, needsInput, ownInput, fai
     const pending = node('span','task-archive-pending','·');
     pending.setAttribute('aria-label','Archive pending');pending.dataset.tooltip='Archive pending. Checking current task state.';row.append(pending);
   }
-  const status = roleStatus(role);
+  const status = roleStatus(role, task);
   if (status) { const tag = node('span', 'task-role-tag', status==='unbound'?'Unavailable':status); tag.dataset.roleStatus = status; tag.dataset.tooltip = `Agent ${status==='unbound'?'unavailable':status}`; tag.setAttribute('aria-label', tag.dataset.tooltip); row.append(tag); }
   if (pinned) { const pin = node('span', 'task-pin', '⌖'); pin.setAttribute('aria-label', 'Pinned'); pin.dataset.tooltip = 'Pinned'; row.append(pin); }
   row.setAttribute('aria-label', [name, ...[...row.querySelectorAll('[aria-label]')].map(icon => icon.getAttribute('aria-label'))].join(', '));

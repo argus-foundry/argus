@@ -16,14 +16,15 @@ test('role tags classify ready and blocked and never label ordinary tasks',()=>{
 test('blocked role state stays visible even when an old ready marker remains',()=>{assert.equal(roleStatus({live:true,status:'blocked',ready_to_close:true}),'blocked');});
 test('missing role status is not classified as idle',()=>{assert.equal(roleStatus({live:true}),'');});
 test('a working role outranks a stale ready marker while idle or done roles still show ready',()=>{
- assert.equal(roleStatus({live:true,status:'working',ready_to_close:true}),'working');
+ assert.equal(roleStatus({live:true,status:'working',ready_to_close:true},{live:true,idle:false}),'working');
  assert.equal(roleStatus({live:true,status:'failed',ready_to_close:true}),'failed');
  assert.equal(roleStatus({live:true,status:'done',ready_to_close:true}),'ready');
  assert.equal(roleStatus({live:true,status:'idle',ready_to_close:true}),'ready');
 });
 test('a working binding is not displaced by a stale ready binding for the same task',()=>{
  const live=(id,status,ready)=>({role_id:id,live:true,task_id:'t',status,ready_to_close:ready});
- const pick=roles=>roleStatus(taskRoles({orchestrators:[{id:1,roles}]}).get('t'));
+ const task={id:'t',live:true,idle:false};
+ const pick=roles=>roleStatus(taskRoles({orchestrators:[{id:1,roles}]},[task]).get('t'),task);
  assert.equal(pick([live(1,'working',true),live(2,'done',true)]),'working');
  assert.equal(pick([live(1,'done',true),live(2,'working',true)]),'working');
  assert.equal(pick([live(1,'working',true),live(2,'blocked',true)]),'blocked');
@@ -42,3 +43,23 @@ for (const [statuses,expected] of [
   });
  }
 }
+test('a self-reported working status is shown only while the bound session is running',()=>{
+ const role={live:true,status:'working'};
+ assert.equal(roleStatus(role,{live:true,idle:false}),'working');
+ assert.equal(roleStatus(role,{live:true,idle:true}),'idle');
+ assert.equal(roleStatus(role,{live:false}),'stopped');
+ assert.equal(roleStatus({...role,ready_to_close:true},{live:true,idle:true}),'ready');
+ assert.equal(roleStatus({live:true,status:'blocked'},{live:true,idle:true}),'blocked');
+});
+test('a stale working binding does not outrank a ready binding for an idle task',()=>{
+ const roles=[{role_id:1,live:true,task_id:'t',status:'working'},{role_id:2,live:true,task_id:'t',status:'done',ready_to_close:true}];
+ const tasks=[{id:'t',live:true,idle:true}];
+ for (const order of [roles,[...roles].reverse()]) assert.equal(taskRoles({orchestrators:[{id:1,roles:order}]},tasks).get('t').role_id,2);
+ assert.equal(taskRoles({orchestrators:[{id:1,roles}]},[{id:'t',live:true,idle:false}]).get('t').role_id,1);
+});
+
+test('missing bound task cannot support a working tag',()=>{
+ const role={live:true,status:'working'};
+ assert.equal(roleStatus(role),'stopped');
+ assert.equal(roleStatus({...role,ready_to_close:true}),'ready');
+});
