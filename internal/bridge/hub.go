@@ -25,6 +25,11 @@ type State struct {
 	// boolean is ever serialized; the text lives in Hub.drafts so REST and the
 	// Tailscale-reachable API never expose what the user is typing.
 	HasDraft bool `json:"has_draft,omitempty"`
+	// DraftAware is true once this boot has proven it reports drafts (a draft
+	// event, or session.start carrying draft_aware). Without it HasDraft=false
+	// means "unknown", not "empty", so an older mod never silences the
+	// TUI-side typed-since-submit fallback.
+	DraftAware bool `json:"draft_aware,omitempty"`
 
 	Busy           bool   `json:"busy"`
 	NeedsInput     bool   `json:"needs_input"`
@@ -109,7 +114,7 @@ func (h *Hub) Ingest(taskID string, events []Event, now time.Time) int {
 			st.NeedsInput, st.NeedsInputKind, st.NeedsInputConfidence = false, "", ""
 			// The new process starts with an empty box; the previous boot's draft
 			// stays in h.drafts for TakeDraft.
-			st.HasDraft = false
+			st.HasDraft, st.DraftAware = false, false
 		}
 		if st.Events > 0 && ev.Boot != st.Boot {
 			if h.retired[taskID] == nil {
@@ -132,7 +137,7 @@ func apply(st *State, ev Event, now time.Time) {
 		st.LastMeasureAt = time.Time{}
 		st.Busy, st.NeedsInput, st.NeedsInputKind = false, false, ""
 		st.NeedsInputConfidence = ""
-		st.HasDraft = false
+		st.HasDraft, st.DraftAware = false, false
 	}
 	if ev.Generation != st.Generation {
 		st.SessionID = ""
@@ -147,6 +152,9 @@ func apply(st *State, ev Event, now time.Time) {
 	}
 	switch ev.Type {
 	case TypeSessionStart:
+		if ev.DraftAware {
+			st.DraftAware = true
+		}
 		if ev.Model != "" {
 			st.Model = ev.Model
 		}
@@ -188,7 +196,7 @@ func apply(st *State, ev Event, now time.Time) {
 		}
 		st.RateLimits = append([]RateLimit(nil), ev.RateLimits...)
 	case TypeDraft:
-		st.HasDraft = ev.Text != ""
+		st.HasDraft, st.DraftAware = ev.Text != "", true
 	case TypeHeartbeat:
 		if ev.Busy != nil {
 			st.Busy = *ev.Busy

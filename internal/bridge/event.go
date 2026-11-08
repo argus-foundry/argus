@@ -70,6 +70,9 @@ type Event struct {
 	Model string `json:"model,omitempty"`
 	Cwd   string `json:"cwd,omitempty"`
 
+	// session.start: the mod reports composer drafts (kick-timing-keep-place).
+	DraftAware bool `json:"draft_aware,omitempty"`
+
 	// turn.start / turn.complete
 	TurnID string `json:"turn_id,omitempty"`
 	Reason string `json:"reason,omitempty"`
