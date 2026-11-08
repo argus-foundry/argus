@@ -12,6 +12,7 @@ import Foundation
 public enum DaemonEvent: Sendable, Equatable {
     case taskCreated(taskID: String, name: String, project: String, status: String)
     case taskStatusChanged(taskID: String, from: String, to: String)
+    case taskContextChanged(taskID: String)
     case taskCompleted(taskID: String)
     case taskArchived(taskID: String)
     case taskDeleted(taskID: String)
@@ -38,6 +39,8 @@ public enum DaemonEvent: Sendable, Equatable {
         case let .taskCreated(id, _, _, _):
             return id
         case let .taskStatusChanged(id, _, _):
+            return id
+        case let .taskContextChanged(id):
             return id
         case let .taskCompleted(id):
             return id
@@ -249,6 +252,8 @@ public struct EventsStreamSession: Sendable, Equatable {
         switch event {
         case .resync, .unknown, .taskCreated, .taskForked:
             return [.resnapshot]
+        case .taskContextChanged:
+            return []
         default:
             return [.apply(event)]
         }
@@ -307,6 +312,8 @@ public struct EventsStreamSession: Sendable, Equatable {
             return .taskStatusChanged(taskID: taskID,
                                       from: payload?["from"]?.stringValue ?? "",
                                       to: payload?["to"]?.stringValue ?? "")
+        case "task.context_changed":
+            return .taskContextChanged(taskID: taskID)
         case "task.completed":
             return .taskCompleted(taskID: taskID)
         case "task.archived":

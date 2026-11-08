@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 type Posted = { type: string; seq: number; boot: string; session_id?: string; [k: string]: unknown }
 
-function world(on: On, opts: { task?: string; sessionId?: () => string; denyFetch?: boolean; hangFetch?: boolean; deliver?: boolean } = {}) {
+function world(on: On, opts: { task?: string; sessionId?: () => string | Promise<string>; denyFetch?: boolean; hangFetch?: boolean; deliver?: boolean } = {}) {
   const posted: Posted[] = []
   const urls: string[] = []
   const reads: string[] = []
@@ -31,7 +31,7 @@ function world(on: On, opts: { task?: string; sessionId?: () => string; denyFetc
     posted.push(...(JSON.parse(e.init?.body ?? '{"events":[]}').events ?? []))
     return { value: { status: 200, ok: true, headers: {}, text: '{}' } }
   })
-  on('session.id', () => ({ value: opts.sessionId ? opts.sessionId() : 'sess-1' }))
+  on('session.id', async () => ({ value: opts.sessionId ? await opts.sessionId() : 'sess-1' }))
   on('session.model', () => ({ value: 'opus' }))
   on('session.cwd', () => ({ value: '/work' }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -218,3 +218,183 @@ test('a daemon that never answers does not delay any hook', async ($, on) => {
 // here: the harness mints a different tool_use_id for the plugin's tool.call
 // than a test can name on tool.check, so the two never meet. It is verified
 // live (see context/knowledge/gotchas/bridge.md).
+
+const measurement = (tokens: number, changed: Array<'context' | 'cost'> = ['context']) => ({ context: { tokens, percent: 1, window: 200000 }, changed })
+const breakdown = { context: { tokens: 10, percent: 1, window: 200000, breakdown: { categories: [{ name: 'Messages', tokens: 7, kind: 'used' }] } }, rateLimits: [], cost: { usd: 0 } }
+
+test('registration forwards summary categories only for released context measurements', async ($, on) => {
+  const w = world(on, { task: 'T1' })
+  let calls = 0
+  on('session.usage', (_, e) => { calls++; expect(e.breakdown).toBe('summary'); return { value: breakdown } })
+  await $.session.start(START)
+  for (let i = 1; i <= 30; i++) await $.session.measure(measurement(i))
+  await w.delivered()
+  expect(calls).toBe(1)
+  expect(w.posted.filter(p => p.type === 'session.measure').length).toBe(1)
+  expect(w.posted.find(p => p.type === 'session.measure')).toMatchObject({ context: { tokens: 1, categories: { messages: 7 } } })
+  await $.turn.complete({ turnId: 't', reason: 'answer', durationMs: 1, isAborted: false, answer: '' })
+  await w.delivered()
+  expect(calls).toBe(2)
+  expect(w.posted.filter(p => p.type === 'session.measure')[1]).toMatchObject({ context: { tokens: 30, categories: { messages: 7 } } })
+  await w.clock.advance(5000)
+  await $.session.measure(measurement(31, ['cost']))
+  await w.delivered()
+  expect(calls).toBe(2)
+})
+
+test('hung category read never holds the hook and stays single flight after deadline', async ($, on) => {
+  const w = world(on, { task: 'T1' })
+  let calls = 0
+  let release = () => {}
+  on('session.usage', async () => { calls++; await new Promise<void>(r => { release = r }); return { value: breakdown } })
+  await $.session.start(START)
+  let done = false
+  const pending = $.session.measure(measurement(10)).then(() => { done = true })
+  await w.delivered()
+  expect(done).toBe(true)
+  expect(w.posted.filter(p => p.type === 'session.measure').length).toBe(0)
+  await w.clock.advance(500)
+  await w.delivered()
+  expect(w.posted.filter(p => p.type === 'session.measure')[0]).toMatchObject({ context: { tokens: 10 } })
+  expect((w.posted.find(p => p.type === 'session.measure')?.context as Record<string, unknown>).categories).toBe(undefined)
+  await w.clock.advance(5000)
+  await $.session.measure(measurement(20))
+  await w.delivered()
+  expect(calls).toBe(1)
+  expect(w.posted.filter(p => p.type === 'session.measure').length).toBe(2)
+  release()
+  await pending
+  await w.delivered()
+  expect(w.posted.filter(p => p.type === 'session.measure').length).toBe(2)
+  await w.clock.advance(5000)
+  const next = $.session.measure(measurement(30))
+  await w.delivered()
+  expect(calls).toBe(2)
+  release()
+  await next
+})
+
+test('category read rejection posts totals and rapid failures stay throttled', async ($, on) => {
+  const w = world(on, { task: 'T1' })
+  let calls = 0
+  on('session.usage', () => { calls++; throw Error('unavailable') })
+  await $.session.start(START)
+  for (let i = 1; i <= 10; i++) await $.session.measure(measurement(i))
+  await w.delivered()
+  expect(calls).toBe(1)
+  expect(w.posted.find(p => p.type === 'session.measure')).toMatchObject({ context: { tokens: 1 } })
+})
+
+test('category results from an old session are discarded after clear', async ($, on) => {
+  let id = 'old'
+  const w = world(on, { task: 'T1', sessionId: () => id })
+  let release = () => {}
+  on('session.usage', async () => { await new Promise<void>(r => { release = r }); return { value: breakdown } })
+  await $.session.start(START)
+  const pending = $.session.measure(measurement(10))
+  await w.delivered()
+  id = 'new'
+  await $.turn.start({ text: 'new', turnId: 'new' })
+  release()
+  await pending
+  await w.delivered()
+  expect(w.posted.filter(p => p.type === 'session.measure')).toEqual([])
+})
+
+test('slow categories enrich before deadline without delaying the hook', async ($, on) => {
+  const w = world(on, { task: 'T1' })
+  let release = () => {}
+  on('session.usage', async () => { await new Promise<void>(r => { release = r }); return { value: breakdown } })
+  await $.session.start(START)
+  await $.session.measure(measurement(10))
+  await w.clock.advance(100)
+  expect(w.posted.filter(p => p.type === 'session.measure')).toEqual([])
+  release()
+  await w.delivered()
+  expect(w.posted.find(p => p.type === 'session.measure')).toMatchObject({ context: { tokens: 10, categories: { messages: 7 } } })
+})
+
+test('a newer flushed measurement supersedes a pending category read', async ($, on) => {
+  const w = world(on, { task: 'T1' })
+  let calls = 0
+  let release = () => {}
+  on('session.usage', async () => { calls++; await new Promise<void>(r => { release = r }); return { value: breakdown } })
+  await $.session.start(START)
+  await $.session.measure(measurement(10))
+  await $.session.measure(measurement(20))
+  await $.turn.complete({ turnId: 't', reason: 'answer', durationMs: 1, isAborted: false, answer: '' })
+  release()
+  await w.delivered()
+  expect(calls).toBe(1)
+  expect(w.posted.filter(p => p.type === 'session.measure').length).toBe(1)
+  expect(w.posted.find(p => p.type === 'session.measure')).toMatchObject({ context: { tokens: 20 } })
+})
+
+test('identity replacement without a turn also discards a pending reading', async ($, on) => {
+  let id = 'old'
+  const w = world(on, { task: 'T1', sessionId: () => id })
+  let release = () => {}
+  on('session.usage', async () => { await new Promise<void>(r => { release = r }); return { value: breakdown } })
+  await $.session.start(START)
+  await $.session.measure(measurement(10))
+  await w.delivered()
+  id = 'new'
+  release()
+  await w.delivered()
+  expect(w.posted.filter(p => p.type === 'session.measure')).toEqual([])
+})
+
+
+test('supersession is checked after asynchronous identity reads settle', async ($, on) => {
+  let reads = 0
+  let release = () => {}
+  const w = world(on, { task: 'T1', sessionId: () => {
+    if (++reads === 3) return new Promise<string>(resolve => { release = () => resolve('sess-1') })
+    return 'sess-1'
+  } })
+  on('session.usage', () => ({ value: breakdown }))
+  await $.session.start(START)
+  await $.session.measure(measurement(10))
+  await w.delivered()
+  expect(reads).toBe(3)
+  await $.session.measure(measurement(20))
+  await $.turn.complete({ turnId: 't', reason: 'answer', durationMs: 1, isAborted: false, answer: '' })
+  await w.delivered()
+  release()
+  await w.delivered()
+  expect(w.posted.filter(p => p.type === 'session.measure').length).toBe(1)
+  expect(w.posted.find(p => p.type === 'session.measure')).toMatchObject({ context: { tokens: 20 } })
+})
+
+test('a breakdown mapping error still posts aggregate telemetry', async ($, on) => {
+  const w = world(on, { task: 'T1' })
+  on('session.usage', () => ({ value: { ...breakdown, context: { ...breakdown.context, breakdown: { categories: [{ tokens: 1, kind: 'used' }] } } } } as never))
+  await $.session.start(START)
+  await $.session.measure(measurement(10))
+  await w.delivered()
+  expect(w.posted.find(p => p.type === 'session.measure')).toMatchObject({ context: { tokens: 10 } })
+})
+
+test('measurement before session identity is reported still forwards totals', async ($, on) => {
+  const w = world(on, { task: 'T1' })
+  await $.session.measure(measurement(10))
+  await w.delivered()
+  expect(w.posted.find(p => p.type === 'session.measure')).toMatchObject({ context: { tokens: 10 } })
+})
+
+test('new session publishes identical context immediately', async ($, on) => {
+  let id = 'old'
+  const w = world(on, { task: 'T1', sessionId: () => id })
+  on('session.usage', () => ({ value: breakdown }))
+  await $.session.start(START)
+  await $.session.measure(measurement(10))
+  await w.delivered()
+  expect(w.posted.filter(p => p.type === 'session.measure')).toMatchObject([{ session_id: 'old', context: { tokens: 10, categories: { messages: 7 } } }])
+  id = 'new'
+  await $.turn.start({ text: 'after clear', turnId: 't-new' })
+  await $.session.measure(measurement(10))
+  await w.delivered()
+  const measures = w.posted.filter(p => p.type === 'session.measure')
+  expect(measures.length).toBe(2)
+  expect(measures[1]).toMatchObject({ session_id: 'new', context: { tokens: 10, categories: { messages: 7 } } })
+})

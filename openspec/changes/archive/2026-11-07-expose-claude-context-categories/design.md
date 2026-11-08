@@ -1,0 +1,10 @@
+## Decisions
+
+- **Producer mapping is by row label.** The engine types breakdown rows only as `used`/`free`/`buffer`/`deferred` and documents the label as the display name, so the mod maps labels (`System prompt`, `System tools` + `MCP tools`, `Custom agents`, `Memory files`, `Skills`, `Messages`) and the `buffer` row (compaction reserve). Unknown labels and deferred rows are dropped, never guessed. Counts are the engine's own estimates of each row, not role totals inferred by Argus.
+- **Deviation from the ticket wording:** the ticket calls categories "measured"; the engine documents them as estimates (a `summary` breakdown estimates throughout). Argus reports them as the engine's measurement and does not recompute.
+- **`summary` detail, not `full`:** `full` calls the token-count API per category on every measurement; too costly for a message that fires after each tool step.
+- **Breakdown only for released context measurements.** Read in the background with a 250ms deadline and one flight per bridge. Timeout sends totals but retains the flight until the engine call settles. Discard results after session or generation replacement, or a newer measurement. Hooks never await enrichment.
+- **Authority and measurement age are separate.** An old measurement remains `live=true` while the current launch sends fresh heartbeats, because unchanged context is deduplicated. Clients can display age using `measured_at`. Replacing a session, process generation or account launch invalidates the old context; a known replaced launch returns `context=null`. If bridge authority is unavailable without a known replacement, recorded data returns `live=false`. The hub clears context when a new session or generation reports.
+- **Invalid measurements are dropped individually.** Log one bounded invalid-count summary after releasing the ingest lock, retain the previous context snapshot, ingest all valid lifecycle and measurement events, and return 200 with accepted/received counts.
+- **Event is an invitation only**, emitted after a live measurement carrying context.
+- The response is provider-neutral (`provider`, `source`) so Codex context can fill it later.

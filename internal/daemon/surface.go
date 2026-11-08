@@ -195,7 +195,11 @@ const (
 	// 35: sandbox profile allows file-read-metadata on ~/.aws so omp's startup
 	//     stat no longer fails with EPERM. A stale supervisor spawns omp with the
 	//     old profile and it crashes on launch.
-	SupervisorSpawnSurface = 35
+	// 36: the bridge mod reads context categories after throttle selection,
+	//     in background single-flight work with a deadline. A stale supervisor
+	//     spawns sessions with the older mod, whose measurements carry no
+	//     categories.
+	SupervisorSpawnSurface = 36
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -488,7 +492,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "66be1a389caaf3346c4100535ad116a744d1f16e88e9dd8a944279441ea40be3"
+	SpawnSurfaceDigest  = "0584805393c7b2a1bfe699003479be53eebbbd0a2135ebc9c90dbcca5536e8e7"
 	StreamSurfaceDigest = "4db586fb7dcaf62899cb2ebc82bbaa7fcc325d7cf99611f5f7942c44f9bc9467"
 )
 

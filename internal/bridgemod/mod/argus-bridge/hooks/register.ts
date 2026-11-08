@@ -9,7 +9,7 @@
 // (`claude plugin validate` follows it nowhere else), so the helpers below take
 // `$` and the per-load `Bridge` state explicitly instead of closing over them.
 import type { Hook, Register } from 'claude-code'
-import { measureFields, MeasureThrottle } from './measure'
+import { categoriesFromBreakdown, measureFields, MeasureThrottle } from './measure'
 import { Reporter, type Env } from './reporter'
 import { Delivery } from './delivery'
 import { confidenceOf, GRACE_MS, NeedsInputTracker, type Kind, type Transition } from './tracker'
@@ -21,6 +21,7 @@ type Engine = Parameters<Hook<'session.start'>>[0]
 const HEARTBEAT_MS = 15_000
 /** A hung daemon must not hang a hook: a post is abandoned after this. */
 const POST_TIMEOUT_MS = 2_000
+const CATEGORY_TIMEOUT_MS = 250
 
 /** Everything one load of the mod keeps; a hot reload makes a fresh one. */
 type Bridge = {
@@ -30,7 +31,10 @@ type Bridge = {
   readonly boot: string
   reporter: Reporter | undefined
   readonly tracker: NeedsInputTracker
-  readonly measure: MeasureThrottle
+  measure: MeasureThrottle
+  readonly categoryMeasures: WeakSet<Record<string, unknown>>
+  categoryReading: boolean
+  measureVersion: number
   lastModel: string | undefined
   heartbeat: { cancel: () => void } | undefined
   deliveryTimer: { cancel: () => void } | undefined
@@ -47,6 +51,9 @@ function newBridge(): Bridge {
     reporter: undefined,
     tracker: new NeedsInputTracker(),
     measure: new MeasureThrottle(),
+    categoryMeasures: new WeakSet(),
+    categoryReading: false,
+    measureVersion: 0,
     lastModel: undefined,
     heartbeat: undefined,
     deliveryTimer: undefined,
@@ -104,8 +111,41 @@ async function emitTransition($: Engine, b: Bridge, t: Transition | null): Promi
   else await rep($, b).emit('cleared', { tool_use_id: t.toolUseId })
 }
 
+async function enrichMeasure($: Engine, b: Bridge, fields: Record<string, unknown>, sessionId: string, version: number): Promise<void> {
+  let started = false
+  try {
+    const generation = await $.env.get('ARGUS_BRIDGE_GENERATION')
+    if (await $.session.id() !== sessionId) return
+    // A timeout releases the measurement, but only settlement releases the flight.
+    const read = $.session.usage({ breakdown: 'summary' }).then(
+      usage => categoriesFromBreakdown(usage.context.breakdown?.categories),
+    ).catch(() => undefined).finally(() => { b.categoryReading = false })
+    started = true
+    const categories = await Promise.race([
+      read,
+      $.clock.sleep(CATEGORY_TIMEOUT_MS).then(() => undefined),
+    ])
+    const currentId = await $.session.id()
+    const currentGeneration = await $.env.get('ARGUS_BRIDGE_GENERATION')
+    if (version !== b.measureVersion || rep($, b).sessionId !== sessionId ||
+        currentId !== sessionId || currentGeneration !== generation) return
+    if (categories) fields.context = { ...(fields.context as Record<string, unknown>), categories }
+    await rep($, b).emit('session.measure', fields)
+  } finally {
+    if (!started) b.categoryReading = false
+  }
+}
+
 async function sendMeasure($: Engine, b: Bridge, fields: Record<string, unknown> | undefined): Promise<void> {
-  if (fields) await rep($, b).emit('session.measure', fields)
+  if (!fields) return
+  const version = ++b.measureVersion
+  const sessionId = rep($, b).sessionId
+  if (!b.categoryReading && b.categoryMeasures.has(fields) && sessionId) {
+    b.categoryReading = true
+    void safe(() => enrichMeasure($, b, fields, sessionId, version))
+  } else {
+    await rep($, b).emit('session.measure', fields)
+  }
 }
 
 // Reports the session id/model/cwd when any differs from what was last
@@ -116,6 +156,10 @@ async function syncSession($: Engine, b: Bridge, force: boolean): Promise<void> 
   const id = await $.session.id()
   const model = await $.session.model()
   if (!force && id === r.sessionId && model === b.lastModel) return
+  if (id !== r.sessionId) {
+    b.measure = new MeasureThrottle()
+    b.measureVersion++
+  }
   r.setSession(id)
   b.lastModel = model
   await r.emit('session.start', { model, cwd: await $.session.cwd() })
@@ -278,7 +322,9 @@ export const register: Register = on => {
   on('session.measure', async ($, e, next) => {
     await safe(async () => {
       if (!(await rep($, b).taskId())) return
-      await sendMeasure($, b, b.measure.offer(measureFields(e), await $.clock.now()))
+      const fields = measureFields(e)
+      if (e.changed.includes('context')) b.categoryMeasures.add(fields)
+      await sendMeasure($, b, b.measure.offer(fields, await $.clock.now()))
       scheduleUI($, b.ui)
     })
     return next(e)
