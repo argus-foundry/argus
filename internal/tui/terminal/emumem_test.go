@@ -355,7 +355,8 @@ func TestReleaseIdle_LiveReturnPaintsContent(t *testing.T) {
 	screen := tcell.NewSimulationScreen("UTF-8")
 	testutil.NoError(t, screen.Init())
 	screen.SetSize(82, 26)
-	sess := &mockAdapter{alive: true, ptyCols: 80, ptyRows: 24, output: []byte(b.String()), totalWritten: uint64(b.Len())}
+	raw := []byte(b.String())
+	sess := &mockAdapter{alive: true, ptyCols: 80, ptyRows: 24, output: raw, totalWritten: uint64(len(raw))}
 	tp.SetSession(sess)
 	tp.SetTaskID(taskID)
 	tp.Draw(screen)

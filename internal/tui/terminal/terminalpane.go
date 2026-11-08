@@ -2351,7 +2351,7 @@ func (tp *TerminalPane) asyncReplayRebuildAt(gen uint64, taskID string, scrollOf
 		}
 		logSize = limit
 		firstByte = win.start
-		bytesFed = uint64(windowEnd - win.start)
+		bytesFed = uint64(windowEnd - win.start) //nolint:gosec // G115: windowEnd >= win.start (feed only advances)
 		nonTail = windowEnd < limit
 		atBudget = scrollbackCells(emu) >= replayScrollbackCellBudget
 	} else {

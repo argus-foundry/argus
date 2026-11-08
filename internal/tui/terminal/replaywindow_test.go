@@ -214,8 +214,8 @@ func TestReplayWindow_FullTraversal(t *testing.T) {
 	if slides < 4 {
 		t.Fatalf("expected the window to slide several times, saw %d window states", slides)
 	}
-	if grown := int64(testHeapBytes()) - int64(heapAfterFirst); grown > 24<<20 {
-		t.Fatalf("heap grew %d bytes during the upward traversal", grown)
+	if now := testHeapBytes(); now > heapAfterFirst && now-heapAfterFirst > 24<<20 {
+		t.Fatalf("heap grew %d bytes during the upward traversal", now-heapAfterFirst)
 	}
 
 	// Back down to the live bottom.
@@ -247,8 +247,8 @@ func TestReplayWindow_FullTraversal(t *testing.T) {
 	drawSettled(t, tp, screen)
 	nums := checkWindow("tail")
 	testutil.Equal(t, nums[len(nums)-1] >= total-3, true)
-	if grown := int64(testHeapBytes()) - int64(heapAfterFirst); grown > 24<<20 {
-		t.Fatalf("heap grew %d bytes over the full round trip", grown)
+	if now := testHeapBytes(); now > heapAfterFirst && now-heapAfterFirst > 24<<20 {
+		t.Fatalf("heap grew %d bytes over the full round trip", now-heapAfterFirst)
 	}
 }
 
