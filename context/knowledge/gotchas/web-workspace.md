@@ -154,3 +154,9 @@
 - **Client rectangles do not prove that closed-disclosure content can receive focus.** Exclude descendants of every closed `details` ancestor except its first summary subtree, then confirm `document.activeElement` after each focus attempt before ending recovery.
 - **Focus recovery follows view lifetime and explicit supersession, never a request deadline.** Capture before disabling controls and restore after unlocking; a timed-out request still needs focus in its surviving error UI.
 - **Consume saved load recovery on its first settlement.** Completed captures no longer observe departure and must not run during later background refreshes; bulk completion must use the shared visibility checks too.
+
+- **Treat a context-route 404 or HTML 200 as an older daemon, but never replace a supported empty or failed context read with bridge/meta values.** Measurement age does not change live authority, null categories stay absent, and context/session invalidation must bypass task-snapshot buffering to fence in-flight reads.
+
+- **A scrollable native popover root needs both tabindex and autofocus for keyboard entry.** Chromium can skip the root during Tab navigation even with tabindex=0, so focus it through the native opening algorithm and retain that same node across refreshes.
+
+- **Context and auxiliary usage reads need separate publication fences and must merge the latest snapshot after awaiting.** Coalesce event bursts without clearing same-session categories, queue one follow-up for events arriving during a read, and bound shared reads so a hung request cannot block polling indefinitely.

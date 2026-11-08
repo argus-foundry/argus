@@ -20,6 +20,8 @@ async function app({
   });
   page.on('pageerror', error => errors.push(error.message));
   page.setDefaultTimeout(5000);
+  const contextReads=[];
+  const measurement={task_id:'a',session_id:'s1',provider:'anthropic',source:'bridge',live:true,measured_at:new Date().toISOString(),context:{used_tokens:50,window_tokens:100,percent:50,categories:{messages:50}}};
   const tasks = [{
     id: 'a',
     name: 'Selected task',
@@ -80,6 +82,7 @@ async function app({
   });
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
+    if(path==='/api/tasks/a/context'){contextReads.push(path);return route.fulfill({json:measurement});}
     if (path.endsWith('/input')) {
       inputs.push({
         path,
@@ -136,7 +139,7 @@ async function app({
     reads,
     held,
     tasks,
-    inputs
+    inputs, measurement, contextReads
   };
 }
 async function waitHeld(held) {
@@ -579,4 +582,20 @@ test.afterEach(async ({
   browser
 }) => {
   await Promise.all(browser.contexts().map(context => context.close()));
+});
+
+test('context stream invalidation refreshes the selected popover during a buffered task read',async()=>{
+  const {page,measurement,contextReads,held}=await app();
+  await page.locator('.task-row').filter({hasText:'Selected task'}).click();
+  await page.locator('#context-toggle').click();
+  await page.waitForFunction(()=>document.querySelector('#composer-context').textContent.includes('50 tokens'));
+  const before=contextReads.length;
+  await page.evaluate(()=>window.emit({id:50,type:'resync'}));
+  await page.clock.runFor(101);await waitHeld(held);
+  measurement.context.categories.messages=777;
+  await page.evaluate(()=>window.emit({id:51,type:'task.context_changed',task_id:'a',payload:{session_id:'s1',measured_at:new Date().toISOString()}}));
+  await page.clock.runFor(101);
+  await page.waitForFunction(()=>document.querySelector('#composer-context').textContent.includes('777 tokens'));
+  assert.ok(contextReads.length>before);
+  assert.ok(held.length,'Context updates must not await the buffered task snapshot');
 });

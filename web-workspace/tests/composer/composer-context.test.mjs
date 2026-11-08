@@ -53,3 +53,39 @@ test('live task bridge supplies known usage windows when account readings are mi
 test('malformed optional endpoint shapes cannot break composer rendering', () => {
   assert.deepEqual(contextSnapshot(task,{raw:{},accounts:{},backends:{backends:{}},roster:{orchestrators:{},freelance:{}},meta:{entries:{}}},now).windows,[]);
 });
+
+const measurement = {task_id:'a',session_id:'s1',provider:'anthropic',live:true,measured_at:'2026-11-06T10:00:00Z',source:'bridge',context:{used_tokens:1234,window_tokens:200000,percent:0.617,categories:{messages:1000,memory:null,tools:0,agents:34,skills:null,system:200,compaction:null}}};
+test('task context keeps measured categories, zero and old live authority', () => {
+  const view = contextSnapshot({...task,session_id:'s1'},{...data,measurement},now);
+  assert.equal(view.context.used,1234);
+  assert.deepEqual(view.context.categories,[['Messages',1000],['Tools',0],['Agents',34],['System',200]]);
+  assert.equal(view.context.recorded,false);
+  assert.equal(view.context.age,'2h ago');
+});
+test('supported empty or mismatched session context never falls back to bridge totals', () => {
+  const bridge = {live:true,context:{tokens:99,window:100,percent:99}};
+  for (const value of [{...measurement,context:null,live:false},{...measurement,session_id:'old'},null]) {
+    assert.equal(contextSnapshot({...task,session_id:'s1'},{bridge,measurement:value},now).context,null);
+  }
+});
+test('recorded task context displays measured time without an inferred percent', () => {
+  const view = contextSnapshot(task,{measurement:{...measurement,live:false,context:{used_tokens:null,window_tokens:200000,percent:null,categories:{skills:5}}}},now);
+  assert.equal(view.context.recorded,true); assert.equal(view.context.percent,null);
+  assert.deepEqual(view.context.categories,[['Skills',5]]);
+});
+
+test('all category names retain measured zero and reject invalid values',()=>{
+  const categories={messages:0,memory:0,tools:0,agents:0,skills:0,system:0,compaction:0};
+  const view=contextSnapshot(task,{measurement:{...measurement,context:{...measurement.context,categories}}},now);
+  assert.deepEqual(view.context.categories,[['Messages',0],['Memory',0],['Tools',0],['Agents',0],['Skills',0],['System',0],['Compaction',0]]);
+  for(const value of [null,-1,'0',Infinity,NaN]){
+    const context={...measurement.context,categories:{memory:value}};
+    assert.deepEqual(contextSnapshot(task,{measurement:{...measurement,context}},now).context.categories,[]);
+  }
+});
+test('measurement age includes minutes and days without changing live authority',()=>{
+  for(const [at,age] of [['2026-11-06T12:00:00Z','just now'],['2026-11-06T11:58:00Z','2m ago'],['2026-11-04T12:00:00Z','2d ago']]){
+    const view=contextSnapshot(task,{measurement:{...measurement,measured_at:at}},now);
+    assert.equal(view.context.age,age);assert.equal(view.context.recorded,false);
+  }
+});

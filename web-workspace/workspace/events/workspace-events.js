@@ -43,7 +43,10 @@ export class WorkspaceEvents {
    while(!signal.aborted&&generation===this.generation){const {done,value}=await reader.read();if(done)throw new Error('Event stream ended');
     for(const event of parser.feed(decoder.decode(value,{stream:true}))){
      if(Number.isSafeInteger(event.id)&&event.id>0){if(event.id<=this.cursor)continue;this.cursor=event.id;}
-     if(event.type==='task.archived'){
+     if(['session.started','session.exited'].includes(event.type))this.callbacks.context?.(event);
+     if(event.type==='task.context_changed'){
+      this.callbacks.context?.(event);
+     }else if(event.type==='task.archived'){
       this.archivePending.set(event.task_id,++this.archiveRevision);
       this.callbacks.event(event);this.scheduleSnapshot();
       log('events','archive pending',{count:this.archivePending.size});
