@@ -12,7 +12,11 @@ import (
 // cadence, so N spawns resolved inside one window would all see the same
 // snapshot and land on the same account. The ledger remembers recent spawns
 // per (backend, account) in this process and ResolveChoice treats each as
-// SpawnPenaltyPct extra usage until it ages out of SpawnPenaltyWindow.
+// SpawnPenaltyPct extra usage. The penalty is only a placeholder for usage the
+// next probe has not measured yet: routing always scores the REAL reading, and a
+// spawn stops counting the moment a reading newer than it arrives (the reading
+// already includes it). SpawnPenaltyWindow is the backstop for readings with
+// no timestamp.
 const (
 	SpawnPenaltyPct    = 5.0
 	SpawnPenaltyWindow = 30 * time.Minute
@@ -42,9 +46,10 @@ func ledgerNow() time.Time {
 	return time.Now()
 }
 
-// recentSpawns counts spawns for the key inside the window, pruning expired
+// recentSpawns counts spawns for the key inside the window and newer than since
+// (the account's latest reading time; zero = unknown), pruning window-expired
 // entries as it goes.
-func recentSpawns(backend, account string) int {
+func recentSpawns(backend, account string, since time.Time) int {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	key := ledgerKey(backend, account)
@@ -60,7 +65,13 @@ func recentSpawns(backend, account string) int {
 		return 0
 	}
 	ledger.spawns[key] = kept
-	return len(kept)
+	n := 0
+	for _, t := range kept {
+		if t.After(since) {
+			n++
+		}
+	}
+	return n
 }
 
 // RecordSpawn notes one spawn on the backend+account.
@@ -89,8 +100,8 @@ func WithReservation(resolve func() Choice) Choice {
 }
 
 // penalized returns pct plus the recent-spawn penalty and the spawn count.
-func penalized(backend, account string, pct float64) (float64, int) {
-	n := recentSpawns(backend, account)
+func penalized(backend, account string, pct float64, readingAt time.Time) (float64, int) {
+	n := recentSpawns(backend, account, readingAt)
 	return pct + float64(n)*SpawnPenaltyPct, n
 }
 

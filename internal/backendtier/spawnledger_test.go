@@ -64,7 +64,7 @@ func TestResolveChoiceIsPure(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "personal")
 	}
-	testutil.Equal(t, recentSpawns("claude", "personal"), 0)
+	testutil.Equal(t, recentSpawns("claude", "personal", time.Time{}), 0)
 }
 
 func TestUnreadTiersRotateByFewestSpawns(t *testing.T) {
@@ -86,6 +86,51 @@ func TestUnreadTiersRotateByFewestSpawns(t *testing.T) {
 func TestLedgerKeyNormalizesDefault(t *testing.T) {
 	resetLedger(t)
 	RecordSpawn("claude", "")
-	testutil.Equal(t, recentSpawns("claude", config.DefaultAccountName), 1)
-	testutil.Equal(t, recentSpawns("codex", ""), 0)
+	testutil.Equal(t, recentSpawns("claude", config.DefaultAccountName, time.Time{}), 1)
+	testutil.Equal(t, recentSpawns("codex", "", time.Time{}), 0)
+}
+
+// The penalty is a placeholder for usage the next probe has not measured: once
+// a reading newer than the spawn lands, the real reading is scored alone.
+func TestPenaltyClearsOnFreshReading(t *testing.T) {
+	now := resetLedger(t)
+	withCachedPct(t, known(40), known(0))
+	readingAt := now.Add(-time.Hour)
+	restore := usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
+		return usagebudget.Reading{Percentage: 38, LastProbedAt: readingAt}, account == "personal"
+	})
+	defer restore()
+	cfg := config.Config{Backends: testBackends(), Accounts: map[string]config.Account{"personal": {ClaudeConfigDir: t.TempDir()}}, BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
+		{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+		{Backend: "claude", Account: "personal", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+	}}}
+	WithReservation(func() Choice { return ResolveChoice(cfg, "claude", "") })
+	// Reading is older than the spawn: still penalized, so default wins.
+	testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "default")
+	// A reading taken after the spawn already includes it: penalty gone.
+	*now = now.Add(time.Minute)
+	readingAt = *now
+	testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "personal")
+}
+
+func TestPenaltyClearsOnFreshDaemonReading(t *testing.T) {
+	now := resetLedger(t)
+	at := now.Add(-time.Hour)
+	usage := Usage{Claude: map[string]usagebudget.Reading{
+		"default":  {Percentage: 40, LastProbedAt: at},
+		"personal": {Percentage: 38, LastProbedAt: at},
+	}}
+	defer SetUsageSource(func() (Usage, error) { return usage, nil })()
+	cfg := config.Config{Backends: testBackends(), Accounts: map[string]config.Account{"personal": {ClaudeConfigDir: t.TempDir()}}, BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
+		{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+		{Backend: "claude", Account: "personal", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+	}}}
+	WithReservation(func() Choice { return ResolveChoice(cfg, "claude", "") })
+	testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "default")
+	*now = now.Add(time.Minute)
+	for k, r := range usage.Claude {
+		r.LastProbedAt = *now
+		usage.Claude[k] = r
+	}
+	testutil.Equal(t, ResolveChoice(cfg, "claude", "").Account, "personal")
 }

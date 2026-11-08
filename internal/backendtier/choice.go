@@ -3,6 +3,7 @@ package backendtier
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/uxlog"
@@ -50,6 +51,7 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 		choice := Choice{Backend: tier.Backend, Account: selected}
 		var pct float64
 		var known bool
+		var readingAt time.Time
 		switch tier.Probe {
 		case config.ProbeNone:
 		case config.ProbeClaudeUsage, config.ProbeCodexUsage:
@@ -58,14 +60,20 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 			}
 			if tier.Probe == config.ProbeClaudeUsage {
 				pct, known = rd.claude(selected)
+				if rd.claudeAt != nil {
+					readingAt = rd.claudeAt(selected)
+				}
 			} else if selected == "" || selected == config.DefaultAccountName {
 				pct, known = rd.codex()
+				if rd.codexAt != nil {
+					readingAt = rd.codexAt()
+				}
 			}
 		default:
 			continue
 		}
 		if known {
-			adj, n := penalized(tier.Backend, selected, pct)
+			adj, n := penalized(tier.Backend, selected, pct, readingAt)
 			if n > 0 {
 				uxlog.Log("[routing] burst penalty backend=%q account=%q spawns=%d usage=%.2f->%.2f", tier.Backend, selected, n, pct, adj)
 				pct = adj
@@ -81,7 +89,7 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 		if !known {
 			// Fewest recent spawns wins so a burst of unread tiers rotates;
 			// list order breaks ties (strict <).
-			if n := recentSpawns(tier.Backend, selected); unread.Backend == "" || n < unreadSpawns {
+			if n := recentSpawns(tier.Backend, selected, time.Time{}); unread.Backend == "" || n < unreadSpawns {
 				unread, unreadSpawns = choice, n
 			}
 			continue
