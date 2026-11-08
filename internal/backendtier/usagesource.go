@@ -3,6 +3,7 @@ package backendtier
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/usagebudget"
@@ -43,6 +44,39 @@ func SetUsageSource(read func() (Usage, error)) func() {
 type readings struct {
 	claude func(account string) (float64, bool)
 	codex  func() (float64, bool)
+	// claudeAt/codexAt report when the reading was measured and when its
+	// window resets (zero = unknown); nil means unknown. Spawns older than the
+	// measurement no longer carry a burst penalty, and a remembered reading is
+	// not recalled past its reset.
+	claudeAt func(account string) readingTimes
+	codexAt  func() readingTimes
+}
+
+// readingTimes is when a reading was measured and, per quota window, its
+// percentage and reset (empty = a single-window reading: the live percentage
+// with reset).
+type readingTimes struct {
+	probed, reset time.Time
+	windows       []windowReading
+}
+
+// windowReading is one quota window's percentage and reset (zero = unknown).
+type windowReading struct {
+	pct   float64
+	reset time.Time
+}
+
+// timesOf keeps every Claude window separately, so a last-known recall can
+// score whichever window has not reset yet instead of pairing one window's
+// percentage with another's reset.
+func timesOf(r usagebudget.Reading) readingTimes {
+	t := readingTimes{probed: r.LastProbedAt, reset: r.ResetAt}
+	for _, w := range []*usagebudget.Window{r.FiveHour, r.SevenDay} {
+		if w != nil {
+			t.windows = append(t.windows, windowReading{pct: w.Percentage, reset: w.ResetAt})
+		}
+	}
+	return t
 }
 
 // currentReadings returns the reading functions for one resolution: a single
@@ -69,6 +103,18 @@ func currentReadings() readings {
 					}
 					return u.Codex.Percentage, true
 				},
+				claudeAt: func(account string) readingTimes {
+					if account == "" {
+						account = config.DefaultAccountName
+					}
+					return timesOf(u.Claude[account])
+				},
+				codexAt: func() readingTimes {
+					if u.Codex == nil {
+						return readingTimes{}
+					}
+					return timesOf(*u.Codex)
+				},
 			}
 		}
 		// ErrNoUsageSnapshot is the cached source's routine "not warm yet"; it
@@ -81,6 +127,17 @@ func currentReadings() readings {
 	return readings{
 		claude: func(account string) (float64, bool) { return claudeUsageForAccount([]string{account})() },
 		codex:  func() (float64, bool) { return codexCachedPct() },
+		claudeAt: func(account string) readingTimes {
+			if account == "" {
+				account = config.DefaultAccountName
+			}
+			r, _ := usagebudget.CachedReadingForAccount(account)
+			return timesOf(r)
+		},
+		codexAt: func() readingTimes {
+			r, _ := CachedReading()
+			return timesOf(usagebudget.Reading{LastProbedAt: r.LastProbedAt, ResetAt: r.ResetAt})
+		},
 	}
 }
 

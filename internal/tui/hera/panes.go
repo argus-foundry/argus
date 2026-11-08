@@ -279,10 +279,22 @@ const KickDebounce = 300 * time.Millisecond
 // "rerender deferred" uxlog line every 300ms for the whole busy stretch
 // (BUG-077). 10s keeps retry pressure on the daemon negligible while still
 // catching the agent going idle well within a session's lifetime. Consecutive
-// deferrals double the dwell up to 60s; a rebind resets it.
+// deferrals back off to kickRetryMax; a rebind or a zoom toggle resets it.
 const KickRetryInterval = 10 * time.Second
 
-const kickRetryMax = 60 * time.Second
+// kickRetryMax caps the deferral backoff. It was 60s, which starved a
+// constantly-busy coordinator for minutes: the retry only samples "idle" once
+// per interval, and a coordinator idles in short gaps between tool calls. The
+// interim view (replay at the authored width) keeps a pending pane readable,
+// so a tight cap costs only one cheap IsIdle/InitialPTYSize decision per
+// pane per 15s while it buys the earliest possible repair after a gap (9a).
+const kickRetryMax = 15 * time.Second
+
+// ZoomKickDebounce is the dwell for a Ctrl+Z fullscreen toggle. A toggle is a
+// discrete user action, not a drag or a rail traversal, so it skips the 300ms
+// KickDebounce dwell meant to collapse kick storms; the short dwell only
+// collapses an accidental double-tap into one evaluation at the settled width.
+const ZoomKickDebounce = 100 * time.Millisecond
 
 // kickPending tracks an armed-but-unfired size-drift kick candidate for one
 // pane (HeraPage.coordKickPending / agentKickPending). The zero value means
@@ -366,9 +378,10 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 	// the toggle moved the width — rapid toggling keeps pushing the deadline, so
 	// it collapses into one evaluation at the settled width.
 	if p.layoutShifted && pending.taskID == bound && pending.cols != cols {
-		uxlog.Log("[hera-view] fullscreen width change task=%s cols %d->%d: re-arming size-drift kick evaluation", bound, pending.cols, cols)
+		uxlog.Log("[hera-view] fullscreen width change task=%s cols %d->%d: re-arming size-drift kick evaluation (dwell=%s, retry backoff reset from %s)", bound, pending.cols, cols, ZoomKickDebounce, pending.retryDelay)
 		*kickedFor = ""
-		pending.deadline = now.Add(KickDebounce)
+		pending.deadline = now.Add(ZoomKickDebounce)
+		pending.retryDelay = 0 // a fresh user action restarts the backoff
 	}
 	if *kickedFor == bound {
 		if pending.taskID == bound {

@@ -1100,7 +1100,7 @@ An explicit Hera revive SHALL restart an idle live session with a fresh identity
 
 ### Requirement: Deferred Hera kicks back off
 
-Consecutive deferred pane kicks SHALL retry at 10, 20, 40, then 60 second intervals, capped at 60 seconds with no hard give-up. Rebinding SHALL reset the backoff.
+Consecutive deferred pane kicks SHALL retry at 10 then 15 second intervals, capped at 15 seconds with no hard give-up. Rebinding or a fullscreen toggle SHALL reset the backoff.
 
 #### Scenario: Repeated deferrals
 

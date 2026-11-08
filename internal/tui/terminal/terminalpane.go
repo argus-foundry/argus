@@ -271,6 +271,22 @@ type TerminalPane struct {
 	// clean escape boundary. See oscfilter.go. Owned by the Draw goroutine.
 	oscStrip oscfilter.Filter
 
+	// Synchronized-output (DEC 2026) hold, owned by the Draw goroutine; see
+	// syncoutput.go. syncHeldAt is the absolute session offset where the held
+	// region starts (0 = none) and syncHeldSince when this pane first saw that
+	// block still open.
+	syncHeldAt    uint64
+	syncHeldSince time.Time
+	syncExpired   uint64
+	syncLogAt     time.Time
+	syncNow       func() time.Time // test seam
+	syncDisabled  bool             // test seam: reproduces the pre-gate behaviour for before/after measurement
+	// OnSyncHold, when set before the UI loop starts, is called (on the Draw
+	// goroutine) when a pane begins holding an open 2026 block, asking the owner
+	// to wake a draw after the given timeout. A lost `?2026l` produces no output
+	// to wake the repaint pump, so without it the hold could never expire.
+	OnSyncHold func(time.Duration)
+
 	// Cached PTY size — set from Draw() (main goroutine), read by sync goroutine.
 	ptyCols int
 	ptyRows int
@@ -1369,6 +1385,20 @@ func replayEmuDims(sess agentview.TerminalAdapter, taskID string, paneCols, pane
 	if sess != nil && sess.Alive() {
 		if c, r := sess.PTYSize(); c > 0 && r > 0 {
 			ac, ar = c, r
+		}
+	}
+	// The live PTY size FOLLOWS resizes (a Ctrl+Z shrink moves it to the pane
+	// width at once), but the committed history stays baked at the width the
+	// session started — and the agent re-emitted its transcript — at. Never
+	// emulate narrower than that: a narrower emulator autowraps every long
+	// line into left-edge fragments plus a right-edge letter column (9a, the
+	// "Re-render pending" garbling). Every real handle exposes
+	// InitialPTYSize; fakes without it keep the live-size behaviour.
+	if sess != nil && sess.Alive() {
+		if is, ok := sess.(interface{ InitialPTYSize() (int, int) }); ok {
+			if ic, ir := is.InitialPTYSize(); ic > ac && ir > 0 {
+				ac, ar = ic, max(ar, ir)
+			}
 		}
 	}
 	if ac <= 0 || ar <= 0 {
@@ -2589,6 +2619,7 @@ func (tp *TerminalPane) renderLive(screen tcell.Screen, x, y, w, h int, ptyCols,
 			tp.emu.Resize(buildCols, buildRows)
 		}
 		tp.oscStrip.Reset()
+		tp.resetSyncGate()
 		tp.emuFedTotal = 0
 		tp.emuCols = buildCols
 		tp.emuRows = buildRows
@@ -2686,6 +2717,7 @@ func (tp *TerminalPane) renderLive(screen tcell.Screen, x, y, w, h int, ptyCols,
 			if gap, ok := readLogGapEndingAt(tp.taskID, raw, int64(newBytes)); ok { //nolint:gosec // see comment
 				_, _ = SafeEmuWrite(tp.emu, tp.oscStrip.Filter(gap))
 				tp.emuFedTotal = totalWritten
+				tp.resetSyncGate()
 				fullReplay = false
 				ringWrapCaughtUp = true
 			}
@@ -2741,8 +2773,21 @@ func (tp *TerminalPane) renderLive(screen tcell.Screen, x, y, w, h int, ptyCols,
 			// needed (parser state is already at the right boundary).
 			// oscStrip carries state across feeds so an OSC sequence split
 			// between two deltas is still stripped.
-			_, _ = SafeEmuWrite(tp.emu, tp.oscStrip.Filter(raw[len(raw)-int(newBytes):]))
-			tp.emuFedTotal = totalWritten
+			// Withhold an open synchronized-output (DEC 2026) block so the
+			// emulator — and therefore the paint — never shows a half-drawn
+			// frame. The held bytes stay unfed (emuFedTotal stops short of
+			// them) and are re-read next draw once the block closes or times out.
+			feed, held := tp.syncGate(raw[len(raw)-int(newBytes):], totalWritten)
+			if len(feed) == 0 && tp.paintCacheValid && tp.paintCacheX == x && tp.paintCacheY == y &&
+				tp.paintCacheW == w && tp.paintCacheH == h {
+				// Everything new is withheld (an open block): nothing changed,
+				// so replay the last completed frame instead of re-rendering
+				// the unchanged emulator.
+				tp.replayPaintCache(screen)
+				return
+			}
+			_, _ = SafeEmuWrite(tp.emu, tp.oscStrip.Filter(feed))
+			tp.emuFedTotal = totalWritten - uint64(held) //nolint:gosec // held is a non-negative length bounded by the delta
 		} else if tp.emuFedTotal == 0 {
 			msg := "Waiting for output..."
 			widget.FillArea(screen, x, y, w, h, ' ', tcell.StyleDefault)
@@ -3033,6 +3078,7 @@ func (tp *TerminalPane) resetLiveEmulatorInPlace() {
 		return
 	}
 	tp.emuGen.Add(1)
+	tp.resetSyncGate()
 	_, _ = SafeEmuWrite(tp.emu, []byte("\x1bc"))
 	ReleaseScrollback(tp.emu) // ClearScrollback alone keeps the peak reachable
 }

@@ -54,6 +54,16 @@ func (s *RPCService) RoutingUsage(_ *Empty, resp *backendtier.Usage) error {
 	return nil
 }
 
+// RoutingUsageFresh is RoutingUsage preceded by a fresh probe round (debounced
+// and bounded, see Daemon.freshenUsage): a TUI process about to spawn asks for
+// readings that postdate any burst. An older daemon lacks this method; the
+// client then keeps its cached snapshot.
+func (s *RPCService) RoutingUsageFresh(_ *Empty, resp *backendtier.Usage) error {
+	s.daemon.freshenUsage()
+	*resp = backendtier.LocalUsage(s.daemon.db.Config())
+	return nil
+}
+
 // logRPCErr logs an RPC handler error under the given method name and returns
 // err.Error() for assignment to the response's Error field. It folds the
 // repeated `resp.Error = err.Error(); slog.Error(method, "err", err)` pair

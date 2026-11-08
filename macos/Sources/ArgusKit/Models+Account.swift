@@ -125,14 +125,22 @@ public enum NewTaskAccount {
         return usable.first(where: \.isDefault)?.name ?? "default"
     }
 
-    /// The `account` to send. A shown picker is always an explicit choice, so
-    /// the selected name is sent ("default" included). nil means no choice was
-    /// offered (one or zero usable accounts) or the selection is not usable for
-    /// the backend; the daemon then resolves the project / global default.
+    /// The `account` to send. Selecting a named account pins it; selecting
+    /// "default" sends nil so the daemon routes by usage headroom
+    /// (auto-account-routing). nil also means no choice was offered (one or zero
+    /// usable accounts) or the selection is not usable for the backend; the
+    /// daemon then resolves the project / global default.
     public static func requestValue(selected: String, accounts all: [Account], backend: String,
                                     kinds: [String: String] = [:]) -> String? {
         let usable = accounts(all, forBackend: backend, kinds: kinds)
-        guard usable.count > 1, usable.contains(where: { $0.name == selected }) else { return nil }
+        guard usable.count > 1, usable.contains(where: { $0.name == selected }),
+              selected != "default" else { return nil }
         return selected
+    }
+
+    /// Picker row label; the default account is annotated as auto-routed since
+    /// choosing it no longer pins.
+    public static func pickerLabel(_ account: Account) -> String {
+        account.name == "default" ? "\(account.displayLabel) (auto-routed)" : account.displayLabel
     }
 }

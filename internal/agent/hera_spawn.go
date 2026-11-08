@@ -194,10 +194,11 @@ func resolveOrchestratorAccount(database *db.DB, orchestratorID int64) (string, 
 				uxlog.Log("[account] orchestrator %d coordinator task %s unreadable: %v", orchestratorID, b.ArgusTaskID, err)
 				continue
 			}
-			if t.AccountRouted {
-				uxlog.Log("[account] orchestrator %d coordinator %s was routed to %q; worker routes too", orchestratorID, t.ID, t.Account)
+			if acct := InheritableAccount(t); acct == "" {
+				uxlog.Log("[routing] orchestrator %d coordinator %s is unpinned (account %q); worker routes too", orchestratorID, t.ID, t.Account)
 				return "", nil
 			}
+			uxlog.Log("[routing] orchestrator %d coordinator %s pinned to %q; worker inherits", orchestratorID, t.ID, t.Account)
 			return t.Account, nil
 		}
 		if len(bindings) > 0 {
@@ -208,14 +209,16 @@ func resolveOrchestratorAccount(database *db.DB, orchestratorID int64) (string, 
 	return "", nil
 }
 
-// PinnedAccount converts a stored task account into an explicit selection for
-// a task that inherits it (hera worker, fork): the default account is stored
-// as "", which as an input would mean "resolve the project/global default".
-func PinnedAccount(stored string) string {
-	if stored == "" {
-		return config.DefaultAccountName
+// InheritableAccount is the account a child (fork, MCP task_create) inherits
+// from parent. A blank or routed parent account is unpinned, so the child
+// returns "" and routes by headroom; a named or explicit "default" account is a
+// deliberate pin and is inherited as-is. Never converts blank into a "default"
+// pin (auto-account-routing).
+func InheritableAccount(parent *model.Task) string {
+	if parent == nil || parent.AccountRouted || parent.Account == "" {
+		return ""
 	}
-	return stored
+	return parent.Account
 }
 
 // HeraWorkerSpawnResult is the success payload from SpawnHeraWorker.
