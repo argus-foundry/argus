@@ -170,6 +170,11 @@ Live Claude bridges with `bridge.delivery` enabled deliver doorbells as plugin-f
   explicitly failed (no need to wait for session death). Coordinators/freelancers just update status.
   Any hera-bound role may also record `handoff_note` and set `request_recycle=true`; the latter only
   records intent, and the daemon recycles the same task in place once the session becomes idle.
+  **Every `handoff_note` MUST include an "Open with the user" section**: the user's last unresolved
+  question or request, your latest answer or thinking on it, and any decision the user still owes —
+  write `none` if nothing is open. The fresh session relays a non-empty section to the user as its
+  first reply. (The daemon also appends the last human message and your reply after it, extracted
+  from the transcript, so a forced recycle is covered — but it cannot recover your unfinished thinking.)
 
 - **`hera_revive(cwd, role_name, [orchestrator])`** — coordinator-only PULL-revive of one role you
   coordinate. Reach for this when a role you spawned looks stuck — `hera_tree_updates`/`hera_status`

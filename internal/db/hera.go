@@ -889,6 +889,9 @@ func (d *DB) MoveHeraBinding(oldBindingID int64, roleIn CreateHeraRoleInput, tas
 			return err
 		}
 
+		// The old role is replaced by a new one; mail for it is dead.
+		clearDeadRoleMailAfterEnd(tx, HeraEndReasonMoved)
+
 		result = MoveHeraBindingResult{
 			OldOrchestratorName: oldOrchName,
 			OldRoleName:         oldRoleName,
@@ -917,6 +920,7 @@ func (d *DB) EndHeraBinding(bindingID int64, reason string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrHeraNotFound
 	}
+	clearDeadRoleMailAfterEnd(d.conn, reason)
 	return nil
 }
 
@@ -998,6 +1002,9 @@ func (d *DB) EndHeraBindingsForTask(taskID, reason string) (int, error) {
 		return 0, fmt.Errorf("end hera bindings for task: %w", err)
 	}
 	n, _ := res.RowsAffected()
+	if n > 0 {
+		clearDeadRoleMailAfterEnd(d.conn, reason)
+	}
 	return int(n), nil
 }
 

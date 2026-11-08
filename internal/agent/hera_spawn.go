@@ -791,7 +791,9 @@ func HeraCoordinatorOrientation(orchestrator string) string {
 			"forced one): bring design.md's Open Questions / discovery-findings sections current, then "+
 			"call hera_status(handoff_note=\"...\", request_recycle=true) with a short note capturing "+
 			"anything not already durably captured in the plan-DAG or design.md — why a non-obvious call "+
-			"was made, what to watch for.",
+			"was made, what to watch for. The note MUST include an \"Open with the user\" section: the user's "+
+			"last unresolved question or request, your latest answer or thinking on it, and any decision "+
+			"the user still owes (write \"none\" if nothing is open) — the fresh session relays it to the user first.",
 		orchestrator)
 }
 

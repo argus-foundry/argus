@@ -85,7 +85,7 @@ func (r *HeraRecycleRunner) Restart(taskID string, roleID int64) error {
 		return fmt.Errorf("recycle restart: resolve binding for role %d: %w", roleID, err)
 	}
 
-	seedPrompt, err := hera.BuildRecycleSeedPrompt(r.database, binding.RoleID)
+	seedPrompt, err := hera.BuildRecycleSeedPrompt(r.database, binding.RoleID, recycleExchangeSection(task, r.cfgFn()))
 	if err != nil {
 		return fmt.Errorf("recycle restart: build seed prompt for role %d: %w", binding.RoleID, err)
 	}
