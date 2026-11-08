@@ -1,6 +1,7 @@
 package client
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -57,4 +58,31 @@ func TestCliRoutingUsage(t *testing.T) {
 	fd.mu.Unlock()
 	_, err = c.RoutingUsage()
 	testutil.Error(t, err)
+}
+
+func TestCliRouteRedial(t *testing.T) {
+	fd := newFakeDaemon(t)
+	fd.mu.Lock()
+	fd.routing = backendtier.Usage{Claude: map[string]usagebudget.Reading{"personal": {Percentage: 8}}}
+	fd.mu.Unlock()
+	c := fakeClient(t, fd)
+
+	// Simulate the daemon bounce: this client's connection is dead for good.
+	testutil.NoError(t, c.rpc.Close())
+	_, err := c.RoutingUsage()
+	testutil.Error(t, err)
+
+	got, err := c.RoutingUsageResilient()
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Claude["personal"].Percentage, 8.0)
+
+	// Daemon gone entirely: the original error surfaces, nothing panics.
+	c.sockPath = filepath.Join(t.TempDir(), "gone.sock")
+	_, err = c.RoutingUsageResilient()
+	testutil.Error(t, err)
+
+	// A live connection never takes the fallback path.
+	live := fakeClient(t, newFakeDaemon(t))
+	_, err = live.RoutingUsageResilient()
+	testutil.NoError(t, err)
 }

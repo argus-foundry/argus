@@ -864,6 +864,32 @@ func (c *Client) RoutingUsage() (backendtier.Usage, error) {
 	return usage, err
 }
 
+// RoutingUsageResilient is RoutingUsage that survives a daemon bounce. This
+// client's connection is never re-dialed, so after the daemon restarts every
+// call on it fails with "connection is shut down" and tier routing in the TUI
+// silently saw every account as unknown (fail-open → the depleted default
+// account). On failure it asks the socket once through a short-lived fresh
+// connection; the original error is returned if that also fails.
+func (c *Client) RoutingUsageResilient() (backendtier.Usage, error) {
+	usage, err := c.RoutingUsage()
+	if err == nil || c == nil || c.sockPath == "" {
+		return usage, err
+	}
+	fresh, derr := Connect(c.sockPath)
+	if derr != nil {
+		uxlog.Log("[routing] usage RPC failed (%v) and fresh dial failed: %v", err, derr)
+		return usage, err
+	}
+	defer func() { _ = fresh.Close() }()
+	u2, ferr := fresh.RoutingUsage()
+	if ferr != nil {
+		uxlog.Log("[routing] usage RPC failed (%v) and fresh-connection retry failed: %v", err, ferr)
+		return usage, err
+	}
+	uxlog.Log("[routing] usage RPC recovered over a fresh daemon connection after: %v", err)
+	return u2, nil
+}
+
 // AccountUsageSource adapts AccountUsage for agent.SetAccountUsageSource. A
 // failed read (an older daemon, a dropped socket) logs and reports every
 // account unknown.
