@@ -113,3 +113,67 @@ func TestLastKnownReadingAgeBoundary(t *testing.T) {
 	*now = start.Add(6*time.Hour + time.Second)
 	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=false")
 }
+
+// Claude readings carry two windows. The remembered reading survives until
+// the LAST window resets: a 5-hour reset alone must not turn an account that is
+// still deep into its weekly window into "unknown" (which beats over-threshold
+// tiers).
+func TestLastKnownClaudeReadingLivesUntilLastWindowReset(t *testing.T) {
+	now := resetLedger(t)
+	t.Cleanup(ResetLastKnown)
+	start := *now
+	r := usagebudget.Reading{
+		Percentage: 95, ResetAt: start.Add(30 * time.Minute),
+		FiveHour: &usagebudget.Window{Percentage: 95, ResetAt: start.Add(30 * time.Minute)},
+		SevenDay: &usagebudget.Window{Percentage: 85, ResetAt: start.Add(72 * time.Hour)},
+	}
+	usage := Usage{Claude: map[string]usagebudget.Reading{"default": r}}
+	defer SetUsageSource(func() (Usage, error) { return usage, nil })()
+	cfg := config.Config{Backends: testBackends(), BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
+		{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+	}}}
+	ResolveChoice(cfg, "claude", "")
+	usage.Claude = map[string]usagebudget.Reading{}
+	*now = start.Add(time.Hour) // past the 5-hour reset only
+	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=true")
+	// Refreshed by that resolution; once the weekly window resets too, unknown.
+	*now = start.Add(72 * time.Hour)
+	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=false")
+}
+
+// Local-cache path: a Claude bridge reading's reset expires the remembered
+// reading exactly at the reset instant.
+func TestLastKnownLocalClaudeReadingExpiresAtReset(t *testing.T) {
+	now := resetLedger(t)
+	start := *now
+	pct, ok := 95.0, true
+	withCachedPct(t, func() (float64, bool) { return pct, ok }, unknown())
+	t.Cleanup(usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
+		return usagebudget.Reading{Percentage: pct, ResetAt: start.Add(time.Hour)}, ok
+	}))
+	cfg := config.Config{Backends: testBackends(), BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
+		{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+	}}}
+	ResolveChoice(cfg, "claude", "")
+	ok = false
+	*now = start.Add(time.Hour - time.Second)
+	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=true")
+	*now = start.Add(time.Hour)
+	testutil.Contains(t, ResolveChoice(cfg, "claude", "").Reason, "known=false")
+}
+
+// Local-cache path for Codex: the cached reading's reset is remembered too.
+func TestLastKnownLocalCodexReadingExpiresAtReset(t *testing.T) {
+	resetCodexState(t)
+	now := resetLedger(t)
+	start := *now
+	codexNowFunc = func() time.Time { return *now }
+	storeCodexReading(Reading{Percentage: 100, ResetAt: start.Add(time.Hour), LastProbedAt: start})
+	withCachedPct(t, unknown(), func() (float64, bool) { return CachedCodexPct() })
+	cfg := config.Config{Backends: testBackends(), BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
+		{Backend: "codex", Probe: config.ProbeCodexUsage, ThresholdPct: 80},
+	}}}
+	testutil.Contains(t, ResolveChoice(cfg, "codex", "").Reason, "known=true")
+	*now = start.Add(time.Hour) // cache invalid from here; recall must refuse too
+	testutil.Contains(t, ResolveChoice(cfg, "codex", "").Reason, "known=false")
+}

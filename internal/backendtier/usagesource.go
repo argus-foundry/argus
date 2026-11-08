@@ -52,11 +52,21 @@ type readings struct {
 	codexAt  func() readingTimes
 }
 
-// readingTimes is when a reading was measured and when its window resets.
+// readingTimes is when a reading was measured and when it stops saying
+// anything (the latest reset among its windows; zero = unknown).
 type readingTimes struct{ probed, reset time.Time }
 
+// timesOf uses the LATEST window reset, not the selected window's: when the
+// 5-hour window resets, a remembered reading still reflects a weekly window
+// that has not, so it stays (pessimistically) known until every window reset.
 func timesOf(r usagebudget.Reading) readingTimes {
-	return readingTimes{probed: r.LastProbedAt, reset: r.ResetAt}
+	reset := r.ResetAt
+	for _, w := range []*usagebudget.Window{r.FiveHour, r.SevenDay} {
+		if w != nil && w.ResetAt.After(reset) {
+			reset = w.ResetAt
+		}
+	}
+	return readingTimes{probed: r.LastProbedAt, reset: reset}
 }
 
 // currentReadings returns the reading functions for one resolution: a single

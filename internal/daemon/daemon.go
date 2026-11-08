@@ -1143,6 +1143,11 @@ func (d *Daemon) freshenUsage() {
 	}
 	d.freshenMu.Lock()
 	defer d.freshenMu.Unlock()
+	select {
+	case <-d.done: // stopped while this spawn queued behind another round
+		return
+	default:
+	}
 	if since := time.Since(d.lastFreshen); !d.lastFreshen.IsZero() && since < usageFreshenMinGap {
 		return
 	}

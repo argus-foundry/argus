@@ -103,12 +103,19 @@ func TestFreshenUsageCapIsHard(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	var rounds atomic.Int32
+	codexRan := make(chan struct{}, 4)
 	d.usageBudgetProbe = func(context.Context) error { <-release; return nil }
-	d.codexProbe = func(context.Context) error { rounds.Add(1); return nil }
+	d.codexProbe = func(context.Context) error { rounds.Add(1); codexRan <- struct{}{}; return nil }
 
-	start := time.Now()
-	d.freshenUsage()
-	testutil.Equal(t, time.Since(start) < time.Second, true)
+	// Fail (not hang the package) if the cap regresses to an unbounded wait.
+	returned := make(chan struct{})
+	go func() { d.freshenUsage(); close(returned) }()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("freshenUsage blocked past its cap")
+	}
+	<-codexRan // round 1 has started both probes
 
 	// The abandoned round still debounces: a follow-up spawn does not stack a
 	// second blocked round.
