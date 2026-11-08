@@ -74,6 +74,7 @@ func TestEveryTestPackageInstallsScrub(t *testing.T) {
 	root := filepath.Join("..", "..")
 	hasTests := map[string]bool{}
 	scrubs := map[string]bool{}
+	pkgNames := map[string]string{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -93,6 +94,9 @@ func TestEveryTestPackageInstallsScrub(t *testing.T) {
 		f, perr := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if perr != nil {
 			return perr
+		}
+		if prev, seen := pkgNames[dir]; !seen || strings.HasSuffix(prev, "_test") {
+			pkgNames[dir] = f.Name.Name
 		}
 		for _, decl := range f.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
@@ -122,7 +126,7 @@ func TestEveryTestPackageInstallsScrub(t *testing.T) {
 			continue
 		}
 		if !scrubs[dir] {
-			t.Errorf("%s: test package has no TestMain calling testenv.Main/Scrub", filepath.ToSlash(dir))
+			t.Errorf("%s: test package has no TestMain calling testenv.Main/Scrub.\n%s", filepath.ToSlash(dir), missingScrubSnippet(strings.TrimPrefix(filepath.ToSlash(dir), "../../"), pkgNames[dir]))
 		}
 	}
 }
@@ -168,4 +172,31 @@ func delegatesToScrubbingHelper(dir string, tm *ast.FuncDecl) bool {
 		}
 	}
 	return false
+}
+
+// missingScrubSnippet renders the paste-ready main_test.go for a package the
+// guard found without the scrub. If the package already has a TestMain, call
+// testenv.Scrub() at its top instead of adding a second one.
+func missingScrubSnippet(dir, pkg string) string {
+	return "Fix: add " + dir + "/main_test.go (or call testenv.Scrub() at the top of the existing TestMain):\n\n" +
+		"package " + pkg + "\n\n" +
+		"import (\n\t\"os\"\n\t\"testing\"\n\n\t\"github.com/drn/argus/internal/testenv\"\n)\n\n" +
+		"func TestMain(m *testing.M) { os.Exit(testenv.Main(m)) }\n\n" +
+		"func TestEnvScrubbed(t *testing.T) { testenv.AssertScrubbed(t) }\n\n" +
+		"See context/knowledge/testing.md \"Environment hermeticity\"."
+}
+
+func TestMissingScrubSnippet_IsPasteReady(t *testing.T) {
+	got := missingScrubSnippet("internal/foo", "foo")
+	for _, want := range []string{
+		"internal/foo/main_test.go",
+		"package foo\n",
+		"os.Exit(testenv.Main(m))",
+		"testenv.AssertScrubbed(t)",
+		"github.com/drn/argus/internal/testenv",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("snippet missing %q:\n%s", want, got)
+		}
+	}
 }
