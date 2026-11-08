@@ -1148,7 +1148,7 @@ func (a *App) heraOpenBounceWorker(sel hera.Selection) {
 // session on confirm. It never mentions "coordinator" — the same wording
 // applies to a worker or freelance role (design.md D7).
 const heraBounceInstruction = "You've been asked to bounce (fresh session, same task/worktree/branch). " +
-	"Please wrap up: call hera_status with handoff_note summarizing what's done, the current state, and what's next, and request_recycle=true, so your session restarts fresh once you go idle."
+	"Please wrap up: call hera_status with handoff_note summarizing what's done, the current state, and what's next — plus an \"Open with the user\" section (the user's last unresolved question or request, your latest answer or thinking on it, any decision the user still owes, or \"none\") — and request_recycle=true, so your session restarts fresh once you go idle."
 
 // heraDoBounceWorker sends heraBounceInstruction to role's live session via
 // WriteInput with agentview.OriginSystem — a plain queued input, not a
