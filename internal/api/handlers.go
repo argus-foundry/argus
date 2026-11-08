@@ -1344,6 +1344,15 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 		s.invalidateColsCache(taskID)
 		return false
 	}
+	if s.bridgeDraftPending(taskID) {
+		// kick-timing-keep-place: the kill would discard unsent composer text.
+		// Invalidate so a later resize re-evaluates once the draft is sent or
+		// cleared. (Scroll position is client-side in the web app: named
+		// follow-up, see openspec/changes/kick-timing-keep-place.)
+		uxlog.Log("[rerender] deferred task=%s: unsent composer draft — preserving typed text", taskID)
+		s.invalidateColsCache(taskID)
+		return false
+	}
 	task, err := s.db.Get(taskID)
 	if err != nil || task == nil {
 		// Transient DB error — invalidate so the next same-cols /resize
