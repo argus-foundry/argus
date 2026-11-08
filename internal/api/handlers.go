@@ -784,6 +784,53 @@ func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived boo
 	writeJSON(w, http.StatusOK, map[string]any{"archived": archived})
 }
 
+// --- Pin ---
+
+type pinReq struct {
+	Pinned *bool `json:"pinned"`
+}
+
+// handlePinTask flips only the pinned/archived section flags via the targeted
+// db.SetPinned write, so concurrent edits to other columns survive. Pinning an
+// archived task restores it (model.Task.SetPinned semantics). It never starts
+// or stops a session.
+func (s *Server) handlePinTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	var req pinReq
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON", err)
+		return
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		writeErr(w, http.StatusBadRequest, "expected one JSON value within 1 KiB", err)
+		return
+	}
+
+	if req.Pinned == nil {
+		writeErr(w, http.StatusBadRequest, "pinned is required", nil)
+		return
+	}
+	if err := s.db.SetPinned(id, *req.Pinned); err != nil {
+		if errors.Is(err, db.ErrTaskNotFound) {
+			writeErr(w, http.StatusNotFound, "task not found", nil)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "", err)
+		return
+	}
+	task, err := s.db.Get(id)
+	if err != nil || task == nil {
+		writeErr(w, http.StatusNotFound, "task not found", nil)
+		return
+	}
+	uxlog.Log("[api] pin: task=%s pinned=%t archived=%t", id, task.Pinned, task.Archived)
+	writeJSON(w, http.StatusOK, map[string]any{"task_id": id, "pinned": task.Pinned, "archived": task.Archived})
+}
+
 // --- Rename ---
 
 type renameReq struct {
@@ -1341,6 +1388,15 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 		// overlay, permission, plan-mode confirm). A kick would stop+restart
 		// and silently dismiss the prompt the user is about to answer.
 		// Invalidate so a later resize re-evaluates once the agent moves on.
+		s.invalidateColsCache(taskID)
+		return false
+	}
+	if s.bridgeDraftPending(taskID) {
+		// kick-timing-keep-place: the kill would discard unsent composer text.
+		// Invalidate so a later resize re-evaluates once the draft is sent or
+		// cleared. (Scroll position is client-side in the web app: named
+		// follow-up, see openspec/changes/kick-timing-keep-place.)
+		uxlog.Log("[rerender] deferred task=%s: unsent composer draft — preserving typed text", taskID)
 		s.invalidateColsCache(taskID)
 		return false
 	}

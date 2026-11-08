@@ -441,3 +441,10 @@ M6a scaffolds the native Hera view: a `HeraPage` (rail | coordinator pane | agen
 - **Memo keys must carry every input that can differ per role, and an absent in-repo profile dir must collapse to `""`.** The model memo is keyed on task model/profile/backend/account/project/archetype plus the in-repo profile dir (`tierRepoDir`: `""` when `<worktree>/.argus/profiles` doesn't exist, which behaves identically to `RepoDir==""`); drop a field and two roles silently share a wrong model. A worktree that HAS the directory keeps its own key, preserving in-repo-over-library precedence.
 
 - **Editing `config.toml` or a profile file does not bump the `data_version` rebuild gate.** The tier readout is re-read on every build, but a build only runs when the gate trips or on forced refresh (opening the tab); this predates the change and is unchanged by it.
+
+### kick-timing-keep-place: scroll hold on Hera pane size-drift kicks
+
+- **A pane scrolled above the bottom must never be kicked.** `maybeKickPaneRerender` takes a `scrolledUp` flag (each pane's own `ScrollOffset() > 0`, read at its four Draw call sites) and, while it is set and `ui.rerender_keep_place` is on, holds the pending evaluation: no decision RPC, no retry-log spam. `kickPending.held` makes the FIRST frame back at the bottom restart the `KickDebounce` dwell from scratch, so a kick never lands the instant the user stops scrolling, and a pending 10-60 s retry deadline is replaced (its backoff `retryDelay` is kept).
+- **The Ctrl+Z zoom re-arm goes through the same hold.** It resets `kickedFor` first, then the hold runs, so zooming while reading re-arms but waits for the bottom.
+- **The App re-checks scroll in its decision callback** (`HeraPage.TaskScrolledUp`, either pane bound to the task) because the decision RPCs take a round trip. A scrolled-up deferral there goes through `onDeferred`, i.e. the ordinary retry.
+- **A fake session's empty scrollback clamps the offset back to 0 in the pane's own Draw**, which runs AFTER the hold check in the same frame; tests must re-apply `ScrollUp` before every frame (`drawHeld`).

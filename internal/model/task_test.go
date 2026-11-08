@@ -264,3 +264,40 @@ func TestTask_SetStatus_Pending_NoTimestamps(t *testing.T) {
 		t.Error("EndedAt should remain zero for pending")
 	}
 }
+
+func TestChangedTaskFields(t *testing.T) {
+	base := func() *Task { return &Task{ID: "t", Name: "n", Prompt: "p", Backend: "b"} }
+	tests := []struct {
+		name string
+		mut  func(*Task)
+		want []string
+	}{
+		{"identical", func(*Task) {}, nil},
+		{"prompt is not tracked", func(x *Task) { x.Prompt = "other" }, nil},
+		{"name", func(x *Task) { x.Name = "m" }, []string{"name"}},
+		{"status", func(x *Task) { x.Status = StatusComplete }, []string{"status"}},
+		{"pinned and archived", func(x *Task) { x.Pinned = true; x.Archived = true }, []string{"archived", "pinned"}},
+		{"backend runtime", func(x *Task) { x.Backend = "codex" }, []string{"runtime"}},
+		{"model runtime", func(x *Task) { x.Model = "opus" }, []string{"runtime"}},
+		{"session runtime", func(x *Task) { x.SessionID = "session" }, []string{"runtime"}},
+		{"combined runtime", func(x *Task) { x.Backend = "codex"; x.Model = "m"; x.SessionID = "session" }, []string{"runtime"}},
+		{"agent pid is not tracked", func(x *Task) { x.AgentPID = 123 }, nil},
+		{"account", func(x *Task) { x.AccountRouted = true }, []string{"account"}},
+		{"result", func(x *Task) { x.Result = "{}" }, []string{"result"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cur := base()
+			tc.mut(cur)
+			got := ChangedTaskFields(base(), cur)
+			if len(tc.want) == 0 {
+				testutil.Equal(t, len(got), 0)
+				return
+			}
+			testutil.DeepEqual(t, got, tc.want)
+		})
+	}
+	t.Run("nil", func(t *testing.T) {
+		testutil.Equal(t, len(ChangedTaskFields(nil, base())), 0)
+	})
+}

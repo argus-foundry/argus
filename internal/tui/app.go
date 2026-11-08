@@ -538,7 +538,22 @@ type App struct {
 	// map, it immediately restarts the session via `--session-id` so Claude
 	// re-renders the conversation history at the current (wider) PTY.
 	pendingRerenderRestart map[string]bool
-	initialPTYPublisher    initialPTYPublisher
+	// kickWait holds Tasks-view kicks deferred for scroll position or an unsent
+	// draft (kick-timing-keep-place): task ID -> when the pane+composer were
+	// first seen clear (zero while still blocked). Only touched on the tview
+	// goroutine; onTick re-evaluates after a KickDebounce dwell. Hera panes
+	// retry through their own onDeferred path instead.
+	kickWait map[string]time.Time
+	// kickDeferSince / kickRetryAfter bound the keep-place deferral per task:
+	// the first deferral at the current width (agent.KickDeferCap) and the
+	// earliest the next full evaluation may run after a draft deferral.
+	kickDeferSince map[string]kickDefer
+	kickRetryAfter map[string]time.Time
+	// kickScreen re-emulates a session's output tail to read the rendered Claude
+	// composer; kickScreenMu serializes the off-thread kick goroutines on it.
+	kickScreen          *agent.ScreenRenderer
+	kickScreenMu        sync.Mutex
+	initialPTYPublisher initialPTYPublisher
 
 	// pendingHeraReclaim marks tasks that were in_progress (actively live) at
 	// the moment a Hera nuke/reclaim (heraReclaimAndArchiveTask) fired their
@@ -747,6 +762,9 @@ func New(database store.Store, runner agent.SessionProvider, daemonConnected boo
 		idleUnvisited:          make(map[string]bool),
 		viewedWhileAgent:       make(map[string]bool),
 		pendingRerenderRestart: make(map[string]bool),
+		kickWait:               make(map[string]time.Time),
+		kickDeferSince:         make(map[string]kickDefer),
+		kickRetryAfter:         make(map[string]time.Time),
 		pendingHeraReclaim:     make(map[string]bool),
 		lastAttachCols:         make(map[string]uint16),
 		committedCols:          make(map[string]uint16),
@@ -1058,6 +1076,7 @@ func (a *App) buildUI() {
 		// Size-drift kill+resume seam (see heraKickRerender) — same runner/db
 		// access as the resolver above, wired unconditionally alongside it.
 		a.heraPage.SetRerenderKicker(a.heraKickRerender)
+		a.heraPage.SetKeepPlace(func() bool { return a.db.Config().UI.RerenderKeepPlace })
 	}
 	// Focus-aware status bar: update heraFocus whenever the Hera focus machine
 	// changes state (keyboard or mouse). The statusbar renders different hint
@@ -1818,6 +1837,7 @@ func (a *App) onTick() {
 		// deletes from client map → next Get creates fresh session with empty
 		// buffer → SetSession resets emulator → "Waiting for output..." flash).
 		if taskID != "" {
+			a.retryDeferredKick(taskID)
 			if a.agentPane.Session() == nil {
 				sess := a.runner.Get(taskID)
 				if sess != nil {
@@ -5702,7 +5722,137 @@ func (a *App) bindTaskAgent(task *model.Task, autoStart, focus bool) {
 // heraKickRerender, BUG-077).
 func (a *App) maybeKickRerender(task *model.Task, sess agent.SessionHandle) {
 	_, panelCols := a.computePTYSize() // safe: GetInnerRect on the main goroutine
-	a.maybeKickRerenderAtWidth(task, sess, panelCols, nil)
+	a.maybeKickRerenderGated(task, sess, panelCols, nil, func() bool { return a.agentPane.ScrollOffset() > 0 })
+}
+
+// kickDefer records when kicks at one width were first deferred.
+type kickDefer struct {
+	cols uint16
+	at   time.Time
+}
+
+// draftProbe is the rendered-composer reading taken off the UI goroutine.
+type draftProbe struct {
+	has   bool
+	found bool
+}
+
+// keepPlaceState reports whether the pane showing taskID is scrolled up and
+// whether the task's composer holds unsent text, for the kick-timing-keep-place
+// gates. Both are false when ui.rerender_keep_place is off. UI goroutine only:
+// it reads a.bridgeStates, the deferral clock and the pane's scroll offset.
+// probe is the off-thread rendered-composer reading, nil when none was taken.
+func (a *App) keepPlaceState(taskID string, sess agent.SessionHandle, panelCols uint16, scrolled func() bool, probe *draftProbe) (scrolledUp, hasDraft bool) {
+	if !a.db.Config().UI.RerenderKeepPlace {
+		return false, false
+	}
+	in := a.composerSignals(taskID, sess, panelCols)
+	if probe != nil {
+		in.ScreenFound, in.ScreenHas = probe.found, probe.has
+	}
+	return scrolled != nil && scrolled(), a.resolveDraft(taskID, in)
+}
+
+// composerSignals gathers the draft signals that are cheap and UI-goroutine
+// safe: the mod's report and the TUI-local typed flag, plus the deferral age.
+func (a *App) composerSignals(taskID string, sess agent.SessionHandle, panelCols uint16) agent.ComposerDraftInput {
+	var in agent.ComposerDraftInput
+	if st, ok := a.bridgeStates[taskID]; ok && st.DraftAware {
+		in.BridgeAware, in.BridgeHas = true, st.HasDraft
+	}
+	if c, ok := sess.(interface{ ComposerDirty() bool }); ok {
+		in.TypedFlag = c.ComposerDirty()
+	}
+	if d, ok := a.kickDeferSince[taskID]; ok && d.cols == panelCols {
+		in.DeferredFor = time.Since(d.at)
+	}
+	return in
+}
+
+// resolveDraft applies agent.ComposerDraft (mod report > rendered composer >
+// typed flag, flag capped) and logs when the cap released a held kick.
+func (a *App) resolveDraft(taskID string, in agent.ComposerDraftInput) bool {
+	has, _, capped := agent.ComposerDraft(in)
+	if capped {
+		uxlog.Log("[rerender] typed-flag deferral cap reached task=%s after %s: no longer holding the kick", taskID, in.DeferredFor.Round(time.Second))
+	}
+	return has
+}
+
+// probeComposerScreen reads the rendered Claude composer from the session's
+// output tail. It does ring-buffer/RPC work, so call it off the UI goroutine.
+// found=false (not the Claude composer, or no marker on screen) is "unknown".
+func (a *App) probeComposerScreen(sess agent.SessionHandle) draftProbe {
+	cols, rows := sess.PTYSize()
+	tail := agent.SubstantiveTail(sess.RecentOutputTail, 64*1024, agent.NeedsInputMaxExpandBytes)
+	a.kickScreenMu.Lock()
+	defer a.kickScreenMu.Unlock()
+	if a.kickScreen == nil {
+		a.kickScreen = &agent.ScreenRenderer{}
+	}
+	draft, found := a.kickScreen.InputDraft(tail, cols, rows)
+	return draftProbe{has: strings.TrimSpace(draft) != "", found: found}
+}
+
+// keepPlaceHold is the cheap per-tick hold check for a Tasks-view deferral:
+// the pane is scrolled up, or the mod reports an unsent draft.
+func (a *App) keepPlaceHold(taskID string) bool {
+	if !a.db.Config().UI.RerenderKeepPlace {
+		return false
+	}
+	if a.agentPane.ScrollOffset() > 0 {
+		return true
+	}
+	st, ok := a.bridgeStates[taskID]
+	return ok && st.DraftAware && st.HasDraft
+}
+
+// dropKickWait forgets every piece of Tasks-view deferral state for taskID.
+func (a *App) dropKickWait(taskID string) {
+	delete(a.kickWait, taskID)
+	delete(a.kickDeferSince, taskID)
+	delete(a.kickRetryAfter, taskID)
+}
+
+// retryDeferredKick re-evaluates a Tasks-view kick that was deferred for scroll
+// position or an unsent draft. Called from onTick for the task shown in the
+// agent view: once the pane is at the bottom and the composer clear for a
+// KickDebounce dwell, the ordinary size-drift decision runs again.
+func (a *App) retryDeferredKick(taskID string) {
+	// Idle tick: nothing is armed, so this is one map lookup — no runner, DB,
+	// RPC or file access on the 1s tick for the (usual) undeferred task.
+	clearedAt, waiting := a.kickWait[taskID]
+	if !waiting {
+		return
+	}
+	sess := a.runner.Get(taskID)
+	if sess == nil || !sess.Alive() {
+		a.dropKickWait(taskID)
+		return
+	}
+	// Only the cheap local signals gate the dwell (scroll position, the mod's
+	// draft report). The rendered-composer read and the typed flag — which can
+	// be stale — are weighed by the full evaluation below, at most every
+	// KickRetryInterval after a draft deferral.
+	if a.keepPlaceHold(taskID) {
+		a.kickWait[taskID] = time.Time{}
+		return
+	}
+	now := time.Now()
+	if clearedAt.IsZero() {
+		a.kickWait[taskID] = now
+		return
+	}
+	if now.Sub(clearedAt) < hera.KickDebounce || now.Before(a.kickRetryAfter[taskID]) {
+		return
+	}
+	delete(a.kickWait, taskID)
+	task, err := a.db.Get(taskID)
+	if err != nil || task == nil {
+		return
+	}
+	uxlog.Log("[rerender] retrying deferred kick task=%s: pane at the bottom and composer clear", taskID)
+	a.maybeKickRerender(task, sess)
 }
 
 // heraKickRerender is the Hera-view entry point for the same decision.
@@ -5723,7 +5873,7 @@ func (a *App) heraKickRerender(taskID string, panelCols uint16, onDeferred func(
 		return
 	}
 	sess := a.runner.Get(taskID)
-	a.maybeKickRerenderAtWidth(task, sess, panelCols, onDeferred)
+	a.maybeKickRerenderGated(task, sess, panelCols, onDeferred, func() bool { return a.heraPage.TaskScrolledUp(taskID) })
 }
 
 // maybeKickRerenderAtWidth detects sessions whose committed scrollback width
@@ -5762,7 +5912,18 @@ func (a *App) heraKickRerender(taskID string, panelCols uint16, onDeferred func(
 //
 // Shared predicate with the API's resize handler — see
 // `agent.ShouldKickRerender` for the gating logic.
+//
+// scrolled (kick-timing-keep-place) reports whether the pane showing this task
+// is scrolled up; together with the composer-draft signal it defers a kick
+// that would otherwise cost the user their place or their unsent text. Both
+// are read on the UI goroutine, up front and again in the decision callback.
 func (a *App) maybeKickRerenderAtWidth(task *model.Task, sess agent.SessionHandle, panelCols uint16, onDeferred func()) {
+	a.maybeKickRerenderGated(task, sess, panelCols, onDeferred, nil)
+}
+
+// maybeKickRerenderGated is maybeKickRerenderAtWidth plus the pane's scrolled-up
+// probe; the composer-draft gate needs no caller input (see keepPlaceState).
+func (a *App) maybeKickRerenderGated(task *model.Task, sess agent.SessionHandle, panelCols uint16, onDeferred func(), scrolled func() bool) {
 	if task == nil || sess == nil || !sess.Alive() {
 		return
 	}
@@ -5808,6 +5969,9 @@ func (a *App) maybeKickRerenderAtWidth(task *model.Task, sess agent.SessionHandl
 	cfg := a.db.Config()
 	kickTask := *task
 	committedSnapshot := int(a.committedCols[taskID])
+	sig0 := a.composerSignals(taskID, sess, panelCols)
+	keepPlace := a.db.Config().UI.RerenderKeepPlace
+	scrolled0 := keepPlace && scrolled != nil && scrolled()
 	checkResume := agent.ResumableSessionAvailable
 	if remote, ok := a.runner.(interface {
 		ResumableSessionAvailable(*model.Task, config.Config) (bool, error)
@@ -5820,9 +5984,21 @@ func (a *App) maybeKickRerenderAtWidth(task *model.Task, sess agent.SessionHandl
 		initCols, _ := sess.InitialPTYSize()
 		idle := sess.IsIdle()
 		needsInput := sessionBlockedOnPrompt(taskID, idle)
+		// Read the rendered composer only for a would-be kick with no live
+		// draft-aware bridge to ask: it re-emulates the session's output tail.
+		var probe *draftProbe
+		draft0 := false
+		if keepPlace {
+			if !sig0.BridgeAware && agent.ShouldKickRerender(true, initCols, committedSnapshot, int(panelCols), idle, false, needsInput) == agent.RerenderKick {
+				p := a.probeComposerScreen(sess)
+				probe = &p
+				sig0.ScreenFound, sig0.ScreenHas = p.found, p.has
+			}
+			draft0 = a.resolveDraft(taskID, sig0)
+		}
 		// Transcript probes require filesystem or REST I/O. Only probe a
 		// candidate kick; a changed decision below defers safely for retry.
-		checked := agent.ShouldKickRerender(true, initCols, committedSnapshot, int(panelCols), idle, false, needsInput) == agent.RerenderKick
+		checked := agent.ShouldKickRerenderKeepPlace(true, initCols, committedSnapshot, int(panelCols), idle, false, needsInput, scrolled0, draft0) == agent.RerenderKick
 		var available bool
 		var transcriptErr error
 		if checked {
@@ -5839,10 +6015,33 @@ func (a *App) maybeKickRerenderAtWidth(task *model.Task, sess agent.SessionHandl
 				return
 			}
 			committed := int(a.committedCols[taskID])
-			decision := agent.ShouldKickRerender(true, initCols, committed, int(panelCols), idle, false, needsInput)
+			scrolledNow, draftNow := a.keepPlaceState(taskID, sess, panelCols, scrolled, probe)
+			decision := agent.ShouldKickRerenderKeepPlace(true, initCols, committed, int(panelCols), idle, false, needsInput, scrolledNow, draftNow)
+			if decision != agent.RerenderDeferScrolled && decision != agent.RerenderDeferDraft {
+				a.dropKickWait(taskID)
+			}
 			switch decision {
 			case agent.RerenderSkip:
 				a.setRerendering(taskID, false)
+				return
+			case agent.RerenderDeferScrolled, agent.RerenderDeferDraft:
+				a.setRerenderPending(taskID)
+				a.invalidateAttachCache(taskID)
+				a.recordUnreconciledCommittedCols(taskID, panelCols, pid)
+				reason := "pane scrolled up — preserving the user's place"
+				if d, ok := a.kickDeferSince[taskID]; !ok || d.cols != panelCols {
+					a.kickDeferSince[taskID] = kickDefer{cols: panelCols, at: time.Now()}
+				}
+				if decision == agent.RerenderDeferDraft {
+					reason = "unsent composer text — preserving the draft"
+					a.kickRetryAfter[taskID] = time.Now().Add(hera.KickRetryInterval)
+				}
+				uxlog.Log("[rerender] deferred task=%s: %s (init=%d committed=%d panel=%d)", taskID, reason, initCols, committed, panelCols)
+				if onDeferred != nil {
+					onDeferred()
+				} else if _, waiting := a.kickWait[taskID]; !waiting {
+					a.kickWait[taskID] = time.Time{} // Tasks view: onTick re-evaluates once clear
+				}
 				return
 			case agent.RerenderDeferBusy:
 				a.setRerenderPending(taskID)

@@ -1,0 +1,5 @@
+- [x] Add `task.updated` type, field constants and `ChangedTaskFields` to `internal/model`
+- [x] Add `events.EmitTaskUpdated` shared helper
+- [x] Call it from the db setters and PR meta writes
+- [x] Tests: helper, diff, per-setter, REST two-client SSE, raw PUT, failed writes
+- [x] Document in the events-bus spec, README Reference and events gotchas
