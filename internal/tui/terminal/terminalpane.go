@@ -255,11 +255,15 @@ type TerminalPane struct {
 	forwardingClick bool
 
 	// Owed-re-render notice (resize-without-restart). owedFn is evaluated on
-	// the UI goroutine each Draw; owedShown / owedX,Y,W are the last drawn
+	// the UI goroutine only on events (width change, bind, invalidation), never
+	// per frame; Draw paints the stored owedShown/owedHint; owedShown / owedX,Y,W are the last drawn
 	// state, used for transition logging and the click hit-test. OnOwedClick
 	// runs the on-demand re-render when the notice is clicked.
 	owedFn      OwedFunc
 	owedHintFn  func() string
+	owedHint    string // key hint resolved at the last evaluation event
+	owedPending bool   // an event made the owed state stale; evaluate once at the next Draw
+	owedCols    int    // pane width at the last evaluation; a change is an event
 	owedShown   bool
 	owedX       int
 	owedY       int
@@ -592,6 +596,7 @@ func (tp *TerminalPane) SetSession(sess agentview.TerminalAdapter) {
 		uxlog.Log("[terminalpane] SetSession: nil")
 	}
 	tp.session = sess
+	tp.owedPending = true // a new session/process is an owed-state event
 	tp.pending = false
 	tp.resetLaunchSplashLocked()
 	tp.resetLiveEmulatorInPlace()
@@ -2015,7 +2020,7 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 	if width <= 0 || height <= 0 {
 		return
 	}
-	owedNow := tp.evalOwed(max(width, 20))
+	owedNow := tp.owedStateForDraw(max(width, 20))
 	if tp.Rerendering() {
 		// Paint on the border after terminal content. Even a prompt on the
 		// first content row must remain fully readable during deferral.

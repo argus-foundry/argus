@@ -53,11 +53,25 @@ func (tp *TerminalPane) Rerendering() bool {
 type OwedFunc func(taskID string, sess agentview.TerminalAdapter, cols int) (owed bool, clearReason string)
 
 // SetOwedFunc wires the owed-notice evaluator and the live key hint (the
-// resolved agent.rerender binding; empty means unbound).
+// resolved agent.rerender binding; empty means unbound). The evaluator runs only
+// on EVENTS (see owedStateForDraw), never once per frame.
 func (tp *TerminalPane) SetOwedFunc(fn OwedFunc, hint func() string) {
 	tp.mu.Lock()
 	tp.owedFn = fn
 	tp.owedHintFn = hint
+	tp.owedPending = true
+	tp.mu.Unlock()
+}
+
+// InvalidateOwed marks the owed state stale so the next Draw re-evaluates it
+// once. Safe from any goroutine. The App calls it on the discrete events the
+// pane cannot observe itself: the setting toggling, a keymap reload (the hint),
+// the authored-width anchor finishing its async load, and a session exiting.
+// Width changes and binds are detected by the pane (owedStateForDraw / SetSession
+// / SetTaskID / ResetVT).
+func (tp *TerminalPane) InvalidateOwed() {
+	tp.mu.Lock()
+	tp.owedPending = true
 	tp.mu.Unlock()
 }
 
@@ -68,20 +82,39 @@ func (tp *TerminalPane) RerenderOwed() bool {
 	return tp.owedShown
 }
 
-// evalOwed runs the evaluator and logs shown/cleared transitions exactly once
-// each (never per frame). UI goroutine only (called from Draw).
-func (tp *TerminalPane) evalOwed(cols int) bool {
+// owedStateForDraw returns the stored owed state, re-evaluating it ONLY when an
+// event made it stale: a pending invalidation (bind/rebind, session change,
+// setting, keymap, anchor load) or a changed pane width. A plain repaint at an
+// unchanged width does no evaluation at all — no DB, no RPC, no callback — which
+// matters because Draw runs at up to ~125 fps under typing. Shown/cleared
+// transitions are logged once each. UI goroutine only (called from Draw).
+func (tp *TerminalPane) owedStateForDraw(cols int) bool {
 	tp.mu.Lock()
-	fn, sess, taskID := tp.owedFn, tp.session, tp.taskID
-	tp.mu.Unlock()
-	if fn == nil || taskID == "" {
+	if tp.owedFn == nil || tp.taskID == "" {
+		tp.owedShown = false
+		tp.mu.Unlock()
 		return false
 	}
+	if !tp.owedPending && cols == tp.owedCols {
+		shown := tp.owedShown
+		tp.mu.Unlock()
+		return shown
+	}
+	tp.owedPending = false
+	tp.owedCols = cols
+	fn, hintFn, sess, taskID := tp.owedFn, tp.owedHintFn, tp.session, tp.taskID
+	tp.mu.Unlock()
+
 	owed, reason := fn(taskID, sess, cols)
+	hint := ""
+	if hintFn != nil {
+		hint = hintFn()
+	}
+
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
 	if tp.taskID != taskID {
-		return false // rebound while evaluating
+		return false // rebound while evaluating; the rebind re-armed owedPending
 	}
 	switch {
 	case owed && !tp.owedShown:
@@ -93,6 +126,7 @@ func (tp *TerminalPane) evalOwed(cols int) bool {
 		uxlog.Log("[rerender] owed notice cleared task=%s reason=%s", taskID, reason)
 	}
 	tp.owedShown = owed
+	tp.owedHint = hint
 	return owed
 }
 
@@ -103,6 +137,7 @@ func (tp *TerminalPane) clearOwedLocked(reason string) {
 		uxlog.Log("[rerender] owed notice cleared task=%s reason=%s", tp.taskID, reason)
 	}
 	tp.owedShown = false
+	tp.owedPending = true // a rebind is an event: re-evaluate against the new task/session
 	tp.owedX, tp.owedY, tp.owedW = 0, 0, 0
 }
 
@@ -112,12 +147,8 @@ func (tp *TerminalPane) clearOwedLocked(reason string) {
 // innerX/innerW are the inner content columns (border row is y-1).
 func (tp *TerminalPane) owedNoticeLayout(innerX, innerW int, title string) (text string, startX, w int) {
 	tp.mu.Lock()
-	hintFn := tp.owedHintFn
+	key := tp.owedHint // resolved at the last evaluation event, not per frame
 	tp.mu.Unlock()
-	key := ""
-	if hintFn != nil {
-		key = hintFn()
-	}
 	tail := "re-render via ctrl+k"
 	if key != "" {
 		tail = key + " re-render"

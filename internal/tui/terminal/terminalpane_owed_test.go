@@ -46,6 +46,9 @@ func TestTerminalPane_OwedNotice_TopBorderRight(t *testing.T) {
 	testutil.True(t, strings.HasSuffix(strings.TrimRight(top, "─┐ "), "re-render") || strings.Contains(top, "re-render "))
 
 	owed = false
+	tp.Draw(screen) // no event yet: the stored state is painted, nothing re-evaluated
+	testutil.Contains(t, screenRowText(screen, 0, 100), "width changed")
+	tp.InvalidateOwed() // e.g. the setting flipped
 	tp.Draw(screen)
 	testutil.False(t, strings.Contains(screenRowText(screen, 0, 100), "width changed"))
 }
@@ -124,6 +127,7 @@ func TestTerminalPane_OwedNotice_TransitionLogsOnce(t *testing.T) {
 		tp.Draw(screen) // many frames, one transition
 	}
 	owed = false
+	tp.InvalidateOwed()
 	for range 5 {
 		tp.Draw(screen)
 	}
@@ -147,4 +151,62 @@ func TestTerminalPane_OwedNotice_ClearsOnRebind(t *testing.T) {
 	b, _ := os.ReadFile(logPath)
 	testutil.Contains(t, string(b), "reason=rebind")
 	testutil.False(t, tp.RerenderOwed())
+}
+
+// resize-without-restart (review): the owed state is evaluated on EVENTS only —
+// bind, width change, explicit invalidation — never once per frame.
+func TestTerminalPane_OwedEvaluatedOnEventsNotPerDraw(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tp := NewTerminalPane()
+	tp.SetTaskID("evt")
+	calls := 0
+	hints := 0
+	tp.SetOwedFunc(func(string, agentview.TerminalAdapter, int) (bool, string) {
+		calls++
+		return true, ""
+	}, func() string { hints++; return "ctrl+n" })
+	sess := &mockAdapter{alive: true, ptyCols: 98, ptyRows: 22}
+	tp.SetSession(sess)
+	screen := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, screen.Init())
+	defer screen.Fini()
+	screen.SetSize(100, 24)
+	tp.SetRect(0, 0, 100, 24)
+
+	for range 300 {
+		tp.Draw(screen)
+	}
+	testutil.Equal(t, calls, 1) // the bind event, once
+	testutil.Equal(t, hints, 1)
+	testutil.Contains(t, screenRowText(screen, 0, 100), "width changed · ctrl+n re-render")
+
+	// Width change = event.
+	screen.SetSize(120, 24)
+	tp.SetRect(0, 0, 120, 24)
+	for range 50 {
+		tp.Draw(screen)
+	}
+	testutil.Equal(t, calls, 2)
+
+	// Explicit invalidation = event.
+	tp.InvalidateOwed()
+	for range 50 {
+		tp.Draw(screen)
+	}
+	testutil.Equal(t, calls, 3)
+
+	// New session (re-render restart) = event.
+	tp.SetSession(&mockAdapter{alive: true, ptyCols: 118, ptyRows: 22})
+	for range 50 {
+		tp.Draw(screen)
+	}
+	testutil.Equal(t, calls, 4)
+
+	// Same session re-set every tick (the App does) is NOT an event.
+	cur := tp.Session()
+	for range 50 {
+		tp.SetSession(cur)
+		tp.Draw(screen)
+	}
+	testutil.Equal(t, calls, 4)
 }

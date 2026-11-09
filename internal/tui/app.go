@@ -565,10 +565,6 @@ type App struct {
 	owedAnchors        map[string]owedAnchor
 	owedFetching       map[string]bool
 	autoRerenderLogged bool
-	// autoRerenderCheckedAt/Clock cache the setting read (see autoRerenderOn);
-	// the clock is a test seam, nil = time.Now.
-	autoRerenderCheckedAt time.Time
-	autoRerenderClock     func() time.Time
 	// kickDeferSince / kickRetryAfter bound the keep-place deferral per task:
 	// the first deferral at the current width (agent.KickDeferCap) and the
 	// earliest the next full evaluation may run after a draft deferral.
@@ -1836,6 +1832,7 @@ func (a *App) onTick() {
 		// a db.Config() read. Runs on the tview goroutine (this is inside the
 		// QueueUpdateDraw closure), matching the keymap cache's threading.
 		a.refreshKeymap()
+		a.refreshAutoRerender() // live ui.auto_rerender_on_resize flips (one db.Config() per tick, never per Draw)
 		a.reconcileTasksRail()
 
 		// Refresh task list side panels.
@@ -2423,6 +2420,7 @@ func (a *App) consumeHeraReclaimPending(taskID string) bool {
 // pendingRestart is captured by the caller from a non-RPC source (in-process:
 // direct method call; daemon: ExitInfo.PendingRestart stamped by daemon side).
 func (a *App) handleSessionExitUI(taskID string, cleanExit, pendingRestart bool) {
+	a.invalidateOwed() // a session ended: re-evaluate every pane's owed notice once
 	defer a.setRerendering(taskID, false)
 	// Two callers, two flip-site stories:
 	//   - Daemon mode (HandleSessionExit): the daemon's onFinish callback
@@ -4145,6 +4143,7 @@ func (a *App) refreshKeymap() {
 	}
 	a.keymap = km
 	a.keymapSig = sig
+	a.invalidateOwed() // the owed notice shows the live agent.rerender key
 }
 
 // activeKeymap returns the cached keymap for the per-keystroke dispatch hot path.
@@ -5817,36 +5816,48 @@ func (a *App) maybeKickRerender(task *model.Task, sess agent.SessionHandle) {
 	a.maybeKickRerenderGated(task, sess, panelCols, nil, func() bool { return a.agentPane.ScrollOffset() > 0 })
 }
 
-// autoRerenderCacheTTL bounds how stale the cached ui.auto_rerender_on_resize
-// reading can be.
-const autoRerenderCacheTTL = time.Second
-
-// autoRerenderOn reports ui.auto_rerender_on_resize, read live. With it off
-// (the default) a width change only resizes the PTY: the automatic size-drift
-// kick is skipped at its entry points and an owed-re-render notice + the
-// agent.rerender hotkey take over. Logs the effective value on first read and
-// on every live change. UI goroutine only (it owns the log-dedup fields).
-//
-// It is consulted from every pane Draw (the owed notice and the Hera kick gate),
-// and db.Config() runs several SQLite queries, so the value is cached for
-// autoRerenderCacheTTL: a live Settings/config.toml flip takes effect within a
-// second, never a restart, without a DB round trip per frame.
+// autoRerenderOn reports ui.auto_rerender_on_resize from a cache: it does NO
+// db.Config() read (several SQLite queries) because it is consulted from pane
+// Draw paths and key handling. The cache is primed on first use and refreshed by
+// refreshAutoRerender on the 1s tick (next to refreshKeymap), so a live Settings
+// or config.toml flip lands within a second without a restart. With the setting
+// off (the default) a width change only resizes the PTY: the automatic kick is
+// skipped at its entry points and the owed notice + agent.rerender hotkey take
+// over. UI goroutine only.
 func (a *App) autoRerenderOn() bool {
-	now := time.Now()
-	if a.autoRerenderClock != nil {
-		now = a.autoRerenderClock()
+	if !a.autoRerenderLogged {
+		a.refreshAutoRerender()
 	}
-	if a.autoRerenderLogged && now.Sub(a.autoRerenderCheckedAt) < autoRerenderCacheTTL {
-		return a.autoRerenderLast
-	}
-	a.autoRerenderCheckedAt = now
+	return a.autoRerenderLast
+}
+
+// refreshAutoRerender re-reads the setting (one db.Config() — call it from the
+// tick / startup, never from Draw), logs the effective value on first read and
+// on every live change, and invalidates every pane's owed state when it flips.
+func (a *App) refreshAutoRerender() {
 	on := a.db.Config().UI.AutoRerenderOnResize
-	if !a.autoRerenderLogged || a.autoRerenderLast != on {
+	changed := a.autoRerenderLogged && a.autoRerenderLast != on
+	if !a.autoRerenderLogged || changed {
 		uxlog.Log("[rerender] auto_rerender_on_resize=%t", on)
-		a.autoRerenderLogged = true
-		a.autoRerenderLast = on
 	}
-	return on
+	a.autoRerenderLogged = true
+	a.autoRerenderLast = on
+	if changed {
+		a.invalidateOwed()
+	}
+}
+
+// invalidateOwed marks every pane's owed-re-render state stale so each
+// re-evaluates once at its next Draw. Called on the discrete events a pane can't
+// observe itself (setting flip, keymap reload, anchor load, session exit).
+// Safe from any goroutine.
+func (a *App) invalidateOwed() {
+	if a.agentPane != nil {
+		a.agentPane.InvalidateOwed()
+	}
+	if a.heraPage != nil {
+		a.heraPage.InvalidateOwed()
+	}
 }
 
 // owedAnchor is the per-process authored width the owed notice compares the
@@ -5915,6 +5926,7 @@ func (a *App) loadOwedAnchor(taskID string, p interface {
 	a.owedAnchors[taskID] = owedAnchor{pid: p.PID(), initCols: initCols, hasSession: hasSession}
 	delete(a.owedFetching, taskID)
 	a.owedMu.Unlock()
+	a.invalidateOwed() // the anchor is an owed-state input: panes re-evaluate once
 	if a.tapp != nil {
 		a.tapp.QueueUpdateDraw(func() {})
 	}

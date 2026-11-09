@@ -454,6 +454,13 @@ func (p *HeraPage) SetOwedFunc(fn terminal.OwedFunc, hint func() string) {
 	}
 }
 
+// InvalidateOwed marks both panes' owed-re-render state stale (re-evaluated once
+// at their next Draw). Safe from any goroutine.
+func (p *HeraPage) InvalidateOwed() {
+	p.coordPane.InvalidateOwed()
+	p.agentPane.InvalidateOwed()
+}
+
 // SetAutoRerender wires the live ui.auto_rerender_on_resize setting
 // (resize-without-restart). Left nil (tests, remote mode) the automatic kick is ON,
 // i.e. byte-identical to the behavior before the setting existed.

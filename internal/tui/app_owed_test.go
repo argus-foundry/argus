@@ -3,13 +3,15 @@ package tui
 import (
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/drn/argus/internal/agent"
+	"github.com/drn/argus/internal/app/agentview"
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/testutil"
 	"github.com/drn/argus/internal/tui/store"
+	"github.com/drn/argus/internal/tui/terminal"
+	"github.com/gdamore/tcell/v2"
 )
 
 // resize-without-restart: the owed notice is derived from the session's
@@ -61,7 +63,7 @@ func TestPaneRerenderOwed(t *testing.T) {
 
 	// Setting on: the kick handles it, so no notice.
 	testutil.NoError(t, d.SetConfigValue("ui.auto_rerender_on_resize", "true"))
-	app.autoRerenderCheckedAt = time.Time{} // expire the cached reading
+	app.refreshAutoRerender() // the tick refresh
 	owed, reason = app.paneRerenderOwed(task.ID, sess, 140)
 	testutil.False(t, owed)
 	testutil.Equal(t, reason, "setting-on")
@@ -79,31 +81,64 @@ func (c *countingStore) Config() config.Config {
 	return c.Store.Config()
 }
 
-func TestAutoRerenderOn_CachedNotPerDraw(t *testing.T) {
+// resize-without-restart (review blocker): neither autoRerenderOn nor the pane's
+// Draw path may touch db.Config(). The setting is read once at startup and on the
+// tick (refreshAutoRerender); N pane draws at a steady width do zero Config()
+// reads and zero owed evaluations.
+func TestAutoRerenderOn_CacheOnlyNoConfigPerDraw(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	d := testDB(t)
 	cs := &countingStore{Store: d}
 	app := New(cs, agent.NewRunner(nil), false)
-	now := time.Now()
-	app.autoRerenderClock = func() time.Time { return now }
+	testutil.False(t, app.autoRerenderOn()) // primes the cache (one read)
 	cs.configCalls.Store(0)
 
-	for range 500 { // 500 pane draws within one cache window
+	for range 500 {
 		testutil.False(t, app.autoRerenderOn())
 	}
-	testutil.Equal(t, cs.configCalls.Load(), int64(1))
+	testutil.Equal(t, cs.configCalls.Load(), int64(0))
 
-	// A live flip is picked up once the cache window passes — no restart.
+	// A live flip is invisible until the tick refresh, then applied (one read).
 	testutil.NoError(t, d.SetConfigValue("ui.auto_rerender_on_resize", "true"))
-	testutil.False(t, app.autoRerenderOn()) // still inside the window
-	now = now.Add(autoRerenderCacheTTL + time.Millisecond)
+	testutil.False(t, app.autoRerenderOn())
+	app.refreshAutoRerender()
 	testutil.True(t, app.autoRerenderOn())
-	testutil.Equal(t, cs.configCalls.Load(), int64(2))
+	testutil.Equal(t, cs.configCalls.Load(), int64(1))
+}
 
-	// The owed-notice path (called per Draw) shares the cache.
+func TestPaneDrawPath_NoConfigNoEvaluationAtSteadyWidth(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := testDB(t)
+	cs := &countingStore{Store: d}
+	app := New(cs, agent.NewRunner(nil), false)
+	_, stop := wireApp(t, app) // loadOwedAnchor queues a redraw: needs a running loop
+	defer stop()
+	task := &model.Task{ID: "draw-t", Name: "n", Status: model.StatusInProgress, SessionID: "sid", Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
+	sess := &fakeKickSession{pid: 3, alive: true, initCols: 20}
+	app.loadOwedAnchor(task.ID, sess)
+
+	evals := 0
+	pane := terminal.NewTerminalPane()
+	pane.SetOwedFunc(func(id string, s agentview.TerminalAdapter, cols int) (bool, string) {
+		evals++
+		return app.paneRerenderOwed(id, s, cols)
+	}, app.rerenderKeyHint)
+	pane.SetTaskID(task.ID)
+	pane.SetSession(sess)
+	screen := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, screen.Init())
+	defer screen.Fini()
+	screen.SetSize(120, 30)
+	pane.SetRect(0, 0, 120, 30)
+
+	pane.Draw(screen) // bind event: the one evaluation (primes caches)
+	testutil.True(t, pane.RerenderOwed())
 	cs.configCalls.Store(0)
-	for range 200 {
-		app.paneRerenderOwed("t", nil, 100)
+	evals = 0
+	for range 500 {
+		pane.Draw(screen)
 	}
 	testutil.Equal(t, cs.configCalls.Load(), int64(0))
+	testutil.Equal(t, evals, 0)
 }

@@ -104,7 +104,7 @@ func TestSmoke_OwedNoticeClearsWhenSettingOn(t *testing.T) {
 	testutil.NoError(t, app.db.SetConfigValue("ui.auto_rerender_on_resize", "true"))
 	deadline := time.Now().Add(uiTimeout)
 	for time.Now().Before(deadline) {
-		app.tapp.QueueUpdateDraw(func() {}) // a repaint re-evaluates the pane's notice
+		app.tapp.QueueUpdateDraw(func() { app.refreshAutoRerender() }) // the tick's refresh + repaint
 		syncUI(t, app.tapp)
 		if !strings.Contains(screenText(sim, 80, 24), "width changed") {
 			return
