@@ -68,6 +68,10 @@ func TestHelpModal_Draw(t *testing.T) {
 	testutil.Contains(t, body, "return focus to rail; keep terminal visible")
 	testutil.Contains(t, body, "Projects View (rail)")
 	testutil.Contains(t, body, "Agent View")
+	// resize-without-restart: the generated Agent View section lists the
+	// on-demand re-render chord.
+	testutil.Contains(t, body, "re-render at this width")
+	testutil.Contains(t, body, "ctrl+n")
 	// Plan-DAG view keys (Stage 7): the plan diagram nav + fan-out + drill must
 	// be discoverable — fail the build if any binding is silently dropped.
 	testutil.Contains(t, body, "Projects View (plan DAG)")
