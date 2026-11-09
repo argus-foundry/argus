@@ -75,6 +75,7 @@ const (
 	srAccountField
 	srProjectAccount
 	srBridge
+	srResident
 )
 
 // settingsCategory groups related settings rows into a left-rail entry.
@@ -106,6 +107,7 @@ const (
 	catRemoteAPI
 	catHera
 	catBridge
+	catResident
 	catTodo
 	catAppearance
 	catLogs
@@ -143,6 +145,8 @@ func (c settingsCategory) Label() string {
 		return "Hera"
 	case catBridge:
 		return "Bridge"
+	case catResident:
+		return "Resident"
 	case catTodo:
 		return "To-Do List"
 	case catAppearance:
@@ -161,7 +165,7 @@ func (c settingsCategory) Label() string {
 // present, render after a "Plugins" header below this list.
 var builtinCategories = []settingsCategory{
 	catSystem, catSandbox, catProjects, catBackends, catBackendTiers, catAccounts, catDefaults, catSchedules,
-	catKnowledgeBase, catRemoteAPI, catHera, catBridge, catTodo, catAppearance, catLogs,
+	catKnowledgeBase, catRemoteAPI, catHera, catBridge, catResident, catTodo, catAppearance, catLogs,
 }
 
 // settingsFocus is which sub-panel currently owns input within the settings view.
@@ -305,6 +309,15 @@ type SettingsView struct {
 	todoProject        string
 	todoTag            string
 	editingTodoProject bool
+
+	// Resident category (add-resident-agent): inline editor, last gate message,
+	// and the rename/enable callback (OnResidentChange).
+	resEdit     residentEdit
+	residentMsg string
+	// OnResidentChange fires after any persisted resident setting change with
+	// the current name and enabled flag; the header tab label hooks here.
+	OnResidentChange func(name string, enabled bool)
+
 	editTodoProjectBuf string
 	editingTodoTag     bool
 	editTodoTagBuf     string
@@ -1209,6 +1222,9 @@ func (sv *SettingsView) rebuildRows() {
 	case catBridge:
 		sv.rows = append(sv.rows, sv.bridgeRows()...)
 
+	case catResident:
+		sv.rows = append(sv.rows, sv.residentRows()...)
+
 	case catRemoteAPI:
 		apiLabel := "Disabled"
 		if sv.apiEnabled {
@@ -1364,6 +1380,9 @@ func (sv *SettingsView) PasteHandler() func(pastedText string, setFocus func(p t
 		} else if sv.activeEditKey != "" {
 			sv.editPluginBuf += pastedText
 			sv.rebuildRows()
+		} else if sv.resEdit.active {
+			sv.resEdit.buf += strings.Join(strings.Fields(pastedText), " ")
+			sv.rebuildRows()
 		} else if sv.editingTodoProject {
 			sv.editTodoProjectBuf += pastedText
 			sv.rebuildRows()
@@ -1400,7 +1419,7 @@ func (sv *SettingsView) FocusRightPane() { sv.setFocus(focusPane) }
 // IsEditing returns true when the user is inline-editing any field.
 func (sv *SettingsView) IsEditing() bool {
 	return sv.editingVault != "" || sv.editingSource || sv.editingBackendModel != "" || sv.activeEditKey != "" ||
-		sv.editingTodoProject || sv.editingTodoTag || sv.editingTierIdx != -1 || sv.editingSandboxIdx != -1 || sv.acctEdit.active
+		sv.editingTodoProject || sv.editingTodoTag || sv.editingTierIdx != -1 || sv.editingSandboxIdx != -1 || sv.acctEdit.active || sv.resEdit.active
 }
 
 // SelectedProject returns the project at the cursor, or nil.
@@ -1713,6 +1732,9 @@ func (sv *SettingsView) HandleKey(ev *tcell.EventKey) bool {
 	if sv.editingBackendModel != "" {
 		return sv.handleEditModelKey(ev)
 	}
+	if sv.resEdit.active {
+		return sv.handleResidentEditKey(ev)
+	}
 	if sv.editingTodoProject {
 		return sv.handleEditTodoProjectKey(ev)
 	}
@@ -1762,7 +1784,7 @@ func (sv *SettingsView) HandleKey(ev *tcell.EventKey) bool {
 			return true
 		}
 		switch sv.currentRowKind() {
-		case srBridge:
+		case srBridge, srResident:
 			return sv.handleEnter()
 		case srSpinner:
 			sv.cycleSpinner(1)
@@ -2132,6 +2154,8 @@ func (sv *SettingsView) handleEnter() bool {
 	switch row.kind {
 	case srBridge:
 		return sv.toggleBridge(row.key)
+	case srResident:
+		return sv.handleResidentEnter(row.key)
 	case srSandbox:
 		// Toggle sandbox.
 		sv.sandboxEnabled = !sv.sandboxEnabled
@@ -3180,6 +3204,8 @@ func (sv *SettingsView) renderPane(screen tcell.Screen, x, y, w, h int) {
 // renderRowDetail dispatches to the per-row detail renderer.
 func (sv *SettingsView) renderRowDetail(screen tcell.Screen, x, y, w, h int, row *settingsRow) {
 	switch row.kind {
+	case srResident:
+		sv.renderResidentDetail(screen, x, y, w, h, row)
 	case srBridge:
 		widget.DrawText(screen, x, y, w, "Bridge", theme.StyleTitle)
 		text := "Report Claude session state. Applies to new sessions; disabling restores terminal authority."

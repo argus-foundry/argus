@@ -77,8 +77,8 @@ Stage 6's slice of 1.1/1.3 is covered by `coord_hook_resident_test.go` and `Test
 
 **Depends on:** Stage 4
 
-- [ ] 9.1 Add the Resident Settings category (enabled, name, budget, memory dir, model, account, read-only tool-list pointer), local-only, with a required-name gate on enabling and prerequisite messaging
-- [ ] 9.2 Settings smoke tests including live rename
+- [x] 9.1 Add the Resident Settings category (enabled, name, budget, memory dir, model, account, read-only tool-list pointer), local-only, with a required-name gate on enabling and prerequisite messaging
+- [x] 9.2 Settings smoke tests including live rename
 
 ## 10. Docs, gotchas, parity and archive
 
