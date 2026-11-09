@@ -857,6 +857,9 @@ func TestMaybeKickRerender_TUIDefersWhenBlockedOnPrompt(t *testing.T) {
 	d := testDB(t)
 	runner := agent.NewRunner(nil)
 	app := New(d, runner, false)
+	// maybeKickRerender is the automatic path, opt-in since resize-without-
+	// restart; without this the test would pass vacuously (nothing ever kicks).
+	testutil.NoError(t, d.SetConfigValue("ui.auto_rerender_on_resize", "true"))
 	_, stop := wireApp(t, app)
 	defer stop()
 
@@ -5995,5 +5998,46 @@ func TestSpawnPTYSize_FallsBackToHostSize(t *testing.T) {
 		r, c := app.spawnPTYSize("no-such-task")
 		testutil.Equal(t, r, wantR)
 		testutil.Equal(t, c, wantC)
+	}
+}
+
+// resize-without-restart: with ui.auto_rerender_on_resize off (default) a width
+// drift past the margin on an idle, resumable session must NOT stop it; with it
+// on the very same call stops it exactly once (byte-identical to before).
+func TestMaybeKickRerender_AutoSetting(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		set      string
+		wantStop bool
+	}{
+		{"off by default", "", false},
+		{"explicit off", "false", false},
+		{"on restores the kick", "true", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			d := testDB(t)
+			app := New(d, agent.NewRunner(nil), false)
+			if tc.set != "" {
+				testutil.NoError(t, d.SetConfigValue("ui.auto_rerender_on_resize", tc.set))
+			}
+			_, stop := wireApp(t, app)
+			defer stop()
+			task := &model.Task{ID: "auto-" + strings.ReplaceAll(tc.name, " ", "-"), Name: "n", Status: model.StatusInProgress, SessionID: "sid", Worktree: t.TempDir()}
+			seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
+			sess := &fakeKickSession{idle: true, alive: true, initCols: 20}
+			// Use the Hera entry (explicit width) so the test is independent of
+			// the main pane's size; heraKickRerender resolves the task + session.
+			testutil.NoError(t, d.Add(task))
+			app.runner = getRunner{Runner: agent.NewRunner(nil), sess: sess}
+			readUI(t, app.tapp, func() { app.heraKickRerender(task.ID, 120, nil) })
+			if tc.wantStop {
+				waitRerender(t, sess.stopCalled.Load)
+				return
+			}
+			time.Sleep(150 * time.Millisecond) // give a (wrongly) spawned decision goroutine time to act
+			testutil.False(t, sess.stopCalled.Load())
+			readUI(t, app.tapp, func() { testutil.False(t, app.pendingRerenderRestart[task.ID]) })
+		})
 	}
 }

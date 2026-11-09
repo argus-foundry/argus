@@ -1664,3 +1664,76 @@ func TestPanes_ZoomToggleSkipsDragDebounceAndResetsBackoff(t *testing.T) {
 	// Deferred again: the retry delay restarted at KickRetryInterval.
 	testutil.Equal(t, p.coordKickPending.deadline.Sub(p.kickClockNow()), KickRetryInterval)
 }
+
+// resize-without-restart: with the automatic kick disabled no evaluation is
+// scheduled at all — not on bind, not after the dwell, not on a zoom re-arm.
+func TestPanes_AutoRerenderOff_NoKickEvaluation(t *testing.T) {
+	d := memDB(t)
+	orch := seedOrch(t, d, "orch")
+	seedBoundRole(t, d, orch, "coord", db.HeraKindCoordinator, "t-coord")
+	seedBoundRole(t, d, orch, "wkr", db.HeraKindWorker, "t-wkr")
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{
+		"t-coord": {id: "t-coord", alive: true},
+		"t-wkr":   {id: "t-wkr", alive: true},
+	}))
+	on := false
+	p.SetAutoRerender(func() bool { return on })
+	kicks, advance := newKickRecorder(p)
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "wkr"), true)
+	p.Machine().SetRegion(FocusCoord)
+
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	defer sim.Fini()
+	sim.SetSize(160, 30)
+	p.SetRect(0, 0, 160, 30)
+
+	p.Draw(sim)
+	advance(KickDebounce * 3)
+	p.Draw(sim)
+	testutil.Equal(t, len(*kicks), 0) // bind + dwell: nothing scheduled
+
+	p.Machine().ToggleFullscreen() // zoom re-arm path
+	p.Draw(sim)
+	advance(ZoomKickDebounce * 3)
+	p.Draw(sim)
+	testutil.Equal(t, len(*kicks), 0)
+
+	// Flip the setting on live: the same page now evaluates (no restart needed).
+	on = true
+	p.Machine().ToggleFullscreen() // back to split: width change re-arms
+	p.Draw(sim)
+	advance(KickDebounce * 3)
+	p.Draw(sim)
+	testutil.Equal(t, len(*kicks) > 0, true)
+}
+
+// With the setting on (and nil = on for unwired pages) the debounce behaves
+// exactly as before: the dwell holds the kick, then it fires once per pane.
+func TestPanes_SettingOn_KickDebounceUnchanged(t *testing.T) {
+	d := memDB(t)
+	orch := seedOrch(t, d, "orch")
+	seedBoundRole(t, d, orch, "wkr", db.HeraKindWorker, "t-wkr")
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{"t-wkr": {id: "t-wkr", alive: true}}))
+	p.SetAutoRerender(func() bool { return true })
+	kicks, advance := newKickRecorder(p)
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "wkr"), true)
+
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	defer sim.Fini()
+	sim.SetSize(120, 30)
+	p.SetRect(0, 0, 120, 30)
+
+	p.Draw(sim)
+	advance(KickDebounce / 2)
+	p.Draw(sim)
+	testutil.Equal(t, len(*kicks), 0)
+	advance(KickDebounce)
+	p.Draw(sim)
+	testutil.Equal(t, len(kicksFor(*kicks, "t-wkr")), 1)
+}

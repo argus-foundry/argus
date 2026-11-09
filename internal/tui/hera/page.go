@@ -87,7 +87,11 @@ type HeraPage struct {
 	kickRerender RerenderKicker
 	// keepPlace is the live ui.rerender_keep_place setting; nil means on.
 	keepPlace func() bool
-	prMeta    map[string]map[string]string
+
+	// autoRerender is the live ui.auto_rerender_on_resize setting; nil means on
+	// (resize-without-restart).
+	autoRerender func() bool
+	prMeta       map[string]map[string]string
 	// needsInput is the authoritative per-task needs-input set the App pushes each
 	// tick (App.needsInputIDs — the SAME idle-gated agent.DetectNeedsInput set the
 	// task list consumes). doRefresh threads it into heramodel.BuildModel so each live role

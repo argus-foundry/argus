@@ -548,6 +548,11 @@ type App struct {
 	// goroutine; onTick re-evaluates after a KickDebounce dwell. Hera panes
 	// retry through their own onDeferred path instead.
 	kickWait map[string]time.Time
+
+	// autoRerenderLast/Logged dedupe the [rerender] auto_rerender_on_resize log
+	// line (resize-without-restart); UI goroutine only.
+	autoRerenderLast   bool
+	autoRerenderLogged bool
 	// kickDeferSince / kickRetryAfter bound the keep-place deferral per task:
 	// the first deferral at the current width (agent.KickDeferCap) and the
 	// earliest the next full evaluation may run after a draft deferral.
@@ -1084,6 +1089,7 @@ func (a *App) buildUI() {
 		// access as the resolver above, wired unconditionally alongside it.
 		a.heraPage.SetRerenderKicker(a.heraKickRerender)
 		a.heraPage.SetKeepPlace(func() bool { return a.db.Config().UI.RerenderKeepPlace })
+		a.heraPage.SetAutoRerender(a.autoRerenderOn)
 	}
 	// Focus-aware status bar: update heraFocus whenever the Hera focus machine
 	// changes state (keyboard or mouse). The statusbar renders different hint
@@ -5261,6 +5267,7 @@ func tcellKeyToBytes(ev *tcell.EventKey) []byte {
 func (a *App) prepareRun() {
 	a.applyStartupSkew()
 	a.restoreLastTab()
+	a.autoRerenderOn() // log the effective ui.auto_rerender_on_resize once at startup
 	a.enableAsyncHeraRefresh()
 }
 
@@ -5775,8 +5782,26 @@ func (a *App) bindTaskAgent(task *model.Task, autoStart, focus bool) {
 // pane, which stays bound with no analogous re-entry event (see
 // heraKickRerender, BUG-077).
 func (a *App) maybeKickRerender(task *model.Task, sess agent.SessionHandle) {
+	if !a.autoRerenderOn() {
+		return // resize-without-restart: the owed notice + hotkey replace the automatic kick
+	}
 	_, panelCols := a.computePTYSize() // safe: GetInnerRect on the main goroutine
 	a.maybeKickRerenderGated(task, sess, panelCols, nil, func() bool { return a.agentPane.ScrollOffset() > 0 })
+}
+
+// autoRerenderOn reports ui.auto_rerender_on_resize, read live. With it off
+// (the default) a width change only resizes the PTY: the automatic size-drift
+// kick is skipped at its entry points and an owed-re-render notice + the
+// agent.rerender hotkey take over. Logs the effective value on first read and
+// on every live change. UI goroutine only (it owns the log-dedup fields).
+func (a *App) autoRerenderOn() bool {
+	on := a.db.Config().UI.AutoRerenderOnResize
+	if !a.autoRerenderLogged || a.autoRerenderLast != on {
+		uxlog.Log("[rerender] auto_rerender_on_resize=%t", on)
+		a.autoRerenderLogged = true
+		a.autoRerenderLast = on
+	}
+	return on
 }
 
 // kickDefer records when kicks at one width were first deferred.
@@ -5922,6 +5947,9 @@ func (a *App) retryDeferredKick(taskID string) {
 // honor RerenderDeferBusy/RerenderDeferPrompt's documented retry contract
 // (BUG-077 — see gotchas/hera-view.md).
 func (a *App) heraKickRerender(taskID string, panelCols uint16, onDeferred func()) {
+	if !a.autoRerenderOn() {
+		return
+	}
 	task, err := a.db.Get(taskID)
 	if err != nil || task == nil {
 		return
