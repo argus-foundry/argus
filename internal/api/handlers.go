@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -554,9 +555,14 @@ func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 // recovers a missing Claude transcript with a fresh ID and original prompt.
 func (s *Server) handleRestartTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	force, ok := parseForceRevive(w, r)
+	if !ok {
+		return
+	}
+	defer s.taskLocks.Lock(id)()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
-		writeErr(w, http.StatusNotFound, "task not found", nil)
+		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
 		return
 	}
 
@@ -564,14 +570,28 @@ func (s *Server) handleRestartTask(w http.ResponseWriter, r *http.Request) {
 	// (no live session, or session.IsIdle()) are exactly what this endpoint
 	// targets — they should be restarted, not rejected.
 	if sess := s.runner.Get(task.ID); sess != nil && !sess.IsIdle() {
-		writeErr(w, http.StatusConflict, "task already running", nil)
+		writeCodedErrCause(w, http.StatusConflict, "task already running", "task_running", nil)
+		return
+	}
+
+	if s.runner.HasPendingRestart(task.ID) {
+		uxlog.Log("[api] restart: refused pending restart task=%s", id)
+		writeCodedErrCause(w, http.StatusConflict, "agent is restarting", "agent_restarting", nil)
+		return
+	}
+
+	proceed, rollback := s.closeoutGate(w, task, force, "restart")
+	if !proceed {
 		return
 	}
 
 	reattached, err := s.restartTaskSession(task)
 	if err != nil {
+		if !errors.Is(err, agent.ErrStartAmbiguous) {
+			rollback()
+		}
 		uxlog.Log("[api] restart: start failed task=%s err=%v", id, err)
-		writeErr(w, http.StatusInternalServerError, "", err)
+		writeLaunchErr(w, err)
 		return
 	}
 
@@ -590,6 +610,93 @@ func (s *Server) handleRestartTask(w http.ResponseWriter, r *http.Request) {
 		resp["healed"] = true
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func writeLaunchErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, agent.ErrStartAmbiguous) {
+		writeCodedErrCause(w, http.StatusServiceUnavailable, "session start outcome is unknown; check task runtime before retrying", "start_ambiguous", nil)
+		return
+	}
+	writeCodedErrCause(w, http.StatusInternalServerError, "", "start_failed", err)
+}
+
+type reviveReq struct {
+	ForceRevive bool `json:"force_revive"`
+}
+
+// parseForceRevive reads the optional {"force_revive":bool} body; an empty
+// body means false. It writes the 400 itself and reports ok=false on junk.
+func parseForceRevive(w http.ResponseWriter, r *http.Request) (force, ok bool) {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1025))
+	if err != nil {
+		writeCodedErrCause(w, http.StatusBadRequest, "", "invalid_body", err)
+		return false, false
+	}
+	if len(raw) > 1024 {
+		writeCodedErrCause(w, http.StatusBadRequest, "body exceeds 1024 bytes", "invalid_body", nil)
+		return false, false
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return false, true
+	}
+	if bytes.TrimSpace(raw)[0] != '{' {
+		writeCodedErrCause(w, http.StatusBadRequest, "expected JSON object", "invalid_body", nil)
+		return false, false
+	}
+	var req reviveReq
+	if err := json.Unmarshal(raw, &req); err != nil {
+		writeCodedErrCause(w, http.StatusBadRequest, "invalid JSON", "invalid_body", err)
+		return false, false
+	}
+	return req.ForceRevive, true
+}
+
+// closeoutGate applies the TUI's close-out guard to a REST resume/restart: a
+// worker or freelance task awaiting Hera close-out is refused unless the
+// caller deliberately forces the revival. On a forced revival it clears the
+// close-out state up front and returns a rollback that restores it if the
+// launch then fails. Callers hold the per-task lock.
+func (s *Server) closeoutGate(w http.ResponseWriter, task *model.Task, force bool, op string) (proceed bool, rollback func()) {
+	noop := func() {}
+	workerOrFreelance, err := s.db.TaskHoldsLiveHeraWorkerOrFreelanceBinding(task.ID)
+	if err != nil {
+		uxlog.Log("[api] %s: closeout check failed task=%s err=%v", op, task.ID, err)
+		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_check_failed", err)
+		return false, noop
+	}
+	if !workerOrFreelance {
+		return true, noop
+	}
+	awaiting, err := s.db.HeraWorkerAwaitingCloseout(task.ID)
+	if err != nil {
+		uxlog.Log("[api] %s: closeout check failed task=%s err=%v", op, task.ID, err)
+		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_check_failed", err)
+		return false, noop
+	}
+	if !awaiting {
+		return true, noop
+	}
+	if !force {
+		uxlog.Log("[api] %s: refused closed-out task=%s", op, task.ID)
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":            "task awaits Hera close-out",
+			"code":             "hera_closeout",
+			"can_force_revive": true,
+		})
+		return false, noop
+	}
+	snap, err := s.db.SnapshotAndClearHeraCloseout(task.ID)
+	if err != nil {
+		uxlog.Log("[api] %s: force-revive clear failed task=%s err=%v", op, task.ID, err)
+		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_clear_failed", err)
+		return false, noop
+	}
+	uxlog.Log("[api] %s: force-reviving closed-out task=%s", op, task.ID)
+	return true, func() {
+		if rerr := s.db.RestoreHeraCloseout(snap); rerr != nil {
+			uxlog.Log("[api] %s: restore closeout failed task=%s err=%v", op, task.ID, rerr)
+		}
+	}
 }
 
 // restartTaskSession resumes a task's session (or reattaches a live one) and
@@ -618,37 +725,30 @@ func (s *Server) restartTaskSession(task *model.Task) (reattached bool, err erro
 
 func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	force, ok := parseForceRevive(w, r)
+	if !ok {
+		return
+	}
+	defer s.taskLocks.Lock(id)()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
-		writeErr(w, http.StatusNotFound, "task not found", nil)
+		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
 		return
 	}
 
-	if task.Status == model.StatusInProgress {
-		// Only refuse when the agent is actively working. Idle in_progress
-		// tasks (no live session OR session.IsIdle()) are exactly what the
-		// PWA's "Resume" prompt targets — the user opened a quiet task and
-		// wants to wake / restart it. StartOrReattach below handles both
-		// sub-cases: returns the existing handle for live-but-idle, or
-		// spawns fresh for ghost-in_progress.
-		//
-		// Note: this is a non-locked check followed by an unlocked
-		// StartOrReattach. A session can flip between non-idle and exited
-		// in the gap; the worst case is a harmless reattach that
-		// immediately spawns fresh. Argus is single-user / single-daemon
-		// so the race window has no real-world impact, but don't tighten
-		// the check to atomic without auditing the StartOrReattach call
-		// sites that share the same pattern.
-		if sess := s.runner.Get(task.ID); sess != nil && !sess.IsIdle() {
-			writeErr(w, http.StatusConflict, "task already running", nil)
-			return
-		}
-		// A daemon-initiated rerender restart is already bringing the session
-		// back; starting a second one here races it.
-		if s.runner.HasPendingRestart(task.ID) {
-			writeErr(w, http.StatusConflict, "agent is restarting", nil)
-			return
-		}
+	if sess := s.runner.Get(task.ID); sess != nil && !sess.IsIdle() {
+		writeCodedErrCause(w, http.StatusConflict, "task already running", "task_running", nil)
+		return
+	}
+	if s.runner.HasPendingRestart(task.ID) {
+		uxlog.Log("[api] resume: refused pending restart task=%s", id)
+		writeCodedErrCause(w, http.StatusConflict, "agent is restarting", "agent_restarting", nil)
+		return
+	}
+
+	proceed, rollback := s.closeoutGate(w, task, force, "resume")
+	if !proceed {
+		return
 	}
 
 	// StartOrReattach handles the desync case where the daemon still owns a
@@ -670,8 +770,11 @@ func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 
 	sess, reattached, err := s.runner.StartOrReattach(task, cfg, 24, 80, resume)
 	if err != nil {
+		if !errors.Is(err, agent.ErrStartAmbiguous) {
+			rollback()
+		}
 		uxlog.Log("[api] resume: start failed task=%s status=%s err=%v", id, prevStatus, err)
-		writeErr(w, http.StatusInternalServerError, "", err)
+		writeLaunchErr(w, err)
 		return
 	}
 
@@ -767,6 +870,7 @@ func (s *Server) handleUnarchiveTask(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived bool) {
 	id := r.PathValue("id")
+	defer s.taskLocks.Lock(id)()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeErr(w, http.StatusNotFound, "task not found", nil)
@@ -1219,16 +1323,28 @@ func (s *Server) handleGetLinks(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWriteInput(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-
-	sess := s.runner.Get(id)
-	if sess == nil {
-		writeErr(w, http.StatusNotFound, "no active session", nil)
-		return
-	}
-
 	data, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "", err)
+		return
+	}
+
+	defer s.taskLocks.Lock(id)()
+
+	task, err := s.db.Get(id)
+	if err != nil || task == nil {
+		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
+		return
+	}
+	if task.Archived {
+		uxlog.Log("[api] input: rejected archived task=%s origin=%s", id, authOrigin(r))
+		writeCodedErrCause(w, http.StatusConflict, "task is archived", "task_archived", nil)
+		return
+	}
+
+	sess := s.runner.Get(id)
+	if sess == nil {
+		writeCodedErrCause(w, http.StatusNotFound, "no active session", "no_active_session", nil)
 		return
 	}
 
@@ -2109,6 +2225,18 @@ func writeErr(w http.ResponseWriter, status int, msg string, err error) {
 		text = err.Error()
 	}
 	writeJSON(w, status, map[string]string{"error": text})
+}
+
+// writeCodedErrCause is writeErr plus a stable machine-readable `code` field.
+func writeCodedErrCause(w http.ResponseWriter, status int, msg, code string, err error) {
+	text := msg
+	switch {
+	case err != nil && msg != "":
+		text = msg + ": " + err.Error()
+	case err != nil:
+		text = err.Error()
+	}
+	writeJSON(w, status, map[string]string{"error": text, "code": code})
 }
 
 func sanitizeName(prompt string) string {

@@ -89,6 +89,10 @@ type Server struct {
 	kickScreenMu sync.Mutex
 	kickScreen   agent.ScreenRenderer
 
+	// taskLocks serializes archive, input, resume and restart per task so an
+	// archive success happens-before any later input or session start.
+	taskLocks taskLocker
+
 	// pluginSections is the in-memory mirror of the `plugin_settings` table
 	// (PR 7 of the plugin substrate). The DB is the source of truth; this
 	// shadow lets the daemon answer "is this plugin still registered?"

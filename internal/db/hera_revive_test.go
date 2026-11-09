@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/drn/argus/internal/model"
@@ -234,4 +235,148 @@ func TestClearHeraCloseout(t *testing.T) {
 		testutil.NoError(t, err)
 		testutil.Equal(t, awaiting, false)
 	})
+}
+
+func TestSnapshotRestoreHeraCloseout(t *testing.T) {
+	d := heraTestDB(t)
+	task := &model.Task{Name: "t", Status: model.StatusInReview, Project: "p"}
+	testutil.NoError(t, d.Add(task))
+	o := mkOrch(t, d, "o")
+	r := mkRole(t, d, o.ID, "r", HeraKindWorker)
+	mkBinding(t, d, r.ID, task.ID, "/wt/t")
+	testutil.NoError(t, d.SetMeta(task.ID, HeraMetaNamespace, HeraMetaKeyReadyToClose, "true"))
+	testutil.NoError(t, d.UpsertHeraRoleStatus(r.ID, HeraStatusFailed))
+
+	snap, err := d.SnapshotAndClearHeraCloseout(task.ID)
+	testutil.NoError(t, err)
+	awaiting, _ := d.HeraWorkerAwaitingCloseout(task.ID)
+	testutil.False(t, awaiting)
+
+	testutil.NoError(t, d.RestoreHeraCloseout(snap))
+	awaiting, _ = d.HeraWorkerAwaitingCloseout(task.ID)
+	testutil.True(t, awaiting)
+	rs, err := d.HeraRoleStatusFor(r.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, rs.Status, HeraStatusFailed)
+
+	testutil.NoError(t, d.RestoreHeraCloseout(nil))
+}
+
+func TestRestoreCloseoutConcurrentAndExact(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprint(changed), func(t *testing.T) {
+			d := heraTestDB(t)
+			task := &model.Task{Name: "t", Status: model.StatusInReview}
+			testutil.NoError(t, d.Add(task))
+			o := mkOrch(t, d, "o")
+			r := mkRole(t, d, o.ID, "r", HeraKindWorker)
+			mkBinding(t, d, r.ID, task.ID, "/wt/t")
+			testutil.NoError(t, d.UpsertHeraRoleStatus(r.ID, HeraStatusDone))
+			before, err := d.HeraRoleStatusFor(r.ID)
+			testutil.NoError(t, err)
+			snap, err := d.SnapshotAndClearHeraCloseout(task.ID)
+			testutil.NoError(t, err)
+			if changed {
+				testutil.NoError(t, d.UpsertHeraRoleStatus(r.ID, HeraStatusBlocked))
+			}
+			testutil.NoError(t, d.RestoreHeraCloseout(snap))
+			after, err := d.HeraRoleStatusFor(r.ID)
+			testutil.NoError(t, err)
+			if changed {
+				testutil.Equal(t, after.Status, HeraStatusBlocked)
+			} else {
+				testutil.DeepEqual(t, after, before)
+			}
+			meta, err := d.ListMeta(task.ID, HeraMetaNamespace)
+			testutil.NoError(t, err)
+			testutil.Equal(t, len(meta), 0)
+		})
+	}
+}
+
+func TestRestoreCloseoutGeneration(t *testing.T) {
+	for _, ready := range []string{"", "true", "false"} {
+		for _, newer := range []bool{false, true} {
+			t.Run(fmt.Sprintf("ready=%s/newer=%t", ready, newer), func(t *testing.T) {
+				d := heraTestDB(t)
+				task := &model.Task{Name: "t", Status: model.StatusInReview}
+				testutil.NoError(t, d.Add(task))
+				o := mkOrch(t, d, "o")
+				r := mkRole(t, d, o.ID, "r", HeraKindWorker)
+				mkBinding(t, d, r.ID, task.ID, "/wt/t")
+				testutil.NoError(t, d.UpsertHeraRoleStatus(r.ID, HeraStatusDone))
+				if ready != "" {
+					testutil.NoError(t, d.SetMeta(task.ID, HeraMetaNamespace, HeraMetaKeyReadyToClose, ready))
+				}
+				before, err := d.HeraRoleStatusFor(r.ID)
+				testutil.NoError(t, err)
+				beforeMeta, err := d.ListMeta(task.ID, HeraMetaNamespace)
+				testutil.NoError(t, err)
+				snap, err := d.SnapshotAndClearHeraCloseout(task.ID)
+				testutil.NoError(t, err)
+				if newer {
+					// Same-value writes are newer generations too, not rollback candidates.
+					testutil.NoError(t, d.UpsertHeraRoleStatus(r.ID, HeraStatusWorking))
+					testutil.NoError(t, d.SetMeta(task.ID, HeraMetaNamespace, HeraMetaKeyReadyToClose, "false"))
+					before, err = d.HeraRoleStatusFor(r.ID)
+					testutil.NoError(t, err)
+					beforeMeta, err = d.ListMeta(task.ID, HeraMetaNamespace)
+					testutil.NoError(t, err)
+				}
+				testutil.NoError(t, d.RestoreHeraCloseout(snap))
+				after, err := d.HeraRoleStatusFor(r.ID)
+				testutil.NoError(t, err)
+				afterMeta, err := d.ListMeta(task.ID, HeraMetaNamespace)
+				testutil.NoError(t, err)
+				testutil.DeepEqual(t, after, before)
+				testutil.DeepEqual(t, afterMeta, beforeMeta)
+				// A second rollback cannot overwrite later work either.
+				testutil.NoError(t, d.UpsertHeraRoleStatus(r.ID, HeraStatusBlocked))
+				testutil.NoError(t, d.RestoreHeraCloseout(snap))
+				after, err = d.HeraRoleStatusFor(r.ID)
+				testutil.NoError(t, err)
+				testutil.Equal(t, after.Status, HeraStatusBlocked)
+			})
+		}
+	}
+}
+
+func TestCloseoutTransactionFailure(t *testing.T) {
+	for _, restore := range []bool{false, true} {
+		t.Run(fmt.Sprint(restore), func(t *testing.T) {
+			d := heraTestDB(t)
+			task := &model.Task{Name: "t", Status: model.StatusInReview}
+			testutil.NoError(t, d.Add(task))
+			o := mkOrch(t, d, "o")
+			r := mkRole(t, d, o.ID, "r", HeraKindWorker)
+			mkBinding(t, d, r.ID, task.ID, "/wt/t")
+			testutil.NoError(t, d.UpsertHeraRoleStatus(r.ID, HeraStatusDone))
+			testutil.NoError(t, d.SetMeta(task.ID, HeraMetaNamespace, HeraMetaKeyReadyToClose, "true"))
+			var snap *HeraCloseoutSnapshot
+			var err error
+			if restore {
+				snap, err = d.SnapshotAndClearHeraCloseout(task.ID)
+				testutil.NoError(t, err)
+			}
+			before, err := d.HeraRoleStatusFor(r.ID)
+			testutil.NoError(t, err)
+			beforeMeta, err := d.ListMeta(task.ID, HeraMetaNamespace)
+			testutil.NoError(t, err)
+			_, err = d.conn.Exec(`CREATE TRIGGER fail_role_update BEFORE UPDATE ON hera_role_status BEGIN SELECT RAISE(ABORT,'forced role failure'); END`)
+			testutil.NoError(t, err)
+			if restore {
+				err = d.RestoreHeraCloseout(snap)
+			} else {
+				snap, err = d.SnapshotAndClearHeraCloseout(task.ID)
+				testutil.Nil(t, snap)
+			}
+			testutil.NotNil(t, err)
+			after, err := d.HeraRoleStatusFor(r.ID)
+			testutil.NoError(t, err)
+			afterMeta, err := d.ListMeta(task.ID, HeraMetaNamespace)
+			testutil.NoError(t, err)
+			testutil.DeepEqual(t, after, before)
+			testutil.DeepEqual(t, afterMeta, beforeMeta)
+		})
+	}
 }

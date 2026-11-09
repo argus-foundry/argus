@@ -1,0 +1,4 @@
+- [x] Failing tests
+- [x] Implementation
+- [x] Docs (README reference, gotchas)
+- [x] `make pre-pr`

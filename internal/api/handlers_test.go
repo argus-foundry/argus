@@ -482,6 +482,7 @@ func TestHandleResumeTask(t *testing.T) {
 	})
 
 	t.Run("heals desync when runner has a live session", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
 		if testing.Short() {
 			t.Skip("starts a real PTY-backed sleep; skipped in -short")
 		}
@@ -507,6 +508,7 @@ func TestHandleResumeTask(t *testing.T) {
 		// produces the "session already exists for task X" error.
 		sess, err := srv.runner.Start(task, d.Config(), 24, 80, false)
 		testutil.NoError(t, err)
+		srv.runner = idleGuardSessionRunner(srv.runner, sess)
 		// The heal path is non-destructive — it never stops the session, so
 		// the test owns the lifecycle. If the heal logic ever starts
 		// stopping/restarting, this cleanup needs revisiting.
