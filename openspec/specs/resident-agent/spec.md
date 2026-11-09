@@ -48,7 +48,7 @@ The system SHALL expose one predicate, `IsResident()`, and SHALL apply it so tha
 
 ### Requirement: The daemon keeps the resident session running
 
-While `resident.enabled` is true the daemon SHALL ensure the resident session is running: after supervisor re-attach at daemon start, when the setting becomes true, and, with bounded backoff, when the session exits unexpectedly. It SHALL resume the existing Claude session except after an intentional recycle. The session SHALL be owned by the supervisor like any agent PTY, so it survives TUI exit and daemon restarts. When `resident.enabled` becomes false the daemon SHALL stop the session and SHALL leave the row and the vault memory folder intact. The resident SHALL use the default Claude-family backend, with optional `resident.model` and `resident.account` overrides, and SHALL run under the normal sandbox resolution.
+While `resident.enabled` is true the daemon SHALL ensure the resident session is running: after supervisor re-attach at daemon start, when the setting becomes true, and, with bounded backoff, when the session exits unexpectedly. It SHALL resume the existing Claude session; an intentional recycle relaunches it itself with the recycle seed. A recycle seed is one-shot: every launch the daemon makes that is not the recycle itself (first start, re-enable, or a fresh launch because no resumable transcript exists) SHALL use the resident's orientation prompt, never a persisted recycle seed. The session SHALL be owned by the supervisor like any agent PTY, so it survives TUI exit and daemon restarts. When `resident.enabled` becomes false the daemon SHALL stop the session and SHALL leave the row and the vault memory folder intact. The resident SHALL use the default Claude-family backend, with optional `resident.model` and `resident.account` overrides, and SHALL run under the normal sandbox resolution.
 
 #### Scenario: Survives TUI exit and daemon bounce
 
@@ -59,6 +59,11 @@ While `resident.enabled` is true the daemon SHALL ensure the resident session is
 
 - **WHEN** the resident session exits unexpectedly while enabled
 - **THEN** the daemon restarts it with bounded backoff and resumes the prior session, logging each attempt
+
+#### Scenario: Recycle seed is one-shot
+
+- **WHEN** the resident was recycled and later launches fresh (for example after `resident.account` changes and the prior transcript cannot be resumed)
+- **THEN** the launch carries the orientation prompt, not the earlier recycle's handoff note or relay directive
 
 #### Scenario: Disable stops but preserves
 

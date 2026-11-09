@@ -195,7 +195,11 @@ func TestBuildCmd_ResidentFailsClosedOnUnenforceableFamily(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfg := testConfig()
 	cfg.Backends["nocodexperm"] = config.Backend{Command: "codex"}
+	// The resident dir must exist, or BuildCmd fails earlier on the missing
+	// worktree and the family check is never reached.
+	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
 	task := &model.Task{ID: "r1", Kind: model.KindResident, Backend: "nocodexperm", Worktree: db.ResidentWorkDir()}
 	_, _, err := BuildCmd(task, cfg, false)
 	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "cannot enforce the resident permission policy")
 }

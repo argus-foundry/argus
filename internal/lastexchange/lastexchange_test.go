@@ -114,3 +114,28 @@ func TestFromFile(t *testing.T) {
 	_, err = FromFile(filepath.Join(t.TempDir(), "missing.jsonl"))
 	testutil.Equal(t, err != nil, true)
 }
+
+// Argus-injected turns (typed without the bridge, e.g. the resident's budget
+// nudge or a task-message doorbell) are never the user's last message: the
+// earlier genuine exchange survives, and the session's reply to the injected
+// turn is not attributed to the human.
+func TestExtract_SkipsArgusInjectedTurns(t *testing.T) {
+	nudge := `{"type":"user","message":{"role":"user","content":"[argus] Context budget reached (300000/300000 tokens). Write undone items to resident/open-loops.md, then call task_recycle."}}`
+	doorbellBlock := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"\n[argus] new message from task t1 (kind=note) — call task_inbox to read.\n"}]}}`
+	nudgeReply := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Saving open loops and recycling."}]}}`
+	for name, injected := range map[string]string{"budget nudge": nudge, "doorbell": doorbellBlock} {
+		t.Run(name, func(t *testing.T) {
+			ex := extract(t, humanStr, asstText2, injected, nudgeReply)
+			testutil.Equal(t, ex.Human, "is the slowness pure CPU load?")
+			testutil.Equal(t, ex.Reply, "It is CPU load.")
+		})
+	}
+	t.Run("a later genuine message resets", func(t *testing.T) {
+		ex := extract(t, humanStr, asstText2, nudge, nudgeReply, humanBlock, asstText2)
+		testutil.Equal(t, ex.Human, "is it CPU?")
+		testutil.Equal(t, ex.Reply, "It is CPU load.")
+	})
+	t.Run("only injected turns", func(t *testing.T) {
+		testutil.Equal(t, extract(t, nudge, nudgeReply), Exchange{})
+	})
+}

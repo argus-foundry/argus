@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -127,11 +128,14 @@ func TestResidentRecycleUsesPersistentOrientation(t *testing.T) {
 			task.Backend = "test"
 			task.SessionID = "old-session"
 			testutil.NoError(t, database.Update(task))
+			// The pre-recycle transcript the seed must carry forward.
+			writeTranscript(t, os.Getenv("HOME"), task.Worktree, "old-session", exchangeTranscript)
 			originalOrientation := residentOrientationPrompt
 			residentOrientationPrompt = func(config.Config) string { return "persistent orientation" }
 			t.Cleanup(func() { residentOrientationPrompt = originalOrientation })
 			runner := &residentRecycleCaptureRunner{live: live}
 			cfg := recycleTestConfig()
+			cfg.Backends["test"] = config.Backend{Command: "claude"} // Claude family: transcript reader applies
 			cfg.Resident.MemoryDir = "custom/memory"
 			r := newTaskRecycleRunner(database, runner, func() config.Config { return cfg })
 			r.spawn = func(f func()) { f() }
@@ -155,7 +159,8 @@ func TestResidentRecycleUsesPersistentOrientation(t *testing.T) {
 			loops := strings.Index(p, "custom/memory/open-loops.md")
 			orient := strings.Index(p, "persistent orientation")
 			relay := strings.Index(p, "Open with the user — relay first")
-			testutil.True(t, handoff >= 0 && relay > handoff && loops > relay && orient > loops)
+			exch := strings.Index(p, "Mostly host CPU load.")
+			testutil.True(t, handoff >= 0 && exch > handoff && relay > exch && loops > relay && orient > loops)
 			testutil.False(t, strings.Contains(p, "obsolete prior recycle seed"))
 
 			// The persisted row matches what was launched, so a later crash

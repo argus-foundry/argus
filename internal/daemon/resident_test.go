@@ -14,6 +14,7 @@ import (
 	"github.com/argus-foundry/argus/internal/api"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/lastexchange"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/notify"
 	"github.com/argus-foundry/argus/internal/testutil"
@@ -236,20 +237,37 @@ func TestResident_ResumesExistingSessionAfterCrash(t *testing.T) {
 	testutil.Equal(t, e.run.starts[1].task.SessionID, sid)
 }
 
-func TestResident_FreshAfterRecycleClearedSession(t *testing.T) {
-	e := newResEnv(t)
-	e.m.tick()
-	row, _ := e.db.ResidentTask()
-	delete(e.run.sess, row.ID)
-	row.SessionID = "" // intentional recycle clears it
-	row.Prompt = "seed"
-	testutil.NoError(t, e.db.Update(row))
-	e.now = e.now.Add(residentBackoffBase)
-	e.m.tick()
-	last := e.run.starts[len(e.run.starts)-1]
-	testutil.Equal(t, last.resume, false)
-	testutil.Equal(t, last.task.Prompt, "seed")
-	testutil.Equal(t, last.task.SessionID != "", true)
+// TestResident_LaunchesNeverReplayRecycleSeed pins the one-shot recycle seed:
+// a recycle persists its seed as the row's Prompt, but every launch the ensure
+// loop makes — a fresh one with no session ID, or a resume whose transcript may
+// be missing and fall back to a fresh launch — carries the orientation.
+func TestResident_LaunchesNeverReplayRecycleSeed(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sessionID string
+		resume    bool
+	}{
+		{"fresh launch", "", false},
+		{"resume after recycle", "recycled-session", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newResEnv(t)
+			e.m.tick()
+			row, _ := e.db.ResidentTask()
+			delete(e.run.sess, row.ID)
+			row.SessionID = tc.sessionID
+			row.Prompt = "stale recycle seed: relay the old handoff first"
+			testutil.NoError(t, e.db.Update(row))
+			e.now = e.now.Add(residentBackoffBase)
+			e.m.tick()
+			last := e.run.starts[len(e.run.starts)-1]
+			testutil.Equal(t, last.resume, tc.resume)
+			testutil.Equal(t, last.task.Prompt, residentOrientationPrompt(e.cfg))
+			testutil.True(t, last.task.SessionID != "")
+			stored, _ := e.db.ResidentTask()
+			testutil.Equal(t, stored.Prompt, residentOrientationPrompt(e.cfg))
+		})
+	}
 }
 
 func TestResident_SkipsWhileRecycleOrKickInFlight(t *testing.T) {
@@ -368,8 +386,12 @@ func TestResident_Send(t *testing.T) {
 	testutil.NoError(t, e.m.Send("hi", "abc"))
 	testutil.Equal(t, len(n.calls), 1)
 	testutil.Equal(t, n.calls[0].task, row.ID)
-	testutil.Equal(t, n.calls[0].text, "hi")
+	// Argus-originated text is marked so last-exchange extraction skips it.
+	testutil.Equal(t, n.calls[0].text, lastexchange.SystemTurnPrefix+"hi")
 	testutil.Equal(t, n.calls[0].id, "resident:abc")
+	testutil.NoError(t, e.m.Send(lastexchange.SystemTurnPrefix+"marked", "m"))
+	testutil.Equal(t, n.calls[1].text, lastexchange.SystemTurnPrefix+"marked") // never double-prefixed
+	n.calls = n.calls[:1]
 
 	testutil.NoError(t, e.m.Send("auto-id", ""))
 	testutil.Equal(t, n.calls[1].id != "resident:", true)
@@ -463,6 +485,91 @@ func TestResident_LogReachesSlog(t *testing.T) {
 	testutil.Equal(t, found, true)
 }
 
+func TestResident_StartFailureReasonSurvivesBackoff(t *testing.T) {
+	failAgain := func(e *resEnv) {
+		t.Helper()
+		row, _ := e.db.ResidentTask()
+		if row != nil {
+			delete(e.run.sess, row.ID)
+		}
+		e.run.startErr = errors.New("boom")
+		e.now = e.now.Add(residentBackoffMax)
+		before := len(e.run.starts)
+		e.m.tick()
+		testutil.Equal(t, len(e.run.starts), before+1)
+		testutil.Contains(t, e.m.State().Reason, "start failed: boom")
+	}
+
+	t.Run("kept across backoff ticks, cleared on success", func(t *testing.T) {
+		e := newResEnv(t)
+		e.run.startErr = errors.New("boom")
+		e.m.tick()
+		testutil.Contains(t, e.m.State().Reason, "start failed: boom")
+		testutil.Equal(t, len(e.run.starts), 1)
+		e.m.tick() // inside the backoff window: no attempt, reason retained
+		testutil.Contains(t, e.m.State().Reason, "start failed: boom")
+		testutil.Equal(t, len(e.run.starts), 1)
+
+		e.run.startErr = nil
+		e.now = e.now.Add(residentBackoffMax)
+		e.m.tick()
+		testutil.Equal(t, len(e.run.starts), 2)
+		testutil.Equal(t, e.m.State().Reason, "")
+	})
+	t.Run("cleared once the session is alive", func(t *testing.T) {
+		e := newResEnv(t)
+		e.run.startErr = errors.New("boom")
+		e.m.tick()
+		testutil.Contains(t, e.m.State().Reason, "start failed: boom")
+		row, _ := e.db.ResidentTask()
+		e.run.sess = map[string]*liveHandle{row.ID: {alive: true}}
+		e.m.tick()
+		testutil.Equal(t, e.m.State().Reason, "")
+	})
+	t.Run("disable and re-enable drop the stale failure", func(t *testing.T) {
+		e := newResEnv(t)
+		e.run.startErr = errors.New("boom")
+		e.m.tick()
+		failAgain(e)
+
+		e.cfg.Resident.Enabled = false
+		e.m.tick()
+		e.cfg.Resident.Enabled = true
+		ready := false
+		e.m.mcpReady = func() bool { return ready }
+		e.m.tick()
+		testutil.Equal(t, e.m.State().Reason, "waiting for the Argus MCP server")
+
+		// Past the prerequisite checks with a restart owned elsewhere, the
+		// reason must be empty, not the failure from before the disable.
+		ready = true
+		e.m.recycling = func(string) bool { return true }
+		e.m.tick()
+		testutil.Equal(t, e.m.State().Reason, "")
+	})
+}
+
+func TestResident_PersistentSetupFailureLogsOnce(t *testing.T) {
+	msgs := captureSlog(t)
+	e := newResEnv(t)
+	// A regular file where the work dir must go makes MkdirAll fail.
+	testutil.NoError(t, os.MkdirAll(db.DataDir(), 0o755))
+	testutil.NoError(t, os.WriteFile(db.ResidentWorkDir(), []byte("x"), 0o600))
+	for i := 0; i < 3; i++ {
+		e.now = e.now.Add(residentBackoffBase)
+		e.m.tick()
+	}
+	testutil.Equal(t, len(e.run.starts), 0)
+	n := 0
+	for _, m := range *msgs {
+		if strings.HasPrefix(m, "[resident] not starting: create") {
+			n++
+		}
+	}
+	testutil.Equal(t, n, 1)
+	testutil.Contains(t, e.m.State().Reason, "create")
+}
+
 func TestResident_WaitsForMCPServer(t *testing.T) {
 	e := newResEnv(t)
 	ready := false
@@ -483,6 +590,34 @@ func TestResident_DaemonManagerClosures(t *testing.T) {
 	runner := agent.NewRunner(nil)
 	d := &Daemon{db: database, sessionCore: newSessionCore(runner, config.DefaultConfig, make(chan struct{}))}
 	m := d.residentMgr()
+	// A concurrent writer takes d.mu like the daemon's own setters do, so
+	// `go test -race` fails if a closure stops locking when it reads these.
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			d.mu.Lock()
+			d.taskRecycler = nil
+			d.apiServer = nil
+			d.mcpPort = 0
+			d.mu.Unlock()
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		_ = m.recycling("r1")
+		_ = m.waiting("r1")
+		_ = m.mcpReady()
+	}
+	close(stop)
+	wg.Wait()
+
 	testutil.Equal(t, m.mcpReady(), false)
 	d.mu.Lock()
 	d.mcpPort = 7742

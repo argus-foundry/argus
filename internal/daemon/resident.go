@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/argus-foundry/argus/internal/backendkind"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/lastexchange"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/notify"
 	"github.com/argus-foundry/argus/internal/uxlog"
@@ -178,11 +180,6 @@ func (m *residentManager) tick() {
 		m.reason(err.Error())
 		return
 	}
-	m.mu.Lock()
-	pending := m.startFailure
-	m.mu.Unlock()
-	m.reason(pending)
-
 	workDir := db.ResidentWorkDir()
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		m.reason(fmt.Sprintf("create %s: %v", workDir, err))
@@ -193,6 +190,14 @@ func (m *residentManager) tick() {
 		m.reason(fmt.Sprintf("resident row: %v", err))
 		return
 	}
+	// Every early return above sets its own reason; past them, the reason is
+	// the last unresolved start failure (or none). Setting it any earlier would
+	// reset the log-on-change dedup each tick and re-log a persistent
+	// directory/row failure every 5s.
+	m.mu.Lock()
+	pending := m.startFailure
+	m.mu.Unlock()
+	m.reason(pending)
 
 	now := m.now()
 	if sess := m.runner.Get(task.ID); sess != nil && sess.Alive() {
@@ -240,14 +245,17 @@ func (m *residentManager) start(task *model.Task, cfg config.Config, backend str
 
 	m.seedResidentMemory(cfg)
 
+	// A recycle seed is one-shot: the recycle launches with it itself
+	// (restartSessionWithSeedPrompt) and never comes through here. Every launch
+	// this loop makes carries the current orientation, so a fresh launch after
+	// a lost transcript (e.g. resident.account changed) never replays a stale
+	// handoff or relay directive. A resume ignores the prompt.
+	task.Prompt = residentOrientationPrompt(cfg)
 	resume := task.SessionID != ""
 	if resume {
 		agent.RefreshResumeSessionID(m.db, task)
 	} else {
 		task.SessionID = model.GenerateSessionID()
-		if task.Prompt == "" {
-			task.Prompt = residentOrientationPrompt(cfg)
-		}
 	}
 	if err := m.db.Update(task); err != nil {
 		residentLog("[resident] persist row before start failed: %v", err)
@@ -414,6 +422,12 @@ func (m *residentManager) Send(text, deliveryID string) error {
 	}
 	if deliveryID == "" {
 		deliveryID = fmt.Sprintf("%d", m.now().UnixNano())
+	}
+	// Everything sent here is Argus-originated (the context-budget nudge), so
+	// mark it: the recycle seed's last-exchange extraction must never mistake
+	// it for the user's last message when it is typed without the bridge.
+	if !strings.HasPrefix(text, lastexchange.SystemTurnPrefix) {
+		text = lastexchange.SystemTurnPrefix + text
 	}
 	n.ReliableNotify(task.ID, text, "resident:"+deliveryID, notify.NotifyOpts{})
 	residentLog("[resident] send queued task=%s delivery=%s bytes=%d", task.ID, deliveryID, len(text))

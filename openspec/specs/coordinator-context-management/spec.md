@@ -278,6 +278,10 @@ The hera recycle seed prompt SHALL include a "Last exchange with the user before
 - **WHEN** the latest user-role entries are plugin-delivered prompts, system-reminder-only content, tool results, or empty
 - **THEN** the extracted human message is the latest genuine human message before them, and a human message surfaced mid-turn inside a tool result is included with its wrapper removed
 
+#### Scenario: Argus-injected turns are ignored
+- **WHEN** a user-role entry is text Argus typed into the session without the bridge (it starts with `[argus] `, e.g. the resident's context-budget nudge or a task-message doorbell)
+- **THEN** it is not the extracted human message, the latest genuine human message before it is kept, and the session's replies after the injected turn are not attributed to that human message
+
 ### Requirement: The Stop hook also acts for the resident task
 
 The `argus coord-hook` Stop hook SHALL treat the resident task as an additional eligible subject alongside hera-bound roles: for a task whose kind is `resident` it SHALL stamp `context_size` on every Stop, record the resident reply state, and, when `context_size` is at or above `resident.context_budget`, emit the existing non-blocking nudge subject to the existing growth-increment gate. The resident nudge text SHALL instruct the agent to write undone items to `resident/open-loops.md`, call `task_recycle` with a short handoff note, and not do so while it has background work or a turn it still owes the user. For the resident the hook SHALL NOT use the hera 1.5x hard-stop path and SHALL NOT require a hera role. Behavior for hera-bound roles and for all other tasks SHALL be unchanged.

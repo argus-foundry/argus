@@ -35,6 +35,12 @@ const (
 	deliveryTag   = "[argus-delivery:"
 )
 
+// SystemTurnPrefix starts every turn Argus itself types into a session
+// without the bridge (the resident's context-budget nudge, task-message
+// doorbells). Such a turn is never "the user's last message": Extract skips it
+// and stops attributing later replies to the earlier genuine human message.
+const SystemTurnPrefix = "[argus] "
+
 // RelayDirective is appended to a recycle seed prompt so the fresh session
 // surfaces anything still open with the human before doing other work.
 const RelayDirective = "\n## Open with the user — relay first\n" +
@@ -86,8 +92,9 @@ func FromFile(path string) (Exchange, error) {
 func Extract(r io.Reader) (Exchange, error) {
 	br := bufio.NewReaderSize(r, 64<<10)
 	var (
-		human   string
-		replies []string
+		human    string
+		replies  []string
+		injected bool // an Argus-injected turn followed the human message
 	)
 	for {
 		raw, err := readLine(br)
@@ -100,9 +107,13 @@ func Extract(r io.Reader) (Exchange, error) {
 					switch {
 					case l.Type == "user" && !l.IsMeta:
 						if h := humanFromUser(l.Message.Content); h != "" {
-							human, replies = h, nil
+							human, replies, injected = h, nil, false
+						} else if systemTurn(l.Message.Content) {
+							// The session's reply to an Argus-injected turn
+							// is not an answer to the human.
+							injected = true
 						}
-					case l.Type == "assistant" && human != "":
+					case l.Type == "assistant" && human != "" && !injected:
 						replies = append(replies, assistantText(l.Message.Content)...)
 					}
 				}
@@ -245,11 +256,10 @@ func midTurnText(raw json.RawMessage) string {
 }
 
 func cleanHuman(s string) string {
-	s = reminderRe.ReplaceAllString(s, "")
-	s = hookTagRe.ReplaceAllString(s, "")
-	s = strings.TrimSpace(s)
+	s = stripNoise(s)
 	switch {
 	case s == "",
+		isSystemText(s),
 		strings.HasPrefix(s, pluginPrefix),
 		strings.Contains(s, deliveryTag),
 		strings.HasPrefix(s, "[Request interrupted by user"):
@@ -349,4 +359,34 @@ func (h Handoff) Prompt() string {
 	b.WriteString(h.OriginalPrompt)
 	b.WriteString("\n")
 	return b.String()
+}
+
+func stripNoise(s string) string {
+	s = reminderRe.ReplaceAllString(s, "")
+	s = hookTagRe.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
+}
+
+func isSystemText(cleaned string) bool {
+	return strings.HasPrefix(cleaned, strings.TrimSpace(SystemTurnPrefix))
+}
+
+// systemTurn reports whether a user-role entry is an Argus-injected turn (see
+// SystemTurnPrefix), as a plain string or as text blocks.
+func systemTurn(raw json.RawMessage) bool {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return isSystemText(stripNoise(s))
+	}
+	var blocks []contentBlock
+	if json.Unmarshal(raw, &blocks) != nil {
+		return false
+	}
+	var texts []string
+	for _, b := range blocks {
+		if b.Type == "text" {
+			texts = append(texts, b.Text)
+		}
+	}
+	return isSystemText(stripNoise(strings.Join(texts, "\n")))
 }
