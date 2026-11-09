@@ -220,7 +220,9 @@ func (m *residentManager) tick() {
 
 // start (re)starts the resident session: it stamps the resolved backend, model,
 // account and sandbox on the row, then resumes the prior Claude session unless
-// there is none (first start, or after an intentional recycle cleared it).
+// there is none (first start). A recycle never reaches here: it relaunches the
+// resident itself with a freshly minted pinned session ID and the resident
+// seed (restartSessionWithSeedPrompt), so a later crash restart resumes that.
 func (m *residentManager) start(task *model.Task, cfg config.Config, backend string, attempt int) {
 	task.Backend = backend
 	task.Model = cfg.Resident.Model
