@@ -36,6 +36,8 @@ General PUT sends only KB enabled/vault path, default backend/share project and 
 
 Project API replacement clears diligence profiles that the API never exposes. The editor explicitly discloses this existing limitation; it does not invent a profile field or claim lossless updates. No live daemon or real project configuration is changed by automated tests.
 
+Task rail snapshots are invalidated by task.updated and specific task events, coalesced for 100 ms. The visible 30 second task fallback stops after the first task.updated and restarts on stream reconnect until another such event. Reconnect, visibility return and Retry connection recover missing persisted events. Pin uses POST /api/tasks/{id}/pin with only pinned, and applies returned flags including restoration.
+
 ## Task hierarchy
 
 `workspace/rail/task-hierarchy.js` reads the existing `/api/hera` roster alongside task snapshots under the same abort and generation guards. Live worker bindings attach to their coordinator task; orchestrator bridge role IDs attach distinct sub-coordinator tasks. Shared coordinator tasks appear once. The first parent in orchestrator ID order wins for multiple bindings; absent parents, detached bindings and cycle-producing links stay roots. Freelance roles stay independent. Non-auth roster failures fall back to flat navigation with a warning rather than discarding tasks.
@@ -64,6 +66,12 @@ Task creation and repository configuration, addition and removal use existing AP
 `ComposerContext` owns only read requests and a native auto popover. On task selection it reads bridge state, Hera metadata, account readings, backend kinds and the roster, then refreshes every 15 seconds and on open. Results are applied behind abort and captured-task guards; disconnect cancels reads and the timer, clears readings and closes the popover. The identity child supplies its captured raw task for account matching.
 
 `contextSnapshot` maps measured fields into context, account windows, identity and role-history totals. Quota never drives the context ring. Only a live bridge may supply live context. Persisted stamps show record time and do not infer a limit; different stamp timestamps cannot be paired. Use backend roster kind to classify custom backend names. Shared-account Claude identity/usage never appears as Codex identity/usage. See `docs/context-data.md` for per-backend availability and needed daemon work.
+
+## Agent messages and human Inbox
+
+Agent messages is a separate read-only task tools tab. It reads only GET hera-messages, pages 100 messages at a time and keeps up to 1,000 records using source plus ID identity. It never consumes or acknowledges agent mail. Older pages preserve scroll and expanded messages.
+
+Inbox is available only for coordinator task bindings, with a role selector when a task binds multiple coordinators. One mail glyph replaces the rail status slot while board_unread is positive and opens the matching Inbox. Opening unread items, Mark unread and Dismiss use the viewed expected_updated_at. Conflicts refetch and collapse the changed item without reading its newer revision. Returned unread_count updates the rail; hera.board_changed, reconnect and roster unread changes reconcile the view. TUI-originated event forwarding remains ENG-1125; Refresh Inbox recovers body-only TUI edits. Reply appends an item reference to the captured composer draft without sending, resolving or resuming the coordinator. Existing Stop/Resume controls remain explicit.
 
 ## Archive context
 
@@ -108,7 +116,7 @@ Maintenance and Update are System sections. Cleanup confirms the full completed-
 
 ## Native desktop parity
 
-Native equivalents and named follow-ups are recorded in the [base specification](../../openspec/specs/desktop-web-workspace/spec.md#non-goals-and-named-follow-ups). Shortcuts use an explicit terminal allowlist. TaskNavigation owns one compact project rail with coordinator nesting. SplitWorkspace owns the separate, persistent split toggle, secondary task picker and compact coordinator roster. Events subscribe before baseline reads and buffer through snapshots, with the native app's 30-second reconciliation fallback for mutations without events. Browser attention owns per-task dedupe, a distinct-task rolling burst window and title/favicon counts. The native new-task account choice resolves project/backend support before creation.
+Native equivalents and named follow-ups are recorded in the [base specification](../../openspec/specs/desktop-web-workspace/spec.md#non-goals-and-named-follow-ups). Shortcuts use an explicit terminal allowlist. TaskNavigation owns one compact project rail with coordinator nesting. SplitWorkspace owns the separate, persistent split toggle, secondary task picker and compact coordinator roster. Events subscribe before baseline reads and buffer through snapshots, with reconnect, visibility return and Retry connection recovery for missing persisted events. Browser attention owns per-task dedupe, a distinct-task rolling burst window and title/favicon counts. The native new-task account choice resolves project/backend support before creation.
 
 `TaskTerminalCache` retains a controller and its DOM view for each visited task. Selection cancels that controller's pending input and suspends its output stream, then mounts the selected view. Foreground catchup appends only unseen bytes using total minus snapshot byte length as the snapshot's start cursor; a counter reset, replay gap or changed geometry replaces the bounded replay instead. Only missing snapshot task IDs and disconnect/pagehide dispose cached controllers. Hera resolves hoisted freelance roles through their owning orchestrator ID.
 
@@ -141,7 +149,7 @@ The project rail uses `taskForest` and `projectGroup` exclusively. `workspace/ra
 
 ## Task control ownership
 
-`workspace/rail/task-menu.js` owns the task menu with task settings, pin and copy entries. `RailActions` tracks pin knowledge separately from membership; supplied boolean state avoids a raw read, unknown menu state resolves lazily, and mutation still reads the raw record immediately before writing. Task settings remains the workflow status editor. Rail icons, task settings and the keyboard shortcut remain archive entry points; the header has no archive action.
+`workspace/rail/task-menu.js` owns the task menu with task settings, pin and copy entries. `RailActions` tracks pin knowledge separately from membership; present boolean snapshot fields reconcile pin state on load, reconnect, resync and fallback polls, absent fields retain cached state, and reads started before newer local or SSE observations cannot regress them. Pin invalidations read the single-task DTO only for changed_fields containing pinned. Selection and menus issue no extra pin reads, and mutation posts only the desired pinned flag to the targeted pin endpoint. Task settings remains the workflow status editor. Rail icons, task settings and the keyboard shortcut remain archive entry points; the header has no archive action.
 
 Task settings owns the session-action row, including a roster-supported Switch Claude session control. `ClaudeSessions.open(task)` captures the supplied task independently of the selected main task; leaving settings or switching tasks cancels its picker. Successful switching refreshes the corresponding task facts and only reconnects the main terminal if it is that task. Split, Fit and terminal Reconnect retain their existing owners.
 

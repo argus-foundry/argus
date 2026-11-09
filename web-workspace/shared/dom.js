@@ -37,11 +37,12 @@ export function tabs(container, onSelect) {
   for (const item of items) {
     item.addEventListener('click', () => select(item));
     item.addEventListener('keydown', event => {
-      const index = items.indexOf(item);
-      const next = { ArrowRight: (index + 1) % items.length, ArrowLeft: (index - 1 + items.length) % items.length, Home: 0, End: items.length - 1 }[event.key];
+      const available=items.filter(tab=>!tab.hidden&&!tab.disabled);
+      const index = available.indexOf(item);
+      const next = { ArrowRight: (index + 1) % available.length, ArrowLeft: (index - 1 + available.length) % available.length, Home: 0, End: available.length - 1 }[event.key];
       if (next === undefined) return;
       event.preventDefault();
-      select(items[next], true);
+      select(available[next], true);
     });
   }
   return id => select(items.find(item => item.id === id) || items[0]);

@@ -27,11 +27,11 @@ test('tasks consolidated-controls', async ({
       const request = route.request(),
         path = new URL(request.url()).pathname;
       let value = {};
-      if (request.method() === 'PUT') {
+      if (path.endsWith('/pin') && request.method() === 'POST') {
         writes.push(path);
-        Object.assign(task, request.postDataJSON());
+        assert.deepEqual(request.postDataJSON(),{pinned:false});Object.assign(task,{pinned:false,archived:false});
         return route.fulfill({
-          json: {}
+          json:{task_id:task.id,pinned:task.pinned,archived:task.archived}
         });
       }
       if (path === '/api/tasks') {
@@ -100,7 +100,7 @@ test('tasks consolidated-controls', async ({
     await page.locator('#notice').filter({
       hasText: 'Task unpinned.'
     }).waitFor();
-    assert.deepEqual(writes, ['/api/tasks/a/raw']);
+    assert.deepEqual(writes, ['/api/tasks/a/pin']);
     await menu().click();
     await page.getByRole('menuitem', {
       name: 'Pin',

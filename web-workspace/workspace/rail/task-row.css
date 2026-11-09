@@ -27,3 +27,5 @@
 #rail-bulk-action.danger{color:var(--error)}.rail-select-all{width:18px;height:18px;flex:0 0 18px;accent-color:var(--accent)}.project-select{margin:0;position:absolute;top:50%;transform:translateY(-50%);opacity:1;right:5px;width:28px;height:28px;accent-color:var(--accent);cursor:pointer}.nav-summary #task-count{min-width:0;flex:1}.task-select[aria-checked="mixed"]{accent-color:var(--accent)}
 
 .project-header:has(.project-select){padding-right:36px}
+
+.task-mail{position:absolute;left:0;top:50%;transform:translateY(-50%);width:28px;height:28px;padding:6px;color:var(--warning);border:0;background:transparent}.task-mail svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.4}.message-body{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}.tool-tabs{flex-wrap:wrap}.inbox-item{padding:var(--space-2) 0;border-bottom:1px solid var(--border)}.inbox-item>button{width:100%;text-align:left}

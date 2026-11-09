@@ -1,3 +1,5 @@
+import {captureFocus} from '../shared/focus-recovery.js';
+import {SessionUsage} from './session-usage.js';
 import { $, node } from '../shared/dom.js';
 import { log } from '../core/api.js';
 import { readContext } from './composer-context-read.js';
@@ -8,6 +10,7 @@ const date = value => new Date(value).toLocaleString(undefined, { dateStyle:'med
 
 export class ComposerContext {
   constructor(api) {
+    this.sessionUsage = new SessionUsage(api,()=>this.render());
     this.api = api; this.toggle = $('context-toggle');
     if (!this.toggle) return;
     this.panel = node('section','context-popover'); this.panel.id = 'composer-context'; this.panel.tabIndex = 0;
@@ -29,7 +32,7 @@ export class ComposerContext {
   }
   select(task) {
     this.cancelReads(); clearInterval(this.timer);
-    this.panel?.hidePopover(); this.task = task; this.sessionID = task?.session_id; this.data = {measurement:null}; this.key = '';
+    this.sessionUsage?.select(task); this.panel?.hidePopover(); this.task = task; this.sessionID = task?.session_id; this.data = {measurement:null}; this.key = '';
     if (!this.toggle) return;
     this.toggle.disabled = !task; this.render();
     if (task && this.api) {
@@ -42,6 +45,7 @@ export class ComposerContext {
     return this.refresh();
   }
   event(event) {
+    this.sessionUsage?.event(event);
     if (event.task_id !== this.task?.id) return;
     if (event.type === 'task.context_changed') {
       const sessionID = event.payload?.session_id, previous = this.data.measurement?.session_id || this.sessionID;
@@ -53,7 +57,7 @@ export class ComposerContext {
     } else if (['session.started','session.exited'].includes(event.type)) this.invalidate();
   }
   identity(raw) { this.data.raw = raw; this.render(); }
-  refresh() { return Promise.all([this.refreshMeasurement(),this.refreshUsage()]); }
+  refresh() { return Promise.all([this.refreshMeasurement(),this.refreshUsage(),this.sessionUsage?.refresh()]); }
   canRead() {
     if (!this.task || !this.api) return false;
     if (document.hidden) { log('composer-context','skipped hidden poll'); return false; }
@@ -124,38 +128,42 @@ export class ComposerContext {
   render() {
     if (!this.panel) return;
     const view = this.task ? contextSnapshot(this.task,this.data) : {context:null,windows:[],identity:[]};
+    const usage=this.sessionUsage?.render();
     const key = JSON.stringify(view); if (this.key === key) return; this.key = key;
     const context = view.context, fill = context?.percent;
     const ring = this.toggle.querySelector('.context-ring');
     ring.dataset.known = String(fill != null); ring.style.setProperty('--context-fill',`${fill ?? 0}%`);
     this.toggle.setAttribute('aria-label',fill == null ? 'Context usage unavailable. Open usage details' : `Context ${pct(fill)} used${context.recorded ? ', last recorded' : ''}. Open usage details`);
     this.toggle.dataset.tooltip = this.toggle.getAttribute('aria-label');
-    this.panel.replaceChildren();
+    if(!this.contextBody){this.contextBody=node('div','context-measurement');this.panel.append(this.contextBody);}
+    if(usage&&!usage.isConnected)this.panel.append(usage);
+    const recover=captureFocus(this.contextBody,()=>this.toggle);
+    this.contextBody.replaceChildren();
     const heading = node('div','context-heading'); heading.append(node('h2','','Context'));
     if (context?.used != null) heading.append(node('span','',`${tokenCount(context.used)}${context.limit ? ` / ${tokenCount(context.limit)}` : ' tokens'}`));
-    this.panel.append(heading);
-    if (fill != null) this.panel.append(this.bar(fill,'Context window used'),this.row('Window used',pct(fill)));
-    if (!context) this.panel.append(node('p','context-note','Context window usage is not available for this session.'));
+    this.contextBody.append(heading);
+    if (fill != null) this.contextBody.append(this.bar(fill,'Context window used'),this.row('Window used',pct(fill)));
+    if (!context) this.contextBody.append(node('p','context-note','Context window usage is not available for this session.'));
     else {
-      if (fill == null) this.panel.append(node('p','context-note','Context window limit is not exposed.'));
-      this.panel.append(node('p','context-note',`${context.recorded ? 'Last recorded' : 'Measured'}${context.age ? ` ${context.age}` : ''}${context.at ? ` (${date(context.at)})` : ''}`));
+      if (fill == null) this.contextBody.append(node('p','context-note','Context window limit is not exposed.'));
+      this.contextBody.append(node('p','context-note',`${context.recorded ? 'Last recorded' : 'Measured'}${context.age ? ` ${context.age}` : ''}${context.at ? ` (${date(context.at)})` : ''}`));
     }
     if (context?.categories?.length) {
       const group = node('div','context-group'); group.append(node('h3','','Context categories'));
       for (const [label,value] of context.categories) group.append(this.row(label,`${tokenCount(value)} tokens`));
-      this.panel.append(group);
+      this.contextBody.append(group);
     }
     if (view.windows.length) {
       const group = node('div','context-group'); group.append(node('h3','',view.kind === 'claude' ? 'Claude usage' : 'Usage'));
       for (const window of view.windows) group.append(this.row(window.label,`${pct(window.left)} left`),this.bar(window.left,`${window.label} remaining`),node('p','context-note',`Resets ${date(window.reset)}`));
-      this.panel.append(group);
+      this.contextBody.append(group);
     }
     if (view.identity.length) {
       const group = node('div','context-group');
       for (const [label,value] of view.identity) group.append(this.row(label,value));
-      this.panel.append(group);
+      this.contextBody.append(group);
     }
-    this.position();
+    this.position();recover();
   }
   position() {
     if (!this.panel?.matches(':popover-open')) return;
