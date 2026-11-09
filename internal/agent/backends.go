@@ -12,16 +12,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/backendkind"
-	"github.com/drn/argus/internal/config"
-	injectantigravity "github.com/drn/argus/internal/inject/antigravity"
-	injectcursor "github.com/drn/argus/internal/inject/cursor"
-	injectopencode "github.com/drn/argus/internal/inject/opencode"
-	"github.com/drn/argus/internal/mcplimits"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/routing"
-	"github.com/drn/argus/internal/skills"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/backendkind"
+	"github.com/argus-foundry/argus/internal/config"
+	injectantigravity "github.com/argus-foundry/argus/internal/inject/antigravity"
+	injectcursor "github.com/argus-foundry/argus/internal/inject/cursor"
+	injectopencode "github.com/argus-foundry/argus/internal/inject/opencode"
+	"github.com/argus-foundry/argus/internal/mcplimits"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/routing"
+	"github.com/argus-foundry/argus/internal/skills"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // ModelDelivery is how a family receives the resolved model at launch.

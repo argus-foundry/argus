@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/drn/argus/internal/gitutil"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // ResolveStackTip walks a base_branch stack forward from t — a chain of

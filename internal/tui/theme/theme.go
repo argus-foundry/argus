@@ -4,7 +4,7 @@ package theme
 import (
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // RailCaret is the gutter marker for a rail's selected row, shared by the

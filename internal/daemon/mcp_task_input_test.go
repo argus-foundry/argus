@@ -3,8 +3,8 @@ package daemon
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/mcp"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/mcp"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestHeadlessInputFromMCP(t *testing.T) {

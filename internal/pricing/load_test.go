@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func writeRates(t *testing.T, path, body string) {

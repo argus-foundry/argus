@@ -12,8 +12,8 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // ArtifactStore persists registered-artifact manifest rows. *db.DB satisfies

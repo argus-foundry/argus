@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // These tests prove the P3 payoff end-to-end with the REAL stack: a daemon

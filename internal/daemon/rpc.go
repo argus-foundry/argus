@@ -5,15 +5,15 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/hera"
-	"github.com/drn/argus/internal/kb"
-	"github.com/drn/argus/internal/selfupdate"
-	"github.com/drn/argus/internal/usagebudget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hera"
+	"github.com/argus-foundry/argus/internal/kb"
+	"github.com/argus-foundry/argus/internal/selfupdate"
+	"github.com/argus-foundry/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // RPCService implements the JSON-RPC methods exposed by the daemon. The

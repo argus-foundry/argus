@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/hera"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/hera"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // dirtyKickSession adds the optional ComposerDirty signal a RemoteSession has.

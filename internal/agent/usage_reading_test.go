@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drn/argus/internal/codexctx"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/codexctx"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 const usageFixture = `{"timestamp":"2026-11-07T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}

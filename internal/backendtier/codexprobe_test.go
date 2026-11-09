@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 func resetCodexState(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // eventSub is a live subscription to /api/events/stream. Events are decoded

@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/drn/argus/internal/config"
+import "github.com/argus-foundry/argus/internal/config"
 
 func (sv *SettingsView) cycleBackendTierAccount() bool {
 	idx := sv.selectedTierIndex()

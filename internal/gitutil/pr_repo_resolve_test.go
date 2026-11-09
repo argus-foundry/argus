@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // installRepoRunner swaps the prRepoRunner seam for the duration of a test.

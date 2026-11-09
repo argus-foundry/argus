@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestInstallDefault_MissingDirInstalls(t *testing.T) {

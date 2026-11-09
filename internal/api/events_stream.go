@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // eventBus broadcasts model.Events to attached SSE subscribers. Each

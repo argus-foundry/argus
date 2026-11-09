@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/profiles"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/profiles"
 )
 
 // runProfilesCommand handles: argus profiles <subcommand>

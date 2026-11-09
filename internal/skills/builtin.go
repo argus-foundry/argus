@@ -12,9 +12,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/drn/argus/internal/inject/atomicfile"
-	"github.com/drn/argus/internal/routing"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/inject/atomicfile"
+	"github.com/argus-foundry/argus/internal/routing"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // builtinFS embeds argus's own skill sources — the single source of truth for

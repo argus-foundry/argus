@@ -5,9 +5,9 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/llm"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/llm"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // autoRenameFn is the LLM-backed name generator. Tests swap it via the same

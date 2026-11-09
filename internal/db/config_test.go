@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestDB_Config_TOMLOverlay verifies that ~/.argus/config.toml (resolved next

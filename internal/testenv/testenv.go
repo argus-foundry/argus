@@ -23,7 +23,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/drn/argus/internal/claudeenv"
+	"github.com/argus-foundry/argus/internal/claudeenv"
 )
 
 // argusOwned are the variables Argus itself exports to (or reads from) an

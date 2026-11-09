@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/drn/argus/internal/backendkind"
+	"github.com/argus-foundry/argus/internal/backendkind"
 )
 
 // DefaultAccountName is the reserved account name meaning each tool's own

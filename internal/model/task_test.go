@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // uuidV4Re matches the canonical 8-4-4-4-12 hex form with the version nibble

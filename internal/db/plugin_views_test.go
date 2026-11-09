@@ -3,7 +3,7 @@ package db
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestPluginViews_AddGetListDelete(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestFiles_ContainsRuntimeFilesOnly(t *testing.T) {

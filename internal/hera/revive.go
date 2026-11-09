@@ -3,8 +3,8 @@ package hera
 import (
 	"fmt"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // ReviveOutcome enumerates what a hera_revive attempt actually did, per

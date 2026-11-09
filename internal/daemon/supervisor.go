@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/buildid"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/buildid"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
 )
 
 // DefaultSupervisorSocketPath returns the session-supervisor's Unix socket

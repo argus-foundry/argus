@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // mustParse is a test helper — returns a valid Section for the form-section

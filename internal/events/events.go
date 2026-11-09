@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // Sink consumes an event from any emission site. The daemon's implementation

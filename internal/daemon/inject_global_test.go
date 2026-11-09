@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestRunGlobalInjectors_CallsEachAndSurvivesFailures(t *testing.T) {

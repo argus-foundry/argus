@@ -29,7 +29,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/drn/argus/internal/buildid"
+	"github.com/argus-foundry/argus/internal/buildid"
 )
 
 // Role identifies which of the six binary identities an Actor represents: three

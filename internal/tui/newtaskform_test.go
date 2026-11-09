@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/skills"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/skills"
+	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // graphQLMergeCandidates is the JSON GitHub returns for an aliased
@@ -18,11 +18,11 @@ const graphQLMergeCandidates = `{
   "data": {
     "rateLimit": {"cost": 1, "remaining": 4999},
     "repo": {
-      "t1": {"nodes": [{"state": "MERGED", "baseRefName": "master", "mergedAt": "2026-06-16T07:42:20Z", "createdAt": "2026-06-16T07:00:00Z", "url": "https://github.com/drn/argus/pull/743"}]},
+      "t1": {"nodes": [{"state": "MERGED", "baseRefName": "master", "mergedAt": "2026-06-16T07:42:20Z", "createdAt": "2026-06-16T07:00:00Z", "url": "https://github.com/argus-foundry/argus/pull/743"}]},
       "t2": {"nodes": []},
       "t3": {"nodes": [
-        {"state": "MERGED", "baseRefName": "master", "mergedAt": "2026-07-01T00:00:00Z", "createdAt": "2026-06-30T00:00:00Z", "url": "https://github.com/drn/argus/pull/800"},
-        {"state": "MERGED", "baseRefName": "some-other-branch", "mergedAt": "2026-06-01T00:00:00Z", "createdAt": "2026-05-30T00:00:00Z", "url": "https://github.com/drn/argus/pull/500"}
+        {"state": "MERGED", "baseRefName": "master", "mergedAt": "2026-07-01T00:00:00Z", "createdAt": "2026-06-30T00:00:00Z", "url": "https://github.com/argus-foundry/argus/pull/800"},
+        {"state": "MERGED", "baseRefName": "some-other-branch", "mergedAt": "2026-06-01T00:00:00Z", "createdAt": "2026-05-30T00:00:00Z", "url": "https://github.com/argus-foundry/argus/pull/500"}
       ]}
     }
   }
@@ -46,7 +46,7 @@ func TestFetchMergeCandidatesBatch_ParsesPerBranchResults(t *testing.T) {
 	testutil.Equal(t, len(res["argus/one"]), 1)
 	testutil.Equal(t, res["argus/one"][0].State, "MERGED")
 	testutil.Equal(t, res["argus/one"][0].BaseRefName, "master")
-	testutil.Equal(t, res["argus/one"][0].URL, "https://github.com/drn/argus/pull/743")
+	testutil.Equal(t, res["argus/one"][0].URL, "https://github.com/argus-foundry/argus/pull/743")
 
 	testutil.Equal(t, len(res["argus/none"]), 0)
 
@@ -133,7 +133,7 @@ func TestFetchMergeCandidatesBatch_UnknownAliasIgnored(t *testing.T) {
   "data": {
     "rateLimit": {"cost": 2, "remaining": 4998},
     "repo": {
-      "t1": {"nodes": [{"state": "MERGED", "baseRefName": "master", "mergedAt": "2026-06-16T07:42:20Z", "createdAt": "2026-06-16T07:00:00Z", "url": "https://github.com/drn/argus/pull/743"}]},
+      "t1": {"nodes": [{"state": "MERGED", "baseRefName": "master", "mergedAt": "2026-06-16T07:42:20Z", "createdAt": "2026-06-16T07:00:00Z", "url": "https://github.com/argus-foundry/argus/pull/743"}]},
       "t99": {"nodes": []}
     }
   }
@@ -159,5 +159,5 @@ func TestFetchPRStatesBatch_StillWorksAfterSharedExecutorExtraction(t *testing.T
 	testutil.NoError(t, err)
 	testutil.Equal(t, fake.calls, 1)
 	testutil.Equal(t, cost, 1)
-	testutil.Equal(t, res["argus/open"].URL, "https://github.com/drn/argus/pull/11")
+	testutil.Equal(t, res["argus/open"].URL, "https://github.com/argus-foundry/argus/pull/11")
 }

@@ -26,10 +26,10 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/drn/argus/internal/oscfilter"
-	"github.com/drn/argus/internal/tui/keyenc"
-	"github.com/drn/argus/internal/tui/theme"
-	"github.com/drn/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/oscfilter"
+	"github.com/argus-foundry/argus/internal/tui/keyenc"
+	"github.com/argus-foundry/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/tui/widget"
 )
 
 // Default emulator dimensions until Draw or Resize provides a real size.

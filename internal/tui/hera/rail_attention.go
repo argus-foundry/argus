@@ -1,8 +1,8 @@
 package hera
 
 import (
-	heramodel "github.com/drn/argus/internal/hera/model"
-	"github.com/drn/argus/internal/uxlog"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // SetBoardAuto applies ui.coordinator_board to attention scans and mailbox

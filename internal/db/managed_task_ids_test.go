@@ -3,7 +3,7 @@ package db
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // mkLiveBinding is a thin helper: creates a binding with ended_at IS NULL for

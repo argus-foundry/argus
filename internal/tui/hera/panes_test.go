@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	heramodel "github.com/drn/argus/internal/hera/model"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/planview"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/planview"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/drn/argus/internal/inject/atomicfile"
+	"github.com/argus-foundry/argus/internal/inject/atomicfile"
 
 	"github.com/BurntSushi/toml"
 )

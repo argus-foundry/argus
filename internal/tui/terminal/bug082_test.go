@@ -8,7 +8,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // BUG-082 — "scrolls up a line then jumps straight back to the bottom,

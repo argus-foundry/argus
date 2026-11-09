@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 type bridgeWarningProbe struct {

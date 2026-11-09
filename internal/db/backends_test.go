@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/kb"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/kb"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestDB_DeleteBackend(t *testing.T) {

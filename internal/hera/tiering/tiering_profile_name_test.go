@@ -3,11 +3,11 @@ package tiering
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	heramodel "github.com/drn/argus/internal/hera/model"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestResolve_ProjectProfileWhitespaceMatchesLaunch(t *testing.T) {

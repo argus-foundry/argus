@@ -4,7 +4,7 @@ import (
 	"runtime/debug"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // fromSettings is the pure extraction that all identity reporting depends on:

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // fakeUsageSession is a scripted stand-in for a live `claude -- /usage` PTY

@@ -3,12 +3,12 @@ package hera
 import (
 	"time"
 
-	heramodel "github.com/drn/argus/internal/hera/model"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/tui/keyenc"
-	"github.com/drn/argus/internal/tui/terminal"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/tui/keyenc"
+	"github.com/argus-foundry/argus/internal/tui/terminal"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )

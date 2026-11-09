@@ -21,13 +21,13 @@ import (
 	"io"
 	"sync"
 
-	"github.com/drn/argus/internal/apiclient"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/sandboxprop"
-	"github.com/drn/argus/internal/tui/settings"
-	"github.com/drn/argus/internal/tui/store"
+	"github.com/argus-foundry/argus/internal/apiclient"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/sandboxprop"
+	"github.com/argus-foundry/argus/internal/tui/settings"
+	"github.com/argus-foundry/argus/internal/tui/store"
 )
 
 // Compile-time assertion: Store implements tui/store.Store.

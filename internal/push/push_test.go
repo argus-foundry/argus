@@ -11,8 +11,8 @@ import (
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func newManager(t *testing.T) (*Manager, *db.DB) {

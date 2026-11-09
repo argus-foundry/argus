@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func i64(v int64) *int64 { return &v }

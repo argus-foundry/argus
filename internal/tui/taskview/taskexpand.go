@@ -1,6 +1,6 @@
 package taskview
 
-import "github.com/drn/argus/internal/uxlog"
+import "github.com/argus-foundry/argus/internal/uxlog"
 
 // ExpandAll reports the remembered project expansion preference.
 func (tl *TaskListView) ExpandAll() bool { return tl.expandAll }

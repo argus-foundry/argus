@@ -9,7 +9,7 @@ import (
 
 	xvt "github.com/charmbracelet/x/vt"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // emuScreen renders the emulator's main screen as newline-joined rows, with

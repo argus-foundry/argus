@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/url"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/sandboxprop"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/sandboxprop"
 )
 
 // ListSandboxProposals returns proposals, optionally filtered by status.

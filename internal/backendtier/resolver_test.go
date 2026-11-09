@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // withCachedPct temporarily overrides both probe-kind cached-reading seams,

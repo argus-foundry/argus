@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/api"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/api"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // openTestDB returns a path to a fresh on-disk SQLite database in a temp dir.

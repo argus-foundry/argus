@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/db"
-	heramodel "github.com/drn/argus/internal/hera/model"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/planview"
-	"github.com/drn/argus/internal/tui/theme"
-	"github.com/drn/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/db"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/planview"
+	"github.com/argus-foundry/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/tui/widget"
 )
 
 // seedPlannedRole creates a planned (never-bound) worker role and returns it.

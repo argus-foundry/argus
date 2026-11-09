@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/claudesession"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // This file implements the two REST endpoints added by

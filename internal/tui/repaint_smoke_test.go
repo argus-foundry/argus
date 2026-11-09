@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/hera"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/hera"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )

@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/drn/argus/internal/testenv"
+	"github.com/argus-foundry/argus/internal/testenv"
 )
 
 // TestMain scrubs agent/host environment variables (ARGUS_*, CODEX_*,

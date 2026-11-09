@@ -3,10 +3,10 @@ package daemon
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // --- Daemon.ForceRecycleCoordinator (fix-coordhook-idle-deadlock, Part B) ---

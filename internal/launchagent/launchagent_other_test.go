@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // On non-darwin every operation is a no-op stub. The contract is

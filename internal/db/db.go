@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 
 	_ "modernc.org/sqlite"
 )

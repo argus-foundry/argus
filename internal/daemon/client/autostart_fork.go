@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/db"
 )
 
 // autoStartFork is the test-hostile body of AutoStart: it fork/execs the

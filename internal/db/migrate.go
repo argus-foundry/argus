@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 )
 
 // migrate checks if the database has been initialized. If not, it seeds defaults.

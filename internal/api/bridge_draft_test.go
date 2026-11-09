@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 const draftEventBody = `{"events":[{"type":"draft","text":"fix the bug","cursor":11,"generation":"launch","session_id":"session","boot":"old","seq":1}]}`

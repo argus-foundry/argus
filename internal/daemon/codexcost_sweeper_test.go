@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestCodexCostSweepFn_NilUnderTest(t *testing.T) {

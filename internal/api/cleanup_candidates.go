@@ -8,14 +8,14 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/gitutil"
-	"github.com/drn/argus/internal/mergesafety"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/mergesafety"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Namespace + keys the merge-safety review's global Cleanup action caches its

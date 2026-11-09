@@ -1,6 +1,6 @@
 package terminal
 
-import "github.com/drn/argus/internal/oscfilter"
+import "github.com/argus-foundry/argus/internal/oscfilter"
 
 // FilterOSC strips OSC sequences from a complete buffer in a single pass; see
 // package oscfilter for why this is necessary (x/ansi treats a 0x9C byte inside

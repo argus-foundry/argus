@@ -3,8 +3,8 @@ package db
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // mkBinding starts a live binding for (role, task) and fails on error.

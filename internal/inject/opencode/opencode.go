@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/drn/argus/internal/inject/atomicfile"
-	"github.com/drn/argus/internal/mcplimits"
+	"github.com/argus-foundry/argus/internal/inject/atomicfile"
+	"github.com/argus-foundry/argus/internal/mcplimits"
 
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // mcpServerName is the key used for Argus in opencode's `mcp` object.

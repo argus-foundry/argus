@@ -3,7 +3,7 @@ package dagview
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // nodeIDs returns the IDs of placed nodes in layer-major, column-minor order.

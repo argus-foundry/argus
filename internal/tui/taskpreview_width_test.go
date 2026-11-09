@@ -7,8 +7,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // wideSessionBytes is a minimal reproduction of Claude's repaint stream on a

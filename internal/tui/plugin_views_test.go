@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/terminalpane"
-	"github.com/drn/argus/internal/tui/views"
-	"github.com/drn/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/terminalpane"
+	"github.com/argus-foundry/argus/internal/tui/views"
+	"github.com/argus-foundry/argus/internal/tui/widget"
 	"github.com/gdamore/tcell/v2"
 )
 

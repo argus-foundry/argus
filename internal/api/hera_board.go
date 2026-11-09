@@ -3,8 +3,8 @@ package api
 import (
 	"net/http"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // handleHeraBoard is the parity surface for future web/macOS read-only views.

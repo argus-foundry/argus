@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/drn/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/gitutil"
 )
 
 // Tier labels surfaced on a confirmed-safe Verdict.

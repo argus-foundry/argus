@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/kb"
+	"github.com/argus-foundry/argus/internal/kb"
 )
 
 // KBUpsert inserts or replaces a document in the FTS5 knowledge base.

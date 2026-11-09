@@ -3,7 +3,7 @@ package tui
 import (
 	"strconv"
 
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Keyed rows let later bridge controls extend this section without new keys.

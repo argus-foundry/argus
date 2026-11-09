@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/todo"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/todo"
 )
 
 // capturedRun is a fake AppleScript runner: it records every script it was

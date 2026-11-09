@@ -4,10 +4,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // taskRecordingRunner records the task each session-core handler rebuilds

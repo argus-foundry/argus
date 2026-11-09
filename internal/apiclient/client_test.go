@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // fixture is a tiny httptest.Server with a couple of canned routes that

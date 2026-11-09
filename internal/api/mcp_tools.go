@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/drn/argus/internal/mcp"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/mcp"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // SetMCPRegistry wires the runtime plugin-tool registry. Called by the daemon

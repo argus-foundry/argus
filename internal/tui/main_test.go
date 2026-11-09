@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/drn/argus/internal/testenv"
+	"github.com/argus-foundry/argus/internal/testenv"
 )
 
 // TestMain installs no-op stubs for the package-level openers so the tui

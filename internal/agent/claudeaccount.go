@@ -10,10 +10,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/drn/argus/internal/claudeenv"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/claudeenv"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // claudeSettingsFile is seeded (copied, never linked) into a new account dir.

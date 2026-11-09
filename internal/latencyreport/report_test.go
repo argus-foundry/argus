@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestReport(t *testing.T) {
@@ -63,7 +63,7 @@ func TestStallRuns(t *testing.T) {
 		name, dump string
 		want       bool
 	}{
-		{"main", "goroutine 1 [running]:\ngithub.com/drn/argus/internal/tui.(*App).onTick.func1()\n\ngoroutine 2 [running]:\nother()", true},
+		{"main", "goroutine 1 [running]:\ngithub.com/argus-foundry/argus/internal/tui.(*App).onTick.func1()\n\ngoroutine 2 [running]:\nother()", true},
 		{"other", "goroutine 1 [running]:\nother()\n\ngoroutine 2 [running]:\nrefreshTasksWithIDs()", false},
 		{"missing", "", false},
 	} {

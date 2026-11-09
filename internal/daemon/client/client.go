@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/usagebudget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // rpcTimeout is the maximum time to wait for any single RPC call to the daemon.

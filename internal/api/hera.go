@@ -4,11 +4,11 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 
-	heramodel "github.com/drn/argus/internal/hera/model"
-	"github.com/drn/argus/internal/hera/tiering"
-	"github.com/drn/argus/internal/uxlog"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/hera/tiering"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // heraRoleJSON is the read-only projection of one hera role for the webapp's

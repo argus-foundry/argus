@@ -7,9 +7,9 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/testutil"
-	pluginsettings "github.com/drn/argus/internal/tui/settings"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/testutil"
+	pluginsettings "github.com/argus-foundry/argus/internal/tui/settings"
 )
 
 const sectionBody = `{

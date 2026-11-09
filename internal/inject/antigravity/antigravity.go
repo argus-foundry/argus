@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/drn/argus/internal/inject/atomicfile"
+	"github.com/argus-foundry/argus/internal/inject/atomicfile"
 )
 
 const (

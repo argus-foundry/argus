@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/drn/argus/internal/bridgemod"
+import "github.com/argus-foundry/argus/internal/bridgemod"
 
 // ensureBridgeModFn materializes the embedded argus-bridge Claude Code mod and
 // returns the directory for Claude's --plugin-dir flag. A package var so tests

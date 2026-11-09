@@ -9,10 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/drn/argus/internal/artifacts"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/artifacts"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 type remoteArtifactReader interface {

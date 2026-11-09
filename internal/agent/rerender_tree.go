@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/shirou/gopsutil/v4/process"
 )
 

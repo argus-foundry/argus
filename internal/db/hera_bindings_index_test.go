@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // explainPlan returns the concatenated EXPLAIN QUERY PLAN detail text.

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/todo"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/todo"
 )
 
 func init() {

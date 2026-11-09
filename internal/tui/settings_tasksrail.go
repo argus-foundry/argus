@@ -3,9 +3,9 @@ package tui
 import (
 	"strconv"
 
-	"github.com/drn/argus/internal/tui/theme"
-	"github.com/drn/argus/internal/tui/widget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/gdamore/tcell/v2"
 )
 

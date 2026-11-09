@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // initialSizeAdapter adds the optional InitialPTYSize accessor every real

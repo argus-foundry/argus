@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/drn/argus/internal/gitutil"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // --- ResolveStackTip: pure, in-memory, no git ---
@@ -87,7 +87,7 @@ func TestClassifyStackInferred_SquashMergedTipRescuedViaTierB(t *testing.T) {
 		testutil.Equal(t, repo, "drn/argus")
 		return map[string][]gitutil.MergeCandidate{
 			"z": {
-				{State: "MERGED", BaseRefName: "master", CreatedAt: "2026-01-03T00:00:00Z", URL: "https://github.com/drn/argus/pull/900"},
+				{State: "MERGED", BaseRefName: "master", CreatedAt: "2026-01-03T00:00:00Z", URL: "https://github.com/argus-foundry/argus/pull/900"},
 			},
 		}, 1, nil
 	})
@@ -214,7 +214,7 @@ func TestClassifyStackInferred_TipMemoizedAcrossCandidates(t *testing.T) {
 		calls++
 		return map[string][]gitutil.MergeCandidate{
 			"z": {
-				{State: "MERGED", BaseRefName: "master", CreatedAt: "2026-01-03T00:00:00Z", URL: "https://github.com/drn/argus/pull/900"},
+				{State: "MERGED", BaseRefName: "master", CreatedAt: "2026-01-03T00:00:00Z", URL: "https://github.com/argus-foundry/argus/pull/900"},
 			},
 		}, 1, nil
 	})

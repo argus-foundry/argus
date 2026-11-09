@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // --- hera_send auto-revive (add-hera-send-auto-revive) ---

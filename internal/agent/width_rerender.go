@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 type widthRerenderKicker interface {

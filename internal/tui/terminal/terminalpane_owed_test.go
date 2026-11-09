@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )

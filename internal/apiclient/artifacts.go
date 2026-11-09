@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 func artifactPath(taskID, filename string) string {

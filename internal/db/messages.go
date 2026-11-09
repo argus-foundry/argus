@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // Sentinel errors returned by the task_messages methods. Callers use

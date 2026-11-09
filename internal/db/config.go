@@ -9,7 +9,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 )
 
 // ConfigKeyDefaultBackend is the config kv key holding the user-selected

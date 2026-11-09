@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/hera"
-	"github.com/drn/argus/internal/mcplimits"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hera"
+	"github.com/argus-foundry/argus/internal/mcplimits"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // HeraStore is the subset of *db.DB used by the native hera_* MCP tools.

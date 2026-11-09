@@ -1,8 +1,8 @@
 package model
 
 import (
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // HeraReader is the narrow, READ-ONLY data-access seam the rail builds from.
