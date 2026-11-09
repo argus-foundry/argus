@@ -253,10 +253,10 @@ func TestHeader_WideLabelKeepsCentering(t *testing.T) {
 		total += 2 + textCells(" "+h.TabLabel(tab)+" ")
 	}
 	want := (width - total) / 2
-	r, _, _, _ := sim.GetContent(want, 0)
-	testutil.Equal(t, r, powerlineSep)
-	r, _, _, _ = sim.GetContent(want-1, 0)
-	testutil.True(t, r != powerlineSep)
+	cell, _, _ := sim.Get(want, 0)
+	testutil.Equal(t, cell, string(powerlineSep))
+	cell, _, _ = sim.Get(want-1, 0)
+	testutil.True(t, cell != string(powerlineSep))
 	testutil.Equal(t, textCells("界"), 2)
 	testutil.Equal(t, textCells("a"), 1)
 }
