@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 )
 
 func (d *DB) Backends() (map[string]config.Backend, error) {

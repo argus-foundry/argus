@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // testSupervisor builds a Supervisor whose cfgFn returns the supplied config

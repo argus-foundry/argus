@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/claudesession"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // seedClaudeTranscript writes a UUID-named transcript into the Claude project

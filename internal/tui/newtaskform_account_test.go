@@ -11,11 +11,11 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/apiclient"
-	"github.com/drn/argus/internal/apistore"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/apiclient"
+	"github.com/argus-foundry/argus/internal/apistore"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 var _ remoteAccountLister = (*apistore.Store)(nil)

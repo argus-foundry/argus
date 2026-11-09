@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // Hera role/binding/orchestrator store (Milestone 1 of merging Hera into Argus

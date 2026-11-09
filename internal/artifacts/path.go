@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // ResolvePath returns the real path of a file inside the task's artifact

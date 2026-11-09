@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/profiles"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/profiles"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func writeProfileFile(t *testing.T, dir, name, content string) {

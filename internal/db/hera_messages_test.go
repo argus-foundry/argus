@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // mkMsg is a test helper that sends a message and fails the test on error.

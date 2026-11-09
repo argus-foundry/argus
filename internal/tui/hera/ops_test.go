@@ -3,11 +3,11 @@ package hera
 import (
 	"testing"
 
-	heramodel "github.com/drn/argus/internal/hera/model"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // selFor builds a heramodel.Selection over a freshly-read heramodel.RoleView for the given role id,

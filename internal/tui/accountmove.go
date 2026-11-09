@@ -9,15 +9,15 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/apiclient"
-	"github.com/drn/argus/internal/backendkind"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/tui/modal"
-	"github.com/drn/argus/internal/usagebudget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/apiclient"
+	"github.com/argus-foundry/argus/internal/backendkind"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/tui/modal"
+	"github.com/argus-foundry/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // remoteAccountMover is satisfied by *apistore.Store: in --remote mode the

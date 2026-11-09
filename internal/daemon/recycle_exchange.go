@@ -5,11 +5,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/claudesession"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/lastexchange"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/lastexchange"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // recycleExchangeSection returns the "Last exchange with the user" seed-prompt

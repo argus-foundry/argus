@@ -8,9 +8,9 @@ import (
 
 	xvt "github.com/charmbracelet/x/vt"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/oscfilter"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/oscfilter"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Sliding replay window (bound-tui-emulator-memory).

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/theme"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )

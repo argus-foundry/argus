@@ -6,9 +6,9 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/drn/argus/internal/tui/keymap"
-	"github.com/drn/argus/internal/tui/theme"
-	"github.com/drn/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/tui/keymap"
+	"github.com/argus-foundry/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/tui/widget"
 )
 
 // HelpModal shows a centered overlay listing keybindings grouped by context.

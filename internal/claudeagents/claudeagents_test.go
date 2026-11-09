@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestSession_Alive(t *testing.T) {

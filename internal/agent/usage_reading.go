@@ -5,10 +5,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/codexctx"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/skills"
+	"github.com/argus-foundry/argus/internal/codexctx"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/skills"
 )
 
 // UsageCounters are token counts; nil is unreported, never zero. InputTokens

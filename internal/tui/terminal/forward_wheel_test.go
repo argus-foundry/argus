@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/app/agentview"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )

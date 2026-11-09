@@ -8,8 +8,8 @@ import (
 
 	xvt "github.com/charmbracelet/x/vt"
 
-	"github.com/drn/argus/internal/oscfilter"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/oscfilter"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // legacyRender reproduces ScreenRenderer.render BEFORE the scrollback cap:

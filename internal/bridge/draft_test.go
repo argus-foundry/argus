@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func draftEv(seq int64, boot, text string, cursor int) Event {

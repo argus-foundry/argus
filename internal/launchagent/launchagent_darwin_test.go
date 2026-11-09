@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // fakeRunner records launchctl invocations and returns scripted responses

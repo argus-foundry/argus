@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 )
 
 type fakeClock struct {

@@ -3,8 +3,8 @@ package profiles
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // seedLoader points at the embeddable seed files under internal/profiles/seeds/

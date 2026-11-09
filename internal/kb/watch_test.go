@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestWatch_RemoveFileWithPendingTimer covers the "remove with pending debounce

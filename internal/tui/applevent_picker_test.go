@@ -6,8 +6,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/drn/argus/internal/macapps"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/macapps"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func sampleApps() []macapps.App {

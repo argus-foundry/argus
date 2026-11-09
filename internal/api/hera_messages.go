@@ -8,8 +8,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 const (

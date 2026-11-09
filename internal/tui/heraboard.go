@@ -3,8 +3,8 @@ package tui
 import (
 	"time"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 func (a *App) mutateHeraBoard(d *db.DB, roleID, itemID int64, updatedAt time.Time, dismiss bool) {

@@ -6,11 +6,11 @@ import (
 	"net/url"
 	"sync"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Compile-time assertion: Provider implements agent.SessionProvider.

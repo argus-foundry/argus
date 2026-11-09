@@ -12,21 +12,21 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/hostsleep"
-	"github.com/drn/argus/internal/launchagent"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/spinner"
-	"github.com/drn/argus/internal/todo"
-	"github.com/drn/argus/internal/tui/keymap"
-	pluginsettings "github.com/drn/argus/internal/tui/settings"
-	"github.com/drn/argus/internal/tui/store"
-	"github.com/drn/argus/internal/tui/streampane"
-	"github.com/drn/argus/internal/tui/theme"
-	"github.com/drn/argus/internal/tui/widget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hostsleep"
+	"github.com/argus-foundry/argus/internal/launchagent"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/spinner"
+	"github.com/argus-foundry/argus/internal/todo"
+	"github.com/argus-foundry/argus/internal/tui/keymap"
+	pluginsettings "github.com/argus-foundry/argus/internal/tui/settings"
+	"github.com/argus-foundry/argus/internal/tui/store"
+	"github.com/argus-foundry/argus/internal/tui/streampane"
+	"github.com/argus-foundry/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // settingsRowKind identifies what kind of row this is in the settings list.
@@ -3443,7 +3443,7 @@ func (sv *SettingsView) renderSourcePathDetail(screen tcell.Screen, x, y, w, h i
 	if r >= h {
 		return
 	}
-	widget.DrawText(screen, x, y+r, w, "Local clone of github.com/drn/argus used by", theme.StyleDimmed)
+	widget.DrawText(screen, x, y+r, w, "Local clone of github.com/argus-foundry/argus used by", theme.StyleDimmed)
 	r++
 	widget.DrawText(screen, x, y+r, w, "the \"Update Argus\" action to run go install.", theme.StyleDimmed)
 	if h > 1 {

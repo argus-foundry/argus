@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/pricing"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/pricing"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // fixture is one sweep test's world: an in-memory argus DB, a fake Codex

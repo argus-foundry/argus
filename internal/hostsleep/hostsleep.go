@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Status classifies the host's sleep posture relative to the remote API.

@@ -5,9 +5,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // hasBounceSignal reports whether the task's inbox holds an ARGUS_BOUNCED note.

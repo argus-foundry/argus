@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/views"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/views"
 )
 
 // TestPluginViews_PostCreates pins the POST /api/plugins/views shape. Body

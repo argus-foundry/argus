@@ -22,10 +22,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/sanitize"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	xvt "github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
-	"github.com/drn/argus/internal/sanitize"
-	"github.com/drn/argus/internal/uxlog"
 )
 
 const (

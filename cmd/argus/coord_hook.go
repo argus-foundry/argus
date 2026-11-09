@@ -15,10 +15,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/db"
 )
 
 // --- `argus coord-hook`: the context-budget Stop hook ---

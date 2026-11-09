@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 )
 
 var accountUsageSource struct {

@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/apiclient"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/apiclient"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // splitCSV splits a comma-separated string, trimming whitespace and dropping

@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestBridgeUISnapshotReadOnly(t *testing.T) {

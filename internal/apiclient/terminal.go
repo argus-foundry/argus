@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/drn/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/app/agentview"
 )
 
 // inputOriginHeader carries the WriteInput origin over REST. Only sent for

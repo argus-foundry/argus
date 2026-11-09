@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Fresh read before spawn (auto-account-routing, Option A). Readings are polled

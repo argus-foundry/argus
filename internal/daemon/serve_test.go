@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestServe_WithKBAndAPI exercises Serve's KB- and API-enabled branches.

@@ -5,9 +5,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/creack/pty"
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/testutil"
 )
 
 // TestApp_Run_NoControllingTerminal_ReturnsCleanError is the regression test

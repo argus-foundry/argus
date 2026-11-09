@@ -8,12 +8,12 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/tui/modal"
-	"github.com/drn/argus/internal/tui/terminalpane"
-	"github.com/drn/argus/internal/tui/views"
-	"github.com/drn/argus/internal/tui/widget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/tui/modal"
+	"github.com/argus-foundry/argus/internal/tui/terminalpane"
+	"github.com/argus-foundry/argus/internal/tui/views"
+	"github.com/argus-foundry/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // pluginHelpPage is the tview.Pages name for the plugin-triggered help overlay.

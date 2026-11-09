@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/claudesession"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 const exchangeTranscript = `{"type":"user","message":{"role":"user","content":"is it CPU or Argus?"}}

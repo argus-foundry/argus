@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // This file pins the add-secrets-resolver-registry change's binary-coherence

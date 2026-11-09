@@ -7,8 +7,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // StopStrayJobs terminates any Claude Code background job (a

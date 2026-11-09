@@ -7,8 +7,8 @@ import (
 
 	xvt "github.com/charmbracelet/x/vt"
 
-	"github.com/drn/argus/internal/oscfilter"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/oscfilter"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestScreenRenderer_ScrollbackStaysBounded proves the RIS-per-render reset

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/drn/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/agent"
 )
 
 // AccountMover performs an account move plus restart. The daemon injects

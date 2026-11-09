@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/claudeenv"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/claudeenv"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestScrub_RemovesEveryDenylistedName(t *testing.T) {
@@ -180,7 +180,7 @@ func delegatesToScrubbingHelper(dir string, tm *ast.FuncDecl) bool {
 func missingScrubSnippet(dir, pkg string) string {
 	return "Fix: add " + dir + "/main_test.go (or call testenv.Scrub() at the top of the existing TestMain):\n\n" +
 		"package " + pkg + "\n\n" +
-		"import (\n\t\"os\"\n\t\"testing\"\n\n\t\"github.com/drn/argus/internal/testenv\"\n)\n\n" +
+		"import (\n\t\"os\"\n\t\"testing\"\n\n\t\"github.com/argus-foundry/argus/internal/testenv\"\n)\n\n" +
 		"func TestMain(m *testing.M) { os.Exit(testenv.Main(m)) }\n\n" +
 		"func TestEnvScrubbed(t *testing.T) { testenv.AssertScrubbed(t) }\n\n" +
 		"See context/knowledge/testing.md \"Environment hermeticity\"."
@@ -193,7 +193,7 @@ func TestMissingScrubSnippet_IsPasteReady(t *testing.T) {
 		"package foo\n",
 		"os.Exit(testenv.Main(m))",
 		"testenv.AssertScrubbed(t)",
-		"github.com/drn/argus/internal/testenv",
+		"github.com/argus-foundry/argus/internal/testenv",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("snippet missing %q:\n%s", want, got)

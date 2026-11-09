@@ -9,10 +9,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/hera"
-	heramodel "github.com/drn/argus/internal/hera/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hera"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Hera mutation endpoints: thin adapters over the TUI rail's db verbs; none hard-deletes a hera row.

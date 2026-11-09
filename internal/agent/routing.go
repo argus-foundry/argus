@@ -1,9 +1,9 @@
 package agent
 
 import (
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // resolveTaskChoice shares backend precedence and carries the scored account

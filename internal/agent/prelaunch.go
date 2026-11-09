@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/ollama"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/ollama"
 )
 
 // prelaunchTimeout caps the wall-clock budget for backend-specific

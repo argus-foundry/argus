@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // writeFile writes contents to a config.toml inside a fresh temp dir and returns

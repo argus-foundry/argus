@@ -3,7 +3,7 @@ package apiclient
 import (
 	"context"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // TaskJSON mirrors api.taskJSON — the wire shape returned by /api/tasks*.

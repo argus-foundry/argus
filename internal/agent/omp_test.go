@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/backendkind"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/backendkind"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func stubOmpSeams(t *testing.T, plugin, overlay string, pluginErr, overlayErr error) {

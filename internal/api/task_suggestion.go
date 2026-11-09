@@ -3,10 +3,10 @@ package api
 import (
 	"time"
 
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 func (s *Server) bridgeSuggestion(id string) *bridge.Suggestion {

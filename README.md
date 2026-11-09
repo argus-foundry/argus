@@ -5,7 +5,7 @@
 <p align="center"><em>Every agent at a glance.</em></p>
 
 <p align="center">
-  <a href="https://github.com/drn/argus/actions/workflows/ci.yml"><img src="https://github.com/drn/argus/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/argus-foundry/argus/actions/workflows/ci.yml"><img src="https://github.com/argus-foundry/argus/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
 Argus is a terminal-native orchestrator for LLM coding agents. Run a swarm of agents — Claude Code, Codex, or any LLM CLI, cloud or local — side by side, each in its own git worktree, all under a single keyboard-driven UI — and reach the same swarm from your phone, from another laptop, from another agent, or from your own notes.
@@ -126,7 +126,7 @@ Disabled by default — see **[Knowledge Base setup](docs/knowledge-base.md)** t
 ## Install
 
 ```bash
-go install github.com/drn/argus/cmd/argus@latest
+go install github.com/argus-foundry/argus/cmd/argus@latest
 argus
 ```
 

@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/drn/argus/internal/inject/atomicfile"
+	"github.com/argus-foundry/argus/internal/inject/atomicfile"
 )
 
 // mcpServerName is the key used for Argus in Claude Code's mcpServers map.

@@ -13,9 +13,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/push"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/push"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 const tokenBytes = 32 // 256 bits

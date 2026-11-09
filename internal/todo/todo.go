@@ -10,7 +10,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 )
 
 // Item is a single to-do item as returned by a backend. ID is opaque and

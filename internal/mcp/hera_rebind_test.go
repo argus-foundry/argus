@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // --- BUG-059: hera_join claim/attach agreement across a stale-task /

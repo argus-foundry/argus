@@ -4,11 +4,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/backendtier"
 
-	"github.com/drn/argus/internal/buildid"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/buildid"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 )
 
 // rpcFor builds an RPCService over the given daemon exactly as Serve does, so

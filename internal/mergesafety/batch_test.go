@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/gitutil"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestClassifyBatch_TierAOnlyIssuesNoNetworkCall(t *testing.T) {
@@ -76,7 +76,7 @@ func TestClassifyBatch_SharedBranchNameInSameRepoBothResolve(t *testing.T) {
 		out := map[string][]gitutil.MergeCandidate{}
 		for branch := range branches {
 			out[branch] = []gitutil.MergeCandidate{
-				{State: "MERGED", BaseRefName: "master", MergedAt: "2026-06-20T00:00:00Z", CreatedAt: "2026-06-20T00:00:00Z", URL: "https://github.com/drn/argus/pull/1"},
+				{State: "MERGED", BaseRefName: "master", MergedAt: "2026-06-20T00:00:00Z", CreatedAt: "2026-06-20T00:00:00Z", URL: "https://github.com/argus-foundry/argus/pull/1"},
 			}
 		}
 		return out, 1, nil

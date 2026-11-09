@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func stub(t *testing.T, fn func(ctx context.Context, dir string) ([]byte, error)) {

@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestIdlePush_ContentIdleFiresExactlyOnce is the BUG-036 make-or-break: a

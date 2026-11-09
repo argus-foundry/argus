@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // This file implements the add-secrets-resolver-registry secrets-resolution

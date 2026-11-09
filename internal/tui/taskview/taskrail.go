@@ -1,8 +1,8 @@
 package taskview
 
 import (
-	"github.com/drn/argus/internal/tui/theme"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/gdamore/tcell/v2"
 )
 

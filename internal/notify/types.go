@@ -7,7 +7,7 @@ package notify
 import (
 	"time"
 
-	"github.com/drn/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/app/agentview"
 )
 
 // defaultDeadlineMS is the default delivery deadline (5 minutes).

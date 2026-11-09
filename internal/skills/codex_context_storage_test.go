@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drn/argus/internal/codexctx"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/codexctx"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestCodexContextFreshOverlayStorage(t *testing.T) {

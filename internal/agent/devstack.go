@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // devStackProcessNames are the executables a devbox-managed dev stack

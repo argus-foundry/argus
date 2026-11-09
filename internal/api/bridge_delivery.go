@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/claudesession"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/notify"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/notify"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 func (s *Server) bridgeDeliveryRoute(id string) notify.BridgeRoute {

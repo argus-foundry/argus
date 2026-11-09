@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/drn/argus/internal/hostsleep"
+	"github.com/argus-foundry/argus/internal/hostsleep"
 )
 
 // RenderHostSleep builds the host-sleep status block printed by `argus doctor`.

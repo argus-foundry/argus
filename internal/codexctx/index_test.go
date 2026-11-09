@@ -7,7 +7,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestOpenThreadIndexRejectsSpecialFiles(t *testing.T) {

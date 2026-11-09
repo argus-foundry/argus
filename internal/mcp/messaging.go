@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // MessageStore is the subset of *db.DB used by the messaging tools. Defined

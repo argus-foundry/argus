@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/db"
 )
 
 // scopeFromAuth returns the plugin scope name when the request was tagged

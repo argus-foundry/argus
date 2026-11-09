@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/db"
-	hera "github.com/drn/argus/internal/hera/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/db"
+	hera "github.com/argus-foundry/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/gdamore/tcell/v2"
 )
 

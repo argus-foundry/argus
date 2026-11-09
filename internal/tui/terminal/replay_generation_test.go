@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // addTaskLogContent adds a session log under the current HOME (setupTaskLog has

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 var t0 = time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)

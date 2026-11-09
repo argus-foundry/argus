@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestStaticIndex_CtrlZGuard is the CI-enforced regression guard for the

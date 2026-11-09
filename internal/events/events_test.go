@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // recordingSink captures emitted events for inspection.

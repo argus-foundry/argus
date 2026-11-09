@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // The env_vars credential mapping round-trips through SetBackend / Backends.

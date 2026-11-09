@@ -7,9 +7,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/sanitize"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/sanitize"
 )
 
 // forkContext holds extracted context from a source task.

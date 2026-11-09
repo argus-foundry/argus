@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/db"
 )
 
 func available() bool { return true }

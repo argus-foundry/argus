@@ -18,13 +18,13 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/gitutil"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/theme"
-	"github.com/drn/argus/internal/tui/widget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 func TestTerminalPane_SetSession(t *testing.T) {

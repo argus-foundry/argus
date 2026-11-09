@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 )
 
 func TestCliUsage(t *testing.T) {

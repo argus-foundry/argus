@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/notify"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/notify"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // noFocus implements notify.FocusReader — always unfocused.

@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/usagebudget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // claudeCachedPct / codexCachedPct are indirected through package-level vars

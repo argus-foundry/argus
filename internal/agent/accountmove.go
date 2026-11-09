@@ -11,12 +11,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/drn/argus/internal/backendkind"
-	"github.com/drn/argus/internal/claudesession"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/backendkind"
+	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // ErrAccountMoveBusy rejects moving a task whose agent is actively working,

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/hostsleep"
-	"github.com/drn/argus/internal/sysmetrics"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/hostsleep"
+	"github.com/argus-foundry/argus/internal/sysmetrics"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestHandleSystemMetrics(t *testing.T) {

@@ -3,7 +3,7 @@ package widget
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestWrapPreservingLines(t *testing.T) {

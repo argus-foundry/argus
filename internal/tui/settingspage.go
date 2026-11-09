@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"github.com/drn/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/tui/widget"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
