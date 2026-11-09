@@ -1124,3 +1124,12 @@ The system SHALL expose `POST /api/tasks/bulk-delete` accepting `task_ids` (1 to
 
 - **WHEN** a selected task passes the admission dirty check but becomes dirty during stop, or its post-exit dirty check fails, with `allow_dirty:false`
 - **THEN** deletion skips the task with `dirty_worktree` or `dirty_check_failed`, preserves its record, logs, artifacts, worktree and branches, and recovery retains that skipped result
+
+### Requirement: Task PR lifecycle projection
+
+`GET /api/tasks` and `GET /api/tasks/{id}` SHALL include `pr_lifecycle` (`open|merged|closed|unknown`) from the cached `pr` namespace without invoking GitHub. A merged-closed `pr_state` with no verified terminal lifecycle (including a contradictory `open`), a missing PR, or any unrecognized value SHALL project `unknown`. `pr_state` semantics are unchanged.
+
+#### Scenario: Closed and merged differ
+
+- **WHEN** two tasks have `pr_state` `merged-closed` with lifecycles `closed` and `merged`
+- **THEN** their entries report `pr_lifecycle` `closed` and `merged`

@@ -32,6 +32,21 @@ type PRResult struct {
 	Merged bool
 }
 
+// Lifecycle projects the result into open/merged/closed. Merged requires the
+// raw MERGED evidence; a merged-closed state without it is a close; no PR is
+// unknown.
+func (r PRResult) Lifecycle() model.PRLifecycle {
+	switch {
+	case r.Merged:
+		return model.PRLifecycleMerged
+	case r.State == model.PRMergedClosed:
+		return model.PRLifecycleClosed
+	case r.State == model.PRNone || r.State == model.PRUnknown:
+		return model.PRLifecycleUnknown
+	}
+	return model.PRLifecycleOpen
+}
+
 // prGraphQLRunner is the test seam for executing `gh api graphql`, mirroring
 // the prRunner seam used by FetchPRState. The real implementation writes the
 // query to a temp file (avoiding argv limits on large aliased queries) and
