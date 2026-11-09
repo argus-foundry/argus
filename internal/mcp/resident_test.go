@@ -151,10 +151,13 @@ func TestResident_TaskRecycleBoundToCaller(t *testing.T) {
 		testutil.Equal(t, isErr, false)
 		testutil.Equal(t, len(*got), 1)
 	})
-	t.Run("a non-resident caller id does not restrict", func(t *testing.T) {
+	t.Run("any bound caller is limited to itself, with no resident lookup needed", func(t *testing.T) {
 		s, got := newSrv()
+		s.taskDB = &mockTaskDB{tasks: []*model.Task{{ID: "abc123", Worktree: "/w/a"}, {ID: "def456", Worktree: "/w/d"}}} // no ResidentTask lookup
 		_, isErr := postTool(t, s, "/mcp?caller=abc123", "task_recycle", `{"id":"def456",`+note+`}`)
+		testutil.Equal(t, isErr, true)
+		testutil.Equal(t, len(*got), 0)
+		_, isErr = postTool(t, s, "/mcp?caller=abc123", "task_recycle", `{"id":"abc123",`+note+`}`)
 		testutil.Equal(t, isErr, false)
-		testutil.Equal(t, len(*got), 1)
 	})
 }
