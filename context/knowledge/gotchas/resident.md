@@ -36,3 +36,18 @@ Memory, orientation and tool permissions are in [resident-memory.md](resident-me
 - **Resident delete identity comes exclusively from the transport caller, never cwd/id; live membership is checked before nuke.** `residentWorkerMutationMu` serializes deletion against graduation (graduation must take the same lock through its transaction, never through a restart wait); reclaim requires the sole live binding to match the selected role. A force summary is captured before reclaim, and an unreadable git field stays `unknown (reason)`.
 - **The local empty-work check requires both zero commits ahead of the worker base ref and a clean tree.** Missing refs, missing worktrees and git errors fail closed; `git status -z` counts newline-containing filenames and rename pairs correctly. A classifier error also refuses default deletion.
 - **A resident-bound Hera call pins cwd and orchestrator to the standing team.** Otherwise an allowed spawn or accept could bypass team scope by naming another coordinator's cwd. The resident and marked/live resident workers cannot bootstrap an orchestrator; workers request graduation instead.
+
+## Codex unattended-worker spike
+
+- **Codex 0.167.0 bypass closes command approvals, not question tools: keep resident-worker eligibility nil.** A real resumed session still displayed an async question with both candidate feature overrides false, and `/plan` still enabled a blocking question (`collaboration_modes` is a removed flag); no verified launch/resume closure was found. — `add-resident-coordinator` task 4.0, 2026-11-09; [commands, sanitized rollout excerpts and limits](../../spikes/2026-11-09-codex-unattended-worker.md).
+
+Observed excerpts (same session, bypass active):
+
+```text
+fresh:   approval_policy=never, collaboration_mode=default
+         request_user_input_async -> {"accepted":true}; UI: Choose red or blue.
+resume:  -c features.collaboration_modes=false -c features.default_mode_request_user_input=false
+         request_user_input_async -> {"accepted":true}; UI: Choose red or blue.
+/plan:   approval_policy=never, collaboration_mode=plan
+         request_user_input -> no output while unanswered; interrupted after >60s
+```
