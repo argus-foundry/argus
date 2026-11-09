@@ -319,8 +319,12 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 		dec.Reason = fmt.Sprintf("Context budget reached (%d/%d tokens). Write undone items to %s, then call task_recycle with a short handoff_note. Do not recycle while background work is in flight or while this session owes the user a turn.", size, budget, path.Join(memoryDir, "open-loops.md"))
 	}
 	// Preserve the existing gates and cadence; only the transport changes.
+	// The resident never uses the bridge budget endpoint: it only queues for a
+	// live hera coordinator binding, so for the resident it can only answer
+	// "not queued" — or, on an ambiguous error, wrongly suppress the nudge.
+	// ResidentSend is its one transport (and marks the text as Argus-injected).
 	queued := false
-	if env.BridgeDelivery != nil {
+	if env.BridgeDelivery != nil && !resident {
 		var deliveryErr error
 		queued, deliveryErr = env.BridgeDelivery(taskID, size, dec.Reason)
 		if deliveryErr != nil {

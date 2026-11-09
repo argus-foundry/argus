@@ -135,6 +135,23 @@ func TestExtract_SkipsArgusInjectedTurns(t *testing.T) {
 		testutil.Equal(t, ex.Human, "is it CPU?")
 		testutil.Equal(t, ex.Reply, "It is CPU load.")
 	})
+	t.Run("bridge-delivered injected turn", func(t *testing.T) {
+		bridged := `{"type":"user","message":{"role":"user","content":"[argus] Context budget reached.\n[argus-delivery:resident:1]"}}`
+		ex := extract(t, humanStr, asstText2, bridged, nudgeReply)
+		testutil.Equal(t, ex.Human, "is the slowness pure CPU load?")
+		testutil.Equal(t, ex.Reply, "It is CPU load.")
+	})
+	t.Run("genuine message mentioning [argus] mid-text", func(t *testing.T) {
+		mention := `{"type":"user","message":{"role":"user","content":"why did [argus] nudge me?"}}`
+		ex := extract(t, humanStr, asstText2, mention, nudgeReply)
+		testutil.Equal(t, ex.Human, "why did [argus] nudge me?")
+		testutil.Equal(t, ex.Reply, "Saving open loops and recycling.")
+	})
+	t.Run("reminder before the injected text", func(t *testing.T) {
+		reminded := `{"type":"user","message":{"role":"user","content":"<system-reminder>x</system-reminder>\n[argus] Context budget reached."}}`
+		ex := extract(t, humanStr, asstText2, reminded, nudgeReply)
+		testutil.Equal(t, ex.Reply, "It is CPU load.")
+	})
 	t.Run("only injected turns", func(t *testing.T) {
 		testutil.Equal(t, extract(t, nudge, nudgeReply), Exchange{})
 	})

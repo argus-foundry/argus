@@ -500,6 +500,18 @@ func TestResident_StartFailureReasonSurvivesBackoff(t *testing.T) {
 		testutil.Contains(t, e.m.State().Reason, "start failed: boom")
 	}
 
+	// assertFailureForgotten checks the stored failure itself was cleared, not
+	// just the reason shown on the clearing tick: with the session gone and a
+	// restart owned elsewhere, the next tick reports the stored failure (if any).
+	assertFailureForgotten := func(t *testing.T, e *resEnv) {
+		t.Helper()
+		row, _ := e.db.ResidentTask()
+		delete(e.run.sess, row.ID)
+		e.run.pending = map[string]bool{row.ID: true}
+		e.m.tick()
+		testutil.Equal(t, e.m.State().Reason, "")
+	}
+
 	t.Run("kept across backoff ticks, cleared on success", func(t *testing.T) {
 		e := newResEnv(t)
 		e.run.startErr = errors.New("boom")
@@ -515,6 +527,19 @@ func TestResident_StartFailureReasonSurvivesBackoff(t *testing.T) {
 		e.m.tick()
 		testutil.Equal(t, len(e.run.starts), 2)
 		testutil.Equal(t, e.m.State().Reason, "")
+		assertFailureForgotten(t, e)
+	})
+	t.Run("cleared on a reattach", func(t *testing.T) {
+		e := newResEnv(t)
+		e.run.startErr = errors.New("boom")
+		e.m.tick()
+		testutil.Contains(t, e.m.State().Reason, "start failed: boom")
+		e.run.startErr = nil
+		e.run.reattach = true
+		e.now = e.now.Add(residentBackoffMax)
+		e.m.tick()
+		testutil.Equal(t, e.m.State().Reason, "")
+		assertFailureForgotten(t, e)
 	})
 	t.Run("cleared once the session is alive", func(t *testing.T) {
 		e := newResEnv(t)
@@ -525,6 +550,7 @@ func TestResident_StartFailureReasonSurvivesBackoff(t *testing.T) {
 		e.run.sess = map[string]*liveHandle{row.ID: {alive: true}}
 		e.m.tick()
 		testutil.Equal(t, e.m.State().Reason, "")
+		assertFailureForgotten(t, e)
 	})
 	t.Run("disable and re-enable drop the stale failure", func(t *testing.T) {
 		e := newResEnv(t)

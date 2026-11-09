@@ -31,7 +31,7 @@ func TestCoordHookResident(t *testing.T) {
 			env.ResidentConfig = func(string) (config.ResidentConfig, error) { return config.ResidentConfig{ContextBudget: 100}, nil }
 			var reply, nudge string
 			env.StampResidentReply = func(_ string, text string) error { reply = text; return nil }
-			env.BridgeDelivery = func(_ string, _ int, text string) (bool, error) { nudge = text; return true, nil }
+			env.ResidentDelivery = func(_ string, text string) error { nudge = text; return nil }
 			var out, errs bytes.Buffer
 			runCoordHook(strings.NewReader(`{"transcript_path":"fake","last_assistant_message":"Hello\u001b\t世界\nsecond line"}`), &out, &errs, env)
 			testutil.Equal(t, reply, "Hello世界")
@@ -91,17 +91,17 @@ func TestResidentReplyCapturedWithoutContext(t *testing.T) {
 	testutil.Equal(t, reply, "still record me")
 }
 
+// The resident's nudge always goes through ResidentSend: the bridge budget
+// endpoint only queues for hera coordinators, so it is never consulted (an
+// ambiguous bridge error must not silently swallow the resident's nudge).
 func TestResidentNudgeDeliveryFallback(t *testing.T) {
 	for _, tc := range []struct {
-		name                    string
-		bridgeQueued            bool
-		bridgeErr, fallbackErr  error
-		wantFallback, wantStamp bool
+		name        string
+		fallbackErr error
+		wantStamp   bool
 	}{
-		{"bridge", true, nil, nil, false, true},
-		{"ambiguous bridge", false, errors.New("ambiguous"), nil, false, true},
-		{"PTY fallback", false, nil, nil, true, true},
-		{"unavailable", false, nil, errors.New("unavailable"), true, false},
+		{"delivered", nil, true},
+		{"unavailable", errors.New("unavailable"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}, contextSize: 200}
@@ -109,7 +109,8 @@ func TestResidentNudgeDeliveryFallback(t *testing.T) {
 			env.IsResident = func(string) (bool, error) { return true, nil }
 			env.ResidentConfig = func(string) (config.ResidentConfig, error) { return config.ResidentConfig{ContextBudget: 100}, nil }
 			env.StampResidentReply = func(string, string) error { return nil }
-			env.BridgeDelivery = func(string, int, string) (bool, error) { return tc.bridgeQueued, tc.bridgeErr }
+			bridged := false
+			env.BridgeDelivery = func(string, int, string) (bool, error) { bridged = true; return true, errors.New("ambiguous") }
 			fallback := false
 			env.ResidentDelivery = func(id, text string) error {
 				fallback = true
@@ -120,7 +121,8 @@ func TestResidentNudgeDeliveryFallback(t *testing.T) {
 			var out, errs bytes.Buffer
 			runCoordHook(strings.NewReader(`{}`), &out, &errs, env)
 			testutil.Equal(t, out.String(), "")
-			testutil.Equal(t, fallback, tc.wantFallback)
+			testutil.False(t, bridged)
+			testutil.True(t, fallback)
 			testutil.Equal(t, f.stampLastNudgedCalled, tc.wantStamp)
 		})
 	}
@@ -136,7 +138,7 @@ func TestCoordHookResidentCustomMemoryDir(t *testing.T) {
 	}
 	env.StampResidentReply = func(string, string) error { return nil }
 	var nudge string
-	env.BridgeDelivery = func(_ string, _ int, text string) (bool, error) { nudge = text; return true, nil }
+	env.ResidentDelivery = func(_ string, text string) error { nudge = text; return nil }
 	var out, errs bytes.Buffer
 	runCoordHook(strings.NewReader(`{}`), &out, &errs, env)
 	testutil.Contains(t, nudge, "assistant/open-loops.md")
