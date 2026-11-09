@@ -1195,6 +1195,9 @@ func TestCheckClaudeResidentCommand(t *testing.T) {
 		{"claude --model $(id)", "$(id)"},
 		{"claude --model `id`", "`id`"},
 		{"claude | tee", "|"},
+		{`/opt/'x'/claude`, "plain path"},
+		{`~/'.local'/bin/claude`, "plain path"},
+		{`'/opt/x/claude'`, "plain path"},
 		{"claude --model opus[1m]", "single-quote"},
 		{"claude --model=opus[1m]", "single-quote"},
 		{`claude --model "opus"`, "not allowed"},
@@ -1229,7 +1232,7 @@ func TestCheckClaudeResidentCommand(t *testing.T) {
 				testutil.False(t, strings.Contains(err.Error(), "single-quote"))
 				// A refused word (not a flag/executable/parse error) gets the
 				// generic wording, not the bracket hint.
-				if strings.HasPrefix(err.Error(), "word ") || strings.Contains(err.Error(), "): word ") {
+				if strings.HasPrefix(err.Error(), "word ") || strings.Contains(err.Error(), "\": word ") {
 					testutil.Contains(t, err.Error(), "quotes, spaces and shell operators")
 				}
 			}

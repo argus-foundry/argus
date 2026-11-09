@@ -1194,7 +1194,9 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// Wrap with sandbox if enabled (effective config merges global + per-project overrides).
 	var sandboxCleanup func()
 	effectiveSandbox := sandboxWithCodexHome(sandboxWithClaudeConfigDir(ResolveSandboxConfig(task, cfg), claudeConfigDir), codexAccountHome)
-	if effectiveSandbox.Enabled && IsSandboxAvailable() && task.Worktree != "" {
+	// The single shared predicate (also used for the resident's sandbox-carry
+	// decision above). effectiveSandbox only adds write paths, never Enabled.
+	if argusWrapsSandbox(task, cfg) {
 		profilePath, params, cleanup, serr := GenerateSandboxConfigFor(fam, task.Worktree, effectiveSandbox)
 		if serr == nil {
 			cmdStr = WrapWithSandbox(cmdStr, profilePath, params)

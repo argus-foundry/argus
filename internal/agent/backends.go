@@ -882,7 +882,11 @@ var (
 // `~/` (shell tilde expansion; `~user` and `$HOME` stay refused).
 var (
 	residentSafeWord = regexp.MustCompile(`^(?:[A-Za-z0-9_./+@%:,=-]|'[A-Za-z0-9_./+@%:,=\[\]-]+')+$`)
-	residentQuoted   = regexp.MustCompile(`'[^']*'`)
+	// residentSafeExe is the executable word: plain characters only (no
+	// quoting at all), so its raw text is also exactly the path stray-job
+	// cleanup and the backend-family lookup see.
+	residentSafeExe = regexp.MustCompile(`^[A-Za-z0-9_./+@%:,=-]+$`)
+	residentQuoted  = regexp.MustCompile(`'[^']*'`)
 )
 
 // onlyUnquotedBrackets reports whether text is refused solely because of
@@ -916,7 +920,10 @@ func checkClaudeResidentCommand(command string) error {
 	safe := func(i int) error {
 		text := raw(i)
 		if i == 0 {
-			text = strings.TrimPrefix(text, "~/")
+			if !residentSafeExe.MatchString(strings.TrimPrefix(text, "~/")) {
+				return fmt.Errorf("executable %q not allowed for the resident (the executable must be a plain path: no quotes, spaces or shell operators)", raw(i))
+			}
+			return nil
 		}
 		if !residentSafeWord.MatchString(text) {
 			if onlyUnquotedBrackets(text) {
