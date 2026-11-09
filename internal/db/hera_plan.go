@@ -50,7 +50,7 @@ type HeraBlock struct {
 // planned node is always a worker (a coordinator is born-bound at orchestrator
 // creation). The supplied short-id-prefixed name, project, and delivery prompt
 // are persisted on the role for use at materialization.
-func (d *DB) CreateHeraPlannedRole(in CreateHeraRoleInput) (*HeraRole, error) {
+func (d *DB) createHeraPlannedRole(in CreateHeraRoleInput) (*HeraRole, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	in.Kind = HeraKindWorker
@@ -64,7 +64,7 @@ func (d *DB) CreateHeraPlannedRole(in CreateHeraRoleInput) (*HeraRole, error) {
 // (ErrHeraBlockCycle); (3) inserts the edge. The cycle check runs in the SAME
 // transaction as the insert so a concurrent edge insert cannot slip a cycle past
 // the check. A duplicate edge (same pair) is idempotent — INSERT OR IGNORE.
-func (d *DB) AddHeraBlock(blockedRoleID, blockerRoleID int64) error {
+func (d *DB) addHeraBlock(blockedRoleID, blockerRoleID int64) error {
 	return d.WithTx(func(tx *sql.Tx) error {
 		return insertHeraBlockTx(tx, blockedRoleID, blockerRoleID)
 	})
@@ -160,7 +160,7 @@ type HeraBlockSpec struct {
 // returned set (e.g. a pre-existing orchestrator role) must be resolved to ids by
 // the caller. All endpoints must belong to orchID (enforced per edge by the
 // cross-orchestrator guard). The caller uniquifies node names first.
-func (d *DB) CreateHeraPlan(orchID int64, nodes []HeraPlannedNodeSpec, edges []HeraBlockSpec) ([]*HeraRole, error) {
+func (d *DB) createHeraPlan(orchID int64, nodes []HeraPlannedNodeSpec, edges []HeraBlockSpec) ([]*HeraRole, error) {
 	var created []*HeraRole
 	err := d.WithTx(func(tx *sql.Tx) error {
 		now := formatTime(time.Now())
@@ -393,7 +393,7 @@ func (d *DB) ListHeraPlannedNodes() ([]*HeraRole, error) {
 
 // RemoveHeraBlock removes the blocking edge (blockedRoleID waits on
 // blockerRoleID). Idempotent: deleting a non-existent edge returns nil.
-func (d *DB) RemoveHeraBlock(blockedRoleID, blockerRoleID int64) error {
+func (d *DB) removeHeraBlock(blockedRoleID, blockerRoleID int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	_, err := d.conn.Exec(
@@ -414,7 +414,7 @@ func (d *DB) RemoveHeraBlock(blockedRoleID, blockerRoleID int64) error {
 // layer rejects that case before calling here, but the store is safe either
 // way). The materialized-vs-planned guard belongs in the MCP layer; this
 // function updates any role unconditionally.
-func (d *DB) UpdateHeraPlannedNode(roleID int64, prompt, project string) error {
+func (d *DB) updateHeraPlannedNode(roleID int64, prompt, project string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	setClauses := make([]string, 0, 2)
@@ -446,7 +446,7 @@ func (d *DB) UpdateHeraPlannedNode(roleID int64, prompt, project string) error {
 // COALESCE). The node is kept in the DB for the plan view but excluded from
 // materialization (ListHeraPlannedNodes adds AND cancelled_at IS NULL) and
 // treated as non-blocking by the gater.
-func (d *DB) CancelHeraPlannedNode(roleID int64) error {
+func (d *DB) cancelHeraPlannedNode(roleID int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	_, err := d.conn.Exec(

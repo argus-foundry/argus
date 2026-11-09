@@ -366,7 +366,7 @@ func (d *DB) ListHeraOrchestrators(includeArchived bool) ([]*HeraOrchestrator, e
 // would otherwise retry materialization forever with no coordinator to ping.
 // The cascade is best-effort: a failure is logged, never returned, so archive's
 // existing error contract (nil / ErrHeraNotFound) is unchanged.
-func (d *DB) ArchiveHeraOrchestrator(id int64) error {
+func (d *DB) archiveHeraOrchestrator(id int64) error {
 	if err := d.heraSetFlag(`UPDATE hera_orchestrators SET archived_at=?, pinned_at=NULL WHERE id=? AND archived_at IS NULL`,
 		heraOrchExistsProbe, id, formatTime(time.Now())); err != nil {
 		return err
@@ -410,7 +410,7 @@ func (d *DB) UnpinHeraOrchestrator(id int64) error {
 //
 // Cascade-cancels still-planned child roles exactly like ArchiveHeraOrchestrator
 // (add-hera-plan-hygiene Bug A) — same best-effort, log-only-on-failure contract.
-func (d *DB) NukeHeraOrchestrator(id int64) error {
+func (d *DB) nukeHeraOrchestrator(id int64) error {
 	now := formatTime(time.Now())
 	if err := d.heraSetFlag(
 		`UPDATE hera_orchestrators SET nuked_at=COALESCE(nuked_at, ?), archived_at=COALESCE(archived_at, ?), pinned_at=NULL WHERE id=?`,
@@ -519,7 +519,7 @@ func (d *DB) heraOrchestratorByActiveName(name string) (*HeraOrchestrator, error
 // unchanged when the kind matches (roles are write-once on prompt/project — the
 // supplied values are ignored), or ErrHeraRoleKindConflict when the kind
 // differs. An archived row with the same key does NOT block creation.
-func (d *DB) CreateHeraRole(in CreateHeraRoleInput) (*HeraRole, error) {
+func (d *DB) createHeraRole(in CreateHeraRoleInput) (*HeraRole, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -612,14 +612,14 @@ func (d *DB) ListHeraRolesByKind(orchID int64, kind HeraRoleKind) ([]*HeraRole, 
 
 // ArchiveHeraRole stamps archived_at and clears pinned_at. Idempotent. Returns
 // ErrHeraNotFound if no row matches id.
-func (d *DB) ArchiveHeraRole(id int64) error {
+func (d *DB) archiveHeraRole(id int64) error {
 	return d.heraSetFlag(`UPDATE hera_roles SET archived_at=?, pinned_at=NULL WHERE id=? AND archived_at IS NULL`,
 		heraRoleExistsProbe, id, formatTime(time.Now()))
 }
 
 // UnarchiveHeraRole clears archived_at. Idempotent. Returns ErrHeraNotFound if
 // no row matches id.
-func (d *DB) UnarchiveHeraRole(id int64) error {
+func (d *DB) unarchiveHeraRole(id int64) error {
 	return d.heraSetFlag(`UPDATE hera_roles SET archived_at=NULL WHERE id=? AND archived_at IS NOT NULL`,
 		heraRoleExistsProbe, id)
 }
@@ -644,7 +644,7 @@ func (d *DB) UnpinHeraRole(id int64) error {
 // rail-feeding lists (ListHeraRoles / ListHeraRolesByKind) but its row, bindings,
 // status, inbox messages, and bound argus task are all retained — recovery is
 // via the DB only. NEVER a hard delete. Returns ErrHeraNotFound if no row matches.
-func (d *DB) NukeHeraRole(id int64) error {
+func (d *DB) nukeHeraRole(id int64) error {
 	now := formatTime(time.Now())
 	return d.heraSetFlag(
 		`UPDATE hera_roles SET nuked_at=COALESCE(nuked_at, ?), archived_at=COALESCE(archived_at, ?), pinned_at=NULL WHERE id=?`,
@@ -654,7 +654,7 @@ func (d *DB) NukeHeraRole(id int64) error {
 // RenameHeraRole updates a role's name. The new name must be free among active
 // roles under the SAME orchestrator; archived siblings and roles in other
 // orchestrators do not block. Returns ErrHeraNotFound or ErrHeraNameConflict.
-func (d *DB) RenameHeraRole(id int64, newName string) error {
+func (d *DB) renameHeraRole(id int64, newName string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -684,7 +684,7 @@ func (d *DB) RenameHeraRole(id int64, newName string) error {
 
 // DeleteHeraRole permanently removes a role. Its bindings and role_status row
 // cascade. Returns ErrHeraNotFound if no row matches id.
-func (d *DB) DeleteHeraRole(id int64) error {
+func (d *DB) deleteHeraRole(id int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	res, err := d.conn.Exec(`DELETE FROM hera_roles WHERE id=?`, id)
@@ -763,7 +763,7 @@ func insertHeraRole(ex execer, in CreateHeraRoleInput, now string) (*HeraRole, e
 // enforced at the index level: a second live binding for the same (task,
 // orchestrator), (worktree, orchestrator), or role fails with a constraint
 // error — the deterministic backstop behind any app-level pre-check.
-func (d *DB) CreateHeraBinding(in CreateHeraBindingInput) (*HeraBinding, error) {
+func (d *DB) createHeraBinding(in CreateHeraBindingInput) (*HeraBinding, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -784,7 +784,7 @@ func (d *DB) CreateHeraBinding(in CreateHeraBindingInput) (*HeraBinding, error) 
 // execs (orphan risk). The role is inserted fresh (not idempotent); callers
 // (e.g. born-bound spawn) supply a name made unique within the orchestrator,
 // and the partial unique index is the backstop.
-func (d *DB) CreateHeraRoleWithBinding(roleIn CreateHeraRoleInput, taskID, worktreePath string) (*HeraRole, *HeraBinding, error) {
+func (d *DB) createHeraRoleWithBinding(roleIn CreateHeraRoleInput, taskID, worktreePath string) (*HeraRole, *HeraBinding, error) {
 	var role *HeraRole
 	var binding *HeraBinding
 	err := d.WithTx(func(tx *sql.Tx) error {
@@ -843,7 +843,7 @@ type MoveHeraBindingResult struct {
 // (already ended, or never existed); the whole transaction rolls back on any
 // failure, so a not-found or a doomed role/binding insert leaves the old
 // binding live and untouched.
-func (d *DB) MoveHeraBinding(oldBindingID int64, roleIn CreateHeraRoleInput, taskID, worktreePath string) (*MoveHeraBindingResult, error) {
+func (d *DB) moveHeraBinding(oldBindingID int64, roleIn CreateHeraRoleInput, taskID, worktreePath string) (*MoveHeraBindingResult, error) {
 	var result MoveHeraBindingResult
 	err := d.WithTx(func(tx *sql.Tx) error {
 		now := formatTime(time.Now())
@@ -915,7 +915,7 @@ func (d *DB) MoveHeraBinding(oldBindingID int64, roleIn CreateHeraRoleInput, tas
 
 // EndHeraBinding stamps ended_at and end_reason on a live binding. Returns
 // ErrHeraNotFound if no live binding has that id.
-func (d *DB) EndHeraBinding(bindingID int64, reason string) error {
+func (d *DB) endHeraBinding(bindingID int64, reason string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	res, err := d.conn.Exec(
@@ -933,7 +933,7 @@ func (d *DB) EndHeraBinding(bindingID int64, reason string) error {
 
 // CreateHeraOrchLink records an intentional parent/child hierarchy. A binding
 // is membership only; the named parent role is the sole owner of this link.
-func (d *DB) CreateHeraOrchLink(parentOrchID, childOrchID, parentRoleID int64) error {
+func (d *DB) createHeraOrchLink(parentOrchID, childOrchID, parentRoleID int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	_, err := d.conn.Exec(`INSERT INTO hera_orch_links (child_orchestrator_id, parent_orchestrator_id, parent_role_id, created_at) VALUES (?, ?, ?, ?)
@@ -960,7 +960,7 @@ func (d *DB) HeraOrchLink(childOrchID int64) (parentOrchID, parentRoleID int64, 
 
 // DeleteHeraOrchLink removes an explicit parent relation without touching any
 // unrelated binding that happens to point at the same Argus task.
-func (d *DB) DeleteHeraOrchLink(childOrchID int64) error {
+func (d *DB) deleteHeraOrchLink(childOrchID int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	res, err := d.conn.Exec(`DELETE FROM hera_orch_links WHERE child_orchestrator_id=?`, childOrchID)
@@ -999,7 +999,7 @@ func (d *DB) ListHeraOrchLinks() ([]HeraOrchLink, error) {
 // the given reason. Returns the number of bindings ended. This is the public
 // form of the task-delete cascade (tasks.go Delete inlines the same UPDATE
 // inside its transaction because WithTx holds the DB mutex and cannot re-enter).
-func (d *DB) EndHeraBindingsForTask(taskID, reason string) (int, error) {
+func (d *DB) endHeraBindingsForTask(taskID, reason string) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	res, err := d.conn.Exec(
@@ -1736,7 +1736,7 @@ func insertHeraBinding(ex execer, in CreateHeraBindingInput, now string) (*HeraB
 // --- Role status ---
 
 // UpsertHeraRoleStatus sets the status for a role, inserting or updating.
-func (d *DB) UpsertHeraRoleStatus(roleID int64, status HeraRoleStatusValue) error {
+func (d *DB) upsertHeraRoleStatus(roleID int64, status HeraRoleStatusValue) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	_, err := d.conn.Exec(

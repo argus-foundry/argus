@@ -180,6 +180,7 @@ func (d *DB) Update(t *model.Task) error {
 		if t.Status == model.StatusComplete {
 			events.Emit(model.EventTypeTaskCompleted, t.ID, nil)
 		}
+		d.emitPlanChangedForTask(t.ID)
 	}
 	// Archive transition: parity with SetArchived so hera and other consumers
 	// of `task.archived` see the event regardless of which write path archived
@@ -400,6 +401,7 @@ func (d *DB) SetArchived(id string, archived bool) error {
 	}
 	if err == nil {
 		emitSectionChange(id, oldArchived != 0, oldPinned != 0, archived, pinnedAfterArchive(archived, oldPinned != 0))
+		d.emitPlanChangedForTask(id)
 	}
 	return err
 }
@@ -484,6 +486,7 @@ func (d *DB) SetStatus(id string, s model.Status) error {
 			events.Emit(model.EventTypeTaskCompleted, id, nil)
 		}
 		events.EmitTaskUpdated(id, model.TaskFieldStatus)
+		d.emitPlanChangedForTask(id)
 	}
 	return nil
 }
@@ -548,6 +551,14 @@ func (d *DB) FindByNameProject(name, project string) (*model.Task, error) {
 }
 
 func (d *DB) Delete(id string) error {
+	err := d.deleteTask(id)
+	if err == nil {
+		d.emitPlanChangedForTask(id)
+	}
+	return err
+}
+
+func (d *DB) deleteTask(id string) error {
 	// Run both DELETEs in one transaction so a crash between them can't
 	// leave orphan task_messages rows pointing at a deleted from/to ID
 	// (such rows could never be acked, and would still count against the

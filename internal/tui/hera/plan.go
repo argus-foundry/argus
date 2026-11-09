@@ -4,9 +4,8 @@ import (
 	"fmt"
 
 	heramodel "github.com/drn/argus/internal/hera/model"
+	heraplan "github.com/drn/argus/internal/hera/plan"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/tui/planview"
 	"github.com/drn/argus/internal/tui/widget"
 	"github.com/drn/argus/internal/uxlog"
@@ -47,69 +46,34 @@ func heraPlanNodesWithBridge(orch *heramodel.OrchView, bridge map[string]*heramo
 	if orch == nil {
 		return nil, nil
 	}
+	pnodes, pedges := heraplan.Project(orch, bridge)
 
-	// One roleID -> nodeID map drives BOTH nodes and edges so an edge's endpoints
-	// resolve to the same ids the nodes carry (a live node's id is its bound task,
-	// a planned node's id is a synthetic role key). Coordinator roles are not plan
-	// nodes (they author the plan; the DAG is the worker order-of-ops), so they
-	// are skipped here.
-	nodeID := make(map[int64]string, len(orch.Roles))
-	nodes := make([]planview.Node, 0, len(orch.Roles))
-	for i := range orch.Roles {
-		r := &orch.Roles[i]
-		if r.Kind != db.HeraKindWorker || r.Archived {
-			continue
-		}
+	nodeID := make(map[int64]string, len(pnodes))
+	nodes := make([]planview.Node, 0, len(pnodes))
+	for i := range pnodes {
+		pn := &pnodes[i]
+		r := pn.Role
 		id := planNodeID(r)
-		nodeID[r.RoleID] = id
+		nodeID[pn.RoleID] = id
 		state := planNodeState(r)
-		n := planview.Node{
-			ID:      id,
-			Name:    r.Name,
-			Planned: r.Planned,
-			State:   state,
-			// The node description is the role's stored prompt VERBATIM. planview
-			// owns the presentation (first N non-empty lines, wrapped/truncated to
-			// the pane, policy-agnostic — no stripping) so the "how much to show"
-			// policy lives in one place (nodeHeaderLines). See improve-hera-node-
-			// descriptions + gotchas/hera-view.md.
-			Description: r.Prompt,
-			Icon:        planNodeIcon(r, state),
-			// Diligence-tiering readout (D-VIEW). Archetype is the role's own
-			// (no I/O); the model/effort/warning are stamped by the App's
-			// SetTierResolver during doRefresh (resolution reads disk, so it can't
-			// run here on the tview thread). Remote/unstamped → all empty.
-			Archetype:      r.Archetype,
+		nodes = append(nodes, planview.Node{
+			ID:             id,
+			Name:           pn.Name,
+			Planned:        pn.Planned,
+			State:          state,
+			Description:    pn.Prompt,
+			Icon:           planNodeIcon(r, state),
+			Archetype:      pn.Archetype,
 			Model:          r.AppliedModel,
 			Effort:         r.AppliedEffort,
 			ProfileWarning: r.ProfileWarning,
-		}
-		// A worker whose bound task coordinates a child orchestrator is a
-		// sub-coordinator: Enter drills into that child's plan DAG (D6). The bridge
-		// index already encodes the worker→child-coordinator relationship the rail
-		// uses; reuse it rather than re-deriving. A node with no bound task
-		// (planned) can never be a sub-coordinator.
-		if bridge != nil && r.BridgeTaskID != "" {
-			if child := bridge[r.BridgeTaskID]; child != nil && child.ID != orch.ID {
-				n.Drillable = true
-			}
-		}
-		nodes = append(nodes, n)
+			Drillable:      pn.BridgeTarget,
+		})
 	}
 
-	// Edges: every blocking edge whose BOTH endpoints projected to a node. An edge
-	// to a coordinator or archived role (not in nodeID) is dropped — ListHeraBlocks
-	// already excludes archived/nuked endpoints, but guard anyway so a stray edge
-	// never references a missing node. Direction matches dagview: From=blocker
-	// (upstream), To=blocked (downstream).
-	edges := make([]planview.Edge, 0, len(orch.Blocks))
-	for _, b := range orch.Blocks {
-		from, okFrom := nodeID[b.BlockerRoleID]
-		to, okTo := nodeID[b.BlockedRoleID]
-		if !okFrom || !okTo {
-			continue
-		}
-		edges = append(edges, planview.Edge{From: from, To: to})
+	edges := make([]planview.Edge, 0, len(pedges))
+	for _, e := range pedges {
+		edges = append(edges, planview.Edge{From: nodeID[e.BlockerRoleID], To: nodeID[e.DependentRoleID]})
 	}
 
 	uxlog.Log("[planview] projected orch %d: %d nodes, %d edges", orch.ID, len(nodes), len(edges))
@@ -159,24 +123,20 @@ func planNodeID(r *heramodel.RoleView) string {
 // result, with the {"failed":true} result winning over the workflow status (red ✕)
 // — reusing coordTaskFailed (details.go), not a third copy.
 func planNodeState(r *heramodel.RoleView) planview.State {
-	if r.Cancelled {
+	switch heraplan.StateOf(r) {
+	case heraplan.StateCancelled:
 		return planview.StateCancelled
-	}
-	if r.Planned {
+	case heraplan.StatePlanned:
 		return planview.StatePlanned
-	}
-	if coordTaskFailed(r.TaskResult) {
+	case heraplan.StateFailed:
 		return planview.StateFailed
-	}
-	switch r.TaskStatus {
-	case model.StatusComplete.String():
+	case heraplan.StateDone:
 		return planview.StateDone
-	case model.StatusInReview.String():
+	case heraplan.StateInReview:
 		return planview.StateInReview
-	case model.StatusInProgress.String():
+	case heraplan.StateInProgress:
 		return planview.StateWorking
 	default:
-		// pending / unknown / unbound-but-once-materialized → pending dot.
 		return planview.StatePending
 	}
 }
