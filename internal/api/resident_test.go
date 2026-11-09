@@ -8,9 +8,31 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/drn/argus/internal/agent"
 	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/testutil"
 )
+
+func TestResidentWaitingUsesStickyDetector(t *testing.T) {
+	srv, d := testServer(t)
+	close(srv.stopCh)
+	r, _, err := d.EnsureResidentTask(filepath.Join(t.TempDir(), "resident"))
+	testutil.NoError(t, err)
+	state := newIdleWatcherState()
+	tail := blockedTail
+	tailOf := func(string) []byte { return tail }
+	srv.detectNeedsInputTick(state, []string{r.ID}, []string{r.ID}, tailOf)
+	testutil.Equal(t, srv.ResidentWaiting(), true)
+	testutil.Equal(t, srv.runner.(*agent.Runner).NeedsInput(r.ID), false)
+	// A prompt disappearing from the tail while busy retains sticky waiting.
+	tail = idleTail
+	srv.detectNeedsInputTick(state, []string{r.ID}, nil, tailOf)
+	testutil.Equal(t, srv.ResidentWaiting(), true)
+	testutil.Equal(t, srv.runner.(*agent.Runner).NeedsInput(r.ID), false)
+	// A stopped session clears the same signal without a second detector.
+	srv.detectNeedsInputTick(state, nil, nil, tailOf)
+	testutil.Equal(t, srv.ResidentWaiting(), false)
+}
 
 func residentFixture(t *testing.T) (http.Handler, string) {
 	t.Helper()

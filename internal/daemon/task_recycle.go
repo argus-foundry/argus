@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"log/slog"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/drn/argus/internal/agent"
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/db"
+	"github.com/drn/argus/internal/uxlog"
 )
 
 // taskRecycleMetaNamespace/taskRecycleMetaKeyTimedOutPrompt persist a
@@ -105,6 +107,11 @@ func (r *taskRecycleRunner) Recycle(taskID, handoffNote string) error {
 	}
 
 	seedPrompt := buildTaskRecycleSeedPrompt(task.Prompt, handoffNote)
+	if task.IsResident() {
+		cfg := r.cfgFn()
+		seedPrompt = buildResidentRecycleSeedPrompt(residentOrientationPrompt(cfg), handoffNote, cfg.Resident.MemoryDir)
+		uxlog.Log("[resident] recycle seed composed task=%s bytes=%d", taskID, len(seedPrompt))
+	}
 	r.spawn(func() {
 		defer r.inFlight.Delete(taskID)
 		r.awaitIdleAndRestart(taskID, seedPrompt)
@@ -182,4 +189,16 @@ func buildTaskRecycleSeedPrompt(originalPrompt, handoffNote string) string {
 	b.WriteString("\n")
 
 	return b.String()
+}
+
+func buildResidentRecycleSeedPrompt(orientation, handoffNote, memoryDir string) string {
+	if memoryDir == "" {
+		memoryDir = "resident"
+	}
+	return "You are a fresh resident session recycled to reset context. Follow this handoff first.\n\n" +
+		"## Handoff note from your prior session\n\n" + handoffNote +
+		"\n\n## Recover working memory\n\nRead `" + path.Join(memoryDir, "open-loops.md") +
+		"` first, then `" + path.Join(memoryDir, "profile.md") +
+		"`, then continue from the handoff and open loops. No other recovery tool calls are needed.\n\n" +
+		"## Persistent orientation (background only)\n\n" + orientation + "\n"
 }

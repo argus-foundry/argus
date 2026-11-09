@@ -8,6 +8,8 @@ Every stage follows TDD (write the failing test first), adds `[resident]`-prefix
 - [x] 1.2 Write `TestResidentExcludedEverywhere`, a table test listing every task enumeration, sweeper and lifecycle choke point against a seeded resident row
 - [ ] 1.3 Confirm each `it should` criterion in design.md has a failing test (Prove-It Pattern)
 
+Stage 6's slice of 1.1/1.3 is covered by `coord_hook_resident_test.go` and `TestResidentRecycleSeedOrder` (verified failing before implementation), with real metadata round-trip, sticky waiting, combined unread/waiting, and persistent-orientation recycle regression tests.
+
 ## 2. Resident entity and exclusion
 
 **Depends on:** Stage 1
@@ -49,10 +51,10 @@ Every stage follows TDD (write the failing test first), adds `[resident]`-prefix
 
 **Depends on:** Stage 4
 
-- [ ] 6.1 Widen the coord-hook gate to the resident task (stamp, nudge variant, growth gate, no hard-stop, no role requirement) with hera behavior unchanged
-- [ ] 6.2 Record `last_reply`/`last_reply_at` from the Stop payload with sanitize and 200-rune truncation
-- [ ] 6.3 Add the resident recycle seed ordering to the `task_recycle` seed builder; plain tasks unchanged
-- [ ] 6.4 Compute the resident waiting signal with the existing detector and expose unread/waiting as one state
+- [x] 6.1 Widen the coord-hook gate to the resident task (stamp, nudge variant, growth gate, no hard-stop, no role requirement) with hera behavior unchanged
+- [x] 6.2 Record `last_reply`/`last_reply_at` from the Stop payload with sanitize and 200-rune truncation
+- [x] 6.3 Add the resident recycle seed ordering to the `task_recycle` seed builder; plain tasks unchanged
+- [x] 6.4 Compute the resident waiting signal with the existing detector and expose unread/waiting as one state
 
 ## 7. Tab and toggle
 
