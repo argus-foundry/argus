@@ -374,6 +374,20 @@ The context control SHALL open an accessible dismissible popover, show only sour
 - **THEN** those values remain in the composer with measured context and reset times
 - **AND** the composer omits Account and historical role token totals without reading the Hera roster
 
+### Requirement: Show measured current session totals and paginated turns alongside measured Codex context.
+
+The context ring uses GET /context measurements for Codex, including recorded and unavailable states. Session usage reads GET /usage with limit=50, pins older pages to returned session_id, preserves nullable counters and labels cached input as included in input. task.usage_changed refreshes measurements. Session changes and task changes cancel and fence old reads.
+
+#### Scenario: Obsolete responses
+
+- **WHEN** a task or connection changes while a request is pending
+- **THEN** late responses cannot overwrite the current view or draft
+
+#### Scenario: Unavailable API
+
+- **WHEN** a read or mutation fails
+- **THEN** the view shows actionable retry feedback without claiming success
+
 ### Requirement: Project rows and task creation
 Project headers SHALL show a letter avatar and project name, an always-visible New task (+) button and a hover/focus Configuration gear. Project headers SHALL omit task counts. Empty projects SHALL have no disclosure control, expanded state or empty child area, including when previously expanded projects become empty after refresh or archive filters. Non-empty groups SHALL retain existing pointer, keyboard and in-memory disclosure behavior. The Configuration gear SHALL open the project editor directly; no single-item project menu or duplicate New task action SHALL remain.
 

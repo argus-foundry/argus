@@ -84,7 +84,7 @@ The composer uses a roomy rounded draft area with a read-only backend/model labe
 
 See `web-tests/tests/workspace/composer/composer-layout.spec.ts` for the bottom-bar geometry, read-only model and native file-picker checks.
 
-Click the context ring for measured context and usage. Live bridge readings can fill the ring; recorded Hera stamps are dated. A dashed ring means context percentage is unavailable. Claude account limits show remaining usage and reset times when exposed. Plan, email and organization remain here when exposed. Account and historical role input, cache and output totals appear in task Info. Unsupported fields stay hidden. The [data availability table](docs/context-data.md) identifies the daemon work needed for Codex quota and full context breakdown parity.
+Click the context ring for measured context and usage. Measured Claude or Codex context can fill the ring; recorded measurements are dated. A dashed ring means context percentage is unavailable. Claude account limits show remaining usage and reset times when exposed. Plan, email and organization remain here when exposed. Session totals and turn pages appear in the popover, with cached input included in input. Account and historical role input, cache and output totals appear in task Info. Unsupported fields stay hidden. The [data availability table](docs/context-data.md) identifies the daemon work needed for Codex quota and full context breakdown parity.
 
 See `web-tests/tests/workspace/composer/composer-context.spec.ts` for context/quota mapping, dismissal, narrow viewport, stale task reads and disconnect checks. Reads refresh every 15 seconds without touching draft input or sending terminal commands.
 

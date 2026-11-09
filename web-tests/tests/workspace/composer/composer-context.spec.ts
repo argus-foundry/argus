@@ -23,6 +23,7 @@ async function fixture(contextRoute = 'missing') {
   window.measurement={task_id:'a',session_id:'s1',provider:'anthropic',source:'bridge',live:true,measured_at:new Date(Date.now()-7200000).toISOString(),context:{used_tokens:5000,window_tokens:200000,percent:2.5,categories:{messages:3000,memory:null,tools:0,agents:100,skills:100,system:1800,compaction:null}}};
   const api={request:async(path,options)=>{
     window.paths.push(path);
+    if(path.includes('/usage?'))return Response.json({task_id:'a',session_id:'s1',totals:null,turns:[],next_cursor:null});
     const response=window.contextMode==='missing'?new Response('',{status:404}):window.contextMode==='html'?new Response('<!doctype html><html>old daemon</html>',{headers:{'content-type':'text/html'}}):window.contextMode==='error'?new Response('',{status:500}):Response.json(window.measurement);
     if(window.block)return new Promise(resolve=>window.held.push(()=>resolve(response)));return response;
   },json:async(path,options)=>{window.paths.push(path);const key=path.split('/').pop().split('?')[0];if(window.block) return new Promise(resolve=>window.held.push(()=>resolve(reads[key])));return reads[key];}};
@@ -113,7 +114,7 @@ test('task switch and disconnect reject late reads and clear measurements', asyn
   await page.waitForTimeout(100);
   assert.equal(await page.locator('#context-toggle').isDisabled(), true);
   assert.equal(await page.locator('.context-ring').getAttribute('data-known'), 'false');
-  assert.equal(await page.locator('#composer-context').textContent(), 'ContextContext window usage is not available for this session.');
+  assert.equal(await page.locator('#composer-context .context-measurement').textContent(), 'ContextContext window usage is not available for this session.');
 });
 test('Codex uses a recorded context stamp, with no inferred window or Claude account fields', async () => {
   const page = await fixture();
@@ -220,6 +221,8 @@ test('overflowing context region supports keyboard scroll, refresh and Escape',a
   assert.equal(await panel.isVisible(),false);
   assert.equal(await trigger.evaluate(element=>document.activeElement===element),true);
   await page.keyboard.press('Enter');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.getByRole('button',{name:'Refresh usage'}).evaluate(element=>document.activeElement===element),true,'Tab enters the usage controls');
   await page.keyboard.press('Tab');
   assert.equal(await page.locator('#attach-files').evaluate(element=>document.activeElement===element),true,'The nonmodal panel must allow normal Tab navigation');
 });

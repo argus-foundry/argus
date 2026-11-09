@@ -42,6 +42,7 @@ async function setup(roster = {}) {
   await page.route('**/api/**', route => {
     const path = new URL(route.request().url()).pathname;
     reads.push(path);
+    if(path.endsWith('/context'))return route.fulfill({status:404,json:{error:'Unsupported context route'}});
     if (path.endsWith('/output')) return route.fulfill({
       body: '',
       headers: {

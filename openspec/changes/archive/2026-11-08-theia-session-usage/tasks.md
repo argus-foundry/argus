@@ -1,0 +1,4 @@
+- [x] Add failing unit and browser fixture coverage
+- [x] Implement frontend contract adoption and accessibility
+- [x] Run workspace tests and relevant browser checks
+- [x] Update docs and gotchas, archive delta, commit slice
