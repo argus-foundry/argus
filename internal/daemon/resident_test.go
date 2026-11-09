@@ -317,6 +317,66 @@ func TestResident_DisableStopsButPreservesRow(t *testing.T) {
 	testutil.Equal(t, len(e.run.starts), 2)
 }
 
+func TestResident_RunningPrereqFailureStopsAndSurfacesReason(t *testing.T) {
+	e := newResEnv(t)
+	e.m.tick()
+	row, _ := e.db.ResidentTask()
+	e.cfg.API.Enabled = false
+
+	// First failing tick: debounced, session untouched, reason already shown.
+	e.m.tick()
+	testutil.Equal(t, len(e.run.stopped), 0)
+	testutil.Contains(t, e.m.State().Reason, "api.enabled")
+
+	// Second consecutive failure stops it and the reason stays.
+	e.m.tick()
+	testutil.DeepEqual(t, e.run.stopped, []string{row.ID})
+	testutil.Contains(t, e.m.State().Reason, "api.enabled")
+	testutil.Equal(t, e.m.lastReason != "", true)
+
+	// Recovery restarts it and clears the reason.
+	delete(e.run.sess, row.ID)
+	e.cfg.API.Enabled = true
+	e.now = e.now.Add(time.Hour)
+	e.m.tick()
+	testutil.Equal(t, len(e.run.starts), 2)
+	testutil.Equal(t, e.m.State().Reason, "")
+}
+
+func TestResident_PrereqBlipDoesNotStop(t *testing.T) {
+	e := newResEnv(t)
+	e.m.tick()
+	e.cfg.KB.Enabled = false
+	e.m.tick() // one-tick blip
+	e.cfg.KB.Enabled = true
+	e.m.tick() // recovered: counter resets
+	e.cfg.KB.Enabled = false
+	e.m.tick() // a second blip is again only the first consecutive failure
+	testutil.Equal(t, len(e.run.stopped), 0)
+}
+
+func TestResident_NoClaudeBackendStopsRunning(t *testing.T) {
+	e := newResEnv(t)
+	e.m.tick()
+	row, _ := e.db.ResidentTask()
+	e.cfg.Backends = map[string]config.Backend{}
+	e.cfg.Defaults.Backend = ""
+	e.m.tick()
+	e.m.tick()
+	testutil.DeepEqual(t, e.run.stopped, []string{row.ID})
+	testutil.Contains(t, e.m.State().Reason, "Claude-family")
+}
+
+func TestResident_MCPNotReadyDoesNotStopRunning(t *testing.T) {
+	e := newResEnv(t)
+	e.m.tick()
+	e.m.mcpReady = func() bool { return false }
+	for i := 0; i < 4; i++ {
+		e.m.tick()
+	}
+	testutil.Equal(t, len(e.run.stopped), 0)
+}
+
 func TestResident_UserStopIsRestartedWhileEnabled(t *testing.T) {
 	e := newResEnv(t)
 	e.m.tick()
@@ -673,8 +733,11 @@ func TestResident_DaemonManagerClosures(t *testing.T) {
 
 func TestResident_StartUsesReportedPaneSize(t *testing.T) {
 	e := newResEnv(t)
+	// Active is whatever view the user is on (here a narrow side-paneled one);
+	// the resident must launch at its own pane's reported size instead.
 	testutil.NoError(t, e.db.PublishInitialPTYLayout(db.InitialPTYLayout{
-		Active:     db.PTYSize{Rows: 50, Cols: 160},
+		Active:     db.PTYSize{Rows: 30, Cols: 60},
+		Resident:   db.PTYSize{Rows: 50, Cols: 160},
 		ReportedAt: e.now,
 	}))
 	e.m.tick()
@@ -683,6 +746,21 @@ func TestResident_StartUsesReportedPaneSize(t *testing.T) {
 	}
 	testutil.Equal(t, e.run.starts[0].rows, uint16(50))
 	testutil.Equal(t, e.run.starts[0].cols, uint16(160))
+}
+
+// An older TUI publishes only Active: the resident never adopts it.
+func TestResident_StartIgnoresActiveWithoutResidentSize(t *testing.T) {
+	e := newResEnv(t)
+	testutil.NoError(t, e.db.PublishInitialPTYLayout(db.InitialPTYLayout{
+		Active:     db.PTYSize{Rows: 30, Cols: 60},
+		ReportedAt: e.now,
+	}))
+	e.m.tick()
+	if len(e.run.starts) != 1 {
+		t.Fatalf("starts = %d, want 1", len(e.run.starts))
+	}
+	testutil.Equal(t, e.run.starts[0].rows, uint16(24))
+	testutil.Equal(t, e.run.starts[0].cols, uint16(80))
 }
 
 func TestResident_StartFallsBackTo24x80WithoutReport(t *testing.T) {

@@ -936,18 +936,6 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		}
 	}
 
-	// The resident's three-tier tool policy (ask / deny lists from [resident])
-	// rides the family's own rules flag. Families without one (non-Claude)
-	// cannot be a resident backend, so nothing is silently dropped there.
-	if task.IsResident() && fam.PermissionRulesFlag != nil {
-		if flag := fam.PermissionRulesFlag(cfg.Resident.AllowTools, cfg.Resident.AskTools, cfg.Resident.DenyTools); flag != "" {
-			cmdStr += flag
-			uxlog.Log("[resident] permission rules delivered allow=%d ask=%d deny=%d", len(cfg.Resident.AllowTools), len(cfg.Resident.AskTools), len(cfg.Resident.DenyTools))
-			// BuildCmd runs in the daemon/supervisor, which never calls uxlog.Init.
-			slog.Info("[resident] permission rules delivered", "allow", len(cfg.Resident.AllowTools), "ask", len(cfg.Resident.AskTools), "deny", len(cfg.Resident.DenyTools))
-		}
-	}
-
 	// Inject the resolved model (task override > diligence profile > backend
 	// default) through the family's delivery: --model for ModelFlag families;
 	// OpenCode's v2 full TUI rejects that flag, so its model is delivered later
@@ -979,6 +967,33 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	}
 	cmdStr += modelFlag
 
+	// The resident's self-contained permission policy (allow / ask / deny from
+	// [resident], merged with the account's own user-level deny/ask) rides the
+	// family's rules flag together with `--setting-sources project`, which
+	// drops the user's settings (allow rules, hooks, plugins, model). It sits
+	// after the model resolution so the account's own model is only carried
+	// over when nothing else chose one. Families without the flag cannot be a
+	// resident backend (checked above), so nothing is silently dropped.
+	if task.IsResident() && fam.PermissionRulesFlag != nil {
+		us := readResidentUserSettings(task, cfg)
+		policy := ResidentPolicy{
+			Allow:       cfg.Resident.AllowTools,
+			Ask:         mergeRules(cfg.Resident.AskTools, us.Ask),
+			Deny:        mergeRules(cfg.Resident.DenyTools, us.Deny),
+			HookCommand: residentStopHookCommand(),
+			Effort:      us.Effort,
+		}
+		if resolvedModel == "" && !hasModelFlag(backend.Command) {
+			policy.Model = us.Model
+		}
+		if flag := fam.PermissionRulesFlag(policy); flag != "" {
+			cmdStr += flag
+			uxlog.Log("[resident] permission policy delivered allow=%d ask=%d (user %d) deny=%d (user %d) model=%q", len(policy.Allow), len(policy.Ask), len(us.Ask), len(policy.Deny), len(us.Deny), policy.Model)
+			// BuildCmd runs in the daemon/supervisor, which never calls uxlog.Init.
+			slog.Info("[resident] permission policy delivered", "allow", len(policy.Allow), "ask", len(policy.Ask), "user_ask", len(us.Ask), "deny", len(policy.Deny), "user_deny", len(us.Deny), "model", policy.Model)
+		}
+	}
+
 	// Make argus's own builtin skills (archive, hera, ...) available through
 	// the family's discovery hook: Claude loads .claude/skills/ from a
 	// --add-dir directory (a documented exception to --add-dir otherwise
@@ -988,6 +1003,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// Materialization failure is logged and skipped rather than blocking
 	// launch.
 	opencodeSkillsDir := ""
+	residentClaude := task.IsResident() && fam.Kind == backendkind.Claude
 	switch fam.SkillDelivery {
 	case SkillsAddDir, SkillsFlag, SkillsInlineConfig, SkillsConfigOverlay:
 		if root, err := ensureSessionSkillsFn(); err != nil {
@@ -1010,6 +1026,15 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		}
 	}
 
+	// The resident's restricted setting sources also drop the account's user
+	// skills; re-expose them through an --add-dir whose .claude/skills links to
+	// the account's skills dir (Claude only discovers <dir>/.claude/skills).
+	if residentClaude && fam.SkillDelivery == SkillsAddDir {
+		if root := ensureResidentUserSkillsDir(task, cfg); root != "" {
+			cmdStr += " --add-dir " + shellQuote(root)
+		}
+	}
+
 	// Make argus's own builtin routing content (hera coordination, argus-task
 	// self-management) reach Claude, Pi and opencode sessions by materializing
 	// it and delivering the path through the family's own flag or config —
@@ -1022,9 +1047,26 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// logged and skipped rather than blocking launch.
 	opencodeRoutingPath := ""
 	if fam.RoutingDelivery != RoutingNone {
-		if path, err := ensureBuiltinRoutingFn(); err != nil {
+		path, err := ensureBuiltinRoutingFn()
+		if err != nil {
 			uxlog.Log("[routing] builtin routing content materialize failed (continuing without it): %v", err)
-		} else if path != "" {
+			path = ""
+		}
+		// The resident drops user settings sources but still gets the
+		// account's CLAUDE.md. Claude keeps only the LAST
+		// --append-system-prompt-file, so the routing content and CLAUDE.md
+		// ship as one combined file.
+		if residentClaude && fam.RoutingDelivery == RoutingSystemPromptFile {
+			if md := readResidentUserClaudeMD(task, cfg); md != "" {
+				if combined, cerr := materializeResidentPrompt(path, md); cerr != nil {
+					uxlog.Log("[resident] combined system prompt materialize failed (continuing without the user CLAUDE.md): %v", cerr)
+					slog.Warn("[resident] combined system prompt materialize failed", "err", cerr)
+				} else {
+					path = combined
+				}
+			}
+		}
+		if path != "" {
 			switch fam.RoutingDelivery {
 			case RoutingSystemPromptFile:
 				cmdStr += " --append-system-prompt-file " + shellQuote(path)
@@ -1296,10 +1338,8 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		cmd.Env = append(cmd.Env, "ARGUS_TASK_ID="+task.ID)
 		// Marks the resident spawn only, so the Stop hook asks the daemon
 		// "am I the resident?" for the resident alone; every other task pays
-		// zero extra RPCs per turn.
-		if task.IsResident() {
-			cmd.Env = append(cmd.Env, ResidentEnvMarker+"=1")
-		}
+		// zero extra RPCs per turn. Appended in the final env pass below so
+		// an inherited or backend-configured marker can never leak or forge it.
 	}
 
 	// Diligence-profile env export (add-diligence-profiles). When a bound
@@ -1416,11 +1456,14 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// after every other environment source so none can forge or replace it.
 	filtered := cmd.Env[:0]
 	for _, entry := range cmd.Env {
-		if name, _, _ := strings.Cut(entry, "="); name != "ARGUS_SANDBOXED" {
+		if name, _, _ := strings.Cut(entry, "="); name != "ARGUS_SANDBOXED" && name != ResidentEnvMarker {
 			filtered = append(filtered, entry)
 		}
 	}
 	cmd.Env = filtered
+	if task.ID != "" && task.IsResident() {
+		cmd.Env = append(cmd.Env, ResidentEnvMarker+"=1")
+	}
 	if sandboxCleanup != nil {
 		cmd.Env = append(cmd.Env, "ARGUS_SANDBOXED=1")
 	}

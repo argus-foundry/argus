@@ -312,8 +312,14 @@ func (a *App) applyResidentState(resp daemon.ResidentStateResp) {
 		a.markResidentViewed()
 		unread = false
 	}
+	// The daemon reports prerequisite reasons even while the session runs; only
+	// a not-running resident has anything to explain.
+	reason := ""
+	if !resp.Running {
+		reason = sanitizeResidentReason(resp.Reason)
+	}
 	next := residentAttention{unread: unread, waiting: resp.Waiting, preview: resp.LastReply,
-		reason: sanitizeResidentReason(resp.Reason)}
+		reason: reason}
 	if next != a.residentSt {
 		uxlog.Log("[resident] attention state unread=%v waiting=%v reason=%q", next.unread, next.waiting, next.reason)
 	}

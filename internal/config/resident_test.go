@@ -194,8 +194,11 @@ func TestDefaultResidentConfig_OutwardActionsNeverAllowed(t *testing.T) {
 	}
 	// Positive rule: every allow-tier entry is a single named MCP tool whose
 	// verb is read-only, except an explicit, reviewed exception list.
-	readVerbs := map[string]bool{"get": true, "list": true, "search": true, "read": true, "query": true, "fetch": true, "suggest": true}
-	exceptions := []string{"mcp__argus__kb_ingest", "mcp__argus__task_recycle", "mcp__claude_ai_Slack__slack_send_message_draft"}
+	readVerbs := map[string]bool{"get": true, "list": true, "search": true, "read": true, "query": true, "fetch": true, "suggest": true, "whoami": true, "view": true}
+	// Draft create/update tools are the reviewed exceptions: a draft is never
+	// sent without a separate (ask-tier) send tool.
+	exceptions := []string{"mcp__argus__kb_ingest", "mcp__argus__task_recycle", "mcp__argus__task_inbox", "mcp__argus__task_message_ack", "mcp__claude_ai_Slack__slack_send_message_draft",
+		"mcp__claude_ai_Gmail__create_draft", "mcp__claude_ai_Gmail__update_draft", "mcp__claude_ai_Superhuman_Mail__create_or_update_draft"}
 	for _, ex := range exceptions {
 		if !has(r.AllowTools, ex) {
 			t.Errorf("AllowTools missing reviewed exception %s", ex)
@@ -210,7 +213,7 @@ func TestDefaultResidentConfig_OutwardActionsNeverAllowed(t *testing.T) {
 			continue
 		}
 		op := tool[strings.LastIndex(tool, "__")+2:]
-		for _, prefix := range []string{"slack_", "notion-", "kb_"} {
+		for _, prefix := range []string{"slack_", "notion-calendar-", "notion-connector-", "notion-memory-", "notion-", "kb_"} {
 			if strings.HasPrefix(op, prefix) {
 				op = strings.TrimPrefix(op, prefix)
 				break
@@ -279,6 +282,51 @@ func TestResidentDefaults_NoWriteToolAllowed(t *testing.T) {
 		"mcp__claude_ai_Notion__notion-create-comment", "mcp__claude_ai_Notion__notion-create-database",
 		"mcp__claude_ai_Notion__notion-update-data-source", "mcp__claude_ai_Notion__notion-move-pages",
 		"mcp__claude_ai_Notion__notion-duplicate-page", "mcp__claude_ai_Notion__notion-delete-pages",
+		"mcp__claude_ai_Notion__notion-calendar-create-events",
+		"mcp__claude_ai_Notion__notion-calendar-update-events",
+		"mcp__claude_ai_Notion__notion-calendar-cancel-events",
+		"mcp__claude_ai_Notion__notion-update-comment",
+		"mcp__claude_ai_Notion__notion-delete-comment",
+		"mcp__claude_ai_Notion__notion-delete-databases",
+		"mcp__claude_ai_Notion__notion-create-view",
+		"mcp__claude_ai_Notion__notion-update-view",
+		"mcp__claude_ai_Notion__notion-create-folder",
+		"mcp__claude_ai_Notion__notion-update-folder",
+		"mcp__claude_ai_Notion__notion-restore-pages",
+		"mcp__claude_ai_Notion__notion-restore-version",
+		"mcp__claude_ai_Notion__notion-create-suggested-edit",
+		"mcp__claude_ai_Notion__notion-resolve-suggested-edit",
+		"mcp__claude_ai_Notion__notion-set-comment-reaction",
+		"mcp__claude_ai_Notion__notion-set-discussion-resolved",
+		"mcp__claude_ai_Notion__notion-create-meeting-note",
+		"mcp__claude_ai_Notion__notion-link-meeting-note-to-calendar-event",
+		"mcp__claude_ai_Notion__notion-create-attachment",
+		"mcp__claude_ai_Notion__notion-create-file-upload",
+		"mcp__claude_ai_Notion__notion-spawn-session",
+		"mcp__claude_ai_Notion__notion-send-message-to-session",
+		"mcp__claude_ai_Notion__notion-stop-session",
+		"mcp__claude_ai_Notion__notion-upload-skill",
+		"mcp__claude_ai_Notion__notion-update-skill-settings",
+		"mcp__claude_ai_Notion__notion-convert-page-to-skill",
+		"mcp__claude_ai_Notion__notion-convert-to-meetings-database",
+		"mcp__claude_ai_Linear__merge_diff",
+		"mcp__claude_ai_Linear__submit_diff_review",
+		"mcp__claude_ai_Linear__update_diff",
+		"mcp__claude_ai_Linear__resolve_diff_thread",
+		"mcp__claude_ai_Linear__retire_issue_label",
+		"mcp__claude_ai_Linear__retire_project_label",
+		"mcp__claude_ai_Linear__retire_initiative_label",
+		"mcp__claude_ai_Linear__restore_issue_label",
+		"mcp__claude_ai_Linear__restore_project_label",
+		"mcp__claude_ai_Linear__restore_initiative_label",
+		"mcp__claude_ai_Linear__mark_notification",
+		"mcp__claude_ai_Slack__slack_add_reaction",
+		"mcp__claude_ai_Superhuman_Mail__invite_teammate",
+		"mcp__claude_ai_Superhuman_Mail__unsubscribe",
+		"mcp__claude_ai_Superhuman_Mail__create_shared_thread_comment",
+		"mcp__claude_ai_Superhuman_Mail__react_shared_thread_comment",
+		"mcp__claude_ai_Superhuman_Mail__unshare_thread",
+		"mcp__claude_ai_Superhuman_Mail__undo_send",
 	}
 	for _, w := range writes {
 		t.Run(w, func(t *testing.T) {

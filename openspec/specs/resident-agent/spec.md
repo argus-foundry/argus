@@ -48,7 +48,7 @@ The system SHALL expose one predicate, `IsResident()`, and SHALL apply it so tha
 
 ### Requirement: The daemon keeps the resident session running
 
-While `resident.enabled` is true the daemon SHALL ensure the resident session is running: after supervisor re-attach at daemon start, when the setting becomes true, and, with bounded backoff, when the session exits unexpectedly. It SHALL resume the existing Claude session; an intentional recycle relaunches it itself with the recycle seed. A recycle seed is one-shot: every launch the daemon makes that is not the recycle itself (first start, re-enable, or a fresh launch because no resumable transcript exists) SHALL use the resident's orientation prompt, never a persisted recycle seed. The session SHALL be owned by the supervisor like any agent PTY, so it survives TUI exit and daemon restarts. When `resident.enabled` becomes false the daemon SHALL stop the session and SHALL leave the row and the vault memory folder intact. The resident SHALL use the default Claude-family backend, with optional `resident.model` and `resident.account` overrides, and SHALL run under the normal sandbox resolution.
+While `resident.enabled` is true the daemon SHALL ensure the resident session is running: after supervisor re-attach at daemon start, when the setting becomes true, and, with bounded backoff, when the session exits unexpectedly. It SHALL resume the existing Claude session; an intentional recycle relaunches it itself with the recycle seed. A recycle seed is one-shot: every launch the daemon makes that is not the recycle itself (first start, re-enable, or a fresh launch because no resumable transcript exists) SHALL use the resident's orientation prompt, never a persisted recycle seed. The session SHALL be owned by the supervisor like any agent PTY, so it survives TUI exit and daemon restarts. When `resident.enabled` becomes false the daemon SHALL stop the session and SHALL leave the row and the vault memory folder intact. When a prerequisite (the resident requirements below, or the Claude-family backend) fails on two consecutive ticks while the session is running, the daemon SHALL stop the session the same way and surface the failure reason, and SHALL start it again once the prerequisite recovers; a single failing tick SHALL NOT stop it, and the daemon's own MCP server not having bound yet is a startup wait, not a prerequisite failure. The resident SHALL use the default Claude-family backend, with optional `resident.model` and `resident.account` overrides, and SHALL run under the normal sandbox resolution. The daemon SHALL launch the resident at the resident tab's own reported pane size (the TUI's published resident entry, not the size of whatever view the user is on), falling back to the live session's PTY size (a re-attach, or a TUI that publishes no resident size) and then to 24x80.
 
 #### Scenario: Survives TUI exit and daemon bounce
 
@@ -69,6 +69,16 @@ While `resident.enabled` is true the daemon SHALL ensure the resident session is
 
 - **WHEN** `resident.enabled` is set to false
 - **THEN** the session is stopped and the row and `resident/` vault folder are unchanged
+
+#### Scenario: Prerequisite fails while running
+
+- **WHEN** the resident is running and a prerequisite later fails (for example `api.enabled` is switched off or the vault path disappears) on two consecutive ticks
+- **THEN** the session is stopped, the failure reason is shown in the resident state, and the daemon restarts it once the prerequisite recovers
+
+#### Scenario: Transient prerequisite blip
+
+- **WHEN** a prerequisite fails for a single tick and then recovers
+- **THEN** the running session is not stopped
 
 #### Scenario: Non-Claude default backend
 
@@ -132,7 +142,9 @@ The resident SHALL record durable facts (people, customers, projects, decisions)
 
 ### Requirement: Outward actions need one-key confirmation and Slack is drafts only
 
-The resident's permission policy SHALL have three tiers, configurable by `resident.allow_tools`, `resident.ask_tools` and `resident.deny_tools` with shipped defaults, and SHALL run under a non-bypass permission mode so the ask and deny tiers are enforced: read-only connector tools and `kb_*` SHALL run without a prompt; outward tools (creating, updating or deleting calendar events, responding to events, sending mail or drafts, sharing mail threads, creating Slack conversations, canvases or lists and editing them, and every Linear and Notion write or delete tool) SHALL require an explicit user confirmation through the Claude permission prompt; Slack message sending (including scheduled sends) SHALL be denied, with only `slack_send_message_draft` allowed. A pending confirmation SHALL raise the resident's waiting (`?`) signal.
+The resident's permission policy SHALL have three tiers, configurable by `resident.allow_tools`, `resident.ask_tools` and `resident.deny_tools` with shipped defaults, and SHALL run under a non-bypass permission mode so the ask and deny tiers are enforced: read-only connector tools and `kb_*` SHALL run without a prompt; outward tools (every write/send/delete/modify tool of the outward connectors (Notion, Gmail, Superhuman, Slack, Linear, Google Calendar, Granola), except draft creation/update) SHALL require an explicit user confirmation through the Claude permission prompt; Slack message sending (including scheduled sends) SHALL be denied, with draft creation/update (such as `slack_send_message_draft`) allowed; Slack send and schedule are denied. A pending confirmation SHALL raise the resident's waiting (`?`) signal.
+
+The policy SHALL be self-contained: the resident SHALL launch with setting sources restricted to `project` so the user's own settings (allow rules, hooks, plugins, model) do not apply, and only the resident's own allow list SHALL run without a prompt. The user's `permissions.deny` and `permissions.ask` rules SHALL be merged into the resident's lists (never the user's `allow` rules), its inline settings SHALL set the default permission mode and disable bypass mode, SHALL carry the account's `model` and `effortLevel` when no other model is chosen, and SHALL register the `argus coord-hook` Stop hook inline in place of the dropped user-level hook. The account's `CLAUDE.md` and user `skills/` SHALL still be provided to the resident. Sending a message to another task (`task_message_send`) SHALL require confirmation, while reading and acknowledging the resident's own inbox SHALL NOT.
 
 #### Scenario: Calendar invite asks first
 
@@ -143,6 +155,11 @@ The resident's permission policy SHALL have three tiers, configurable by `reside
 
 - **WHEN** the resident attempts `slack_send_message`, then `slack_send_message_draft`
 - **THEN** the first is denied and the second proceeds without a prompt
+
+#### Scenario: User allow rules do not widen the resident
+
+- **WHEN** the user's settings allow every tool of a connector the resident does not list
+- **THEN** the resident's launch carries none of those allow rules and the tool prompts
 
 #### Scenario: Reads do not prompt
 

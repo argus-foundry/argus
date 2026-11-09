@@ -220,10 +220,14 @@ var reservedContextKeys = map[Context][]Binding{
 // or (reason, false) to reject (keep the default).
 func bindingAllowed(ctx Context, act Action, b Binding) (string, bool) {
 	// The resident toggle is dispatched ahead of tab/modal handling and must be
-	// reachable while an agent PTY owns the keyboard, so a bare printable rune
-	// would steal ordinary typing. Require ctrl+<letter>, a named key, etc.
-	if act == ActGlobalResident && b.Key == tcell.KeyRune {
-		return "binds a bare printable key; global.resident needs a modifier (e.g. ctrl+\\) so it cannot steal typing", false
+	// reachable while an agent PTY or a text input owns the keyboard, so any
+	// unmodified key (printable rune or named key such as backspace/delete)
+	// would steal ordinary typing. Require a modifier, ctrl+<letter>, or ctrl+\.
+	if act == ActGlobalResident {
+		_, isCtrlLetter := ctrlLetters[b.Key]
+		if b.Key == tcell.KeyRune || (!isCtrlLetter && b.Key != tcell.KeyCtrlBackslash && b.Mods == 0) {
+			return "binds an unmodified key; global.resident needs a modifier (e.g. ctrl+\\) so it cannot steal typing", false
+		}
 	}
 	// Plain (unmodified) navigation keys are reserved in every context: the
 	// fast-path reverse lookup strips modifiers (eventBinding), so a plain

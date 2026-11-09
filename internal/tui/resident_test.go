@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -777,10 +779,16 @@ func TestSmoke_ResidentReturnIsDirect(t *testing.T) {
 				// terminal); the selected orchestrator stays.
 				a.heraPage.Machine().SetCoordPresent(false)
 			}
-			var hops []widget.Tab
+			var hops, persists, headerSets []widget.Tab
 			a.onSwitchTab = func(tab widget.Tab) { hops = append(hops, tab) }
+			a.onPersistLastTab = func(tab widget.Tab) { persists = append(persists, tab) }
+			a.header.SetTabObserver(func(tab widget.Tab) { headerSets = append(headerSets, tab) })
 			a.toggleResident()
 			testutil.DeepEqual(t, hops, []widget.Tab{want})
+			// A detour that bypasses the onSwitchTab seam (header.SetTab +
+			// persistLastTab straight to Tasks) would show up here.
+			testutil.DeepEqual(t, persists, []widget.Tab{want})
+			testutil.DeepEqual(t, headerSets, []widget.Tab{want})
 			testutil.Equal(t, a.header.ActiveTab(), want)
 			last, err := d.LoadLastTab()
 			testutil.NoError(t, err)
@@ -804,24 +812,49 @@ func (r *residentFixedRunner) Get(string) agent.SessionHandle { return r.sess }
 
 // TestSmoke_ResidentFirstAttachResizesPTY: a freshly bound live session is
 // resized to the pane even though the pane's seeded size already matches (no
-// width delta), via the one-shot forced resync (Q7).
+// width delta), via the one-shot forced resync (Q7). Drives the REAL call site
+// (refreshResidentTab) in both the local and the daemon-client (async probe)
+// paths, and re-attaching the SAME session must not resize again (a
+// `fresh := sess != nil` regression would SIGWINCH on every poll).
 func TestSmoke_ResidentFirstAttachResizesPTY(t *testing.T) {
-	a, _ := residentTestApp(t)
-	first, second := newRepaintSession(), newRepaintSession()
-	r := &residentFixedRunner{SessionProvider: a.runner, sess: first}
-	a.runner = r
-	_, stop := wireApp(t, a)
-	defer stop()
-	readUI(t, a.tapp, func() { a.switchTab(widget.TabResident) })
-	redrawUI(t, a)
-	readUI(t, a.tapp, func() { a.residentPane.SyncPTYSize() })
-	testutil.True(t, first.resizes.Load() >= 1)
-	// The pane size is now settled and SetSession seeds the tracked size from
-	// the pane, so only the forced resync can resize a replacement PTY.
-	readUI(t, a.tapp, func() { a.attachResidentSession(second) })
-	redrawUI(t, a)
-	readUI(t, a.tapp, func() { a.residentPane.SyncPTYSize() })
-	testutil.True(t, second.resizes.Load() >= 1)
+	for _, viaDaemon := range []bool{false, true} {
+		t.Run(fmt.Sprint("daemon=", viaDaemon), func(t *testing.T) {
+			a, _ := residentTestApp(t)
+			first, second := newRepaintSession(), newRepaintSession()
+			r := &residentFixedRunner{SessionProvider: a.runner, sess: first}
+			a.runner = r
+			if viaDaemon {
+				a.daemonClient = &dclient.Client{} // unconnected; never touches a live daemon
+			}
+			_, stop := wireApp(t, a)
+			defer stop()
+			refresh := func() {
+				readUI(t, a.tapp, func() { a.refreshResidentTab() })
+				waitForCond(t, a.tapp, "attach settled", func() bool { return !a.residentAttachPending })
+				redrawUI(t, a)
+				readUI(t, a.tapp, func() { a.residentPane.SyncPTYSize() })
+			}
+			readUI(t, a.tapp, func() { a.switchTab(widget.TabResident) })
+			waitForCond(t, a.tapp, "first bound", func() bool { return a.residentPane.Session() != nil })
+			redrawUI(t, a)
+			readUI(t, a.tapp, func() { a.residentPane.SyncPTYSize() })
+			testutil.True(t, first.resizes.Load() >= 1)
+			// Re-attaching the SAME session (every 2s poll) must not resize again.
+			before := first.resizes.Load()
+			for i := 0; i < 3; i++ {
+				refresh()
+			}
+			testutil.Equal(t, first.resizes.Load(), before)
+			// The pane size is now settled and SetSession seeds the tracked size
+			// from the pane, so only the forced resync can resize a replacement.
+			r.sess = second
+			refresh()
+			testutil.True(t, second.resizes.Load() >= 1)
+			again := second.resizes.Load()
+			refresh()
+			testutil.Equal(t, second.resizes.Load(), again)
+		})
+	}
 }
 
 // TestSmoke_ResidentReasonShownInPlaceholderAndSettings: the daemon's reason
@@ -851,5 +884,157 @@ func TestSmoke_ResidentReasonShownInPlaceholderAndSettings(t *testing.T) {
 		testutil.Contains(t, screenText(s2, 80, 24), "Not running: waiting for the Argus MCP server")
 		a.applyResidentState(daemon.ResidentStateResp{})
 		testutil.Equal(t, a.settings.residentReason, "")
+		testutil.Equal(t, a.residentSt.reason, "")
+		s3 := drawSim(t)
+		a.settings.Draw(s3)
+		s3.Show()
+		testutil.False(t, strings.Contains(screenText(s3, 80, 24), "waiting for the Argus MCP server"))
+		a.switchTab(widget.TabResident)
 	})
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		sim.Show()
+		testutil.False(t, strings.Contains(screenText(sim, 80, 24), "waiting for the Argus MCP server"))
+	})
+}
+
+// TestSmoke_ResidentRunningDropsReason: the daemon reports prerequisite reasons
+// even while the session runs; a running resident shows no "Not running:" line
+// in Settings and no placeholder note.
+func TestSmoke_ResidentRunningDropsReason(t *testing.T) {
+	a, _ := residentTestApp(t)
+	sim, stop := wireApp(t, a)
+	defer stop()
+	const reason = "prereq-reason-xyz"
+	readUI(t, a.tapp, func() {
+		a.switchTab(widget.TabResident)
+		a.applyResidentState(daemon.ResidentStateResp{Running: true, Reason: reason})
+		testutil.Equal(t, a.residentSt.reason, "")
+		testutil.Equal(t, a.settings.residentReason, "")
+	})
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		sim.Show()
+		testutil.False(t, strings.Contains(screenText(sim, 80, 24), reason))
+		a.switchTab(widget.TabSettings)
+		selectRowInCategory(t, a.settings, catResident, srResident, resKeyName)
+		a.settings.SetRect(0, 0, 100, 30)
+		s2 := drawSim(t)
+		a.settings.Draw(s2)
+		s2.Show()
+		text := screenText(s2, 80, 24)
+		testutil.False(t, strings.Contains(text, "Not running:"))
+		testutil.False(t, strings.Contains(text, reason))
+		// Control: the same reason while NOT running is shown.
+		a.applyResidentState(daemon.ResidentStateResp{Running: false, Reason: reason})
+		s3 := drawSim(t)
+		a.settings.Draw(s3)
+		s3.Show()
+		testutil.Contains(t, screenText(s3, 80, 24), "Not running: "+reason)
+	})
+}
+
+// writeResidentLog seeds the dead resident's session log so its tab replays it
+// (instead of drawing the "Session not running" placeholder).
+func writeResidentLog(t *testing.T, d *db.DB) {
+	t.Helper()
+	row, err := d.ResidentTask()
+	testutil.NoError(t, err)
+	home := os.Getenv("HOME")
+	testutil.NoError(t, os.MkdirAll(filepath.Join(home, ".argus", "sessions"), 0o755))
+	testutil.NoError(t, os.WriteFile(filepath.Join(home, ".argus", "sessions", row.ID+".log"),
+		[]byte(strings.Repeat("replayed resident output\r\n", 30)), 0o644))
+}
+
+// TestSmoke_ResidentReasonBannerOverReplay: once the resident has run, its
+// stopped tab replays the dead session's log, so the daemon's not-running
+// reason shows as a one-line banner over the replay; it is absent when the
+// resident runs or the reason clears.
+func TestSmoke_ResidentReasonBannerOverReplay(t *testing.T) {
+	a, d := residentTestApp(t)
+	writeResidentLog(t, d)
+	sim, stop := wireApp(t, a)
+	defer stop()
+	const reason = "waiting for the Argus MCP server"
+	show := func() string {
+		redrawUI(t, a)
+		var text string
+		readUI(t, a.tapp, func() {
+			sim.Show()
+			text = screenText(sim, 80, 24)
+		})
+		return text
+	}
+	readUI(t, a.tapp, func() {
+		a.switchTab(widget.TabResident)
+		a.applyResidentState(daemon.ResidentStateResp{Reason: reason})
+	})
+	waitForCond(t, a.tapp, "replay loaded", func() bool { return a.residentPane.HasContent() })
+	text := show()
+	testutil.Contains(t, text, reason)
+	testutil.False(t, strings.Contains(text, "Session not running"))
+	// Running: the reason is dropped, so the banner goes with it.
+	readUI(t, a.tapp, func() { a.applyResidentState(daemon.ResidentStateResp{Running: true, Reason: reason}) })
+	testutil.False(t, strings.Contains(show(), reason))
+	// Not running again, then the reason clears.
+	readUI(t, a.tapp, func() { a.applyResidentState(daemon.ResidentStateResp{Reason: reason}) })
+	testutil.Contains(t, show(), reason)
+	readUI(t, a.tapp, func() { a.applyResidentState(daemon.ResidentStateResp{}) })
+	testutil.False(t, strings.Contains(show(), reason))
+}
+
+// TestInitialPTYLayout_ResidentMatchesPaneRect: the published resident size is
+// the resident pane's real inner rect (full width minus border, between the
+// header and status bar) and is distinct from Active on a narrower view.
+func TestInitialPTYLayout_ResidentMatchesPaneRect(t *testing.T) {
+	for _, size := range [][2]int{{239, 40}, {120, 30}} {
+		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
+			a, d := residentTestApp(t)
+			screen, stop := wireApp(t, a)
+			defer stop()
+			readUI(t, a.tapp, func() {
+				screen.SetSize(size[0], size[1])
+				a.switchTab(widget.TabHera) // Active = a narrower worker pane
+			})
+			a.tapp.QueueUpdateDraw(func() {})
+			waitRerender(t, func() bool {
+				s, err := d.InitialPTYSize(db.InitialPTYRoleResident, time.Now())
+				return err == nil && s.Valid()
+			})
+			readUI(t, a.tapp, func() { a.switchTab(widget.TabResident) })
+			redrawUI(t, a)
+			var want db.PTYSize
+			readUI(t, a.tapp, func() {
+				_, _, w, h := a.residentPane.GetRect()
+				want = db.PTYSize{Rows: uint16(h - 2), Cols: uint16(w - 2)} //nolint:gosec // simulation-screen pane dims; pane draws its own 1-cell border
+			})
+			waitRerender(t, func() bool {
+				s, err := d.InitialPTYSize(db.InitialPTYRoleResident, time.Now())
+				return err == nil && s == want
+			})
+			active, err := d.InitialPTYSize("", time.Now())
+			testutil.NoError(t, err)
+			testutil.Equal(t, active, want) // on the resident tab Active is the same full-width pane
+		})
+	}
+}
+
+// The resident size is independent of the active view: while on the Hera tab
+// Active is the (narrow) worker pane but Resident stays the full-width pane.
+func TestInitialPTYLayout_ResidentIndependentOfActive(t *testing.T) {
+	a, d := residentTestApp(t)
+	screen := tcell.NewSimulationScreen("")
+	testutil.NoError(t, screen.Init())
+	defer screen.Fini()
+	screen.SetSize(239, 40)
+	a.nowFn = time.Now
+	a.header.SetTab(widget.TabHera)
+	a.publishInitialPTYLayout(screen)
+	waitPTYPublication(t, &a.initialPTYPublisher)
+	res, err := d.InitialPTYSize(db.InitialPTYRoleResident, time.Now())
+	testutil.NoError(t, err)
+	active, err := d.InitialPTYSize("", time.Now())
+	testutil.NoError(t, err)
+	testutil.Equal(t, res, db.PTYSize{Rows: 36, Cols: 237})
+	testutil.Equal(t, active, db.PTYSize{Rows: 36, Cols: 101})
 }

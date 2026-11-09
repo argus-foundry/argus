@@ -75,14 +75,16 @@ const residentNudgeLineFormat = "\n[argus] new message from task %s (%s, kind=%s
 
 const maxNudgeNameRunes = 60
 
-// sanitizeNudgeName makes a task name safe to write into a peer's PTY: only
-// printable ASCII survives (no ESC/CSI, no newlines, no quotes or brackets that
-// could fake a prompt), whitespace runs collapse, and it is length-capped.
+// sanitizeNudgeName makes a task name safe to write into a peer's PTY. It is a
+// strict allowlist — [A-Za-z0-9._-], everything else becomes "_" — so a name
+// can never carry prose, spaces, punctuation or control bytes that could read
+// as an instruction or fake the doorbell's structure (task names are slugs, so
+// real names pass through unchanged). It is length-capped.
 func sanitizeNudgeName(name string) string {
 	var b strings.Builder
 	n := 0
 	for _, r := range name {
-		if r < 0x20 || r > 0x7e || r == '"' || r == '[' || r == ']' || r == '`' {
+		if !nudgeNameRune(r) {
 			r = '_'
 		}
 		if n >= maxNudgeNameRunes {
@@ -91,11 +93,15 @@ func sanitizeNudgeName(name string) string {
 		b.WriteRune(r)
 		n++
 	}
-	out := strings.TrimSpace(b.String())
+	out := strings.Trim(b.String(), "_")
 	if out == "" {
 		return "unnamed"
 	}
 	return out
+}
+
+func nudgeNameRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-'
 }
 
 // nudgeLine builds the doorbell for recipient from caller.

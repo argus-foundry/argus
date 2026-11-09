@@ -1,12 +1,16 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -235,4 +239,198 @@ func claudeConfigDirFromEnv(env []string) string {
 		}
 	}
 	return dir
+}
+
+// residentExecutable resolves the argus binary the resident's inline Stop hook
+// runs. A package var so tests can pin it.
+var residentExecutable = os.Executable
+
+// residentStopHookCommand is the inline `coord-hook` Stop hook that replaces the
+// user-level one the resident's restricted setting sources drop. The global
+// registration is the bare `argus coord-hook` (resolved through PATH); the
+// resident pins the absolute path of the binary doing the spawn (daemon or
+// supervisor, both the argus executable) so the hook never depends on PATH
+// or a hard-coded install location. Falls back to the bare name.
+func residentStopHookCommand() string {
+	exe, err := residentExecutable()
+	if err != nil || exe == "" {
+		return "argus coord-hook"
+	}
+	if !shellSafeWord.MatchString(exe) {
+		exe = shellQuote(exe)
+	}
+	return exe + " coord-hook"
+}
+
+// shellSafeWord matches a path needing no shell quoting.
+var shellSafeWord = regexp.MustCompile(`^[A-Za-z0-9_./+@%:,=-]+$`)
+
+// residentUserSettings is the slice of an account's user settings.json the
+// resident re-supplies: restrictions (deny/ask) and the model it should keep.
+// Allow rules are never read.
+type residentUserSettings struct {
+	Ask, Deny     []string
+	Model, Effort string
+}
+
+// residentAccountDir is the Claude config directory the resident's account
+// loads user-level files from: the task's account dir, or for the default
+// account $CLAUDE_CONFIG_DIR when set, else ~/.claude. Empty when unresolvable.
+func residentAccountDir(task *model.Task, cfg config.Config) string {
+	dir, err := ClaudeConfigDirForTask(task, cfg)
+	if err != nil {
+		uxlog.Log("[resident] account config dir unresolved (skipping user-level files): %v", err)
+		slog.Warn("[resident] account config dir unresolved", "err", err)
+		return ""
+	}
+	if _, explicit, _ := cfg.ClaudeConfigDir(task.Account); !explicit && dir == config.DefaultClaudeDir() {
+		if env := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); env != "" {
+			dir = filepath.Clean(config.ExpandHome(env))
+		}
+	}
+	return dir
+}
+
+// readResidentUserSettings best-effort reads the account's settings.json. A
+// missing or unreadable file yields the zero value (the resident's own lists).
+func readResidentUserSettings(task *model.Task, cfg config.Config) residentUserSettings {
+	dir := residentAccountDir(task, cfg)
+	if dir == "" {
+		return residentUserSettings{}
+	}
+	path := filepath.Join(dir, claudeSettingsFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			uxlog.Log("[resident] user settings unreadable (using the resident's own rules only): %v", err)
+			slog.Warn("[resident] user settings unreadable", "path", path, "err", err)
+		}
+		return residentUserSettings{}
+	}
+	var doc struct {
+		Permissions struct {
+			Ask  []any `json:"ask"`
+			Deny []any `json:"deny"`
+		} `json:"permissions"`
+		Model       any `json:"model"`
+		EffortLevel any `json:"effortLevel"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		uxlog.Log("[resident] user settings unparseable (using the resident's own rules only): %v", err)
+		slog.Warn("[resident] user settings unparseable", "path", path, "err", err)
+		return residentUserSettings{}
+	}
+	strs := func(in []any) []string {
+		var out []string
+		for _, v := range in {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	str := func(v any) string {
+		s, _ := v.(string)
+		return strings.TrimSpace(s)
+	}
+	return residentUserSettings{
+		Ask: strs(doc.Permissions.Ask), Deny: strs(doc.Permissions.Deny),
+		Model: str(doc.Model), Effort: str(doc.EffortLevel),
+	}
+}
+
+// mergeRules returns own followed by extra, without duplicates.
+func mergeRules(own, extra []string) []string {
+	out := append([]string(nil), own...)
+	seen := make(map[string]bool, len(own)+len(extra))
+	for _, r := range own {
+		seen[r] = true
+	}
+	for _, r := range extra {
+		if !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// readResidentUserClaudeMD returns the account's CLAUDE.md, or "" when absent.
+func readResidentUserClaudeMD(task *model.Task, cfg config.Config) string {
+	dir := residentAccountDir(task, cfg)
+	if dir == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			uxlog.Log("[resident] user CLAUDE.md unreadable (skipping): %v", err)
+			slog.Warn("[resident] user CLAUDE.md unreadable", "err", err)
+		}
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+// materializeResidentPrompt writes routingPath's content (when set) followed by
+// the user CLAUDE.md as one content-addressed file and returns its path.
+func materializeResidentPrompt(routingPath, claudeMD string) (string, error) {
+	var buf []byte
+	if routingPath != "" {
+		b, err := os.ReadFile(routingPath)
+		if err != nil {
+			return "", fmt.Errorf("read routing prompt: %w", err)
+		}
+		buf = append(buf, b...)
+		buf = append(buf, '\n')
+	}
+	buf = append(buf, "# User instructions (CLAUDE.md)\n\n"...)
+	buf = append(buf, claudeMD...)
+	buf = append(buf, '\n')
+	root, err := argusCacheDir("resident-prompt")
+	if err != nil {
+		return "", err
+	}
+	dir, err := materializeContentAddressed(root, map[string][]byte{"system-prompt.md": buf})
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "system-prompt.md"), nil
+}
+
+// ensureResidentUserSkillsDir returns an --add-dir root whose .claude/skills
+// links to the account's user skills dir, or "" when the account has none.
+// Claude discovers skills only under <added dir>/.claude/skills; the link lives
+// in the Argus cache, keyed by the source path so accounts never share one.
+func ensureResidentUserSkillsDir(task *model.Task, cfg config.Config) string {
+	dir := residentAccountDir(task, cfg)
+	if dir == "" {
+		return ""
+	}
+	src := filepath.Join(dir, "skills")
+	if fi, err := os.Stat(src); err != nil || !fi.IsDir() {
+		return ""
+	}
+	cache, err := argusCacheDir("resident-skills")
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(src))
+	root := filepath.Join(cache, hex.EncodeToString(sum[:])[:16])
+	link := filepath.Join(root, ".claude", "skills")
+	if cur, err := os.Readlink(link); err == nil && cur == src {
+		return root
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		uxlog.Log("[resident] user skills link dir failed (skipping user skills): %v", err)
+		slog.Warn("[resident] user skills link dir failed", "err", err)
+		return ""
+	}
+	_ = os.Remove(link)
+	if err := os.Symlink(src, link); err != nil {
+		uxlog.Log("[resident] user skills link failed (skipping user skills): %v", err)
+		slog.Warn("[resident] user skills link failed", "err", err)
+		return ""
+	}
+	return root
 }

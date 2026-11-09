@@ -1988,6 +1988,22 @@ func drawClosedOutBanner(screen tcell.Screen, x, y, width, height int) {
 	}
 }
 
+// drawReasonBanner paints a one-line, closed-out-banner-styled reason over the
+// first row of a replayed (not-running) pane: the row is blanked first so the
+// text never mixes with replay cells. Truncated to the pane width.
+func drawReasonBanner(screen tcell.Screen, x, y, width int, note string) {
+	if width <= 0 {
+		return
+	}
+	line := " " + note
+	if utf8.RuneCountInString(line) > width {
+		r := []rune(line)
+		line = string(r[:width])
+	}
+	widget.FillArea(screen, x, y, width, 1, ' ', theme.StyleClipboardHint)
+	widget.DrawText(screen, x, y, width, line, theme.StyleClipboardHint)
+}
+
 // --- Draw ---
 
 func (tp *TerminalPane) Draw(screen tcell.Screen) {
@@ -2120,6 +2136,14 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 		return
 	}
 
+	if note := tp.placeholderNote; note != "" && !alive && (sess != nil || tp.HasContent()) {
+		// The pane is replaying a dead session's log instead of drawing the
+		// placeholder, so the placeholder's reason line would never show. Overlay
+		// the same reason as a one-line banner on the pane's first row once the
+		// replay has painted (deferred, so every replay return path is covered).
+		defer drawReasonBanner(screen, x, y, width, note)
+	}
+
 	if sess == nil && !tp.HasContent() {
 		if pending {
 			// Show launch banner while worktree is being created.
@@ -2147,7 +2171,7 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 		// never leak a prior frame's cells regardless of which path got here).
 		widget.FillArea(screen, x, y, width, height, ' ', tcell.StyleDefault)
 		widget.DrawText(screen, midX, midY, width, msg, theme.StyleDimmed)
-		if note := tp.placeholderNote; note != "" && height > 2 {
+		if note := tp.placeholderNote; note != "" && midY+2 < y+height {
 			nx := x + (width-utf8.RuneCountInString(note))/2
 			if nx < x {
 				nx = x

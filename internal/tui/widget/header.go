@@ -54,6 +54,9 @@ var (
 type Header struct {
 	*tview.Box
 	activeTab Tab
+	// tabObserver (test seam) is called on every SetTab so a navigation that
+	// bypasses the App's switchTab seam is still visible.
+	tabObserver func(Tab)
 
 	// tabLabels holds the per-slot display text. Initialized from TabLabels;
 	// individual slots can be overridden via SetTabLabel. Width computations and
@@ -128,7 +131,13 @@ func (h *Header) TabLabel(t Tab) string {
 // SetTab changes the active tab.
 func (h *Header) SetTab(t Tab) {
 	h.activeTab = t
+	if h.tabObserver != nil {
+		h.tabObserver(t)
+	}
 }
+
+// SetTabObserver registers fn to be called on every SetTab (test seam).
+func (h *Header) SetTabObserver(fn func(Tab)) { h.tabObserver = fn }
 
 // ActiveTab returns the current tab.
 func (h *Header) ActiveTab() Tab {

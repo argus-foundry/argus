@@ -63,7 +63,7 @@ The `global.resident` action (default `ctrl+\`) SHALL be dispatched unconditiona
 
 ### Requirement: The resident pane resizes on first attach and explains why it is not running
 
-When a live session is newly bound to the resident pane, the TUI SHALL schedule a one-shot forced PTY resync so the session is resized to the pane even when no width delta would be detected. The resident pane SHALL NOT use the Hera size-drift kill-and-resume kick machinery: that machinery is coupled to Hera pane bindings and its restart path would race the daemon's ensure loop. The TUI SHALL carry `ResidentStateResp.Reason` from its existing poll (UI goroutine only, control bytes stripped) into the resident tab's no-session placeholder and into the Settings -> Resident detail pane (`Not running: <reason>`), and SHALL clear it when the daemon reports none.
+When a live session is newly bound to the resident pane, the TUI SHALL schedule a one-shot forced PTY resync so the session is resized to the pane even when no width delta would be detected. The resident pane SHALL NOT use the Hera size-drift kill-and-resume kick machinery: that machinery is coupled to Hera pane bindings and its restart path would race the daemon's ensure loop. The TUI SHALL carry `ResidentStateResp.Reason` from its existing poll (UI goroutine only, control bytes stripped) into the resident tab's no-session placeholder and into the Settings -> Resident detail pane (`Not running: <reason>`), and SHALL clear it when the daemon reports none. Once the resident has run, its stopped tab replays the dead session's log instead of drawing the placeholder, so while the resident is not running and a reason exists the pane SHALL also draw the reason as a one-line banner on its first inner row over the replay (UI goroutine only, truncated to the pane width, no screen sync); the banner SHALL be absent while a live session is attached and once the reason is empty. The TUI SHALL publish a dedicated resident size in its initial-PTY layout report, equal to the full-width resident pane's inner rect (the host screen minus the header row, the status bar row and the pane's one-cell borders), independent of whichever view is active.
 
 #### Scenario: Replacement session is resized
 
@@ -74,6 +74,16 @@ When a live session is newly bound to the resident pane, the TUI SHALL schedule 
 
 - **WHEN** the daemon reports a reason such as "waiting for the Argus MCP server" and no session is attached
 - **THEN** the resident tab placeholder and Settings -> Resident both show it, and both clear when the reason is empty
+
+#### Scenario: Reason visible over a replayed pane
+
+- **WHEN** the resident has run before, so its stopped tab replays the dead session's log, and the daemon reports a reason
+- **THEN** a one-line banner with the reason is drawn over the replay, and it disappears when the resident runs or the reason clears
+
+#### Scenario: Resident size is its own pane
+
+- **WHEN** the user is on a view narrower than the resident pane (for example a Hera worker pane)
+- **THEN** the published resident size is still the full-width resident pane's inner size
 
 ### Requirement: Rail box shows the resident's attention state beside needs-attention
 

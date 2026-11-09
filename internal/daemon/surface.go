@@ -219,7 +219,11 @@ const (
 	//     resident spawn also exports ARGUS_RESIDENT=1 (its Stop hook gates the
 	//     resident lookup on it), strips bypass flags with a shell-words parser
 	//     and refuses an unparseable command, and carries the widened default
-	//     ask list.
+	//     ask list. It launches with --setting-sources project and an inline
+	//     --settings carrying its permissions (user deny/ask merged, never user
+	//     allow), defaultMode, disableBypassPermissionsMode and its own Stop
+	//     coord-hook; the user's CLAUDE.md rides the appended system prompt and
+	//     user skills an --add-dir symlink root.
 	SupervisorSpawnSurface = 40
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -527,7 +531,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "db9983701cfa74ae1092fca18bdf05382295402dd995a758ff7f7bb3fcbb05ff"
+	SpawnSurfaceDigest  = "2278471682dd4664462990aa460eeb790de5b895a66d62134cb1a8bdea83e0ae"
 	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 

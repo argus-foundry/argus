@@ -367,6 +367,7 @@ type App struct {
 	residentMarkViewedFn  func() error                             // test seam; default daemonClient.ResidentMarkViewed
 	residentStateFn       func() (daemon.ResidentStateResp, error) // test seam; default daemonClient.ResidentState
 	onSwitchTab           func(widget.Tab)                         // test seam: records every switchTab target
+	onPersistLastTab      func(widget.Tab)                         // test seam: records every last-tab persistence write
 	agentState            agentview.State
 	daemonConnected       bool
 	tasks                 []*model.Task
@@ -5424,6 +5425,9 @@ func lastTabString(t widget.Tab) string {
 // local-only *db.DB type-assert, mirroring the hera rail state and
 // hide-hera-managed persistence sites. No-op in --remote mode.
 func (a *App) persistLastTab(t widget.Tab) {
+	if a.onPersistLastTab != nil {
+		a.onPersistLastTab(t)
+	}
 	d, ok := a.db.(*db.DB)
 	if !ok {
 		return

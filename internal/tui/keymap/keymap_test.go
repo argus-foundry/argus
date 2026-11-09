@@ -425,7 +425,7 @@ func TestAgentRerender_NoDefaultCollision(t *testing.T) {
 // leave every one of them unbound in the agent context so they reach the PTY.
 func TestAgentCtx_ComposerChordsNotBound(t *testing.T) {
 	km := DefaultKeymap()
-	for _, k := range []tcell.Key{tcell.KeyCtrlA, tcell.KeyCtrlE, tcell.KeyCtrlU, tcell.KeyCtrlW, tcell.KeyCtrlK, tcell.KeyCtrlX, tcell.KeyCtrlB} {
+	for _, k := range []tcell.Key{tcell.KeyCtrlA, tcell.KeyCtrlE, tcell.KeyCtrlU, tcell.KeyCtrlW, tcell.KeyCtrlK, tcell.KeyCtrlO, tcell.KeyCtrlX, tcell.KeyCtrlB} {
 		if act, ok := km.Resolve(CtxAgent, ev(k, 0, 0)); ok {
 			t.Errorf("ctrl chord %v unexpectedly bound in CtxAgent to %s", k, act)
 		}
@@ -454,7 +454,7 @@ func TestAgentRerender_PlainKeyRejectedAndRebindHonored(t *testing.T) {
 // warning and keeps the default; modified/named keys are accepted.
 func TestResidentRejectsBareRuneBinding(t *testing.T) {
 	t.Run("bare rune rejected", func(t *testing.T) {
-		for _, spec := range []string{"~", "x", "0"} {
+		for _, spec := range []string{"~", "x", "0", "backspace", "delete", "enter", "tab", "escape", "up", "home", "pgdn", "space"} {
 			km, warns := Build(config.Keybindings{Global: map[string]string{"resident": spec}})
 			testutil.Equal(t, len(warns), 1)
 			testutil.Equal(t, warns[0].Action, ActGlobalResident)
@@ -471,6 +471,10 @@ func TestResidentRejectsBareRuneBinding(t *testing.T) {
 		got, ok := km.Resolve(CtxGlobal, ev(tcell.KeyCtrlX, 0, 0))
 		testutil.True(t, ok)
 		testutil.Equal(t, got, ActGlobalResident)
+		for _, spec := range []string{`ctrl+\`, "ctrl+x", "shift+up"} {
+			_, warns := Build(config.Keybindings{Global: map[string]string{"resident": spec}})
+			testutil.Equal(t, len(warns), 0)
+		}
 	})
 	t.Run("other global actions keep rune bindings", func(t *testing.T) {
 		_, warns := Build(config.Keybindings{Global: map[string]string{"tab_resident": "9"}})

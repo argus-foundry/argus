@@ -31,6 +31,9 @@ var (
 	// residentStableAfter is how long a session must stay alive before the
 	// failure count resets.
 	residentStableAfter = 2 * time.Minute
+	// residentPrereqStopAfter is the consecutive-tick count (about 10s) a
+	// prerequisite must fail before a running session is stopped.
+	residentPrereqStopAfter = 2
 )
 
 // residentMaxSendBytes caps one ResidentSend body (matches the task-message cap).
@@ -91,6 +94,11 @@ type residentManager struct {
 	// so the reason (and the log-on-change dedup) is not wiped while waiting
 	// for the next attempt. Cleared on a live session, success, or disable.
 	startFailure string
+	// prereqFails counts consecutive ticks a prerequisite (or the Claude-backend
+	// requirement) has failed; a running session is stopped only once it reaches
+	// residentPrereqStopAfter, so a transient blip (vault on a briefly
+	// unmounted drive) does not kill it.
+	prereqFails int
 }
 
 func newResidentManager(database *db.DB, runner residentRunner, cfgFn func() config.Config) *residentManager {
@@ -158,28 +166,54 @@ func (m *residentManager) reason(msg string) {
 	}
 }
 
+// prereqFailed handles a failed prerequisite. It always surfaces the reason;
+// from the residentPrereqStopAfter-th consecutive failure on it also stops a running
+// session, so the resident fails visibly instead of lingering after (say)
+// api.enabled is switched off. Stop runs before the reason is set so nothing
+// can clear it. The MCP-not-ready wait is a startup state, not a prerequisite,
+// and never comes here.
+func (m *residentManager) prereqFailed(msg string) {
+	m.mu.Lock()
+	m.prereqFails++
+	stop := m.prereqFails >= residentPrereqStopAfter
+	m.mu.Unlock()
+	if stop {
+		m.stopIfRunning("prerequisite failed: " + msg)
+	}
+	m.reason(msg)
+}
+
 // tick runs one ensure-running pass.
 func (m *residentManager) tick() {
 	cfg := m.cfgFn()
 
 	if !cfg.Resident.Enabled {
+		m.mu.Lock()
+		m.prereqFails = 0
+		m.mu.Unlock()
 		m.reason("")
 		m.stopIfRunning("disabled")
 		return
 	}
 	if err := cfg.ResidentPrereq(); err != nil {
-		m.reason(err.Error())
+		m.prereqFailed(err.Error())
 		return
 	}
 	if m.mcpReady != nil && !m.mcpReady() {
+		m.mu.Lock()
+		m.prereqFails = 0
+		m.mu.Unlock()
 		m.reason("waiting for the Argus MCP server")
 		return
 	}
 	backend, err := residentBackend(cfg)
 	if err != nil {
-		m.reason(err.Error())
+		m.prereqFailed(err.Error())
 		return
 	}
+	m.mu.Lock()
+	m.prereqFails = 0
+	m.mu.Unlock()
 	workDir := db.ResidentWorkDir()
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		m.reason(fmt.Sprintf("create %s: %v", workDir, err))
@@ -262,15 +296,17 @@ func (m *residentManager) start(task *model.Task, cfg config.Config, backend str
 		m.failStart(fmt.Sprintf("persist resident row: %v", err))
 		return
 	}
-	// Launch at the freshest viewer-reported pane size (the same resolution a
-	// revive/recycle uses) so the resident commits history at the width its tab
-	// will show, instead of always 24x80. Falls back to the live session's size
-	// (a re-attach) and then 24x80.
+	// Launch at the viewer-reported size of the resident tab's OWN pane
+	// (db.InitialPTYRoleResident), not Active — Active is whatever view the user
+	// is on (a side-paneled agent view, a Hera worker pane), which would commit
+	// history at a width the resident tab can never repair. Falls back to the
+	// live session's size (a re-attach, or an older TUI that publishes no
+	// resident size) and then 24x80.
 	var sizer interface{ PTYSize() (int, int) }
 	if sess := m.runner.Get(task.ID); sess != nil {
 		sizer = sess
 	}
-	rows, cols, source := resolveSpawnSize(m.db, "", sizer, m.now())
+	rows, cols, source := resolveSpawnSize(m.db, db.InitialPTYRoleResident, sizer, m.now())
 	residentLog("[resident] spawn size source=%s rows=%d cols=%d", source, rows, cols)
 	_, reattached, err := m.runner.StartOrReattach(task, cfg, rows, cols, resume)
 	if err != nil {

@@ -165,10 +165,11 @@ type Family struct {
 	// PermissionFlagTokens.
 	PermissionFlags      func(mode string) string
 	PermissionFlagTokens []string
-	// PermissionRulesFlag delivers per-tool ask/deny rules (the resident's
-	// three-tier policy, add-resident-agent D6) as a per-launch flag; nil means
-	// the family cannot enforce them. Returns "" when both lists are empty.
-	PermissionRulesFlag func(allow, ask, deny []string) string
+	// PermissionRulesFlag delivers the resident's self-contained permission
+	// policy (three-tier tool rules, add-resident-agent D6, plus the setting
+	// sources / inline hook that isolate it from user settings) as per-launch
+	// flags; nil means the family cannot enforce it.
+	PermissionRulesFlag func(p ResidentPolicy) string
 	// StripPermissionFlags removes permission-mode flags from a backend command
 	// so the resident can be forced out of bypass modes (ask rules do not
 	// prompt under bypass).
@@ -231,70 +232,117 @@ func claudeMCPFlag(url string) string {
 	return " --mcp-config " + shellQuote(string(mcpConfig))
 }
 
-// claudePermissionRulesFlag delivers ask/deny tool rules as an inline
-// --settings JSON (permissions.allow / ask / deny). Settings rules are
-// additive with the user's own settings files, and deny always wins.
-func claudePermissionRulesFlag(allow, ask, deny []string) string {
-	if len(allow) == 0 && len(ask) == 0 && len(deny) == 0 {
-		return ""
+// ResidentPolicy is everything a family needs to make the resident's launch
+// self-contained: its three tool tiers plus the inline-settings replacements
+// for the user-level pieces a restricted setting-sources drops.
+type ResidentPolicy struct {
+	Allow, Ask, Deny []string
+	// HookCommand is the inline Stop hook (`<argus> coord-hook`) that replaces
+	// the user-level hook the restricted setting sources drop. Empty omits it.
+	HookCommand string
+	// Model and Effort carry the account settings' model / effortLevel so the
+	// resident does not silently change model when user settings are dropped.
+	Model, Effort string
+}
+
+// claudePermissionRulesFlag makes the resident's Claude launch self-contained:
+// `--setting-sources project` drops every user-level setting (allow rules,
+// hooks, plugins, model), and an inline --settings JSON re-supplies exactly
+// the resident's own policy. Without that, the user's wildcard allow rules
+// would auto-approve any connector tool the resident does not list. ask beats
+// allow, deny removes the tool, and bypass mode is disabled outright.
+func claudePermissionRulesFlag(p ResidentPolicy) string {
+	perms := map[string]any{
+		"defaultMode":                  "default",
+		"disableBypassPermissionsMode": "disable",
 	}
-	perms := map[string]any{}
-	if len(allow) > 0 {
-		perms["allow"] = allow
+	if len(p.Allow) > 0 {
+		perms["allow"] = p.Allow
 	}
-	if len(ask) > 0 {
-		perms["ask"] = ask
+	if len(p.Ask) > 0 {
+		perms["ask"] = p.Ask
 	}
-	if len(deny) > 0 {
-		perms["deny"] = deny
+	if len(p.Deny) > 0 {
+		perms["deny"] = p.Deny
 	}
-	raw, _ := json.Marshal(map[string]any{"permissions": perms})
-	return " --settings " + shellQuote(string(raw))
+	settings := map[string]any{"permissions": perms}
+	if p.HookCommand != "" {
+		settings["hooks"] = map[string]any{"Stop": []any{
+			map[string]any{"hooks": []any{map[string]any{"type": "command", "command": p.HookCommand}}},
+		}}
+	}
+	if p.Model != "" {
+		settings["model"] = p.Model
+	}
+	if p.Effort != "" {
+		settings["effortLevel"] = p.Effort
+	}
+	raw, _ := json.Marshal(settings)
+	return " --setting-sources project --settings " + shellQuote(string(raw))
 }
 
 // shellWord is one top-level shell word: its half-open byte range in the
-// source string (quotes and escapes intact) and its unquoted-literal flag.
+// source string (quotes and escapes intact) and its POSIX quote-removed value.
 type shellWord struct {
 	start, end int
-	// plain is true when the word contains no quote or backslash, so its
-	// text is exactly its value and can be compared against a flag name.
-	plain bool
+	// value is the word after quote removal (what sh passes as the argument),
+	// so `"--flag"`, `--flag""` and `'--flag'` all compare equal to --flag.
+	value string
 }
+
+func isShellSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
 // splitShellWords tokenizes command with POSIX word rules (whitespace
 // separates; single quotes, double quotes with backslash escapes, and
-// backslash escapes group), returning each word's original byte range. An
+// backslash escapes group; an unquoted backslash-newline is a line
+// continuation, i.e. removed, and a separator when it sits between words),
+// returning each word's original byte range and quote-removed value. An
 // unterminated quote or trailing backslash returns an error.
 func splitShellWords(command string) ([]shellWord, error) {
 	var words []shellWord
 	i, n := 0, len(command)
 	for i < n {
-		if c := command[i]; c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+		if isShellSpace(command[i]) {
 			i++
 			continue
 		}
-		w := shellWord{start: i, plain: true}
+		if command[i] == '\\' && i+1 < n && command[i+1] == '\n' {
+			i += 2 // line continuation between words
+			continue
+		}
+		w := shellWord{start: i}
+		var val strings.Builder
 		for i < n {
 			c := command[i]
-			if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			if isShellSpace(c) {
 				break
 			}
 			switch c {
 			case '\'':
-				w.plain = false
 				j := strings.IndexByte(command[i+1:], '\'')
 				if j < 0 {
 					return nil, errors.New("unterminated single quote")
 				}
+				val.WriteString(command[i+1 : i+1+j])
 				i += j + 2
 			case '"':
-				w.plain = false
 				i++
 				for {
 					if i >= n {
 						return nil, errors.New("unterminated double quote")
 					}
 					if command[i] == '\\' {
+						if i+1 >= n {
+							return nil, errors.New("unterminated double quote")
+						}
+						switch command[i+1] {
+						case '$', '`', '"', '\\':
+							val.WriteByte(command[i+1])
+						case '\n':
+						default:
+							val.WriteByte('\\')
+							val.WriteByte(command[i+1])
+						}
 						i += 2
 						continue
 					}
@@ -302,19 +350,24 @@ func splitShellWords(command string) ([]shellWord, error) {
 						i++
 						break
 					}
+					val.WriteByte(command[i])
 					i++
 				}
 			case '\\':
-				w.plain = false
 				if i+1 >= n {
 					return nil, errors.New("trailing backslash")
 				}
+				if command[i+1] != '\n' {
+					val.WriteByte(command[i+1])
+				}
 				i += 2
 			default:
+				val.WriteByte(c)
 				i++
 			}
 		}
 		w.end = i
+		w.value = val.String()
 		words = append(words, w)
 	}
 	return words, nil
@@ -322,45 +375,43 @@ func splitShellWords(command string) ([]shellWord, error) {
 
 // stripClaudePermissionFlags drops --dangerously-skip-permissions,
 // --allow-dangerously-skip-permissions and --permission-mode (both "--permission-mode X"
-// and "--permission-mode=X" forms) from a command. Only top-level unquoted
-// words are considered, so a quoted argument that merely mentions a flag is
-// untouched, and every other byte of the command (quoting, internal spaces,
-// newlines) is preserved. An unparseable command (unbalanced quote) is an
-// error rather than a guess: the resident must not launch on a command whose
-// permission flags could not be reliably removed.
+// and "--permission-mode=X" forms) from a command. Words are compared by their
+// quote-removed value (the command runs under sh -c, so `"--flag"` is a real
+// flag), but only top-level words are considered: a quoted argument that merely
+// mentions a flag is untouched. Splicing is by word range: every kept word and
+// the separator text between kept words survive byte-for-byte, and nothing is
+// trimmed, so a line continuation or escaped space belonging to a kept word is
+// never eaten. An unparseable command (unbalanced quote) is an error rather
+// than a guess: the resident must not launch on a command whose permission
+// flags could not be reliably removed.
 func stripClaudePermissionFlags(command string) (string, error) {
 	words, err := splitShellWords(command)
 	if err != nil {
 		return "", fmt.Errorf("cannot strip permission flags: %w", err)
 	}
 	var b strings.Builder
-	prev := 0 // end of the last kept word
+	prev := 0 // start of the not-yet-written region
 	for i := 0; i < len(words); i++ {
-		w := words[i]
-		text := command[w.start:w.end]
-		drop := false
-		if w.plain {
-			switch {
-			case text == "--dangerously-skip-permissions", text == "--allow-dangerously-skip-permissions":
-				drop = true
-			case text == "--permission-mode":
-				drop = true
-				if i+1 < len(words) {
-					i++ // skip its value
-					w.end = words[i].end
-				}
-			case strings.HasPrefix(text, "--permission-mode="):
-				drop = true
+		v := words[i].value
+		last := i
+		switch {
+		case v == "--dangerously-skip-permissions", v == "--allow-dangerously-skip-permissions",
+			strings.HasPrefix(v, "--permission-mode="):
+		case v == "--permission-mode":
+			if i+1 < len(words) {
+				last = i + 1 // its value word
 			}
+		default:
+			continue
 		}
-		if drop {
-			b.WriteString(command[prev:w.start])
-			// Remove the whitespace run preceding the dropped word too.
-			str := b.String()
-			b.Reset()
-			b.WriteString(strings.TrimRight(str, " \t\n\r"))
-			prev = w.end
+		if i > 0 && words[i-1].end > prev {
+			b.WriteString(command[prev:words[i-1].end])
 		}
+		prev = words[last].end
+		if b.Len() == 0 && last+1 < len(words) {
+			prev = words[last+1].start // no leading separator
+		}
+		i = last
 	}
 	b.WriteString(command[prev:])
 	return b.String(), nil
