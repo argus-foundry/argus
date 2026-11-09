@@ -1,0 +1,7 @@
+- [x] lastexchange handoff seed
+- [x] db setter with rollback values
+- [x] agent.MoveTaskBackend + tests
+- [x] REST / MCP / apiclient plumbing
+- [x] TUI picker handoff rows
+- [x] README, gotchas, backends.md
+- [x] Archive into base spec

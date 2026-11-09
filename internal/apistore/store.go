@@ -722,3 +722,9 @@ func (s *Store) Accounts(ctx context.Context) ([]apiclient.AccountJSON, error) {
 func (s *Store) MoveTaskAccount(ctx context.Context, id, account string, force bool) (*apiclient.MoveAccountResp, error) {
 	return s.c.MoveTaskAccount(ctx, id, account, force)
 }
+
+// MoveTaskBackend moves a task to another CLI with a handoff on the remote
+// daemon (same endpoint, `backend` set).
+func (s *Store) MoveTaskBackend(ctx context.Context, id, backend, account string, force bool) (*apiclient.MoveAccountResp, error) {
+	return s.c.MoveTaskBackend(ctx, id, backend, account, force)
+}

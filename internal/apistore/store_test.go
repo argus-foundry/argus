@@ -547,6 +547,22 @@ func TestStore_MoveTaskAccount(t *testing.T) {
 	testutil.Contains(t, captured, `"force":true`)
 }
 
+func TestStore_MoveTaskBackend(t *testing.T) {
+	f := newFakeAPI(t)
+	var captured string
+	f.mux.HandleFunc("/api/tasks/t1/account", func(w http.ResponseWriter, r *http.Request) {
+		captured = readBody(r)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"from":"default","to":"default","resumed":false,"started":true,"from_backend":"cl","to_backend":"cx","handoff":true}`))
+	})
+	got, err := f.store().MoveTaskBackend(context.Background(), "t1", "cx", "default", false)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.ToBackend, "cx")
+	testutil.True(t, got.Handoff)
+	testutil.False(t, got.ConversationCarried)
+	testutil.Contains(t, captured, `"backend":"cx"`)
+}
+
 func TestStore_MoveTaskAccount_Error(t *testing.T) {
 	f := newFakeAPI(t)
 	f.mux.HandleFunc("/api/tasks/t1/account", func(w http.ResponseWriter, r *http.Request) {

@@ -300,3 +300,53 @@ func (e Exchange) Section() string {
 	b.WriteString("\n")
 	return b.String()
 }
+
+// Handoff describes a task moved between agent CLIs. The conversation does NOT
+// carry over (the transcript formats differ), so Prompt frames the restart
+// honestly and gives the new session what it needs to continue.
+type Handoff struct {
+	From, To  string // CLI labels, e.g. "Claude", "Codex"
+	Worktree  string
+	Branch    string
+	GitStatus string // `git status --short` output
+	// GitStatusKnown marks an empty GitStatus as a clean tree rather than a
+	// failed read.
+	GitStatusKnown bool
+	Exchange       Exchange // last human exchange; zero when unreadable
+	OriginalPrompt string
+}
+
+// Prompt renders the seed prompt for the new session.
+func (h Handoff) Prompt() string {
+	var b strings.Builder
+	b.WriteString("You are a fresh session on a task that was moved from " + h.From + " to " + h.To + ". ")
+	b.WriteString("The prior conversation did NOT carry over: you have none of its context, only what is below and what is in the worktree. ")
+	b.WriteString("Do not pretend to remember earlier work; verify the current state in the worktree before continuing.\n")
+
+	b.WriteString("\n## Where the work stands\n")
+	b.WriteString("- Worktree: " + h.Worktree + "\n")
+	b.WriteString("- Branch: " + h.Branch + "\n")
+	b.WriteString("- `git status --short`:\n```\n")
+	switch {
+	case h.GitStatus != "":
+		b.WriteString(strings.TrimRight(strings.ReplaceAll(h.GitStatus, "```", "'''"), "\n"))
+	case h.GitStatusKnown:
+		b.WriteString("(working tree clean)")
+	default:
+		b.WriteString("(git status unavailable)")
+	}
+	b.WriteString("\n```\n")
+
+	if sec := h.Exchange.Section(); sec != "" {
+		b.WriteString(sec)
+		b.WriteString(RelayDirective)
+	} else {
+		b.WriteString("\n(No excerpt of the last exchange with the user was available.)\n")
+	}
+
+	b.WriteString("\n---\n## Original prompt (background only, not necessarily your current instruction)\n")
+	b.WriteString("This was the task's mission when it began. It may be partly or fully done; check the worktree first.\n\n")
+	b.WriteString(h.OriginalPrompt)
+	b.WriteString("\n")
+	return b.String()
+}

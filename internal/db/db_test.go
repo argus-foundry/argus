@@ -2858,3 +2858,37 @@ func TestDB_SetTaskAccount_OnlyTouchesAccountColumns(t *testing.T) {
 
 	testutil.ErrorIs(t, d.SetTaskAccount("missing", "x", false), ErrTaskNotFound)
 }
+
+func TestDB_SetTaskBackendMove_OnlyTouchesMoveColumnsAndReturnsPrev(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{Name: "bm", Backend: "claude", Model: "opus", SessionID: "sid", Prompt: "orig", Account: "work", AccountRouted: true, Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+
+	other, _ := d.Get(task.ID)
+	other.SetStatus(model.StatusInReview)
+	testutil.NoError(t, d.Update(other))
+
+	prev, err := d.SetTaskBackendMove(task.ID, TaskBackendMove{Backend: "codex", Prompt: "seed"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, prev, TaskBackendMove{Backend: "claude", Model: "opus", Account: "work", AccountRouted: true, SessionID: "sid", Prompt: "orig"})
+
+	got, _ := d.Get(task.ID)
+	testutil.Equal(t, got.Backend, "codex")
+	testutil.Equal(t, got.Model, "")
+	testutil.Equal(t, got.SessionID, "")
+	testutil.Equal(t, got.Prompt, "seed")
+	testutil.Equal(t, got.Account, "")
+	testutil.False(t, got.AccountRouted)
+	testutil.Equal(t, got.Status, model.StatusInReview) // untouched
+
+	// Rollback with the returned values restores the row.
+	_, err = d.SetTaskBackendMove(task.ID, prev)
+	testutil.NoError(t, err)
+	got, _ = d.Get(task.ID)
+	testutil.Equal(t, got.Backend, "claude")
+	testutil.Equal(t, got.SessionID, "sid")
+	testutil.True(t, got.AccountRouted)
+
+	_, err = d.SetTaskBackendMove("missing", TaskBackendMove{})
+	testutil.ErrorIs(t, err, ErrTaskNotFound)
+}
