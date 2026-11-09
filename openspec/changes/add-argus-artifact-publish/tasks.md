@@ -20,8 +20,8 @@
   - no-task unavailable path registers nothing
   - token absent from results and logs
   - `artifact_open` refuses unregistered names and builds `open` / `open -R` through an injectable opener seam
-- [ ] 1.5 `internal/api`: `POST /api/artifacts/publish` success, unavailable and auth tests
-- [ ] 1.6 `cmd/argus`: `artifact publish` subcommand exit codes (0 success, 3 unavailable, non-zero otherwise) against a stub server, if the cmd package's test conventions allow it; otherwise cover the arg parsing and exit-code mapping in a testable helper
+- [x] 1.5 `internal/api`: `POST /api/artifacts/publish` success, unavailable and auth tests
+- [x] 1.6 `cmd/argus`: `artifact publish` subcommand exit codes (0 success, 3 unavailable, non-zero otherwise) against a stub server, if the cmd package's test conventions allow it; otherwise cover the arg parsing and exit-code mapping in a testable helper
 - [ ] 1.7 `internal/routing`: snippet names `artifact_publish`, `ARGUS_ARTIFACT_ACCOUNT`, the update form, all four unavailable options, `artifact_open`, `argus artifact publish`, the no-fallback rule and the self-gate; no `artpush` anywhere
 - [ ] 1.8 Confirm every new test fails for the expected reason (Prove-It)
 
@@ -50,9 +50,9 @@
 
 **Depends on:** Stage 2
 
-- [ ] 4.1 `POST /api/artifacts/publish` in `internal/api`: multipart or JSON body with the HTML content, title, account and update link, using the same auth as the other endpoints
-- [ ] 4.2 `argus artifact publish` subcommand in `cmd/argus` calling the REST endpoint with the local daemon's token; exit codes per spec
-- [ ] 4.3 Tests 1.5–1.6 pass
+- [x] 4.1 `POST /api/artifacts/publish` in `internal/api`: multipart or JSON body with the HTML content, title, account and update link, using the same auth as the other endpoints
+- [x] 4.2 `argus artifact publish` subcommand in `cmd/argus` calling the REST endpoint with the local daemon's token; exit codes per spec
+- [x] 4.3 Tests 1.5–1.6 pass
 
 ## 5. Routing guidance and artpush removal
 

@@ -91,6 +91,9 @@ func main() {
 		case "doctor":
 			runDoctor()
 			return
+		case "artifact":
+			runArtifactCommand(os.Args[2:])
+			return
 		}
 	}
 

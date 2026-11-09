@@ -1730,6 +1730,7 @@ func (d *Daemon) Serve(sockPath string) error {
 			apiSrv.SetScheduler(sch)
 			apiSrv.SetClipboard(d.clipboard)
 			apiSrv.SetMCPRegistry(pluginRegistry)
+			apiSrv.SetArtifactPublisher(artifactPublisher)
 			apiSrv.SetNotifier(d.notifier)
 			apiSrv.SetFocusTracker(d.focusTracker)
 			d.apiServer = apiSrv
