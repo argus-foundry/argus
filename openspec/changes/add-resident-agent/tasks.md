@@ -69,9 +69,9 @@ Stage 6's slice of 1.1/1.3 is covered by `coord_hook_resident_test.go` and `Test
 
 **Depends on:** Stages 6, 7
 
-- [ ] 8.1 Add `ResidentBox` and stack it with `AttentionBar` in the agent-view left column, Hera rail summary and Tasks rail via the existing `OnHeightChange` flow
-- [ ] 8.2 Add the header tab-label marker (`●`/`?`) on every screen; clear on view via the mark-viewed RPC
-- [ ] 8.3 Smoke tests: both boxes visible together, waiting outranks unread, zero height when quiet, no PTY resize or kick when the box toggles, hidden on the resident tab
+- [x] 8.1 Add `ResidentBox` and stack it with `AttentionBar` in the agent-view left column, Hera rail summary and Tasks rail via the existing `OnHeightChange` flow
+- [x] 8.2 Add the header tab-label marker (`●`/`?`) on every screen; clear on view via the mark-viewed RPC
+- [x] 8.3 Smoke tests: both boxes visible together, waiting outranks unread, zero height when quiet, no PTY resize or kick when the box toggles, hidden on the resident tab
 
 ## 9. Settings
 
