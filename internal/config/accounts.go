@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -211,6 +212,35 @@ func (c Config) ResolveAccount(explicit, project string) string {
 		return g
 	}
 	return DefaultAccountName
+}
+
+// ArtifactAccount resolves a project's artifact home account: the claude.ai
+// account its artifacts are published to, independent of which account the
+// task is routed to. The project's [project_artifact_accounts] entry wins,
+// else its [project_accounts] entry, else "" (no home account). An entry
+// naming an unknown account is skipped with a log line. default_account is
+// deliberately NOT a fallback: an unmapped project keeps today's behavior.
+func (c Config) ArtifactAccount(project string) string {
+	if project == "" {
+		return ""
+	}
+	for _, src := range []struct {
+		table string
+		name  string
+	}{
+		{"project_artifact_accounts", c.ProjectArtifactAccounts[project]},
+		{"project_accounts", c.ProjectAccounts[project]},
+	} {
+		if src.name == "" {
+			continue
+		}
+		if err := c.ValidateAccount(src.name); err != nil {
+			slog.Warn("[artifacts] skipping unknown artifact account", "project", project, "table", src.table, "account", src.name, "err", err)
+			continue
+		}
+		return src.name
+	}
+	return ""
 }
 
 // AccountNames returns "default" followed by configured account names
