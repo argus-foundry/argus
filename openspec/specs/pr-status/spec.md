@@ -5,14 +5,14 @@ TBD - created by archiving change add-pr-poll-terminal-skip. Update Purpose afte
 ## Requirements
 ### Requirement: Cached, non-blocking polling
 
-The system SHALL poll PR review state from a daemon-side background loop, covering only non-archived tasks that have a branch AND whose last-known cached PR state is not terminal (`merged-closed`), and SHALL persist results in the `task_meta` sidecar under namespace `pr` (keys `state` and `url`). The per-task polling cadence within that loop is tiered by dormancy (see "Dormancy-tiered poll cadence") rather than a single fixed interval. Within a cycle the tasks selected for polling SHALL be grouped by their resolved PR repo and fetched with one batched GraphQL query per repo (see "Batched GraphQL PR-state fetch grouped by repo"), rather than one GitHub CLI invocation per task. A terminal PR state never changes, so once observed it sticks and that task is excluded from all future polls. The terminal-state check MUST read the same persisted `task_meta` cache the poller writes, so the exclusion survives a daemon restart. The UI MUST NOT invoke the GitHub CLI or GraphQL API on its own thread; it reads only the cached value. A transient fetch failure MUST NOT overwrite a previously cached value.
+The system SHALL poll PR review state from a daemon-side background loop, covering only non-archived tasks that have a branch AND whose cached PR state is non-terminal or lacks a verified terminal lifecycle (`merged` or `closed`), and SHALL persist results in the `task_meta` sidecar under namespace `pr` (keys `state`, `url` and `lifecycle`). The per-task polling cadence within that loop is tiered by dormancy (see "Dormancy-tiered poll cadence") rather than a single fixed interval. Within a cycle the tasks selected for polling SHALL be grouped by their resolved PR repo and fetched with one batched GraphQL query per repo (see "Batched GraphQL PR-state fetch grouped by repo"), rather than one GitHub CLI invocation per task. A terminal PR state never changes, so once its lifecycle is verified as merged or closed, that task is excluded from all future polls. The terminal-state check MUST read the same persisted `task_meta` cache the poller writes, so the exclusion survives a daemon restart. The UI MUST NOT invoke the GitHub CLI or GraphQL API on its own thread; it reads only the cached value. A transient fetch failure MUST NOT overwrite a previously cached value.
 
 #### Scenario: Skips ineligible tasks
 - **WHEN** the poller runs over the task set
 - **THEN** archived tasks and tasks without a branch are not polled
 
 #### Scenario: Skips tasks with a terminal cached PR state
-- **WHEN** the poller runs over the task set and a non-archived task with a branch has a cached `pr` namespace `state` of `merged-closed`
+- **WHEN** the poller runs over the task set and a non-archived task with a branch has a cached `pr` namespace `state` of `merged-closed` and a verified `lifecycle` of `merged` or `closed`
 - **THEN** that task is excluded from the eligible set and is never included in any batched query, and the skip is logged via uxlog
 
 #### Scenario: Still polls tasks with a non-terminal cached state
@@ -24,7 +24,7 @@ The system SHALL poll PR review state from a daemon-side background loop, coveri
 - **THEN** that task remains eligible and is included in its repo's batched query
 
 #### Scenario: Terminal exclusion survives a daemon restart
-- **WHEN** the daemon restarts and a task's cached `pr` namespace `state` is `merged-closed`
+- **WHEN** the daemon restarts and a task's cached `pr` namespace `state` is `merged-closed` with lifecycle `merged` or `closed`
 - **THEN** the first poll after restart reads that persisted value and excludes the task without re-fetching it
 
 #### Scenario: Persists successful result
@@ -137,7 +137,7 @@ The system SHALL select, each poll cycle, which eligible tasks to query based on
 
 The cadence tier SHALL be derived from the task's most recent lifecycle timestamp — the latest of `ended_at`, `started_at`, and `created_at` — as: within the last 1h → every cycle; 1h to 24h → every 5th cycle; 24h to 7d → every 15th cycle; older than 7d → every 30th cycle.
 
-A branch whose last-known cached PR state is an open PR (`draft`, `awaiting-review`, `changes-requested`, or `approved`) SHALL be polled every cycle regardless of dormancy tier, so externally-driven review or merge transitions surface promptly.
+A branch whose last-known cached PR state is an open PR (`draft`, `awaiting-review`, `changes-requested`, or `approved`) SHALL be polled every cycle regardless of dormancy tier, so externally-driven review or merge transitions surface promptly. An unverified terminal cache SHALL receive one immediate verification attempt per daemon process, with unsuccessful later attempts subject to the normal dormancy tier. Verified terminal caches SHALL remain excluded.
 
 Eligible tasks NOT selected in a given cycle SHALL be skipped without issuing any GitHub query and without altering their cached `task_meta` state. Selection across cycles SHALL be spread (e.g. by task-id hash) so each cycle polls a roughly constant fraction of each tier rather than all of a tier's tasks landing on the same cycle.
 
@@ -182,7 +182,7 @@ When a poll cycle resolves a task's PR as genuinely MERGED (not merely closed �
 
 The system SHALL resolve the task's most recent Hera role (any binding, live or ended) and that role's orchestrator's coordinator identically for both notifications, mirroring the existing coordinator-resolution pattern the plan-DAG gater already uses for its own hold/fan-in notices.
 
-Because a PR state is permanently excluded from all future polling once it reaches a terminal value (`merged-closed` – see "Cached, non-blocking polling"), a genuine merge is observed by the poller AT MOST ONCE per task, ever, so both notifications fire at most once per task with no additional bookkeeping.
+Merge notifications SHALL fire only when the pre-poll cached state was non-terminal or absent. Refreshing an already terminal state to verify its lifecycle SHALL NOT repeat either notification. Verified terminal entries are excluded from subsequent polls.
 
 Derived from: `internal/daemon/daemon.go` (`pollPRStatesOnce`, `resolveHeraRoleAndCoordinator`, `notifyCoordinatorOfMergedPR`, `notifyRoleOfMergedPR`), `internal/gitutil/pr_batch.go` (`PRResult.Merged`, `mapBatchNode`), `internal/db/hera_messages.go` (`SendHeraMessage`'s `ErrHeraMessageSelfSend` guard, the reason the role notice cannot reach a coordinator's own directly-bound task).
 
@@ -213,27 +213,93 @@ Derived from: `internal/daemon/daemon.go` (`pollPRStatesOnce`, `resolveHeraRoleA
 
 ### Requirement: An unchanged poll result is not rewritten
 
-The poller SHALL persist a task's polled PR `state` and `url` only when at least one of them differs from the value already stored under namespace `pr`. The comparison and the write SHALL occur inside a single transaction, so there is no window in which a stale read decides the outcome. When both values already match, the poller SHALL commit nothing, so the database's change counter (`PRAGMA data_version`) does not move and the stored `updated_at` of that row is not advanced. Merge notifications SHALL be unaffected: whether a poll resolves a PR as merged is decided from the fetched result, not from whether a write happened. (A terminal stored state is already excluded from polling, so a merge transition always arrives with a changed value and is written.) Because `updated_at` of an unchanged `pr` row no longer advances, `GET /api/tasks/{id}/meta` reports the time the value last changed, not the time it was last polled.
+The poller SHALL persist a task's polled PR `state`, `url` and `lifecycle` only when at least one of them differs from the value already stored under namespace `pr`. The comparison and the write SHALL occur inside a single transaction, so there is no window in which a stale read decides the outcome. When all three values already match, the poller SHALL commit nothing, so the database's change counter (`PRAGMA data_version`) does not move and the stored `updated_at` of that row is not advanced. Merge notifications SHALL be unaffected: whether a poll resolves a PR as merged is decided from the fetched result, not from whether a write happened. (Already terminal entries may be fetched to verify lifecycle, but SHALL NOT repeat either merge notification.) Because `updated_at` of an unchanged `pr` row no longer advances, `GET /api/tasks/{id}/meta` reports the time the value last changed, not the time it was last polled.
 
 Derived from: `internal/daemon/daemon.go` (`pollPRStatesOnce`), `internal/db/task_meta.go` (`SetMetaBatchIfChanged`).
 
 #### Scenario: An identical poll result commits nothing
 
-- **WHEN** a poll resolves a task's PR as state `none`, url `''` and the stored `pr` row already holds exactly those values
+- **WHEN** a poll resolves a task's PR as state `none`, url `''`, lifecycle `unknown` and the stored `pr` row already holds exactly those values
 - **THEN** no transaction commits, `data_version` does not change and `updated_at` is unchanged
 
 #### Scenario: A changed state is written
 
 - **WHEN** a poll resolves `awaiting-review` with a URL for a task whose stored state is `none`
-- **THEN** both keys are written and `updated_at` advances
+- **THEN** all three keys are written and `updated_at` advances
 
 #### Scenario: A changed url alone is written
 
 - **WHEN** only the URL differs from the stored value
-- **THEN** both keys are written
+- **THEN** all three keys are written
 
 #### Scenario: A merge transition still notifies
 
 - **WHEN** a poll resolves a task's PR as merged while the stored state is still open (`awaiting-review`), so the result differs and is written
 - **THEN** both merge notifications fire under the existing rules, exactly as before this change
 
+### Requirement: PR lifecycle persistence
+
+The poller SHALL persist `lifecycle` (`open`, `merged`, `closed` or `unknown`) under namespace `pr` alongside `state` and `url`, in the same transaction. `merged` SHALL require GitHub's raw MERGED state; a CLOSED PR SHALL yield `closed`; no PR SHALL yield `unknown`. A terminal cached `state` without a verified `lifecycle` (`merged` or `closed`) SHALL receive one immediate verification attempt per task per daemon process. Later attempts SHALL follow the task's normal dormancy cadence if fetching fails or the response omits the branch. A successful fetch that stores `merged` or `closed` SHALL exclude the task from future polls. An authoritative no-PR response SHALL store `none`/`unknown` and resume ordinary dormancy polling. A terminal state paired with `open` is unverified and SHALL project `unknown` until refreshed. Refreshing an already terminal cache SHALL persist lifecycle and publish any changed-cache event without repeating either merge notification. A failed fetch SHALL leave the stored lifecycle untouched.
+
+#### Scenario: Closed is not merged
+
+- **WHEN** GitHub reports CLOSED for a task's PR
+- **THEN** `lifecycle` is stored as `closed` and no merge notification fires
+
+#### Scenario: Legacy terminal entry is refreshed once
+
+- **WHEN** a task's cached `state` is `merged-closed` with no verified terminal `lifecycle`, including a stale `open` from a rolled-back binary
+- **THEN** the next poll makes one immediate verification attempt regardless of dormancy and, on success, stores the lifecycle without repeating merge notices and skips later polls
+
+#### Scenario: Unsuccessful terminal verification uses dormancy retries
+
+- **WHEN** the immediate verification fetch fails or returns no result for the branch
+- **THEN** the cached triplet is unchanged and later attempts follow dormancy cadence until verification succeeds
+- **AND** a daemon restart permits one new immediate attempt, while verified terminal entries remain skipped
+
+### Requirement: PR change event
+
+After a PR cache commit that changed a stored value, outside the database mutex, the poller SHALL publish `task.pr_changed` with `{"url","state","lifecycle","source"}`. `source` SHALL be `automatic` for branch discovery and `manual` for linked PR verification. An unchanged result SHALL publish nothing.
+
+#### Scenario: Changed result publishes once
+
+- **WHEN** a poll changes a task's cached PR values
+- **THEN** exactly one `task.pr_changed` is published, and a repeat poll with the same result publishes none
+
+### Requirement: Manual PR association
+
+The system SHALL store a manually linked PR URL per task in `task_pr_links`, separate from the derived `pr` cache, surviving archive and daemon restart and removed only by clearing it or deleting the task. The branch poller SHALL NOT poll or write cache for a linked task, and its write SHALL be refused inside the write transaction. A manual pass SHALL verify the linked PR by URL through `gh`, storing `state`, `url` (the linked URL) and `lifecycle`; a lookup error SHALL keep the association and last verified cache. Setting or clearing an existing link SHALL delete the task's `pr` cache.
+
+#### Scenario: Link survives conflicting branch result
+
+- **WHEN** a linked task shares a branch whose lookup returns a different PR
+- **THEN** the linked task's cache and association still refer to the linked PR
+
+#### Scenario: Clearing restores discovery
+
+- **WHEN** the link is cleared
+- **THEN** the next branch poll caches the branch-derived PR
+
+
+The manual pass SHALL skip missing and archived tasks and use the branch poller's shared dormancy and terminal-verification eligibility. A linked cache SHALL be trusted only when its stored URL matches the manual link. A mismatched terminal cache SHALL receive the bounded immediate terminal verification attempt, then normal dormancy retries on failure; projection SHALL report the linked URL with unknown state/lifecycle and null checked_at until verified. Refused automatic writes SHALL emit neither a PR change event nor either merge notice. Task pruning SHALL remove associations in the same transaction as the task rows. Clearing an absent link SHALL preserve automatic cache and emit no mutation events.
+
+#### Scenario: Link changes during a branch fetch
+
+- **WHEN** a branch fetch returns merged after a different manual link is installed
+- **THEN** the refused result sends neither merge notice nor PR change event
+
+#### Scenario: Prune removes durable intent atomically
+
+- **WHEN** either prune entry point deletes a linked task
+- **THEN** the task and link are deleted together, and a failed task deletion rolls back link removal
+- **AND** a legacy orphan link is skipped without fetching or writing cache
+
+#### Scenario: Manual eligibility follows task activity
+
+- **WHEN** a linked task is archived, or its dormant unknown cache is not due this cycle
+- **THEN** the manual pass skips its URL lookup
+
+#### Scenario: Re-upgrade rejects a foreign terminal cache
+
+- **WHEN** an older binary has cached a merged branch PR different from the manual link
+- **THEN** GET projects the linked URL as unknown and the manual pass re-verifies it with bounded retries

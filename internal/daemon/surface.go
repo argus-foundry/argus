@@ -210,7 +210,15 @@ const (
 	//     the supervisor's BuildCmd (fix-recycle-session-id). A stale supervisor
 	//     recycles Claude sessions with no --session-id, leaving the task row
 	//     without a resumable ID (ctrl+n re-render refuses).
-	// 40: the resident agent's launch carries its ask/deny tool rules as an
+	// 40: BuildCmd exports ARGUS_ARTIFACT_ACCOUNT (the project's artifact home
+	//     account) when the agent must publish claude.ai artifacts via artpush,
+	//     strips an inherited value, and the injected routing content gains the
+	//     argus-artifacts snippet (add-artifact-home-account). A stale
+	//     supervisor never exports it, so routed-away tasks keep publishing to
+	//     the wrong account. The home account must be Claude-capable (a
+	//     codex_home-only entry is skipped), and a stripped inherited value is
+	//     logged under [artifacts].
+	// 41: the resident agent's launch carries its ask/deny tool rules as an
 	//     inline --settings flag and a non-bypass permission mode is forced
 	//     (add-resident-agent D6), and its Argus MCP URL is bound to its own task
 	//     (?caller=). A stale supervisor spawns the resident without them, so outward actions would not prompt.
@@ -234,8 +242,11 @@ const (
 	//     (--allowedTools is refused by that allowlist, not stripped). The
 	//     backend command must also be a single line (an unescaped newline
 	//     would split off every appended flag in sh).
+<<<<<<< HEAD
 	// v41: resident's launch policy allows standing-team coordination and
 	// spawn/delete, asks for graduation, and denies membership/plan surgery.
+=======
+>>>>>>> origin/argus/always-on-agent/5a-final
 	SupervisorSpawnSurface = 41
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -543,7 +554,11 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
+<<<<<<< HEAD
 	SpawnSurfaceDigest  = "3805c54326443abdf45f819e79c65e17ec35c0c1f552d3ae2eba80b5055b41ab"
+=======
+	SpawnSurfaceDigest  = "7d324c5a9a2995a33eb6f0ced0733eed6530af7bd69adb56119f5ded6165c736"
+>>>>>>> origin/argus/always-on-agent/5a-final
 	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 
