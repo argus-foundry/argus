@@ -41,6 +41,10 @@ const (
 	ActGlobalJumpNeedsInput Action = "global.jump_needs_input"
 	ActGlobalRestoreRail    Action = "global.restore_rail"
 	ActGlobalSwitcher       Action = "global.switcher"
+	// Resident agent (add-resident-agent): ctrl+\ toggles to/from the resident
+	// tab (unconditional global dispatch); 0 selects the tab directly.
+	ActGlobalResident    Action = "global.resident"
+	ActGlobalTabResident Action = "global.tab_resident"
 
 	// Task list
 	ActTaskNew       Action = "tasklist.new"
@@ -168,6 +172,7 @@ var defaultSpecs = map[Context]map[Action]string{
 		ActGlobalOpenRepo: "ctrl+o", ActGlobalOpenPR: "ctrl+p", ActGlobalPrune: "ctrl+r",
 		ActGlobalPalette: "ctrl+k", ActGlobalJumpNeedsInput: "ctrl+g",
 		ActGlobalRestoreRail: "ctrl+b", ActGlobalSwitcher: "ctrl+j",
+		ActGlobalResident: `ctrl+\`, ActGlobalTabResident: "0",
 	},
 	CtxTaskList: {
 		ActTaskNew: "n", ActTaskStatusAdv: "s", ActTaskStatusRev: "S",
@@ -222,6 +227,8 @@ var actionLabels = map[Action]string{
 	ActGlobalPalette: "command palette", ActGlobalJumpNeedsInput: "next needs-input (?) / unread coordinator board",
 	ActGlobalRestoreRail: "jump back now, even with (?) still open",
 	ActGlobalSwitcher:    "jump switcher (tasks + projects)",
+	ActGlobalResident:    "toggle resident agent",
+	ActGlobalTabResident: "switch to Resident tab",
 
 	ActTaskNew: "new task", ActTaskStatusAdv: "advance status", ActTaskStatusRev: "revert status",
 	ActTaskArchive: "toggle archive", ActTaskPin: "toggle pin", ActTaskRename: "rename",
@@ -318,7 +325,8 @@ func (k *Keymap) ActionLabel(a Action) string {
 var contextOrder = map[Context][]Action{
 	CtxGlobal: {ActGlobalQuit, ActGlobalHelp, ActGlobalTabTasks, ActGlobalTabHera, ActGlobalTabSettings,
 		ActGlobalRefresh, ActGlobalDestroy, ActGlobalFork, ActGlobalOpenRepo, ActGlobalOpenPR, ActGlobalPrune,
-		ActGlobalPalette, ActGlobalSwitcher, ActGlobalJumpNeedsInput, ActGlobalRestoreRail},
+		ActGlobalPalette, ActGlobalSwitcher, ActGlobalJumpNeedsInput, ActGlobalRestoreRail,
+		ActGlobalResident, ActGlobalTabResident},
 	CtxTaskList: {ActTaskNew, ActTaskDown, ActTaskUp, ActTaskStatusAdv, ActTaskStatusRev, ActTaskArchive,
 		ActTaskPin, ActTaskRename, ActTaskCopy, ActTaskExpandAll, ActTaskFilter, ActTaskHera, ActTaskInbox, ActTaskArtifacts, ActTaskMoveAccount},
 	CtxAgent: {ActAgentLinks, ActAgentArtifacts, ActAgentSession, ActAgentOpenPR, ActAgentZoom, ActAgentCopy, ActAgentRerender,

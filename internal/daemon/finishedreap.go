@@ -82,6 +82,9 @@ func (f *finishedSessionReaper) tick() []string {
 		if err != nil || t == nil {
 			continue // no row (or unreadable): never touch a session we can't classify
 		}
+		if t.IsResident() {
+			continue // the resident is never lifecycle-managed (add-resident-agent)
+		}
 		e, known := f.state[id]
 		finished := taskFinished(t)
 		if !known {

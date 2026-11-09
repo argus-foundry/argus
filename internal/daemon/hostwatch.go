@@ -100,7 +100,7 @@ func sendHostSuspendSignals(database *db.DB, ids []string, gap time.Duration) in
 	sent := 0
 	for _, id := range ids {
 		t, err := database.Get(id)
-		if err != nil || t == nil || t.Archived {
+		if err != nil || t == nil || t.Archived || t.IsResident() {
 			slog.Info("hostwatch: skipping task", "task", id)
 			continue
 		}

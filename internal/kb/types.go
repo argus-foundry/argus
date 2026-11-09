@@ -12,6 +12,9 @@ type Document struct {
 	ModifiedAt time.Time
 	IngestedAt time.Time
 	WordCount  int
+	// Extra holds frontmatter lines other than title/tags (e.g. `dream: skip`),
+	// preserved verbatim through vault write-back. Not persisted in the index.
+	Extra []string
 }
 
 // SearchResult wraps a Document with FTS5 match metadata.

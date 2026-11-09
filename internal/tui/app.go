@@ -356,12 +356,23 @@ type App struct {
 	// agentCrossReturn remembers the agent view a Cmd+Right hop left from, so
 	// Cmd+Left from the Hera rail can restore it. Main goroutine only; cleared
 	// by switchTab and by the return hop.
-	agentCrossReturn *agentCrossReturn
-	agentState       agentview.State
-	daemonConnected  bool
-	tasks            []*model.Task
-	runningIDs       []string
-	idleIDs          []string
+	agentCrossReturn      *residentReturn
+	residentReturn        *residentReturn
+	residentPane          *terminal.TerminalPane
+	residentAttachPending bool
+	residentBox           *widget.ResidentBox
+	residentSt            residentAttention
+	residentPollPending   bool
+	residentPolledAt      time.Time
+	residentMarkViewedFn  func() error                             // test seam; default daemonClient.ResidentMarkViewed
+	residentStateFn       func() (daemon.ResidentStateResp, error) // test seam; default daemonClient.ResidentState
+	onSwitchTab           func(widget.Tab)                         // test seam: records every switchTab target
+	onPersistLastTab      func(widget.Tab)                         // test seam: records every last-tab persistence write
+	agentState            agentview.State
+	daemonConnected       bool
+	tasks                 []*model.Task
+	runningIDs            []string
+	idleIDs               []string
 	// visibleActiveSpinner caches computeVisibleActiveSpinner's result
 	// (add-spinner-visible-scope), recomputed once per refreshTasksWithIDs
 	// call (tview main goroutine, a.mu held) so spinnerLoop's background
@@ -813,6 +824,11 @@ func New(database store.Store, runner agent.SessionProvider, daemonConnected boo
 
 	app.settings = NewSettingsView(database)
 	app.settings.Keys = app.activeKeymap
+	// Rename/enable applies live: no waiting for the next resident tick.
+	app.settings.OnResidentChange = func(string, bool) {
+		app.refreshResidentTab()
+		app.syncResidentBox()
+	}
 	app.settings.OnHostSleepUpdate = func() {
 		app.tapp.QueueUpdateDraw(func() { app.settings.Refresh() })
 	}
@@ -869,6 +885,7 @@ func New(database store.Store, runner agent.SessionProvider, daemonConnected boo
 	app.activeKeymap() // prime the keymap (logs any config warnings at startup)
 
 	app.buildUI()
+	app.refreshResidentTab()
 	app.refreshTasks()
 	if app.tasksRailEnabled {
 		app.showTasksRail()
@@ -992,6 +1009,8 @@ func (a *App) buildUI() {
 	a.agentPane = terminal.NewTerminalPane()
 	a.agentPane.SetOwedFunc(a.paneRerenderOwed, a.rerenderKeyHint)
 	a.agentPane.OnOwedClick = a.rerenderHotkeyClassic
+	a.residentPane = terminal.NewTerminalPane()
+	a.residentPane.OnNeedRedraw = func() { a.tapp.QueueUpdateDraw(func() {}) }
 	a.agentHeader = widget.NewAgentHeader()
 
 	// Wire mouse click callbacks so clicking a panel switches agentFocus.
@@ -1032,12 +1051,19 @@ func (a *App) buildUI() {
 	// above the git status panel; it starts at zero height and grows as
 	// updateAttentionBar resizes it.
 	a.attentionBar = widget.NewAttentionBar()
+	a.residentBox = widget.NewResidentBox()
 	a.agentLeftCol = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.attentionBar, 0, 0, false).
+		AddItem(a.residentBox, 0, 0, false).
 		AddItem(a.gitPanel, 0, 1, false)
 	a.attentionBar.OnHeightChange = func() {
 		a.agentLeftCol.ResizeItem(a.attentionBar, a.attentionBar.DesiredHeight(), 0)
 		a.forceRedraw("attention bar height changed")
+	}
+	// Left-column-only resize: no PTY pane is resized or kicked (spec: rail box).
+	a.residentBox.OnHeightChange = func() {
+		a.agentLeftCol.ResizeItem(a.residentBox, a.residentBox.DesiredHeight(), 0)
+		a.forceRedraw("resident box height changed")
 	}
 	a.agentPanels = tview.NewFlex().SetDirection(tview.FlexColumn).
 		AddItem(a.agentLeftCol, 0, 1, false).
@@ -1056,6 +1082,7 @@ func (a *App) buildUI() {
 	// The rail identifies the selected task; only the classic page needs the
 	// task-name header. Rail content starts directly below the root tab bar.
 	a.tasksRailPage = taskview.NewRailPage(a.tasklist, a.agentPanels, a.agentPane)
+	a.tasksRailPage.Resident = a.residentBox
 	a.tasksRailPage.PaneFocused = func() bool { return a.mode == modeAgent }
 	a.tasksRailPage.OnRailFocus = a.focusTasksRail
 	a.tasklist.SetRailMode(a.tasksRailEnabled)
@@ -1070,6 +1097,7 @@ func (a *App) buildUI() {
 		heraReader = d
 	}
 	a.heraPage = hera.NewHeraPage(heraReader)
+	a.heraPage.SetResidentBox(a.residentBox)
 	a.heraPage.SetBoardAuto(a.db.Config().UI.CoordinatorBoard)
 	a.heraPage.Keys = a.activeKeymap
 	if d, ok := a.db.(*db.DB); ok {
@@ -1191,6 +1219,7 @@ func (a *App) buildUI() {
 		AddPage("tasks", a.taskPage, true, true).
 		AddPage("tasks-rail", a.tasksRailPage, true, false).
 		AddPage("agent", a.agentPage, true, false).
+		AddPage("resident", a.residentPane, true, false).
 		AddPage("hera", a.heraPage, true, false).
 		AddPage("settings", a.settingsPage, true, false)
 	a.loadPluginViews()
@@ -1261,7 +1290,7 @@ func (a *App) afterDraw(screen tcell.Screen) {
 	a.reconcilePluginViewSize()
 	a.publishInitialPTYLayout(screen)
 	if a.typing != nil || a.repaint != nil {
-		frames := terminalFrames(a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane())
+		frames := terminalFrames(a.agentPane, a.residentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane())
 		if a.typing != nil {
 			a.typing.reconcileFrames(frames)
 		}
@@ -1724,6 +1753,7 @@ func (a *App) spinnerLoop() {
 			// freshly-bound session doesn't paint at a stale width for up to a
 			// full 1s tick. No-op when no hera pane is drawn this frame.
 			a.heraPage.SyncPanes()
+			a.residentPane.SyncPTYSize()
 			if hasActiveRunning {
 				a.tapp.QueueUpdateDraw(func() {})
 			}
@@ -1833,6 +1863,8 @@ func (a *App) onTick() {
 		// QueueUpdateDraw closure), matching the keymap cache's threading.
 		a.refreshKeymap()
 		a.refreshAutoRerender() // live ui.auto_rerender_on_resize flips (one db.Config() per tick, never per Draw)
+		a.refreshResidentTab()
+		a.pollResidentState()
 		a.reconcileTasksRail()
 
 		// Refresh task list side panels.
@@ -4158,6 +4190,26 @@ func (a *App) activeKeymap() *keymap.Keymap {
 
 func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 	a.repaint.noteKey() // echo frames keep the fast cap; nil-safe before the pump exists
+	// This global action also works with a rune binding on a focused pane.
+	// A modal or text editor owns it as an ignored key, without dismissing it.
+	// A plugin view is full surrender, so the key falls through to the plugin.
+	// A modal swallows it (so dismiss-on-any-key modals stay open), but a text
+	// field keeps it as ordinary input (a rune binding like "~" must stay typeable).
+	if a.mode != modePluginView {
+		if act, ok := a.activeKeymap().Resolve(keymap.CtxGlobal, event); ok && act == keymap.ActGlobalResident {
+			switch {
+			case a.residentModalBlocked():
+				uxlog.Log("[resident] toggle skipped: modal open")
+				return nil
+			case a.residentTextInputBlocked():
+				// Fall through to the normal dispatch below so the field gets the key.
+				uxlog.Log("[resident] toggle skipped: text input owns the key")
+			default:
+				a.toggleResident()
+				return nil
+			}
+		}
+	}
 	var entered time.Time
 	if a.typing != nil {
 		entered = a.typing.now()
@@ -4379,6 +4431,10 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 	// failsafe + agent-view back ladder + quit-from-task-list).
 	switch event.Key() {
 	case tcell.KeyCtrlC:
+		if a.header.ActiveTab() == widget.TabResident {
+			a.forwardResidentKey(event)
+			return nil
+		}
 		if a.mode == modeAgent {
 			// Forward ctrl+c to the PTY if session is alive; otherwise ignore
 			if sess := a.agentPane.Session(); sess != nil && sess.Alive() {
@@ -4403,6 +4459,10 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 		a.stopTUI()
 		return nil
 	case tcell.KeyCtrlQ:
+		if a.header.ActiveTab() == widget.TabResident {
+			a.toggleResident()
+			return nil
+		}
 		if a.tasksRailEnabled && a.tasksRailViewing {
 			a.focusTasksRail()
 			a.tapp.SetFocus(a.tasksRailPage)
@@ -4442,6 +4502,7 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 	// Tab switching is 1/2/3 only (Left/Right fall through to the focused view).
 	suppressRune := event.Key() == tcell.KeyRune &&
 		((a.mode == modeTaskList && a.tasklist.Filtering()) ||
+			a.header.ActiveTab() == widget.TabResident ||
 			(a.mode == modeTaskList && a.settings.IsEditing()) ||
 			a.heraPaneFocused() ||
 			(a.mode == modeTaskList && a.header.ActiveTab() == widget.TabHera && a.heraPage.RailFiltering()))
@@ -4449,6 +4510,11 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 	if !suppressRune {
 		if act, ok := a.activeKeymap().Resolve(keymap.CtxGlobal, event); ok {
 			switch act {
+			case keymap.ActGlobalTabResident:
+				if a.mode != modeAgent && !a.residentInputBlocked() {
+					a.switchTab(widget.TabResident)
+					return nil
+				}
 			case keymap.ActGlobalQuit:
 				if a.mode == modeTaskList {
 					a.stopTUI()
@@ -4479,7 +4545,7 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 				// the diff-based Show() failed to overwrite. Only outside agent view
 				// and off a focused Hera pane; otherwise fall through so the agent /
 				// pane gets the key (handleAgentKey's link-picker binding, or the PTY).
-				if a.mode != modeAgent && !a.heraPaneFocused() {
+				if a.mode != modeAgent && !a.heraPaneFocused() && a.header.ActiveTab() != widget.TabResident {
 					uxlog.Log("[tui] refresh — Sync")
 					a.screen.Sync()
 					return nil
@@ -4556,6 +4622,10 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 		}
 	}
 
+	if a.header.ActiveTab() == widget.TabResident {
+		a.forwardResidentKey(event)
+		return nil
+	}
 	switch a.mode {
 	case modeAgent:
 		return a.handleAgentKey(event)
@@ -4723,12 +4793,6 @@ func (a *App) toggleAgentZen() {
 	uxlog.Log("[tui] agent zen mode toggled: %v", a.agentZen)
 }
 
-// agentCrossReturn is where a Cmd+Right hop out of the agent view came from.
-type agentCrossReturn struct {
-	taskID string
-	zen    bool
-}
-
 // agentPaneRight is the agent view's "focus pane right" action. Unzoomed it
 // steps terminal → files; when cross-tab arrows are enabled, Right from the
 // rightmost visible pane (files unzoomed, the lone terminal when zoomed)
@@ -4755,14 +4819,14 @@ func (a *App) hopAgentViewToHera() {
 	a.exitAgentView()
 	a.switchTab(widget.TabHera)
 	if taskID != "" {
-		a.agentCrossReturn = &agentCrossReturn{taskID: taskID, zen: zen}
+		a.agentCrossReturn = &residentReturn{tab: widget.TabTasks, mode: modeAgent, taskID: taskID, zen: zen}
 	}
 }
 
 // returnToAgentView restores the agent view a hop left from, landing on its
 // rightmost visible pane (files unzoomed, terminal zoomed). Returns false when
 // there is nothing valid to restore, so the caller falls back to the task list.
-func (a *App) returnToAgentView(ret *agentCrossReturn) bool {
+func (a *App) returnToAgentView(ret *residentReturn) bool {
 	if ret == nil {
 		return false
 	}
@@ -5346,6 +5410,8 @@ func (a *App) restoreLastTab() {
 // lives here (persist-tasks-view-ui-state design.md).
 func lastTabString(t widget.Tab) string {
 	switch t {
+	case widget.TabResident:
+		return "tasks" // exiting on the resident always relaunches into Tasks
 	case widget.TabHera:
 		return "hera"
 	case widget.TabSettings:
@@ -5359,6 +5425,9 @@ func lastTabString(t widget.Tab) string {
 // local-only *db.DB type-assert, mirroring the hera rail state and
 // hide-hera-managed persistence sites. No-op in --remote mode.
 func (a *App) persistLastTab(t widget.Tab) {
+	if a.onPersistLastTab != nil {
+		a.onPersistLastTab(t)
+	}
 	d, ok := a.db.(*db.DB)
 	if !ok {
 		return
@@ -5370,6 +5439,24 @@ func (a *App) persistLastTab(t widget.Tab) {
 
 // switchTab changes the active top-level tab.
 func (a *App) switchTab(t widget.Tab) {
+	if a.onSwitchTab != nil {
+		a.onSwitchTab(t)
+	}
+	if t == widget.TabResident {
+		a.refreshResidentTab()
+		if a.header.TabLabel(t) == "" {
+			return
+		}
+	}
+	if a.header.ActiveTab() == widget.TabResident && t != widget.TabResident {
+		a.residentPane.SetFocused(false)
+		a.residentPane.SetSession(nil)
+	}
+	// Leaving agent view must restore the shell header before changing tabs.
+	if a.mode == modeAgent && t == widget.TabResident {
+		a.exitAgentView()
+		a.root.ResizeItem(a.header, 1, 0)
+	}
 	if t != widget.TabTasks && a.tasksRailViewing {
 		a.focusTasksRail()
 		a.mu.Lock()
@@ -5377,11 +5464,23 @@ func (a *App) switchTab(t widget.Tab) {
 		a.mu.Unlock()
 	}
 	a.agentCrossReturn = nil // any other navigation forgets the agent-view hop
+	a.residentReturn = nil
 	a.header.SetTab(t)
 	a.statusbar.SetTab(t)
 	a.persistLastTab(t)
+	a.syncResidentBox()
+	a.refreshResidentLabelOnly()
 
 	switch t {
+	case widget.TabResident:
+		a.mode = modeTaskList
+		a.refreshResidentTab()
+		a.residentPane.SetFocused(true)
+		a.root.ResizeItem(a.header, 1, 0)
+		a.pages.SwitchToPage("resident")
+		a.tapp.SetFocus(a.residentPane)
+		a.markResidentViewed()
+		uxlog.Log("[resident] tab selected")
 	case widget.TabTasks:
 		if a.tasksRailEnabled {
 			a.showTasksRail()
@@ -7709,6 +7808,8 @@ func (a *App) restorePageFocus(prev string) {
 	a.pages.SwitchToPage(prev)
 	// Restore focus to whichever widget owns the visible tab.
 	switch a.header.ActiveTab() {
+	case widget.TabResident:
+		a.tapp.SetFocus(a.residentPane)
 	case widget.TabSettings:
 		a.tapp.SetFocus(a.settings)
 	case widget.TabHera:
@@ -7757,6 +7858,9 @@ func (a *App) closeErrorModal() {
 	a.errorModal = nil
 	a.pages.RemovePage("error")
 	switch a.header.ActiveTab() {
+	case widget.TabResident:
+		a.pages.SwitchToPage("resident")
+		a.tapp.SetFocus(a.residentPane)
 	case widget.TabSettings:
 		a.pages.SwitchToPage("settings")
 		a.tapp.SetFocus(a.settings)
@@ -8848,10 +8952,13 @@ func (a *App) releaseIdlePaneMemory() {
 	if !a.idleReleaseEnabled.Load() || a.tapp == nil || a.agentPane == nil || a.heraPage == nil {
 		return
 	}
-	panes := []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane()}
+	panes := []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane(), a.residentPane}
 	a.tapp.QueueUpdate(func() {
 		now := time.Now()
 		for _, p := range panes {
+			if p == nil {
+				continue
+			}
 			releaseIdlePane(p, now)
 		}
 	})

@@ -6,6 +6,11 @@ test('named event patches task state and unknown events request resnapshot',()=>
  assert.equal(patchEvent(tasks,{type:'session.needs_input',task_id:'a',payload:{needs_input:true}}).tasks[0].needs_input,true);
  assert.equal(patchEvent(tasks,{type:'future.event'}).resnapshot,true);assert.equal(patchEvent(tasks,{type:'resync'}).resnapshot,true);
 });
+test('resident.* events neither patch tasks nor request a resnapshot',()=>{
+ const tasks=[{id:'a',status:'in_progress'}];
+ const result=patchEvent(tasks,{type:'resident.turn_completed',task_id:'a',payload:{}});
+ assert.equal(result.resnapshot,false);assert.equal(result.tasks,tasks);
+});
 test('SSE frames survive chunk boundaries, CRLF and comments',()=>{
  const parser=new SSEFrames(),result=[];for(const text of [':keep\r\n\r\nevent: task.ren','amed\r\ndata: {"id":2,','"type":"task.renamed"}\r\n\r\n'])result.push(...parser.feed(text));assert.equal(result.length,1);assert.equal(result[0].id,2);
 });

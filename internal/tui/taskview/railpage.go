@@ -18,6 +18,9 @@ type RailPage struct {
 	Bound       bool
 	PaneFocused func() bool
 	OnRailFocus func()
+	// Resident is drawn atop the rail column only while the content column is
+	// not visible (otherwise the agent view's left column already shows it).
+	Resident *widget.ResidentBox
 }
 
 func NewRailPage(list *TaskListView, content, terminal tview.Primitive) *RailPage {
@@ -31,9 +34,17 @@ func (p *RailPage) Draw(screen tcell.Screen) {
 	x, y, w, h := p.GetInnerRect()
 	widget.FillArea(screen, x, y, w, h, ' ', theme.StyleDefault)
 	rw := min(widget.RailWidth, w)
-	p.list.SetRect(x, y, rw, h)
-	p.list.Draw(screen)
 	p.visible = w > rw && h > 0
+	listY, listH := y, h
+	if p.Resident != nil && (!p.visible || !p.Bound) {
+		if rh := p.Resident.DesiredHeight(); rh > 0 && h-rh > 3 {
+			p.Resident.SetRect(x, y, rw, rh)
+			p.Resident.Draw(screen)
+			listY, listH = y+rh, h-rh
+		}
+	}
+	p.list.SetRect(x, listY, rw, listH)
+	p.list.Draw(screen)
 	if !p.visible {
 		if p.OnRailFocus != nil {
 			p.OnRailFocus()

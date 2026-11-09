@@ -197,7 +197,14 @@ type Daemon struct {
 	// polls for coordinators with a pending recycle request and restarts
 	// each once its session goes idle.
 	heraRecycleWatcher *hera.RecycleWatcher
-	clipboard          *clipboard.Store // agent-staged clipboard, in-memory
+
+	// taskRecycler is the one task_recycle runner (nil until MCP wiring); the
+	// resident manager consults it so its restart never races a recycle.
+	taskRecycler *taskRecycleRunner
+
+	residentOnce sync.Once
+	resident     *residentManager // add-resident-agent; built lazily by residentMgr
+	clipboard    *clipboard.Store // agent-staged clipboard, in-memory
 
 	// Boot identity — recorded once at New() so the TUI can detect when the
 	// on-disk binary has been rebuilt since the daemon started. binaryHash is
@@ -583,6 +590,12 @@ func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
 	if err != nil || t == nil || t.Status != model.StatusInProgress {
 		return
 	}
+	if t.IsResident() {
+		// The resident stays in_progress permanently; the ensure-running loop
+		// (not a status flip) handles its exit.
+		residentLog("[resident] session exit task=%s clean=%t (status unchanged)", taskID, cleanExit)
+		return
+	}
 	if cleanExit {
 		t.SetStatus(model.StatusComplete)
 	} else {
@@ -747,7 +760,7 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 	terminalAtStart := make(map[string]bool, len(tasks))
 	var skipped int
 	for _, t := range tasks {
-		if t == nil || t.Archived || t.Branch == "" {
+		if !prPollEligible(t) {
 			continue
 		}
 		if _, manual := manualPRs[t.ID]; manual {
@@ -1023,6 +1036,12 @@ func (d *Daemon) notifyRoleOfMergedPR(t *model.Task, prURL string) {
 	if _, sErr := d.heraNotifyService().Send(coord.ID, role.ID, body, tldr, nil); sErr != nil {
 		uxlog.Log("[pr] poll: role merge notice failed for %s: %v", t.ID, sErr)
 	}
+}
+
+// prPollEligible is the PR poller's base eligibility: a live, branched task.
+// The resident has no branch and is never polled (add-resident-agent).
+func prPollEligible(t *model.Task) bool {
+	return t != nil && !t.Archived && !t.IsResident() && t.Branch != ""
 }
 
 // shouldPollPR shares terminal verification and dormancy eligibility across pollers.
@@ -1650,6 +1669,9 @@ func (d *Daemon) Serve(sockPath string) error {
 		// (see task_recycle.go) only works across calls if the map itself
 		// persists between them.
 		taskRecycler := newTaskRecycleRunner(d.db, d.runner, d.cfgFn)
+		d.mu.Lock()
+		d.taskRecycler = taskRecycler
+		d.mu.Unlock()
 		mcpSrv.SetTaskRecycler(func(in mcp.TaskRecycleInput) error {
 			return taskRecycler.Recycle(in.TaskID, in.HandoffNote)
 		})
@@ -1727,7 +1749,9 @@ func (d *Daemon) Serve(sockPath string) error {
 			apiSrv.SetMCPRegistry(pluginRegistry)
 			apiSrv.SetNotifier(d.notifier)
 			apiSrv.SetFocusTracker(d.focusTracker)
+			d.mu.Lock()
 			d.apiServer = apiSrv
+			d.mu.Unlock()
 			d.restoreBridgeUsage = usagebudget.SetBridgeReader(apiSrv.BridgeUsage)
 			// argus_api_get: agents read daemon REST state in-process through the
 			// MCP server instead of curl + the master token. Only present when both
@@ -1759,6 +1783,14 @@ func (d *Daemon) Serve(sockPath string) error {
 			}
 		}
 	}
+
+	// Resident agent ensure-running loop (add-resident-agent D3). Runs after
+	// ReconcileOnStartup so a supervisor-held session is re-attached rather than
+	// double-started, and after the MCP/API servers are set up so the recycling
+	// and waiting closures see d.taskRecycler/d.apiServer and the first spawn
+	// gets the MCP port (the loop also waits on mcpReady). Inert while
+	// resident.enabled is false.
+	go d.residentMgr().run(d.done)
 
 	// Register RPC service.
 	// Embed the same *sessionCore so the session-scoped RPC methods (promoted

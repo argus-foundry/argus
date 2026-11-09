@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"log/slog"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -110,10 +111,19 @@ func (r *taskRecycleRunner) Recycle(taskID, handoffNote string) error {
 	// session's final reply to the user is written after this call returns, and
 	// the transcript extraction must see it.
 	originalPrompt := task.Prompt
+	resident := task.IsResident()
 	r.spawn(func() {
 		defer r.inFlight.Delete(taskID)
 		r.awaitIdleAndRestart(taskID, func(t *model.Task) string {
-			return buildTaskRecycleSeedPrompt(originalPrompt, handoffNote, recycleExchangeSection(t, r.cfgFn()))
+			cfg := r.cfgFn()
+			if resident {
+				// The resident re-reads its orientation and memory instead of a
+				// task prompt (add-resident-agent).
+				seed := buildResidentRecycleSeedPrompt(residentOrientationPrompt(cfg), handoffNote, cfg.Resident.MemoryDir, recycleExchangeSection(t, cfg))
+				residentLog("[resident] recycle seed composed task=%s bytes=%d", taskID, len(seed))
+				return seed
+			}
+			return buildTaskRecycleSeedPrompt(originalPrompt, handoffNote, recycleExchangeSection(t, cfg))
 		})
 	})
 	return nil
@@ -170,7 +180,12 @@ func (r *taskRecycleRunner) restart(taskID string, buildSeed func(*model.Task) s
 	if err := agent.StopStrayJobs(task, r.cfgFn(), task.SessionID); err != nil {
 		return fmt.Errorf("task_recycle restart: stop stray jobs for task %s: %w", taskID, err)
 	}
-	return restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, buildSeed(task), "")
+	// The resident launches at its dedicated size, not the Active view's.
+	var role db.HeraRoleKind
+	if task.IsResident() {
+		role = db.InitialPTYRoleResident
+	}
+	return restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, buildSeed(task), role)
 }
 
 // buildTaskRecycleSeedPrompt composes the opening prompt for the fresh
@@ -197,4 +212,22 @@ func buildTaskRecycleSeedPrompt(originalPrompt, handoffNote, lastExchange string
 	b.WriteString("\n")
 
 	return b.String()
+}
+
+// buildResidentRecycleSeedPrompt orders the resident seed: handoff, last
+// exchange, relay directive, working-memory recovery, then the persistent
+// orientation as background. lastExchange may be "" (fail-open).
+func buildResidentRecycleSeedPrompt(orientation, handoffNote, memoryDir, lastExchange string) string {
+	if memoryDir == "" {
+		memoryDir = "resident"
+	}
+	// Marked as Argus-injected so the next recycle's last-exchange extraction
+	// never quotes this seed as the user's message.
+	return lastexchange.SystemTurnPrefix + "You are a fresh resident session recycled to reset context. Follow this handoff first.\n\n" +
+		"## Handoff note from your prior session\n\n" + handoffNote + "\n" +
+		lastExchange + lastexchange.RelayDirective +
+		"\n## Recover working memory\n\nRead `" + path.Join(memoryDir, "open-loops.md") +
+		"` first, then `" + path.Join(memoryDir, "profile.md") +
+		"`, then continue from the handoff and open loops. No other recovery tool calls are needed.\n\n" +
+		"## Persistent orientation (background only)\n\n" + orientation + "\n"
 }

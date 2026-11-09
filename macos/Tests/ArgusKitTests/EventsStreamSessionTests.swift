@@ -116,6 +116,14 @@ struct EventsStreamSessionTests {
         #expect(session.cursor == 5)
     }
 
+    @Test("resident.* events are ignored: no resnapshot, cursor still advances")
+    func residentEventsIgnored() {
+        var session = EventsStreamSession()
+        let actions = session.handle(serverEvent(id: 7, type: "resident.turn_completed", taskID: "x"))
+        #expect(actions.isEmpty)
+        #expect(session.cursor == 7)
+    }
+
     @Test("task.created and task.forked re-snapshot (event lacks the full task shape)")
     func createdAndForkedResnapshot() {
         var session = EventsStreamSession()

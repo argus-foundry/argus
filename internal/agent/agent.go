@@ -840,6 +840,9 @@ func NeedsSessionRecapture(task *model.Task, cfg config.Config) bool {
 	}
 }
 
+// ResidentEnvMarker is exported (=1) into the resident's agent process only.
+const ResidentEnvMarker = "ARGUS_RESIDENT"
+
 // BuildCmd constructs the exec.Cmd for running an agent on a task.
 // If the task has a SessionID, the command uses --resume to reconnect.
 // If resume is false and SessionID is set, it uses --session-id for a new session with a known ID.
@@ -858,6 +861,31 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	cmdStr := backend.Command
 
 	fam := FamilyOf(backend.Command)
+	// residentArgusWrap records that the resident policy dropped the user's
+	// Claude sandbox `enabled` because Argus will wrap this launch itself.
+	residentArgusWrap := false
+	// Fail closed: a resident on a family that cannot enforce its tool policy
+	// and strip bypass flags must never launch with the policy silently dropped.
+	if task.IsResident() && (fam.PermissionRulesFlag == nil || fam.StripPermissionFlags == nil || fam.ResidentCommandCheck == nil) {
+		return nil, nil, fmt.Errorf("resident backend %q cannot enforce the resident permission policy", backend.Command)
+	}
+	// The resident's ask rules only prompt outside bypass modes: drop any
+	// bypass/permission-mode flag from its command and force default mode
+	// below, regardless of defaults.permission_mode.
+	forceDefaultPerm := task.IsResident() && fam.StripPermissionFlags != nil
+	if forceDefaultPerm {
+		stripped, err := fam.StripPermissionFlags(backend.Command)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resident backend %q: %w", backend.Command, err)
+		}
+		backend.Command = stripped
+		cmdStr = backend.Command
+		// Flag allowlist: refuse anything but the executable and known-benign
+		// flags (--allowedTools, --plugin-dir, --mcp-config, --settings, ...).
+		if err := fam.ResidentCommandCheck(backend.Command); err != nil {
+			return nil, nil, err
+		}
+	}
 	isCodex := fam.Kind == backendkind.Codex
 	isClaude := fam.Kind == backendkind.Claude
 	isOpencode := fam.Kind == backendkind.Opencode
@@ -876,7 +904,13 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	}
 	mcpFlag := ""
 	if cfg.MCPPort > 0 && fam.MCPFlag != nil {
-		mcpFlag = fam.MCPFlag(fmt.Sprintf("http://localhost:%d/mcp", cfg.MCPPort))
+		mcpURL := fmt.Sprintf("http://localhost:%d/mcp", cfg.MCPPort)
+		if task.IsResident() {
+			// Bind this connection to the resident so task_recycle can refuse to
+			// target any other task; the agent cannot alter its own spawn flags.
+			mcpURL += "?caller=" + url.QueryEscape(task.ID)
+		}
+		mcpFlag = fam.MCPFlag(mcpURL)
 		uxlog.Log("[mcp] configured task=%s family=%s client_timeout=%ds", task.ID, fam.Kind, mcplimits.ClientTimeoutSeconds)
 	}
 	cmdStr += mcpFlag
@@ -898,8 +932,14 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// receive one. Skipped when the command already names a permission flag
 	// (command wins) so we never double-inject. Injected before
 	// resume/session-id/prompt suffixes so the flags precede the "--" separator.
-	if fam.PermissionFlags != nil && !fam.HasPermissionFlag(backend.Command) {
-		if flags := fam.PermissionFlags(cfg.Defaults.PermissionMode); flags != "" {
+	// forceDefaultPerm already stripped every top-level permission flag; a
+	// substring match would also hit quoted arguments mentioning one.
+	if fam.PermissionFlags != nil && (forceDefaultPerm || !fam.HasPermissionFlag(backend.Command)) {
+		mode := cfg.Defaults.PermissionMode
+		if forceDefaultPerm {
+			mode = config.PermissionModeDefault
+		}
+		if flags := fam.PermissionFlags(mode); flags != "" {
 			cmdStr += " " + flags
 		}
 	}
@@ -935,6 +975,42 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	}
 	cmdStr += modelFlag
 
+	// The resident's self-contained permission policy (allow / ask / deny from
+	// [resident], merged with the account's own user-level deny/ask) rides the
+	// family's rules flag together with `--setting-sources project`, which
+	// drops the user's settings (allow rules, hooks, plugins, model). It sits
+	// after the model resolution so the account's own model is only carried
+	// over when nothing else chose one. Families without the flag cannot be a
+	// resident backend (checked above), so nothing is silently dropped.
+	if task.IsResident() && fam.PermissionRulesFlag != nil {
+		// Claude's Bash sandbox cannot nest inside Argus's sandbox-exec, so the
+		// user's `enabled` is not carried when the resident is itself sandboxed.
+		// Must be the SAME predicate the sandbox-wrap block below uses (never
+		// the persisted task.Sandboxed): dropping the user's Claude sandbox
+		// `enabled` is only safe when Argus really wraps the resident. If the
+		// wrap then fails, the launch is refused below rather than falling
+		// through unsandboxed with neither sandbox applied.
+		residentArgusWrap = argusWrapsSandbox(task, cfg)
+		us := readResidentUserSettings(task, cfg, residentArgusWrap)
+		policy := ResidentPolicy{
+			Allow:       cfg.Resident.AllowTools,
+			Ask:         mergeRules(cfg.Resident.AskTools, us.Ask),
+			Deny:        mergeRules(cfg.Resident.DenyTools, us.Deny),
+			HookCommand: residentStopHookCommand(),
+			Effort:      us.Effort,
+			Sandbox:     us.Sandbox,
+		}
+		if resolvedModel == "" && !hasModelFlag(backend.Command) {
+			policy.Model = us.Model
+		}
+		if flag := fam.PermissionRulesFlag(policy); flag != "" {
+			cmdStr += flag
+			uxlog.Log("[resident] permission policy delivered allow=%d ask=%d (user %d) deny=%d (user %d) model=%q", len(policy.Allow), len(policy.Ask), len(us.Ask), len(policy.Deny), len(us.Deny), policy.Model)
+			// BuildCmd runs in the daemon/supervisor, which never calls uxlog.Init.
+			slog.Info("[resident] permission policy delivered", "allow", len(policy.Allow), "ask", len(policy.Ask), "user_ask", len(us.Ask), "deny", len(policy.Deny), "user_deny", len(us.Deny), "model", policy.Model)
+		}
+	}
+
 	// Make argus's own builtin skills (archive, hera, ...) available through
 	// the family's discovery hook: Claude loads .claude/skills/ from a
 	// --add-dir directory (a documented exception to --add-dir otherwise
@@ -944,6 +1020,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// Materialization failure is logged and skipped rather than blocking
 	// launch.
 	opencodeSkillsDir := ""
+	residentClaude := task.IsResident() && fam.Kind == backendkind.Claude
 	switch fam.SkillDelivery {
 	case SkillsAddDir, SkillsFlag, SkillsInlineConfig, SkillsConfigOverlay:
 		if root, err := ensureSessionSkillsFn(); err != nil {
@@ -966,6 +1043,15 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		}
 	}
 
+	// The resident's restricted setting sources also drop the account's user
+	// skills; re-expose them through an --add-dir whose .claude/skills links to
+	// the account's skills dir (Claude only discovers <dir>/.claude/skills).
+	if residentClaude && fam.SkillDelivery == SkillsAddDir {
+		if root := ensureResidentUserSkillsDir(task, cfg); root != "" {
+			cmdStr += " --add-dir " + shellQuote(root)
+		}
+	}
+
 	// Make argus's own builtin routing content (hera coordination, argus-task
 	// self-management) reach Claude, Pi and opencode sessions by materializing
 	// it and delivering the path through the family's own flag or config —
@@ -978,9 +1064,26 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// logged and skipped rather than blocking launch.
 	opencodeRoutingPath := ""
 	if fam.RoutingDelivery != RoutingNone {
-		if path, err := ensureBuiltinRoutingFn(); err != nil {
+		path, err := ensureBuiltinRoutingFn()
+		if err != nil {
 			uxlog.Log("[routing] builtin routing content materialize failed (continuing without it): %v", err)
-		} else if path != "" {
+			path = ""
+		}
+		// The resident drops user settings sources but still gets the
+		// account's CLAUDE.md. Claude keeps only the LAST
+		// --append-system-prompt-file, so the routing content and CLAUDE.md
+		// ship as one combined file.
+		if residentClaude && fam.RoutingDelivery == RoutingSystemPromptFile {
+			if md := readResidentUserClaudeMD(task, cfg); md != "" {
+				if combined, cerr := materializeResidentPrompt(path, md); cerr != nil {
+					uxlog.Log("[resident] combined system prompt materialize failed (continuing without the user CLAUDE.md): %v", cerr)
+					slog.Warn("[resident] combined system prompt materialize failed", "err", cerr)
+				} else {
+					path = combined
+				}
+			}
+		}
+		if path != "" {
 			switch fam.RoutingDelivery {
 			case RoutingSystemPromptFile:
 				cmdStr += " --append-system-prompt-file " + shellQuote(path)
@@ -1091,13 +1194,19 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// Wrap with sandbox if enabled (effective config merges global + per-project overrides).
 	var sandboxCleanup func()
 	effectiveSandbox := sandboxWithCodexHome(sandboxWithClaudeConfigDir(ResolveSandboxConfig(task, cfg), claudeConfigDir), codexAccountHome)
-	if effectiveSandbox.Enabled && IsSandboxAvailable() && task.Worktree != "" {
+	// The single shared predicate (also used for the resident's sandbox-carry
+	// decision above). effectiveSandbox only adds write paths, never Enabled.
+	if argusWrapsSandbox(task, cfg) {
 		profilePath, params, cleanup, serr := GenerateSandboxConfigFor(fam, task.Worktree, effectiveSandbox)
 		if serr == nil {
 			cmdStr = WrapWithSandbox(cmdStr, profilePath, params)
 			sandboxCleanup = cleanup
+		} else if residentArgusWrap {
+			// The resident's own Claude sandbox `enabled` was dropped on the
+			// promise of this wrap: never fall through with neither applied.
+			return nil, nil, fmt.Errorf("resident sandbox profile: %w", serr)
 		}
-		// If sandbox config generation fails, fall through to unsandboxed
+		// Otherwise, if sandbox config generation fails, fall through to unsandboxed
 	}
 
 	// On any error return below, run sandboxCleanup so the temp profile file
@@ -1111,8 +1220,21 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	}()
 
 	// Every task must have a worktree — never run in the project directory.
+	// Chesterton's Fence: the rule exists to keep agents out of project
+	// directories. The resident agent has no project, so it is the single
+	// exception: a resident-kind task whose Worktree is exactly the resident
+	// working directory (a plain dir under the Argus data dir).
 	if task.Worktree == "" {
 		return nil, nil, fmt.Errorf("task %q has no worktree set — refusing to start without worktree isolation", task.Name)
+	}
+	if task.IsResident() && task.Worktree != db.ResidentWorkDir() {
+		return nil, nil, fmt.Errorf("resident task %q worktree %q is not the resident working directory %q", task.Name, task.Worktree, db.ResidentWorkDir())
+	}
+	// Inverse guard: a non-resident task rooted in the resident directory (e.g.
+	// an older TUI binary that does not send Task.Kind) would relaunch the
+	// resident without its permission policy, so fail closed.
+	if !task.IsResident() && filepath.Clean(task.Worktree) == filepath.Clean(db.ResidentWorkDir()) {
+		return nil, nil, fmt.Errorf("task %q runs in the resident working directory but is not the resident; refusing to spawn it without the resident permission policy (restart Argus onto the current binary)", task.Name)
 	}
 
 	// Pre-flight: confirm the worktree directory actually exists. Without this,
@@ -1237,6 +1359,10 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	if task.ID != "" {
 		cmd.Env = append(cmd.Env, "ARGUS_BRIDGE_GENERATION="+model.GenerateSessionID())
 		cmd.Env = append(cmd.Env, "ARGUS_TASK_ID="+task.ID)
+		// Marks the resident spawn only, so the Stop hook asks the daemon
+		// "am I the resident?" for the resident alone; every other task pays
+		// zero extra RPCs per turn. Appended in the final env pass below so
+		// an inherited or backend-configured marker can never leak or forge it.
 	}
 
 	// Artifact home account export (add-artifact-home-account). Recomputed on
@@ -1373,11 +1499,14 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// after every other environment source so none can forge or replace it.
 	filtered := cmd.Env[:0]
 	for _, entry := range cmd.Env {
-		if name, _, _ := strings.Cut(entry, "="); name != "ARGUS_SANDBOXED" {
+		if name, _, _ := strings.Cut(entry, "="); name != "ARGUS_SANDBOXED" && name != ResidentEnvMarker {
 			filtered = append(filtered, entry)
 		}
 	}
 	cmd.Env = filtered
+	if task.ID != "" && task.IsResident() {
+		cmd.Env = append(cmd.Env, ResidentEnvMarker+"=1")
+	}
 	if sandboxCleanup != nil {
 		cmd.Env = append(cmd.Env, "ARGUS_SANDBOXED=1")
 	}
@@ -1392,4 +1521,12 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 // replacement string below).
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// argusWrapsSandbox reports whether BuildCmd's sandbox-wrap block will wrap
+// this launch (sandbox enabled for the task, available on the platform, and a
+// worktree to scope it to). It is the single predicate for both the wrap and
+// the resident's decision to drop the user's own Claude sandbox `enabled`.
+func argusWrapsSandbox(task *model.Task, cfg config.Config) bool {
+	return ResolveSandboxConfig(task, cfg).Enabled && IsSandboxAvailable() && task.Worktree != ""
 }

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
@@ -43,6 +44,9 @@ type TaskCreator func(name, prompt, project, backend, taskModel, sandboxOverride
 // Server is the HTTP REST API server.
 type Server struct {
 	db *db.DB
+	// residentWaiting mirrors whether the resident is flagged needs-input
+	// (set by the needs-input tick, read by ResidentWaiting).
+	residentWaiting atomic.Bool
 
 	deleteOps          deleteOps
 	deleteJobMu        sync.Mutex
@@ -76,6 +80,9 @@ type Server struct {
 	// watcher, push fan-out housekeeping) to terminate. Range over <-stopCh
 	// in select-loops to honour shutdown.
 	stopCh chan struct{}
+	// idleWatcherDone is closed when the idle watcher goroutine exits, so tests
+	// can stop it and wait before swapping s.runner.
+	idleWatcherDone chan struct{}
 
 	// lastResizeCols tracks the most recent cols seen on /resize per task.
 	// xterm.js fires /resize on every mount (even when the viewport is the
@@ -204,20 +211,21 @@ func (s *Server) SetFocusTracker(f *notify.FocusTracker) {
 func New(database *db.DB, runner agent.SessionRunner, token string, creator TaskCreator, pushMgr *push.Manager) *Server {
 	hub := bridge.NewHub()
 	srv := &Server{
-		bridgeHub:      hub,
-		bridgeShadow:   bridge.NewShadow(hub, 0),
-		db:             database,
-		runner:         runner,
-		token:          token,
-		createTask:     creator,
-		push:           pushMgr,
-		eventBus:       newEventBus(),
-		stopCh:         make(chan struct{}),
-		lastResizeCols: make(map[string]uint16),
-		kickDeferSince: make(map[string]kickDeferClock),
-		pluginSections: settings.NewRegistry(),
-		metrics:        sysmetrics.New(db.DataDir()),
-		hostSleep:      hostsleep.NewMonitor(),
+		bridgeHub:       hub,
+		bridgeShadow:    bridge.NewShadow(hub, 0),
+		db:              database,
+		runner:          runner,
+		token:           token,
+		createTask:      creator,
+		push:            pushMgr,
+		eventBus:        newEventBus(),
+		stopCh:          make(chan struct{}),
+		idleWatcherDone: make(chan struct{}),
+		lastResizeCols:  make(map[string]uint16),
+		kickDeferSince:  make(map[string]kickDeferClock),
+		pluginSections:  settings.NewRegistry(),
+		metrics:         sysmetrics.New(db.DataDir()),
+		hostSleep:       hostsleep.NewMonitor(),
 	}
 	srv.rehydratePluginSections()
 	// Start the idle watcher unconditionally. It fires session.idle events
@@ -225,7 +233,10 @@ func New(database *db.DB, runner agent.SessionRunner, token string, creator Task
 	// Push notifications when pushMgr is non-nil. Splitting the two
 	// responsibilities keeps plugins observing idle transitions even on
 	// daemons that opted out of push.
-	go srv.idleWatcher()
+	go func() {
+		defer close(srv.idleWatcherDone)
+		srv.idleWatcher()
+	}()
 	if pushMgr == nil {
 		log.Printf("api: push disabled (no push manager provided)")
 	}

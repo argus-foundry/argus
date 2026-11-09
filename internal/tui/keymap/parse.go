@@ -119,13 +119,18 @@ func Parse(spec string) (Binding, error) {
 
 	// ctrl+<letter> → named control key.
 	if ctrl && !ctrlAlt && !shift {
+		if base == `\` {
+			// 0x1c: the one ctrl+punctuation spec supported — the resident
+			// toggle's default, reachable from any terminal (D9).
+			return Binding{Key: tcell.KeyCtrlBackslash}, nil
+		}
 		if len(base) == 1 {
 			r := rune(baseLower[0])
 			if k, ok := ctrlKeys[r]; ok {
 				return Binding{Key: k}, nil
 			}
 		}
-		return Binding{}, fmt.Errorf("ctrl+%s is not supported (only ctrl+<letter>; use cmd+<arrow> for arrows)", base)
+		return Binding{}, fmt.Errorf("ctrl+%s is not supported (only ctrl+<letter> and ctrl+\\; use cmd+<arrow> for arrows)", base)
 	}
 
 	// Named base (arrows, enter, space, …) possibly with cmd/shift.
@@ -187,6 +192,9 @@ func (b Binding) String() string {
 	}
 	if letter, ok := ctrlLetters[b.Key]; ok {
 		return "ctrl+" + string(letter)
+	}
+	if b.Key == tcell.KeyCtrlBackslash {
+		return `ctrl+\`
 	}
 	return fmt.Sprintf("key(%d)", int(b.Key))
 }

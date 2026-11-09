@@ -113,7 +113,7 @@ func (r *devStackReaper) eligibleWorktrees(rows []*model.Task, running map[strin
 	type claim struct{ blocked bool }
 	claims := map[string]*claim{}
 	for _, t := range rows {
-		if t.Worktree == "" {
+		if t.Worktree == "" || t.IsResident() {
 			continue
 		}
 		wt := filepath.Clean(t.Worktree)

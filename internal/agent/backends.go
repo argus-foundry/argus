@@ -3,10 +3,13 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -168,6 +171,21 @@ type Family struct {
 	// PermissionFlagTokens.
 	PermissionFlags      func(mode string) string
 	PermissionFlagTokens []string
+	// PermissionRulesFlag delivers the resident's self-contained permission
+	// policy (three-tier tool rules, add-resident-agent D6, plus the setting
+	// sources / inline hook that isolate it from user settings) as per-launch
+	// flags; nil means the family cannot enforce it.
+	PermissionRulesFlag func(p ResidentPolicy) string
+	// StripPermissionFlags removes permission-mode flags from a backend command
+	// so the resident can be forced out of bypass modes (ask rules do not
+	// prompt under bypass).
+	StripPermissionFlags func(command string) (string, error)
+	// ResidentCommandCheck is the resident's flag ALLOWLIST over the backend
+	// command (run after StripPermissionFlags): it returns an error naming
+	// the first word that is not the executable or an allowlisted flag/value.
+	// A user-supplied command could otherwise carry flags that load code or
+	// widen permissions outside the resident's inline settings.
+	ResidentCommandCheck func(command string) error
 
 	// Prelaunch runs before the fork (Pi's ollama warmup); nil skips.
 	Prelaunch func(ctx context.Context, task *model.Task, backend config.Backend) error
@@ -224,6 +242,199 @@ func claudeMCPFlag(url string) string {
 		"argus": map[string]any{"type": "http", "url": url, "timeout": mcplimits.ClientTimeoutMilliseconds},
 	}})
 	return " --mcp-config " + shellQuote(string(mcpConfig))
+}
+
+// ResidentPolicy is everything a family needs to make the resident's launch
+// self-contained: its three tool tiers plus the inline-settings replacements
+// for the user-level pieces a restricted setting-sources drops.
+type ResidentPolicy struct {
+	Allow, Ask, Deny []string
+	// HookCommand is the inline Stop hook (`<argus> coord-hook`) that replaces
+	// the user-level hook the restricted setting sources drop. Empty omits it.
+	HookCommand string
+	// Model and Effort carry the account settings' model / effortLevel so the
+	// resident does not silently change model when user settings are dropped.
+	Model, Effort string
+	// Sandbox is the user's Claude `sandbox` settings block with its
+	// allowlisted restrictive keys only (residentSandbox). Nil omits it.
+	Sandbox json.RawMessage
+}
+
+// claudePermissionRulesFlag makes the resident's Claude launch self-contained:
+// `--setting-sources project` drops every user-level setting (allow rules,
+// hooks, plugins, model), and an inline --settings JSON re-supplies exactly
+// the resident's own policy. Without that, the user's wildcard allow rules
+// would auto-approve any connector tool the resident does not list. ask beats
+// allow, deny removes the tool, and bypass mode is disabled outright.
+func claudePermissionRulesFlag(p ResidentPolicy) string {
+	perms := map[string]any{
+		"defaultMode":                  "default",
+		"disableBypassPermissionsMode": "disable",
+	}
+	if len(p.Allow) > 0 {
+		perms["allow"] = p.Allow
+	}
+	if len(p.Ask) > 0 {
+		perms["ask"] = p.Ask
+	}
+	if len(p.Deny) > 0 {
+		perms["deny"] = p.Deny
+	}
+	settings := map[string]any{"permissions": perms}
+	if p.HookCommand != "" {
+		settings["hooks"] = map[string]any{"Stop": []any{
+			map[string]any{"hooks": []any{map[string]any{"type": "command", "command": p.HookCommand}}},
+		}}
+	}
+	if p.Model != "" {
+		settings["model"] = p.Model
+	}
+	if p.Effort != "" {
+		settings["effortLevel"] = p.Effort
+	}
+	if len(p.Sandbox) > 0 {
+		settings["sandbox"] = p.Sandbox
+	}
+	raw, _ := json.Marshal(settings)
+	return " --setting-sources project --settings " + shellQuote(string(raw))
+}
+
+// shellWord is one top-level shell word: its half-open byte range in the
+// source string (quotes and escapes intact) and its POSIX quote-removed value.
+type shellWord struct {
+	start, end int
+	// value is the word after quote removal (what sh passes as the argument),
+	// so `"--flag"`, `--flag""` and `'--flag'` all compare equal to --flag.
+	value string
+}
+
+func isShellSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+
+// splitShellWords tokenizes command with POSIX word rules (whitespace
+// separates; single quotes, double quotes with backslash escapes, and
+// backslash escapes group; an unquoted backslash-newline is a line
+// continuation, i.e. removed, and a separator when it sits between words),
+// returning each word's original byte range and quote-removed value. An
+// unterminated quote or trailing backslash returns an error.
+func splitShellWords(command string) ([]shellWord, error) {
+	var words []shellWord
+	i, n := 0, len(command)
+	for i < n {
+		if isShellSpace(command[i]) {
+			i++
+			continue
+		}
+		if command[i] == '\\' && i+1 < n && command[i+1] == '\n' {
+			i += 2 // line continuation between words
+			continue
+		}
+		w := shellWord{start: i}
+		var val strings.Builder
+		for i < n {
+			c := command[i]
+			if isShellSpace(c) {
+				break
+			}
+			switch c {
+			case '\'':
+				j := strings.IndexByte(command[i+1:], '\'')
+				if j < 0 {
+					return nil, errors.New("unterminated single quote")
+				}
+				val.WriteString(command[i+1 : i+1+j])
+				i += j + 2
+			case '"':
+				i++
+				for {
+					if i >= n {
+						return nil, errors.New("unterminated double quote")
+					}
+					if command[i] == '\\' {
+						if i+1 >= n {
+							return nil, errors.New("unterminated double quote")
+						}
+						switch command[i+1] {
+						case '$', '`', '"', '\\':
+							val.WriteByte(command[i+1])
+						case '\n':
+						default:
+							val.WriteByte('\\')
+							val.WriteByte(command[i+1])
+						}
+						i += 2
+						continue
+					}
+					if command[i] == '"' {
+						i++
+						break
+					}
+					val.WriteByte(command[i])
+					i++
+				}
+			case '\\':
+				if i+1 >= n {
+					return nil, errors.New("trailing backslash")
+				}
+				if command[i+1] != '\n' {
+					val.WriteByte(command[i+1])
+				}
+				i += 2
+			default:
+				val.WriteByte(c)
+				i++
+			}
+		}
+		w.end = i
+		w.value = val.String()
+		words = append(words, w)
+	}
+	return words, nil
+}
+
+// stripClaudePermissionFlags drops --dangerously-skip-permissions,
+// --allow-dangerously-skip-permissions, --permission-mode (both "--permission-mode X"
+// and "--permission-mode=X" forms) from a command. (--allowedTools and every
+// other non-allowlisted flag is refused outright by checkClaudeResidentCommand,
+// which runs after this.) Words are compared by their
+// quote-removed value (the command runs under sh -c, so `"--flag"` is a real
+// flag), but only top-level words are considered: a quoted argument that merely
+// mentions a flag is untouched. Splicing is by word range: every kept word and
+// the separator text between kept words survive byte-for-byte, and nothing is
+// trimmed, so a line continuation or escaped space belonging to a kept word is
+// never eaten. An unparseable command (unbalanced quote) is an error rather
+// than a guess: the resident must not launch on a command whose permission
+// flags could not be reliably removed.
+func stripClaudePermissionFlags(command string) (string, error) {
+	words, err := splitShellWords(command)
+	if err != nil {
+		return "", fmt.Errorf("cannot strip permission flags: %w", err)
+	}
+	var b strings.Builder
+	prev := 0 // start of the not-yet-written region
+	for i := 0; i < len(words); i++ {
+		v := words[i].value
+		last := i
+		switch {
+		case v == "--dangerously-skip-permissions", v == "--allow-dangerously-skip-permissions",
+			strings.HasPrefix(v, "--permission-mode="):
+		case v == "--permission-mode":
+			if i+1 < len(words) {
+				last = i + 1 // its value word
+			}
+		default:
+			continue
+		}
+		if i > 0 && words[i-1].end > prev {
+			b.WriteString(command[prev:words[i-1].end])
+		}
+		prev = words[last].end
+		if b.Len() == 0 && last+1 < len(words) {
+			prev = words[last+1].start // no leading separator
+		}
+		i = last
+	}
+	b.WriteString(command[prev:])
+	return b.String(), nil
 }
 
 func codexMCPFlag(url string) string {
@@ -405,22 +616,25 @@ func injectAntigravityGlobal(port int, launching bool) error {
 
 var families = []*Family{
 	{
-		Spec:               mustSpec(backendkind.Claude),
-		PinsSessionID:      true,
-		ResumeFlag:         "--resume",
-		Capture:            captureClaude,
-		ResumeAvailable:    claudeResumeAvailable,
-		RecaptureEveryExit: true,
-		SessionSwitcher:    true,
-		BridgeMod:          true,
-		NativeArtifacts:    true,
-		CostSource:         CostSourceClaudeHook,
-		KnownModels:        []string{"opus", "sonnet", "haiku", "fable"},
-		ModelDelivery:      ModelFlag,
-		SkillDelivery:      SkillsAddDir,
-		RoutingDelivery:    RoutingSystemPromptFile,
-		MCPFlag:            claudeMCPFlag,
-		PermissionFlags:    config.PermissionModeFlags,
+		Spec:                 mustSpec(backendkind.Claude),
+		PinsSessionID:        true,
+		ResumeFlag:           "--resume",
+		Capture:              captureClaude,
+		ResumeAvailable:      claudeResumeAvailable,
+		RecaptureEveryExit:   true,
+		SessionSwitcher:      true,
+		BridgeMod:            true,
+		NativeArtifacts:      true,
+		CostSource:           CostSourceClaudeHook,
+		KnownModels:          []string{"opus", "sonnet", "haiku", "fable"},
+		ModelDelivery:        ModelFlag,
+		SkillDelivery:        SkillsAddDir,
+		RoutingDelivery:      RoutingSystemPromptFile,
+		MCPFlag:              claudeMCPFlag,
+		PermissionFlags:      config.PermissionModeFlags,
+		PermissionRulesFlag:  claudePermissionRulesFlag,
+		StripPermissionFlags: stripClaudePermissionFlags,
+		ResidentCommandCheck: checkClaudeResidentCommand,
 		PermissionFlagTokens: []string{
 			"--permission-mode", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
 		},
@@ -650,4 +864,124 @@ func ensureSandboxGrantDirsIn(f *Family, sb config.SandboxConfig, home string) {
 			uxlog.Log("[%s] create sandbox grant dir %s failed (continuing): %v", f.Kind, dir, err)
 		}
 	}
+}
+
+// residentClaudeValueFlags are the flags the resident's Claude command may
+// carry that take one value; residentClaudeBoolFlags take none. Everything
+// else is refused. --model is the only flag Argus itself ever appends to a
+// Claude command (hasModelFlag/ResolveModel); the rest are plain session
+// tuning verified against `claude --help` and none loads code, tools, MCP
+// servers, settings or directories, or touches permissions.
+var (
+	residentClaudeValueFlags = []string{"--model", "--effort", "--fallback-model"}
+	residentClaudeBoolFlags  = []string{"--verbose"}
+)
+
+// residentSafeWord is a command word that needs no shell escaping: a run of
+// plain characters and/or simple single-quoted segments (no shell
+// metacharacter, space or quote inside). The resident's command is accepted
+// only when every word after the executable matches it (the executable must
+// match the stricter residentSafeExe: a plain unquoted path), so a value like `x;rm`,
+// `"$(...)"` or `$HOME` cannot ride the allowlist into the sh -c line. `[` and
+// `]` are accepted only inside single quotes: unquoted they are a sh glob
+// pattern (`opus[1m]` could match a file in the cwd), so that form is refused
+// with a hint to single-quote it. The executable word alone may also lead with
+// `~/` (shell tilde expansion; `~user` and `$HOME` stay refused).
+var (
+	residentSafeWord = regexp.MustCompile(`^(?:[A-Za-z0-9_./+@%:,=-]|'[A-Za-z0-9_./+@%:,=\[\]-]+')+$`)
+	// residentSafeExe is the executable word: plain path characters only (no
+	// quoting, globs, escapes or `=` — `A=/x/claude` is a shell assignment, not
+	// a command), starting with a letter, digit, `_`, `.` or `/` (sh reads a
+	// leading `-`/`+` as options and `%` as a job spec), so its raw text is
+	// exactly the path stray-job cleanup and the backend-family lookup see.
+	residentSafeExe = regexp.MustCompile(`^[A-Za-z0-9_./][A-Za-z0-9_./+@%:,-]*$`)
+	residentQuoted  = regexp.MustCompile(`'[^']*'`)
+)
+
+// onlyUnquotedBrackets reports whether text is refused solely because of
+// unquoted [ or ] (so the error can suggest single-quoting).
+func onlyUnquotedBrackets(text string) bool {
+	var out strings.Builder
+	last := 0
+	for _, m := range residentQuoted.FindAllStringIndex(text, -1) {
+		out.WriteString(strings.NewReplacer("[", "", "]", "").Replace(text[last:m[0]]))
+		out.WriteString(text[m[0]:m[1]])
+		last = m[1]
+	}
+	out.WriteString(strings.NewReplacer("[", "", "]", "").Replace(text[last:]))
+	return out.String() != text && residentSafeWord.MatchString(out.String())
+}
+
+// checkClaudeResidentCommand enforces the resident's flag allowlist on a
+// Claude backend command: word 0 must be a Claude binary (any path whose base
+// is claude) and every other word must be an allowlisted flag, `=` form or
+// followed by its value word. The error names the offending word.
+func checkClaudeResidentCommand(command string) error {
+	// sh ends a command at an unescaped newline (like `;`), so anything after
+	// it — including every flag Argus appends — would run as a separate,
+	// failing command and the resident would launch without its policy. A
+	// `\`+newline continuation is fine: the word rules refuse `\` inside a
+	// word, so it can only sit in a gap. A bare CR splits words for the
+	// tokenizer but not for sh, so it is refused too.
+	if strings.ContainsAny(strings.ReplaceAll(command, "\\\n", ""), "\n\r") {
+		return fmt.Errorf("resident backend command must be one line (an unescaped newline ends the command in sh; end a line with \\ to continue it)")
+	}
+	words, err := splitShellWords(command)
+	if err != nil {
+		return fmt.Errorf("cannot check resident flags: %w", err)
+	}
+	if len(words) == 0 {
+		return fmt.Errorf("empty backend command")
+	}
+	raw := func(i int) string { return command[words[i].start:words[i].end] }
+	exe := words[0].value
+	safe := func(i int) error {
+		text := raw(i)
+		if i == 0 {
+			if !residentSafeExe.MatchString(strings.TrimPrefix(text, "~/")) {
+				return fmt.Errorf("executable %q not allowed for the resident (the executable must be a plain path: no quotes, globs, escapes, `=`, spaces or shell operators)", raw(i))
+			}
+			return nil
+		}
+		if !residentSafeWord.MatchString(text) {
+			if onlyUnquotedBrackets(text) {
+				return fmt.Errorf("word %q not allowed for the resident (unquoted [ ] is a shell glob; single-quote it, e.g. 'opus[1m]')", raw(i))
+			}
+			return fmt.Errorf("word %q not allowed for the resident (backend %q; quotes, spaces and shell operators are refused)", raw(i), exe)
+		}
+		return nil
+	}
+	if err := safe(0); err != nil {
+		return err
+	}
+	if backendkind.Of(words[0].value) != backendkind.Claude {
+		return fmt.Errorf("executable %q not allowed for the resident (not a Claude binary)", exe)
+	}
+	for i := 1; i < len(words); i++ {
+		v := words[i].value
+		name, _, hasEq := strings.Cut(v, "=")
+		switch {
+		case slices.Contains(residentClaudeBoolFlags, v):
+			if err := safe(i); err != nil {
+				return err
+			}
+		case slices.Contains(residentClaudeValueFlags, name):
+			if err := safe(i); err != nil {
+				return err
+			}
+			if hasEq {
+				continue
+			}
+			if i+1 >= len(words) || strings.HasPrefix(words[i+1].value, "-") {
+				return fmt.Errorf("flag %q needs a value for the resident (backend %q)", v, exe)
+			}
+			i++
+			if err := safe(i); err != nil {
+				return fmt.Errorf("flag %q: %w", v, err)
+			}
+		default:
+			return fmt.Errorf("flag %q not allowed for the resident (backend %q; allowed: --model, --effort, --fallback-model, --verbose)", v, exe)
+		}
+	}
+	return nil
 }

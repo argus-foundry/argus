@@ -11,6 +11,7 @@ import (
 // The body stored excludes frontmatter.
 func ParseDocument(path, content string) Document {
 	title, tags, body := parseYAMLFrontmatter(content)
+	extra := parseExtraFrontmatter(content)
 
 	// Fall back to first H1 heading if no title from frontmatter.
 	if title == "" {
@@ -41,7 +42,44 @@ func ParseDocument(path, content string) Document {
 		Tags:      tags,
 		Tier:      "hot",
 		WordCount: wordCount,
+		Extra:     extra,
 	}
+}
+
+// parseExtraFrontmatter returns the frontmatter lines other than title/tags
+// (and tags' list items) verbatim, so write-back keeps keys such as
+// `dream: skip` instead of silently dropping them. Indented continuation lines
+// belong to the preceding extra key.
+func parseExtraFrontmatter(content string) []string {
+	content = strings.TrimLeft(content, "\n\r")
+	if !strings.HasPrefix(content, "---") {
+		return nil
+	}
+	rest := strings.TrimPrefix(strings.TrimPrefix(content[3:], "\r"), "\n")
+	end := strings.Index(rest, "\n---")
+	if end == -1 {
+		return nil
+	}
+	var extra []string
+	inExtra := false
+	for _, raw := range strings.Split(rest[:end], "\n") {
+		line := strings.TrimRight(raw, "\r")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		indented := line[0] == ' ' || line[0] == '\t' || strings.HasPrefix(trimmed, "- ")
+		switch {
+		case !indented && (strings.HasPrefix(trimmed, "title:") || strings.HasPrefix(trimmed, "tags:")):
+			inExtra = false
+		case !indented:
+			inExtra = true
+			extra = append(extra, line)
+		case inExtra:
+			extra = append(extra, line)
+		}
+	}
+	return extra
 }
 
 // parseYAMLFrontmatter extracts title and tags from YAML frontmatter.
@@ -153,6 +191,10 @@ func RenderMarkdown(doc *Document) string {
 			}
 		}
 		sb.WriteString("]\n")
+	}
+	for _, line := range doc.Extra {
+		sb.WriteString(line)
+		sb.WriteString("\n")
 	}
 	sb.WriteString("---\n\n")
 	sb.WriteString(doc.Body)
