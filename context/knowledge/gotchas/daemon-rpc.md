@@ -204,3 +204,4 @@
 - **The loop skips while `HasPendingRestart` or a `task_recycle` is in flight** (`taskRecycleRunner.inFlight`), else it would start a session inside Recycle's kill-then-start gap. A cleared `SessionID` is what makes the next start fresh instead of `--resume`.
 - **The resident's `Waiting` flag comes from `api.Server.ResidentWaiting()`**, set in the needs-input tick just before the resident is stripped from the generic set; with the API server disabled it reads false.
 - **No supervisor wire fields were added**: the resident RPCs (`Daemon.ResidentState`, `Daemon.ResidentMarkViewed`, `Daemon.ResidentSend`) live on the daemon service only, so ProtocolVersion and the spawn-surface digest are unchanged.
+- **`config.ResidentPermissionsEnforced` is false until Stage 5 maps `ask_tools`/`deny_tools` to the session's permission rules**; while false `ResidentPrereq` refuses to start the resident. Stage 5 must flip it in the same change that enforces the lists.

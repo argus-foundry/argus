@@ -71,6 +71,14 @@ func ValidResidentName(s string) error {
 	return nil
 }
 
+// ResidentPermissionsEnforced gates resident start: AskTools/DenyTools are only
+// declarations until the launch path maps them to the session's permission
+// rules (add-resident-agent Stage 5). While false, ResidentPrereq refuses so the
+// advertised Slack-send denial and outward-action confirmation are never
+// silently skipped. Stage 5 flips this to true in the same change that
+// enforces the lists.
+var ResidentPermissionsEnforced = false
+
 // ResidentPrereq reports why the resident cannot start, or nil when it can: it
 // must be enabled, carry a valid name, and have the knowledge base available
 // (kb.enabled and an existing metis_vault_path directory).
@@ -81,6 +89,9 @@ func (c Config) ResidentPrereq() error {
 	}
 	if err := ValidResidentName(r.Name); err != nil {
 		return fmt.Errorf("a valid name is required to enable the resident: %w", err)
+	}
+	if !ResidentPermissionsEnforced {
+		return errors.New("resident permission policy (ask_tools/deny_tools) is not enforced yet; refusing to start")
 	}
 	if !c.KB.Enabled {
 		return errors.New("kb.enabled must be true: the resident keeps its memory in the knowledge base")
