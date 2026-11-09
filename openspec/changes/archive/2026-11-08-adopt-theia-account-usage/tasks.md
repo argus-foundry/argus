@@ -1,0 +1,4 @@
+- [x] Approve spec and verify accounts contract
+- [x] Add failing unit and browser coverage
+- [x] Render valid matching Claude usage
+- [x] Run unit suite and archive delta

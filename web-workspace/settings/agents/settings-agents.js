@@ -1,3 +1,4 @@
+import {accountWindows} from '../../composer/composer-context-policy.js';
 import {captureFocus} from '../../shared/focus-recovery.js';
 import { node, button, errorMessage } from '../../shared/dom.js';
 import { settingsSignal } from '../settings-fields.js';
@@ -43,6 +44,12 @@ export class AgentSettings {
     const codex = account.supports?.codex === false ? 'Codex unsupported' : typeof account.codex_logged_in === 'boolean' ? account.codex_logged_in ? 'Codex signed in' : 'Codex not signed in' : 'Codex sign-in unknown';
     row.append(node('p', 'settings-note', claude), node('p', 'settings-note', codex));
     for (const [key, label] of [['claude_config_dir', 'Claude config'], ['codex_home', 'Codex home']]) if (account[key]) row.append(node('p', 'settings-note', `${label} ${account[key]}`));
+    if(account.supports?.claude !== false) {
+      const windows=accountWindows(account);
+      row.append(node('p','settings-note',windows.length?'Claude usage':'Claude usage unavailable'));
+      for(const window of windows)row.append(node('p','settings-note',`${window.label} · ${Number((100-window.left).toFixed(2))}% used · resets ${new Date(window.reset).toLocaleString()}`));
+      log('settings-agents','Claude usage rendered',{count:windows.length});
+    }
     return row;
   }
   destroy() { this.abort.abort(); this.read?.abort(); }

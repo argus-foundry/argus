@@ -188,3 +188,5 @@
 
 - **Roster model resolution describes current configuration or planned intent, never confirmed launch telemetry.** Retain safe warnings and requested overrides separately; failed roster refresh labels retained team details stale and suppresses pressure styling.
 - **Roster pressure uses the server percent and the TUI 40/65/90 thresholds.** Null denominators stay uncomputed, null observation time says timing unknown, and coordinator denominators describe recycle budgets rather than model context.
+
+- **Agents account usage shares composer window validation and remains Claude-only.** Expired, null and invalid readings stay unavailable; Codex-only accounts omit the Claude usage block altogether.
