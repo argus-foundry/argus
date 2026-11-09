@@ -116,9 +116,6 @@ func TestHandleMoveTaskAccount(t *testing.T) {
 
 	t.Run("bad target is 400", func(t *testing.T) {
 		s, task := moveServer(t, &moveTestRunner{})
-		w := postMove(s, task.ID, `{"account":"default"}`)
-		testutil.Equal(t, w.Code, http.StatusBadRequest)
-		testutil.Contains(t, w.Body.String(), "already on account")
 		testutil.Equal(t, postMove(s, task.ID, `{"account":"ghost"}`).Code, http.StatusBadRequest)
 		testutil.Equal(t, postMove(s, task.ID, `not json`).Code, http.StatusBadRequest)
 	})

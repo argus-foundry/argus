@@ -102,6 +102,7 @@ func TestAccountMoveChoices_Local(t *testing.T) {
 		testutil.Equal(t, notice, "")
 		testutil.DeepEqual(t, choices, []modal.AccountChoice{
 			{Name: "auto", Detail: "lowest usage (now work)"},
+			{Name: "default", Detail: "5h 100% · wk — ⚠ near limit (current, restarts in place)"},
 			{Name: "work", Detail: "5h — · wk —"},
 		})
 	})
@@ -130,7 +131,8 @@ func TestRemoteAccountMoveChoices(t *testing.T) {
 	testutil.Equal(t, notice, "")
 	testutil.DeepEqual(t, choices, []modal.AccountChoice{
 		{Name: "auto", Detail: "lowest usage"},
-		{Name: "default", Detail: "5h 100% · wk —"},
+		{Name: "default", Detail: "5h 100% · wk — ⚠ near limit"},
+		{Name: "work", Detail: "5h — · wk — (current, restarts in place)"},
 	})
 
 	_, notice = remoteAccountMoveChoices(accountStore{list: []apiclient.AccountJSON{{Name: "work", Supports: apiclient.AccountSupportsJSON{Claude: true}}}}, "work")
@@ -178,7 +180,8 @@ func TestSmoke_MoveAccountFromTaskList(t *testing.T) {
 			readUI(t, app.tapp, func() {
 				testutil.Equal(t, app.accountPickerForce, !tc.idle)
 			})
-			sim.InjectKey(tcell.KeyDown, 0, 0) // auto → work
+			sim.InjectKey(tcell.KeyDown, 0, 0) // auto → default (current)
+			sim.InjectKey(tcell.KeyDown, 0, 0) // → work
 			sim.InjectKey(tcell.KeyEnter, 0, 0)
 
 			select {

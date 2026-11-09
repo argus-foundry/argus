@@ -139,13 +139,18 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	if err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: target account %q: %w", ErrAccount, to, err)
 	}
-	if filepath.Clean(srcDir) == filepath.Clean(dstDir) {
+	same := to == from
+	if !same && filepath.Clean(srcDir) == filepath.Clean(dstDir) {
 		// e.g. the backend pins CLAUDE_CONFIG_DIR through env_vars: switching
 		// the stored account would not change the login at all.
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: accounts %q and %q resolve to the same Claude config dir for this backend", ErrAccount, from, to)
 	}
-	resumed, err := copyClaudeTranscript(srcDir, dstDir, task.Worktree, task.SessionID)
-	if err != nil {
+	var resumed bool
+	if same {
+		// Re-picking the current account is a plain in-place restart: the
+		// transcript is already in this account's dir, nothing to copy.
+		resumed, _ = claudeResumeAvailable(task, cfg)
+	} else if resumed, err = copyClaudeTranscript(srcDir, dstDir, task.Worktree, task.SessionID); err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("copy transcript to account %q: %w", to, err)
 	}
 
@@ -230,9 +235,6 @@ func resolveMoveTarget(cfg config.Config, backendCommand, from, requested string
 	}
 	if !cfg.AccountSupports(target, backendCommand) {
 		return "", fmt.Errorf("%w: account %q does not support this task's backend", ErrAccount, target)
-	}
-	if NormalizeAccount(target) == from {
-		return "", fmt.Errorf("%w: task is already on account %q", ErrAccount, from)
 	}
 	return NormalizeAccount(target), nil
 }

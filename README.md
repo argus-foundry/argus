@@ -634,7 +634,7 @@ An account needs at least one of `claude_config_dir` / `codex_home`. Paths must 
 
 #### Moving a task to another account
 
-When an agent is stuck on its account's usage limit, press `>` on it (Task List or Projects rail) and pick another account, or `auto` for the one with the lowest current usage. The picker shows each account's 5-hour and weekly usage. Argus copies the conversation into that account, switches the task's account, and restarts the same task in place with the conversation resumed: same worktree, branch, and hera role, so its coordinator's messages still reach it. Nothing runs on the exhausted account, so it works with no usage left. A busy agent is interrupted after a warning, and its last in-flight turn may be lost.
+When an agent is stuck on its account's usage limit, press `>` on it (Task List or Projects rail) and pick an account, or `auto` for the other account with the lowest current usage. The picker lists every account (the current one marked; picking it restarts the task in place), shows each one's 5-hour and weekly usage, and warns on any at or above 80% without blocking it. Argus copies the conversation into that account, switches the task's account, and restarts the same task in place with the conversation resumed: same worktree, branch, and hera role, so its coordinator's messages still reach it. Nothing runs on the exhausted account, so it works with no usage left. A busy agent is interrupted after a warning, and its last in-flight turn may be lost.
 
 A coordinator can do the same for its workers with the MCP tool `task_move_account`, and any client can call `POST /api/tasks/{id}/account`. A task cannot move itself. Moving clears the routed mark, so the task's later workers inherit the account you picked.
 
