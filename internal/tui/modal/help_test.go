@@ -442,3 +442,63 @@ func TestSectionsFromKeymap_RailSwitcherRowFollowsRebind(t *testing.T) {
 	}
 	testutil.True(t, found)
 }
+
+func TestResidentSections_ListOnlyAllowedRailKeys(t *testing.T) {
+	secs := ResidentSectionsFromKeymap(keymap.DefaultKeymap())
+	var rail *HelpSection
+	for i := range secs {
+		if secs[i].Title == "Projects View (rail)" {
+			t.Fatalf("resident help must not carry the Projects rail section")
+		}
+		if secs[i].Title == ResidentRailTitle {
+			rail = &secs[i]
+		}
+	}
+	if rail == nil {
+		t.Fatalf("no %q section", ResidentRailTitle)
+	}
+	body := ""
+	for _, b := range rail.Bindings {
+		body += b.Key + " " + b.Action + "\n"
+	}
+	km := keymap.DefaultKeymap()
+	for _, act := range keymap.ResidentRailActions() {
+		bind, _ := km.BindingFor(keymap.CtxHeraRail, act)
+		testutil.Contains(t, body, km.ActionLabel(act))
+		testutil.Contains(t, body, bind.String())
+	}
+	for _, act := range []keymap.Action{keymap.ActHeraSpawn, keymap.ActHeraNewCoord, keymap.ActHeraPin,
+		keymap.ActHeraKanbanAdv, keymap.ActHeraAdopt, keymap.ActHeraCleanup, keymap.ActHeraClear, keymap.ActHeraMoveAccount} {
+		if strings.Contains(body, km.ActionLabel(act)) {
+			t.Errorf("inert action %q leaked into resident help", act)
+		}
+	}
+	if strings.Contains(body, "force recycle") {
+		t.Errorf("bounce key leaked into resident help")
+	}
+	// Non-rail sections are still present.
+	titles := ""
+	for _, s := range secs {
+		titles += s.Title + "|"
+	}
+	testutil.Contains(t, titles, "Global")
+	testutil.Contains(t, titles, "Modals & Forms")
+}
+
+func TestResidentSections_FollowRebind(t *testing.T) {
+	km, warns := keymap.Build(config.Keybindings{HeraRail: map[string]string{"archive": "H"}})
+	testutil.Equal(t, len(warns), 0)
+	var found bool
+	for _, sec := range ResidentSectionsFromKeymap(km) {
+		if sec.Title != ResidentRailTitle {
+			continue
+		}
+		for _, b := range sec.Bindings {
+			if b.Action == km.ActionLabel(keymap.ActHeraArchive) {
+				found = true
+				testutil.Equal(t, b.Key, "H")
+			}
+		}
+	}
+	testutil.True(t, found)
+}

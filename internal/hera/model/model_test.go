@@ -1306,3 +1306,41 @@ func TestModel_Clone(t *testing.T) {
 		testutil.True(t, e.Active == nil && e.Pinned == nil && e.Archived == nil && e.Freelance == nil)
 	})
 }
+
+func TestResidentReaderScopesToStandingOrchestrator(t *testing.T) {
+	d, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	if _, err := d.CreateHeraOrchestrator("proj", ""); err != nil {
+		t.Fatal(err)
+	}
+	task, _, err := d.EnsureResidentTask(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := d.EnsureResidentOrchestrator(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := BuildModel(NewResidentReader(d, d), nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Active) != 1 || m.Active[0].ID != o.ID {
+		t.Fatalf("resident model = %+v", m.Active)
+	}
+	plain, err := BuildModel(d, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range plain.Active {
+		if x.ID == o.ID {
+			t.Fatal("generic model leaked the standing orchestrator")
+		}
+	}
+	if _, err := NewResidentReader(d, d).DataVersion(); err != nil {
+		t.Fatalf("DataVersion forwarding: %v", err)
+	}
+}

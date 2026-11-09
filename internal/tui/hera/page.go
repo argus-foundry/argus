@@ -76,6 +76,14 @@ type HeraPage struct {
 	reader    heramodel.HeraReader
 	remote    bool
 
+	// Resident mode (add-resident-coordinator §6): the page is re-pointed at
+	// the standing orchestrator only. genericReader is the page's normal
+	// reader, residentReader the one scoped to the standing team; the mode
+	// swaps p.reader between them on the UI goroutine.
+	residentMode   bool
+	genericReader  heramodel.HeraReader
+	residentReader heramodel.HeraReader
+
 	// 6b pane feeds.
 	coordPane *terminal.TerminalPane // middle: orchestrator coordinator session
 	agentPane *terminal.TerminalPane // right: worker/leaf session (terminal mode)
@@ -372,6 +380,57 @@ func NewHeraPage(reader heramodel.HeraReader) *HeraPage {
 	p.plan.OnEnter = p.jumpToLeaf
 	p.refresher = NewRefresher(DefaultRefreshDebounce, p.doRefresh)
 	return p
+}
+
+// SetResidentReader wires the reader resident mode builds its model from (the
+// standing orchestrator only). Nil leaves resident mode unavailable.
+func (p *HeraPage) SetResidentReader(r heramodel.HeraReader) { p.residentReader = r }
+
+// ResidentMode reports whether the page is showing the standing team.
+func (p *HeraPage) ResidentMode() bool { return p.residentMode }
+
+// SetResidentMode switches the page between the Projects view (off) and the
+// resident view (on): one standing orchestrator, the resident session in the
+// coordinator pane, workers in the worker pane, and the resident key policy
+// (see handleRailMutation). It rebuilds the model synchronously from the
+// matching reader and rebinds both panes from scratch, so nothing of the other
+// mode's selection survives. MUST run on the tview main thread. A no-op in
+// remote mode or when turning on without a resident reader.
+func (p *HeraPage) SetResidentMode(on bool) {
+	if p.remote || p.residentMode == on {
+		return
+	}
+	if on && p.residentReader == nil {
+		uxlog.Log("[resident-view] enter skipped: no resident reader wired")
+		return
+	}
+	if on {
+		p.genericReader = p.reader
+		p.reader = p.residentReader
+	} else {
+		p.reader = p.genericReader
+	}
+	p.residentMode = on
+	uxlog.Log("[resident-view] mode=%v: rebuilding model and rebinding panes", on)
+	p.rail.ClearFilter()
+	p.focus.ToRail()
+	p.showBoard = false
+	// Unbind first so the rebuild's applySelection binds the new mode's tasks
+	// from a clean slate (fresh ResetVT + first-attach resync).
+	p.bindPane(p.coordPane, &p.coordBound, &p.coordKickedFor, &p.coordKickPending, "", "coord")
+	p.bindPane(p.agentPane, &p.agentBound, &p.agentKickedFor, &p.agentKickPending, "", "agent")
+	p.Refresh()
+}
+
+// coordKickBound is the task the coordinator pane's size-drift kick may act
+// on: none in resident mode, where the resident's own lifecycle (daemon
+// recycle/restart) owns the session and the pane only gets the one-shot
+// first-attach resync from bindPane.
+func (p *HeraPage) coordKickBound() string {
+	if p.residentMode {
+		return ""
+	}
+	return p.coordBound
 }
 
 // drillIntoChild is the plan widget's OnDrillIn handler (D6): the cursor sits on
@@ -957,7 +1016,7 @@ func (p *HeraPage) Draw(screen tcell.Screen) {
 			p.agentX, p.agentW = rx+rw, 0
 			p.coordPane.SetFocused(true)
 			p.coordPane.SetRect(rx, y, rw, h)
-			p.maybeKickPaneRerender(p.coordBound, &p.coordKickedFor, rw, &p.coordKickPending, p.coordPane.ScrollOffset() > 0)
+			p.maybeKickPaneRerender(p.coordKickBound(), &p.coordKickedFor, rw, &p.coordKickPending, p.coordPane.ScrollOffset() > 0)
 			p.coordPane.Draw(screen)
 		case FocusAgent:
 			p.agentX, p.agentW = rx, rw
@@ -982,7 +1041,7 @@ func (p *HeraPage) Draw(screen tcell.Screen) {
 	if coordW >= 2 {
 		p.coordPane.SetFocused(p.focus.State() == FocusCoord)
 		p.coordPane.SetRect(rx, y, coordW, h)
-		p.maybeKickPaneRerender(p.coordBound, &p.coordKickedFor, coordW, &p.coordKickPending, p.coordPane.ScrollOffset() > 0)
+		p.maybeKickPaneRerender(p.coordKickBound(), &p.coordKickedFor, coordW, &p.coordKickPending, p.coordPane.ScrollOffset() > 0)
 		p.coordPane.Draw(screen)
 	}
 	if agentW >= 2 {
@@ -1189,7 +1248,7 @@ func (p *HeraPage) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 		}
 		switch p.focus.State() {
 		case FocusRail:
-			if p.detailsMode && !p.rail.Filtering() {
+			if p.detailsMode && !p.rail.Filtering() && !p.residentMode {
 				if act, _ := p.keys().Resolve(keymap.CtxHeraBoard, event); act == keymap.ActBoardToggle {
 					p.showBoard = !p.showBoard
 					uxlog.Log("[board] toggled orch=%d board=%v", p.boardOrchID, p.showBoard)
@@ -1204,7 +1263,7 @@ func (p *HeraPage) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 			p.forwardKey(p.coordPane, event)
 		case FocusAgent:
 			if p.detailsMode {
-				if act, _ := p.keys().Resolve(keymap.CtxHeraBoard, event); act == keymap.ActBoardToggle {
+				if act, _ := p.keys().Resolve(keymap.CtxHeraBoard, event); act == keymap.ActBoardToggle && !p.residentMode {
 					p.showBoard = !p.showBoard
 					uxlog.Log("[board] toggled orch=%d board=%v", p.boardOrchID, p.showBoard)
 					return
@@ -1436,6 +1495,11 @@ func (p *HeraPage) handleRailMutation(event *tcell.EventKey) bool {
 		// back to the orchestrator's coordinator task — Enter on a header
 		// reattaches a DEAD coordinator session (and is navigate-only when live).
 		taskID := sel.FocusTaskID()
+		// The standing resident's session belongs to the daemon's resident
+		// manager (recycle/restart/revive); Enter on its row only navigates.
+		if p.residentMode && sel.IsCoordinator() {
+			taskID = ""
+		}
 		if taskID != "" && p.OnReattach != nil {
 			live := p.sessionLive(taskID)
 			if !live || !sel.IsCoordinator() {
@@ -1465,6 +1529,9 @@ func (p *HeraPage) handleRailMutation(event *tcell.EventKey) bool {
 	// on an empty selection. The key is still consumed so it never leaks to
 	// rail navigation.
 	if event.Key() == tcell.KeyRune && event.Rune() == 'B' {
+		if p.residentMode {
+			return true // bounce is a structure key: inert on the resident tab
+		}
 		switch {
 		case sel.IsCoordinator():
 			return p.fire(p.OnForceRecycle, sel)
@@ -1475,6 +1542,10 @@ func (p *HeraPage) handleRailMutation(event *tcell.EventKey) bool {
 		}
 	}
 	if act, ok := p.keys().Resolve(keymap.CtxHeraRail, event); ok {
+		if p.residentMode && !residentRailAllows(act, sel) {
+			uxlog.Log("[resident-view] key %s inert (worker-only or structure action)", act)
+			return true // consumed: never falls through to rail navigation
+		}
 		switch act {
 		case keymap.ActHeraDelete:
 			return p.fire(p.OnDelete, sel)
@@ -1538,6 +1609,20 @@ func (p *HeraPage) handleRailMutation(event *tcell.EventKey) bool {
 		}
 	}
 	return false
+}
+
+// residentRailAllows applies the resident tab's key policy (keymap data, not
+// literals): structure keys are inert, worker-only keys need a worker row, and
+// the resident's own row is protected from them.
+func residentRailAllows(act keymap.Action, sel heramodel.Selection) bool {
+	switch keymap.ResidentRailAccess(act) {
+	case keymap.ResidentAnywhere:
+		return true
+	case keymap.ResidentWorkerOnly:
+		return sel.IsWorkerOrFreelance()
+	default:
+		return false
+	}
 }
 
 // notifyFocusChange fires OnFocusChange with the current focus state. Called

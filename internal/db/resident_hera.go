@@ -123,3 +123,32 @@ func (d *DB) IsResidentOrchestrator(id int64) (bool, error) {
 	}
 	return false, err
 }
+
+// ListResidentOrchestrators returns the standing orchestrator as a one-element
+// list (empty before the daemon has created it), the resident tab's analogue of
+// ListHeraOrchestrators. Identity is the live binding to the resident task,
+// never the name: a legacy user orchestrator called "resident" is not returned.
+// Archived rows are returned only when includeArchived, matching the generic
+// list's contract.
+func (d *DB) ListResidentOrchestrators(includeArchived bool) ([]*HeraOrchestrator, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	query := `SELECT id, name, created_at, archived_at, pinned_at, nuked_at, base_branch, kanban_status FROM hera_orchestrators WHERE nuked_at IS NULL AND EXISTS (SELECT 1 FROM hera_bindings rb JOIN tasks rt ON rt.id=rb.argus_task_id WHERE rb.orchestrator_id=hera_orchestrators.id AND rb.ended_at IS NULL AND rt.kind='resident')`
+	if !includeArchived {
+		query += ` AND archived_at IS NULL`
+	}
+	rows, err := d.conn.Query(query + ` ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list resident orchestrators: %w", err)
+	}
+	defer rows.Close()
+	var out []*HeraOrchestrator
+	for rows.Next() {
+		o, err := scanHeraOrchestrator(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}

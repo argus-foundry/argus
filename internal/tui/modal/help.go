@@ -158,6 +158,48 @@ func SectionsFromKeymap(km *keymap.Keymap) []HelpSection {
 	return out
 }
 
+// ResidentRailTitle heads the resident tab's rail section.
+const ResidentRailTitle = "Resident view (rail)"
+
+// residentRailExtra are the structural rows the resident rail keeps: the same
+// navigation and pane-focus keys as the Projects rail, minus every key that
+// creates or restructures (force-recycle `B` included).
+var residentRailExtra = []HelpBinding{
+	{"j / k / space", "navigate team"},
+	{"/", "filter rail by name (↑/↓ navigate, Enter jumps in + clears, Esc clears)"},
+	{"Enter", "enter pane (revive dead/suspended worker)"},
+	{"Tab", "enter pane (then Tab → agent autocomplete)"},
+	{"ctrl+alt+← / →", "move between panes; ctrl+q back to rail"},
+	{"ctrl+z", "fullscreen pane"},
+	{"ctrl+y", "copy staged text (focused pane)"},
+	{"nuke / hide / rename / status", "worker rows only; inert on the resident row"},
+}
+
+// ResidentSectionsFromKeymap is SectionsFromKeymap for the resident tab: the
+// Projects rail section is replaced by the allowlisted rail actions, generated
+// from the keymap's resident policy so help can never list a key the tab
+// ignores (or hide one it honors).
+func ResidentSectionsFromKeymap(km *keymap.Keymap) []HelpSection {
+	secs := SectionsFromKeymap(km)
+	out := make([]HelpSection, 0, len(secs))
+	for _, sec := range secs {
+		switch sec.Title {
+		case "Projects View (rail)":
+			res := HelpSection{Title: ResidentRailTitle}
+			for _, r := range km.ResidentHelpRows() {
+				res.Bindings = append(res.Bindings, HelpBinding{Key: r.Key, Action: r.Label})
+			}
+			res.Bindings = append(res.Bindings, residentRailExtra...)
+			out = append(out, res)
+		case "Coordinator board":
+			// The resident has no board region.
+		default:
+			out = append(out, sec)
+		}
+	}
+	return out
+}
+
 // helpRow is one rendered line of help content.
 type helpRow struct {
 	key     string

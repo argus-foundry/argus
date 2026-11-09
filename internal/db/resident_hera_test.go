@@ -91,3 +91,34 @@ func TestEnsureResidentOrchestrator(t *testing.T) {
 	testutil.ErrorIs(t, d.ArchiveHeraRole(b.RoleID), ErrResidentProtected)
 	testutil.ErrorIs(t, d.EndHeraBinding(b.ID, "test"), ErrResidentProtected)
 }
+
+func TestListResidentOrchestratorsIsBindingBased(t *testing.T) {
+	d := testDB(t)
+	got, err := d.ListResidentOrchestrators(false)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(got), 0)
+
+	// A legacy user orchestrator named "resident" is not the standing team.
+	_, err = d.conn.Exec(`INSERT INTO hera_orchestrators(name,created_at) VALUES ('resident','2026-11-09')`)
+	testutil.NoError(t, err)
+	got, err = d.ListResidentOrchestrators(false)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(got), 0)
+
+	_, err = d.conn.Exec(`UPDATE hera_orchestrators SET name='legacy'`)
+	testutil.NoError(t, err)
+	task, _, err := d.EnsureResidentTask(t.TempDir())
+	testutil.NoError(t, err)
+	o, err := d.EnsureResidentOrchestrator(task.ID)
+	testutil.NoError(t, err)
+	got, err = d.ListResidentOrchestrators(false)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(got), 1)
+	testutil.Equal(t, got[0].ID, o.ID)
+	// The generic list still hides it.
+	all, err := d.ListHeraOrchestrators(true)
+	testutil.NoError(t, err)
+	for _, x := range all {
+		testutil.False(t, x.ID == o.ID)
+	}
+}
