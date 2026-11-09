@@ -274,6 +274,7 @@ events = new WorkspaceEvents(api, { refresh: refreshTasks, pin:event=>railAction
   if(result.resnapshot)events.scheduleSnapshot();
   log('events','applied',{count:tasks.length});
 } });
+api.inputRejected=id=>events.rejectInput(id);
 events.callbacks.board=event=>{tools.event(event);events.scheduleSnapshot();};
 events.callbacks.reconcile=()=>tools.event({type:'resync'});
 split = new SplitWorkspace(() => terminal);

@@ -49,6 +49,17 @@ export class Api {
       };
       const error = new Error(descriptions[response.status] || `Argus request failed (${response.status}).`);
       error.status = response.status;
+      if (response.status === 409 && (requestOptions.method || 'GET').toUpperCase() === 'POST') {
+        let guard;
+        try { guard = await response.json(); } catch {}
+        if (/^\/api\/tasks\/[^/]+\/input$/.test(path) && guard?.code === 'task_archived') {
+          error.code = 'task_archived';
+          error.message = 'Task is archived. Restore it before sending again.';
+        } else if (/^\/api\/tasks\/[^/]+\/(resume|restart)$/.test(path) && guard?.code === 'hera_closeout') {
+          error.code = 'hera_closeout';
+          error.canForceRevive = guard.can_force_revive === true;
+        }
+      }
       throw error;
     }
     if (!['GET', 'HEAD'].includes((requestOptions.method || 'GET').toUpperCase()) &&

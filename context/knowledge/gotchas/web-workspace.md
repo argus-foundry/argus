@@ -177,3 +177,6 @@
 - **Prefetch backend classification off the input path and hold at most one unresolved focus-out for two seconds, without holding other input.** Match present backend kinds `claude` and `""` (custom on the wire), discard stale reports after intervening input, and accept that a literal exact ESC [ O paste with bracketed paste off is indistinguishable and dropped for resolved Claude-family sessions.
 - **Retry a failed backend prefetch after 250 ms and one second, capped at three total attempts, with a post-await cancellation fence.** Adopt successful shared-cache reads, cancel held reports and timers on teardown, and never retry per keystroke.
 - **Claude Code suppresses suggestions for non-`allowed` rate-limit states unless the state is `allowed_warning` and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=true`.** The warning banner alone does not diagnose a missing suggestion; other upstream gates and bridge/composer failures still require checking.
+
+- **A coded task_archived rejection must enter the same revision-fenced reconciliation as archive SSE.** Fence raw and composed writes synchronously before starting the new snapshot; restoration only enables a new deliberate send, never replay.
+- **Force revival belongs only to a confirmed hera_closeout conflict with can_force_revive true.** Busy/restarting errors never force, and a forced failure never loops.

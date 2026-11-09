@@ -1,0 +1,4 @@
+- [x] Verify merged contracts and approval
+- [x] Add failing unit and browser regression coverage
+- [x] Implement archived input reconciliation and deliberate revival
+- [x] Run workspace tests and archive delta

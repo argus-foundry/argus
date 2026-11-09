@@ -26,6 +26,12 @@ export class WorkspaceEvents {
   this.pending=[];this.buffering=false;
   if(resnapshot||this.archivePending.size)this.scheduleSnapshot();return tasks;
  }
+ rejectInput(id){
+  this.archivePending.set(id,++this.archiveRevision);
+  this.callbacks.event({type:'task.archived',task_id:id});
+  this.problem('Task is archived. Restore it before sending again. Your draft is kept.');
+  this.scheduleSnapshot();log('events','authoritative archive rejection');
+ }
  fallbackPoll(){clearInterval(this.fallback);this.seenTaskUpdates=false;this.fallback=setInterval(()=>{if(this.running&&!document.hidden)this.callbacks.refresh();},30000);}
  async open(){
   this.fallbackPoll();

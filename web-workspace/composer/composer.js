@@ -93,7 +93,7 @@ export class TaskComposer {
     if ($('send').getAttribute('aria-label') !== sendLabel) $('send').setAttribute('aria-label', sendLabel);
     if ($('send').dataset.tooltip !== sendLabel) $('send').dataset.tooltip = sendLabel;
     text($('composer-label'), this.identity.label());
-    const error = task && this.errors.get(task.id);
+    const error = task && (this.errors.get(task.id) || (task.archived ? 'Task is archived. Restore it before sending again. Your draft is kept.' : task.archive_pending ? 'Task input is blocked while archive state is checked. Your draft is kept.' : ''));
     if ($('composer-status').classList.contains('error') !== !!error) $('composer-status').classList.toggle('error', !!error);
     text($('composer-status'), error || (pending ? 'Sending to this task. Your draft is kept until delivery succeeds.' : task && !this.interactive ? 'The session is not accepting messages. You can keep drafting.' : 'Enter to send · Shift+Enter for a new line'));
     this.suggestion.render(); this.attachments.render();restore();
@@ -122,7 +122,7 @@ export class TaskComposer {
           [$('draft'), $('send'), document.body].includes(document.activeElement)) this.focus();
     } catch (error) {
       if (generation !== this.generation) return;
-      this.errors.set(task.id, `Message was not confirmed. Your draft is kept. Check the terminal before resending. ${error.message}`);
+      this.errors.set(task.id, error.code === 'task_archived' ? 'Message was rejected because the task was archived. Your draft and attachments are kept. Restore the task before sending again.' : `Message was not confirmed. Your draft is kept. Check the terminal before resending. ${error.message}`);
       log('composer', 'send failed', { status: error.status || 'error' });
     } finally {
       if (generation === this.generation) { this.pending.delete(task.id); this.render(); }
