@@ -16,11 +16,17 @@ import (
 type moveAccountRequest struct {
 	Account string `json:"account"`
 	Force   bool   `json:"force"`
+	// Backend, when set, moves the task to another agent CLI by a restart with
+	// handoff (the conversation is not carried over). Account then defaults to
+	// "default" and must support that backend.
+	Backend string `json:"backend"`
 }
 
 // handleMoveTaskAccount moves a Claude task to another account and resumes its
-// conversation there (agent.MoveTaskAccount). A live session is restarted in
-// place; an exited one goes through the same path as /restart.
+// conversation there (agent.MoveTaskAccount). With `backend` it instead moves
+// the task to another CLI (agent.MoveTaskBackend): a restart with handoff, not
+// a resume. A live session is restarted in place; an exited one goes through
+// the same path as /restart.
 func (s *Server) handleMoveTaskAccount(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req moveAccountRequest
@@ -28,7 +34,7 @@ func (s *Server) handleMoveTaskAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body", err)
 		return
 	}
-	res, status, err := s.moveTaskAccount(agent.AccountMoveInput{TaskID: id, Account: req.Account, Force: req.Force})
+	res, status, err := s.moveTaskAccount(agent.AccountMoveInput{TaskID: id, Account: req.Account, Backend: req.Backend, Force: req.Force})
 	if err != nil {
 		writeErr(w, status, err.Error(), nil)
 		return

@@ -928,6 +928,58 @@ func (d *DB) setTaskAccountLocked(id, account string, routed bool) (bool, error)
 	return oldAccount != account || (oldRouted != 0) != routed, nil
 }
 
+// TaskBackendMove is the set of task columns a move to another agent CLI
+// rewrites together. It is also the shape returned for rollback.
+type TaskBackendMove struct {
+	Backend       string
+	Model         string
+	Account       string
+	AccountRouted bool
+	SessionID     string
+	Prompt        string
+}
+
+// SetTaskBackendMove writes the backend-move columns in one statement and
+// returns the previous values so a failed restart can restore them. Nothing
+// else on the row is touched, so a concurrent status/result write is never
+// clobbered (unlike a whole-row Update).
+func (d *DB) SetTaskBackendMove(id string, m TaskBackendMove) (TaskBackendMove, error) {
+	prev, err := d.setTaskBackendMoveLocked(id, m)
+	if err != nil {
+		return TaskBackendMove{}, err
+	}
+	var fields []string
+	if prev.Backend != m.Backend || prev.Model != m.Model || prev.SessionID != m.SessionID {
+		fields = append(fields, model.TaskFieldRuntime)
+	}
+	if prev.Account != m.Account || prev.AccountRouted != m.AccountRouted {
+		fields = append(fields, model.TaskFieldAccount)
+	}
+	events.EmitTaskUpdated(id, fields...)
+	return prev, nil
+}
+
+func (d *DB) setTaskBackendMoveLocked(id string, m TaskBackendMove) (TaskBackendMove, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var prev TaskBackendMove
+	var routed int
+	err := d.conn.QueryRow(`SELECT backend, model, account, account_routed, session_id, prompt FROM tasks WHERE id=?`, id).
+		Scan(&prev.Backend, &prev.Model, &prev.Account, &routed, &prev.SessionID, &prev.Prompt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TaskBackendMove{}, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+		}
+		return TaskBackendMove{}, err
+	}
+	prev.AccountRouted = routed != 0
+	if _, err := d.conn.Exec(`UPDATE tasks SET backend=?, model=?, account=?, account_routed=?, session_id=?, prompt=? WHERE id=?`,
+		m.Backend, m.Model, m.Account, boolToInt(m.AccountRouted), m.SessionID, m.Prompt, id); err != nil {
+		return TaskBackendMove{}, err
+	}
+	return prev, nil
+}
+
 // TaskWorktreeRow is the minimal task projection `argus doctor` needs to map a
 // running dev-stack process back to its task.
 type TaskWorktreeRow struct {

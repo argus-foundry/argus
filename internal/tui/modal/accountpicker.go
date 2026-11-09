@@ -10,8 +10,11 @@ import (
 // AccountChoice is one target account offered by the AccountPickerModal.
 // Detail is shown after the name (e.g. its usage).
 type AccountChoice struct {
-	Name   string
+	Name   string // the value Selected returns
+	Label  string // shown instead of Name when set
 	Detail string
+	// Note is a dim line shown under the list while this choice is highlighted.
+	Note string
 }
 
 // AccountPickerModal asks which account to move a task to. An optional warning
@@ -78,7 +81,16 @@ func (m *AccountPickerModal) Draw(screen tcell.Screen) {
 	if width <= 0 || height <= 0 {
 		return
 	}
+	hasNote := false
+	for _, c := range m.choices {
+		if c.Note != "" {
+			hasNote = true
+		}
+	}
 	formW := min(64, width-4)
+	if hasNote {
+		formW = min(80, width-4)
+	}
 	if formW < 12 {
 		formW = width
 	}
@@ -88,6 +100,9 @@ func (m *AccountPickerModal) Draw(screen tcell.Screen) {
 	chrome := 6
 	if m.warning != "" {
 		chrome += 2
+	}
+	if hasNote {
+		chrome++
 	}
 	shown := m.choices
 	if maxChoices := max(height-chrome, 0); len(shown) > maxChoices {
@@ -118,10 +133,16 @@ func (m *AccountPickerModal) Draw(screen tcell.Screen) {
 			prefix = "❯ "
 		}
 		label := c.Name
+		if c.Label != "" {
+			label = c.Label
+		}
 		if c.Detail != "" {
 			label += "  " + c.Detail
 		}
 		widget.DrawText(screen, formX+2, row+i, formW-4, prefix+label, style)
+	}
+	if hasNote && m.cursor >= 0 && m.cursor < len(m.choices) {
+		widget.DrawText(screen, formX+2, formY+formH-3, formW-4, m.choices[m.cursor].Note, theme.StyleDimmed)
 	}
 	widget.DrawText(screen, formX+2, formY+formH-2, formW-4, "↑/↓ move    Enter = move    Esc = cancel", theme.StyleDimmed)
 }

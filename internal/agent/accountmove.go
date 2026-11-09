@@ -60,6 +60,9 @@ type AccountMoveInput struct {
 	TaskID  string
 	Account string
 	Force   bool
+	// Backend, when set, makes this a move to another agent CLI: a restart in
+	// place with a handoff seed (MoveTaskBackend), not a resume.
+	Backend string
 	// Rows/Cols size the restarted PTY (0 → 24x80; the pane resizes it later).
 	Rows, Cols uint16
 }
@@ -73,6 +76,13 @@ type AccountMoveResult struct {
 	To      string `json:"to"`
 	Resumed bool   `json:"resumed"`
 	Started bool   `json:"started"`
+
+	// Set only by a backend move (MoveTaskBackend), a restart with handoff.
+	// ConversationCarried is always false: the conversation never comes along.
+	FromBackend         string `json:"from_backend,omitempty"`
+	ToBackend           string `json:"to_backend,omitempty"`
+	Handoff             bool   `json:"handoff,omitempty"`
+	ConversationCarried bool   `json:"conversation_carried,omitempty"`
 }
 
 // accountMoveRunner is the slice of a session runner a move needs: the live
@@ -91,6 +101,9 @@ type accountMoveRunner interface {
 // and restarts a live session in place under the target with --resume. The
 // task row, worktree, branch and hera bindings are untouched.
 func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveInput) (*model.Task, AccountMoveResult, error) {
+	if strings.TrimSpace(in.Backend) != "" {
+		return MoveTaskBackend(database, runner, in)
+	}
 	if !claimAccountMove(in.TaskID) {
 		return nil, AccountMoveResult{}, errAccountMovePending
 	}
