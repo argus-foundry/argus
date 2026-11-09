@@ -7,8 +7,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // ErrMetaInvalidKey rejects writes with an empty task_id, namespace, or key.

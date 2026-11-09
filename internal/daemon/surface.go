@@ -206,13 +206,17 @@ const (
 	//     handed-back draft into a resumed session's box (kick-timing-keep-place).
 	//     A stale supervisor's sessions never report drafts, so the TUI falls
 	//     back to its typed-since-submit signal and a kick restores nothing.
-	// 39: the resident agent's launch carries its ask/deny tool rules as an
+	// 39: a recycle's fresh pinned --session-id rides RecycleReq.SessionID into
+	//     the supervisor's BuildCmd (fix-recycle-session-id). A stale supervisor
+	//     recycles Claude sessions with no --session-id, leaving the task row
+	//     without a resumable ID (ctrl+n re-render refuses).
+	// 40: the resident agent's launch carries its ask/deny tool rules as an
 	//     inline --settings flag and a non-bypass permission mode is forced
 	//     (add-resident-agent D6), and its Argus MCP URL is bound to its own task
 	//     (?caller=). A stale supervisor spawns the resident without them, so outward actions would not prompt.
-	//     The supervisor also rebuilds Task.Kind from the wire (protocol v12);
+	//     The supervisor also rebuilds Task.Kind from the wire (protocol v13);
 	//     without it BuildCmd cannot tell the resident from a plain task.
-	SupervisorSpawnSurface = 39
+	SupervisorSpawnSurface = 40
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -272,7 +276,12 @@ const (
 	//     SessionStatus surfaces a failed supervisor probe as an error instead
 	//     of Alive=false — a post-restart probe can no longer manufacture a
 	//     clean exit that completes a live coordinator.
-	SupervisorStreamSurface = 15
+	//   - v16: Session.Resize records each PTY size change in the append-only
+	//     <task>.sizes index (log-offset, cols, rows) beside the session log, and
+	//     the log is truncated together with it at session start
+	//     (add-session-width-index). A supervisor that predates this writes no
+	//     index and the replay falls back to a single width. No wire change.
+	SupervisorStreamSurface = 16
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -511,8 +520,8 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "60c324990452815d9a6b3163cfdb4123936eca9f8c863ba8924795f51e57408c"
-	StreamSurfaceDigest = "11024ea57e1c40147b4c52d778af95da81fd73b07eccf004cf014df871efd1be"
+	SpawnSurfaceDigest  = "912dcb707a964a0688e2fb7914b3a679d13f8e12c35dc6832e291367f640a0e5"
+	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

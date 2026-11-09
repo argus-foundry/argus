@@ -1,0 +1,4 @@
+- [x] `tiering.ContextFor`, `ContextLevel`, shared `ContextPercent`
+- [x] `context` field on heraRoleJSON
+- [x] Tests: projection (kinds, missing, malformed, budget, clamp), HTTP
+- [x] Docs: README reference, gotchas

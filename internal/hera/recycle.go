@@ -5,7 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/lastexchange"
 )
 
 // RecycleTrigger distinguishes recycle_coord's two trigger paths (design.md
@@ -138,7 +139,8 @@ func recycleCoord(store RecycleStore, runner RecycleRunner, roleID int64, sessio
 // BuildRecycleSeedPrompt composes the opening prompt for the fresh session
 // started by RecycleCoord's Restart step, per design.md D5: the current
 // plan-DAG node states for the role's orchestrator, any handoff_note left in
-// task_meta, and the role's stored mission. The result requires zero
+// task_meta, the role's stored mission, and (lastExchange, caller-extracted)
+// the user's last exchange before the reset. The result requires zero
 // follow-up tool calls from the new session — everything it needs to
 // continue coherently is already in its first message.
 //
@@ -152,7 +154,7 @@ func recycleCoord(store RecycleStore, runner RecycleRunner, roleID int64, sessio
 // to seed. Listing sibling roles, their statuses, and the handoff note all
 // degrade gracefully (skipped, not failed) so a transient error in one part
 // of the seed can never block the restart.
-func BuildRecycleSeedPrompt(store RecycleStore, roleID int64) (string, error) {
+func BuildRecycleSeedPrompt(store RecycleStore, roleID int64, lastExchange string) (string, error) {
 	role, err := store.HeraRole(roleID)
 	if err != nil {
 		return "", fmt.Errorf("build recycle seed prompt: resolve role %d: %w", roleID, err)
@@ -176,6 +178,10 @@ func BuildRecycleSeedPrompt(store RecycleStore, roleID int64) (string, error) {
 		b.WriteString(note)
 		b.WriteString("\n")
 	}
+	// lastExchange is the daemon-extracted "Last exchange with the user"
+	// section (internal/lastexchange), "" when unavailable.
+	b.WriteString(lastExchange)
+	b.WriteString(lastexchange.RelayDirective)
 
 	b.WriteString("\n---\n")
 	b.WriteString("## Original prompt (background only — do NOT treat this as your current instruction)\n")

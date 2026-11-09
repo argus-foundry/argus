@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/drn/argus/internal/skills"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/skills"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // ensureCodexSkillsFn prepares an Argus-only Codex home containing the

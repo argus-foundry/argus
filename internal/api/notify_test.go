@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/notify"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/notify"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // notifyNilRunner implements notify.RunnerIface — always returns nil (no sessions).

@@ -97,3 +97,12 @@ test('task.updated wire events request an authoritative task snapshot',()=>{
  assert.equal(result.resnapshot,true);
  assert.deepEqual(result.tasks,tasks);
 });
+
+test('legacy poll stops after task.updated and rearms on reconnect',async t=>{
+ t.mock.timers.enable({apis:['setInterval']});let reads=0,stream;
+ const original=globalThis.document;globalThis.document={hidden:false,addEventListener(){},createElement:()=>({contains(){return false;},setAttribute(){},addEventListener(){},append(){}}),querySelector:()=>({after(){}}),body:{classList:{toggle(){}}}};
+ const events=new WorkspaceEvents({request:async()=>new Response(new ReadableStream({start(controller){stream=controller;}}),{headers:{'content-type':'text/event-stream'}})},{refresh:async()=>reads++});
+ t.after(()=>{events.stop();globalThis.document=original;});await events.start();t.mock.timers.tick(30000);assert.equal(reads,1);
+ stream.enqueue(new TextEncoder().encode('data: {"id":1,"type":"task.updated","task_id":"a"}\n\n'));await new Promise(setImmediate);
+ t.mock.timers.tick(60000);assert.equal(reads,1);await events.reconnect();assert.equal(reads,2);t.mock.timers.tick(30000);assert.equal(reads,3);
+});

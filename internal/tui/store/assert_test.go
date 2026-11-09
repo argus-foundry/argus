@@ -1,8 +1,8 @@
 package store_test
 
 import (
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/tui/store"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/tui/store"
 )
 
 // Compile-time assertion: *db.DB satisfies store.Store. Lives in _test.go so

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,18 +16,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/gitutil"
-	"github.com/drn/argus/internal/links"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/sanitize"
-	"github.com/drn/argus/internal/skills"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/links"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/sanitize"
+	"github.com/argus-foundry/argus/internal/skills"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // --- Status ---
@@ -87,20 +88,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // taskJSON is the wire shape returned by /api/tasks*.
 //
 // Status is the persisted DB status. Idle is a runtime-derived flag that is
-// true only when Status == in_progress and the agent session is missing or
-// waiting for input. omitempty drops idle:false from the JSON; the SPA reads
-// missing fields as falsy, which matches the intended contract (no idle field
-// == not idle).
+// true only when a live session is waiting for input; an absent session is not
+// idle. omitempty drops idle:false from the JSON; the SPA reads missing fields
+// as falsy, which matches the intended contract (no idle field == not idle).
 type taskJSON struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Status string `json:"status"`
 	Idle   bool   `json:"idle,omitempty"`
-	// Live is true when Status == in_progress and the runner holds a real
-	// session for the task, including one parked idle at a prompt, and no
-	// kill+resume restart is pending. Idle alone cannot say whether input can
-	// reach a PTY, so clients use Live. Deliberately NOT omitempty: an absent
-	// field means an older daemon, and clients fall back to !idle.
+	// Live is true when the runner holds a real session for the task,
+	// including one parked idle at a prompt, and no kill+resume restart is
+	// pending, whatever the workflow status. Deliberately NOT omitempty: an
+	// absent field means an older daemon, and clients fall back to !idle.
 	Live bool `json:"live"`
 	// NeedsInput is a runtime-derived flag, true only when Status ==
 	// in_progress and the daemon's watcher detected the agent is blocked
@@ -113,6 +112,7 @@ type taskJSON struct {
 	Elapsed      string `json:"elapsed,omitempty"`
 	CreatedAt    string `json:"created_at"`
 	Archived     bool   `json:"archived,omitempty"`
+	Pinned       bool   `json:"pinned"`
 	WorktreePath string `json:"worktree_path,omitempty"`
 	Prompt       string `json:"prompt,omitempty"`
 	// PRState is the cached GitHub PR review state for the task's branch,
@@ -122,6 +122,9 @@ type taskJSON struct {
 	// actionable values; the badge renderer ignores draft/merged-closed/
 	// unknown anyway.
 	PRState string `json:"pr_state,omitempty"`
+	// Failure is the explicit agent-reported failure parsed from Result, or
+	// null. Not omitempty so clients can tell "no failure" from an old daemon.
+	Failure *model.TaskFailure `json:"failure"`
 }
 
 // taskRuntimeState carries non-persisted, derived-at-request-time fields used
@@ -136,6 +139,8 @@ type taskRuntimeState struct {
 	// field via omitempty. Populated by the caller from a batch task_meta
 	// read — never by shelling out to gh.
 	PRState string
+	// Failure is the projection of the task's Result; nil when not failed.
+	Failure *model.TaskFailure
 }
 
 func taskToJSON(t *model.Task, rt taskRuntimeState) taskJSON {
@@ -152,9 +157,11 @@ func taskToJSON(t *model.Task, rt taskRuntimeState) taskJSON {
 		Elapsed:      t.ElapsedString(),
 		CreatedAt:    t.CreatedAt.Format(time.RFC3339),
 		Archived:     t.Archived,
+		Pinned:       t.Pinned,
 		WorktreePath: t.Worktree,
 		Prompt:       t.Prompt,
 		PRState:      prDTOValue(rt.PRState),
+		Failure:      rt.Failure,
 	}
 }
 
@@ -169,18 +176,16 @@ func prDTOValue(state string) string {
 	return state
 }
 
-// computeRuntimeState derives the per-request runtime state for a task.
-// Mirrors the TUI's drawTaskRow rule: an InProgress task is idle when it has
-// no live session (running map miss) or its session is waiting for input
-// (idle map hit). Non-InProgress tasks are never idle.
+// computeRuntimeState derives the per-request runtime state for a task. Live
+// is session existence and is independent of workflow status; an absent
+// session is never idle. NeedsInput keeps its in_progress gate and requires a
+// live session.
 func computeRuntimeState(t *model.Task, runningSet, idleSet, needsInputSet map[string]bool) taskRuntimeState {
-	if t.Status != model.StatusInProgress {
-		return taskRuntimeState{}
-	}
+	live := runningSet[t.ID]
 	return taskRuntimeState{
-		Idle:       !runningSet[t.ID] || idleSet[t.ID],
-		Live:       runningSet[t.ID],
-		NeedsInput: needsInputSet[t.ID],
+		Idle:       live && idleSet[t.ID],
+		Live:       live,
+		NeedsInput: live && t.Status == model.StatusInProgress && needsInputSet[t.ID],
 	}
 }
 
@@ -191,7 +196,7 @@ func computeRuntimeState(t *model.Task, runningSet, idleSet, needsInputSet map[s
 func (s *Server) runtimeState(t *model.Task, runningSet, idleSet, needsInputSet map[string]bool) taskRuntimeState {
 	rt := computeRuntimeState(t, runningSet, idleSet, needsInputSet)
 	if rt.Live && s.runner.HasPendingRestart(t.ID) {
-		rt.Live = false
+		rt = taskRuntimeState{}
 	}
 	return rt
 }
@@ -268,6 +273,7 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		if kv := prMeta[t.ID]; kv != nil {
 			rt.PRState = kv["state"]
 		}
+		rt.Failure = model.FailureFromResult(t.Result, t.ResultAt)
 		result = append(result, taskToJSON(t, rt))
 	}
 
@@ -285,6 +291,7 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	}
 	runningSet, idleSet, needsInputSet := s.sessionStateMaps()
 	rt := s.runtimeState(task, runningSet, idleSet, needsInputSet)
+	rt.Failure = model.FailureFromResult(task.Result, task.ResultAt)
 	// Pure cache read of the daemon-written PR state; never shells out to gh.
 	if entries, merr := s.db.ListMeta(task.ID, "pr"); merr == nil {
 		for _, e := range entries {
@@ -548,9 +555,14 @@ func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 // recovers a missing Claude transcript with a fresh ID and original prompt.
 func (s *Server) handleRestartTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	force, ok := parseForceRevive(w, r)
+	if !ok {
+		return
+	}
+	defer s.taskLocks.Lock(id)()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
-		writeErr(w, http.StatusNotFound, "task not found", nil)
+		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
 		return
 	}
 
@@ -558,14 +570,28 @@ func (s *Server) handleRestartTask(w http.ResponseWriter, r *http.Request) {
 	// (no live session, or session.IsIdle()) are exactly what this endpoint
 	// targets — they should be restarted, not rejected.
 	if sess := s.runner.Get(task.ID); sess != nil && !sess.IsIdle() {
-		writeErr(w, http.StatusConflict, "task already running", nil)
+		writeCodedErrCause(w, http.StatusConflict, "task already running", "task_running", nil)
+		return
+	}
+
+	if s.runner.HasPendingRestart(task.ID) {
+		uxlog.Log("[api] restart: refused pending restart task=%s", id)
+		writeCodedErrCause(w, http.StatusConflict, "agent is restarting", "agent_restarting", nil)
+		return
+	}
+
+	proceed, rollback := s.closeoutGate(w, task, force, "restart")
+	if !proceed {
 		return
 	}
 
 	reattached, err := s.restartTaskSession(task)
 	if err != nil {
+		if !errors.Is(err, agent.ErrStartAmbiguous) {
+			rollback()
+		}
 		uxlog.Log("[api] restart: start failed task=%s err=%v", id, err)
-		writeErr(w, http.StatusInternalServerError, "", err)
+		writeLaunchErr(w, err)
 		return
 	}
 
@@ -586,6 +612,93 @@ func (s *Server) handleRestartTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func writeLaunchErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, agent.ErrStartAmbiguous) {
+		writeCodedErrCause(w, http.StatusServiceUnavailable, "session start outcome is unknown; check task runtime before retrying", "start_ambiguous", nil)
+		return
+	}
+	writeCodedErrCause(w, http.StatusInternalServerError, "", "start_failed", err)
+}
+
+type reviveReq struct {
+	ForceRevive bool `json:"force_revive"`
+}
+
+// parseForceRevive reads the optional {"force_revive":bool} body; an empty
+// body means false. It writes the 400 itself and reports ok=false on junk.
+func parseForceRevive(w http.ResponseWriter, r *http.Request) (force, ok bool) {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1025))
+	if err != nil {
+		writeCodedErrCause(w, http.StatusBadRequest, "", "invalid_body", err)
+		return false, false
+	}
+	if len(raw) > 1024 {
+		writeCodedErrCause(w, http.StatusBadRequest, "body exceeds 1024 bytes", "invalid_body", nil)
+		return false, false
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return false, true
+	}
+	if bytes.TrimSpace(raw)[0] != '{' {
+		writeCodedErrCause(w, http.StatusBadRequest, "expected JSON object", "invalid_body", nil)
+		return false, false
+	}
+	var req reviveReq
+	if err := json.Unmarshal(raw, &req); err != nil {
+		writeCodedErrCause(w, http.StatusBadRequest, "invalid JSON", "invalid_body", err)
+		return false, false
+	}
+	return req.ForceRevive, true
+}
+
+// closeoutGate applies the TUI's close-out guard to a REST resume/restart: a
+// worker or freelance task awaiting Hera close-out is refused unless the
+// caller deliberately forces the revival. On a forced revival it clears the
+// close-out state up front and returns a rollback that restores it if the
+// launch then fails. Callers hold the per-task lock.
+func (s *Server) closeoutGate(w http.ResponseWriter, task *model.Task, force bool, op string) (proceed bool, rollback func()) {
+	noop := func() {}
+	workerOrFreelance, err := s.db.TaskHoldsLiveHeraWorkerOrFreelanceBinding(task.ID)
+	if err != nil {
+		uxlog.Log("[api] %s: closeout check failed task=%s err=%v", op, task.ID, err)
+		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_check_failed", err)
+		return false, noop
+	}
+	if !workerOrFreelance {
+		return true, noop
+	}
+	awaiting, err := s.db.HeraWorkerAwaitingCloseout(task.ID)
+	if err != nil {
+		uxlog.Log("[api] %s: closeout check failed task=%s err=%v", op, task.ID, err)
+		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_check_failed", err)
+		return false, noop
+	}
+	if !awaiting {
+		return true, noop
+	}
+	if !force {
+		uxlog.Log("[api] %s: refused closed-out task=%s", op, task.ID)
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":            "task awaits Hera close-out",
+			"code":             "hera_closeout",
+			"can_force_revive": true,
+		})
+		return false, noop
+	}
+	snap, err := s.db.SnapshotAndClearHeraCloseout(task.ID)
+	if err != nil {
+		uxlog.Log("[api] %s: force-revive clear failed task=%s err=%v", op, task.ID, err)
+		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_clear_failed", err)
+		return false, noop
+	}
+	uxlog.Log("[api] %s: force-reviving closed-out task=%s", op, task.ID)
+	return true, func() {
+		if rerr := s.db.RestoreHeraCloseout(snap); rerr != nil {
+			uxlog.Log("[api] %s: restore closeout failed task=%s err=%v", op, task.ID, rerr)
+		}
+	}
+}
+
 // restartTaskSession resumes a task's session (or reattaches a live one) and
 // marks it in progress. Shared by restart and the account move.
 func (s *Server) restartTaskSession(task *model.Task) (reattached bool, err error) {
@@ -594,6 +707,7 @@ func (s *Server) restartTaskSession(task *model.Task) (reattached bool, err erro
 	// so the resume picks the most recent in-place session, not the stale
 	// create-time UUID. No-op for non-Claude / no-change / no-transcript.
 	agent.RefreshResumeSessionID(s.db, task)
+	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
 	// Always resume so BuildCmd appends --resume <session-id> when the task
 	// has a prior session (the normal post-exit case). If SessionID is empty,
 	// BuildCmd starts fresh — same graceful degradation as /resume.
@@ -611,37 +725,30 @@ func (s *Server) restartTaskSession(task *model.Task) (reattached bool, err erro
 
 func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	force, ok := parseForceRevive(w, r)
+	if !ok {
+		return
+	}
+	defer s.taskLocks.Lock(id)()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
-		writeErr(w, http.StatusNotFound, "task not found", nil)
+		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
 		return
 	}
 
-	if task.Status == model.StatusInProgress {
-		// Only refuse when the agent is actively working. Idle in_progress
-		// tasks (no live session OR session.IsIdle()) are exactly what the
-		// PWA's "Resume" prompt targets — the user opened a quiet task and
-		// wants to wake / restart it. StartOrReattach below handles both
-		// sub-cases: returns the existing handle for live-but-idle, or
-		// spawns fresh for ghost-in_progress.
-		//
-		// Note: this is a non-locked check followed by an unlocked
-		// StartOrReattach. A session can flip between non-idle and exited
-		// in the gap; the worst case is a harmless reattach that
-		// immediately spawns fresh. Argus is single-user / single-daemon
-		// so the race window has no real-world impact, but don't tighten
-		// the check to atomic without auditing the StartOrReattach call
-		// sites that share the same pattern.
-		if sess := s.runner.Get(task.ID); sess != nil && !sess.IsIdle() {
-			writeErr(w, http.StatusConflict, "task already running", nil)
-			return
-		}
-		// A daemon-initiated rerender restart is already bringing the session
-		// back; starting a second one here races it.
-		if s.runner.HasPendingRestart(task.ID) {
-			writeErr(w, http.StatusConflict, "agent is restarting", nil)
-			return
-		}
+	if sess := s.runner.Get(task.ID); sess != nil && !sess.IsIdle() {
+		writeCodedErrCause(w, http.StatusConflict, "task already running", "task_running", nil)
+		return
+	}
+	if s.runner.HasPendingRestart(task.ID) {
+		uxlog.Log("[api] resume: refused pending restart task=%s", id)
+		writeCodedErrCause(w, http.StatusConflict, "agent is restarting", "agent_restarting", nil)
+		return
+	}
+
+	proceed, rollback := s.closeoutGate(w, task, force, "resume")
+	if !proceed {
+		return
 	}
 
 	// StartOrReattach handles the desync case where the daemon still owns a
@@ -659,11 +766,15 @@ func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 	// stale create-time UUID. No-op for non-Claude / no-change / no-transcript,
 	// and never populates an empty ID, so the resume decision above is unchanged.
 	agent.RefreshResumeSessionID(s.db, task)
+	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
 
 	sess, reattached, err := s.runner.StartOrReattach(task, cfg, 24, 80, resume)
 	if err != nil {
+		if !errors.Is(err, agent.ErrStartAmbiguous) {
+			rollback()
+		}
 		uxlog.Log("[api] resume: start failed task=%s status=%s err=%v", id, prevStatus, err)
-		writeErr(w, http.StatusInternalServerError, "", err)
+		writeLaunchErr(w, err)
 		return
 	}
 
@@ -759,6 +870,7 @@ func (s *Server) handleUnarchiveTask(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived bool) {
 	id := r.PathValue("id")
+	defer s.taskLocks.Lock(id)()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeErr(w, http.StatusNotFound, "task not found", nil)
@@ -1013,7 +1125,7 @@ func (s *Server) handleForkTask(w http.ResponseWriter, r *http.Request) {
 	// Forks inherit the source task's backend, model, sandbox override, and account so
 	// the new task starts with the same agent and confinement rather than
 	// silently defaulting back to the global setting.
-	task, err := s.createTask(name, prompt, project, src.Backend, src.Model, src.SandboxOverride, agent.PinnedAccount(src.Account), false)
+	task, err := s.createTask(name, prompt, project, src.Backend, src.Model, src.SandboxOverride, agent.InheritableAccount(src), false)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
@@ -1211,16 +1323,28 @@ func (s *Server) handleGetLinks(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWriteInput(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-
-	sess := s.runner.Get(id)
-	if sess == nil {
-		writeErr(w, http.StatusNotFound, "no active session", nil)
-		return
-	}
-
 	data, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "", err)
+		return
+	}
+
+	defer s.taskLocks.Lock(id)()
+
+	task, err := s.db.Get(id)
+	if err != nil || task == nil {
+		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
+		return
+	}
+	if task.Archived {
+		uxlog.Log("[api] input: rejected archived task=%s origin=%s", id, authOrigin(r))
+		writeCodedErrCause(w, http.StatusConflict, "task is archived", "task_archived", nil)
+		return
+	}
+
+	sess := s.runner.Get(id)
+	if sess == nil {
+		writeCodedErrCause(w, http.StatusNotFound, "no active session", "no_active_session", nil)
 		return
 	}
 
@@ -1271,6 +1395,24 @@ func (s *Server) handleGetSize(w http.ResponseWriter, r *http.Request) {
 type resizeReq struct {
 	Cols uint16 `json:"cols"`
 	Rows uint16 `json:"rows"`
+	// ScrolledUp / ComposerDirty are the client-side keep-place signals the
+	// daemon cannot see (xterm.js / SwiftTerm scroll position, typed-since-
+	// submit over bytes the client sent). Absent means false.
+	ScrolledUp    bool `json:"scrolled_up,omitempty"`
+	ComposerDirty bool `json:"composer_dirty,omitempty"`
+}
+
+// kickClientState carries the keep-place signals a client reported with a
+// resize.
+type kickClientState struct {
+	ScrolledUp    bool
+	ComposerDirty bool
+}
+
+// kickDeferClock records when kicks at one width were first deferred.
+type kickDeferClock struct {
+	cols uint16
+	at   time.Time
 }
 
 func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
@@ -1307,13 +1449,14 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
 	// The kick stops the session; the runner's exit goroutine restarts it
 	// at the new dimensions via --session-id so the agent re-emits the
 	// entire conversation. Best-effort: never let this fail the resize.
-	rerendered := s.maybeKickRerender(id, req.Rows, req.Cols)
+	rerendered, deferred := s.evalKickRerender(id, req.Rows, req.Cols, kickClientState{ScrolledUp: req.ScrolledUp, ComposerDirty: req.ComposerDirty})
 
 	writeJSON(w, http.StatusOK, struct {
-		Cols       int  `json:"cols"`
-		Rows       int  `json:"rows"`
-		Rerendered bool `json:"rerendered"`
-	}{Cols: int(req.Cols), Rows: int(req.Rows), Rerendered: rerendered})
+		Cols       int    `json:"cols"`
+		Rows       int    `json:"rows"`
+		Rerendered bool   `json:"rerendered"`
+		Deferred   string `json:"deferred"`
+	}{Cols: int(req.Cols), Rows: int(req.Rows), Rerendered: rerendered, Deferred: deferred})
 }
 
 // isRedundantResize caches the latest cols for taskID and reports
@@ -1352,12 +1495,21 @@ func (s *Server) invalidateColsCache(taskID string) {
 // Safe to call from any goroutine — KickRerender itself only touches runner
 // state and the session's PTY.
 func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
+	kicked, _ := s.evalKickRerender(taskID, rows, cols, kickClientState{})
+	return kicked
+}
+
+// evalKickRerender is maybeKickRerender plus the client-reported keep-place
+// state (kick-timing-keep-place for the web/macOS clients). deferred names the
+// keep-place gate that held an otherwise-eligible kick ("draft" or "scrolled")
+// so the client knows it owes a same-size retry; it is empty otherwise.
+func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClientState) (kicked bool, deferred string) {
 	sess := s.runner.Get(taskID)
 	if sess == nil || !sess.Alive() {
-		return false
+		return false, ""
 	}
 	if s.runner.HasPendingRestart(taskID) {
-		return false
+		return false, ""
 	}
 	// Skip when cols matches the most recent resize for this task. xterm.js
 	// fires /resize on every terminal mount — without this gate, reopening
@@ -1365,7 +1517,7 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 	// overlays) that doesn't survive the --session-id restart. Genuine
 	// resizes fall through because cols differs from the cached value.
 	if s.isRedundantResize(taskID, cols) {
-		return false
+		return false, ""
 	}
 	// Margin gate before the DB read — eliminates a SQLite hit on every
 	// resize that doesn't cross the rerender threshold. The unchanged-cols
@@ -1373,7 +1525,7 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 	// circuits before this gate even reads InitialPTYSize.
 	initCols, _ := sess.InitialPTYSize()
 	if !agent.MarginExceedsRerenderThreshold(initCols, int(cols)) {
-		return false
+		return false, ""
 	}
 	// Now the expensive lookups. Re-check IsIdle here so the idle gate
 	// reflects state at-the-moment-of-stop, not earlier.
@@ -1381,7 +1533,7 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 		// Agent is mid-tool-call — invalidate so the next same-cols
 		// /resize re-evaluates when the agent goes idle.
 		s.invalidateColsCache(taskID)
-		return false
+		return false, ""
 	}
 	if agent.BlockedOnPrompt(sess) {
 		// Agent is idle because it's blocked on a user prompt (AskUserQuestion
@@ -1389,30 +1541,31 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 		// and silently dismiss the prompt the user is about to answer.
 		// Invalidate so a later resize re-evaluates once the agent moves on.
 		s.invalidateColsCache(taskID)
-		return false
+		return false, ""
 	}
-	if s.bridgeDraftPending(taskID) {
-		// kick-timing-keep-place: the kill would discard unsent composer text.
-		// Invalidate so a later resize re-evaluates once the draft is sent or
-		// cleared. (Scroll position is client-side in the web app: named
-		// follow-up, see openspec/changes/kick-timing-keep-place.)
-		uxlog.Log("[rerender] deferred task=%s: unsent composer draft — preserving typed text", taskID)
-		s.invalidateColsCache(taskID)
-		return false
+	// Keep-place gates (kick-timing-keep-place): same order as the TUI's
+	// decision — an unsent draft outranks scroll position. With the setting off
+	// every client signal is ignored and no screen is read.
+	if s.db.Config().UI.RerenderKeepPlace {
+		if hold, reason := s.keepPlaceHold(taskID, sess, cols, cs); hold {
+			s.invalidateColsCache(taskID)
+			return false, reason
+		}
 	}
+	s.clearKickDefer(taskID)
 	task, err := s.db.Get(taskID)
 	if err != nil || task == nil {
 		// Transient DB error — invalidate so the next same-cols /resize
 		// retries instead of permanently short-circuiting on a stale
 		// cached value.
 		s.invalidateColsCache(taskID)
-		return false
+		return false, ""
 	}
 	if task.SessionID == "" {
 		// Codex and other backends without --session-id can never be
 		// kicked — leave the cache populated so same-cols /resize
 		// permanently short-circuits (correct; no retry semantic).
-		return false
+		return false, ""
 	}
 	cfg := s.db.Config()
 	if available, err := agent.ResumableSessionAvailable(task, cfg); err != nil || !available {
@@ -1420,7 +1573,7 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 		//nolint:gosec // G706: slog encodes these as structured attributes, escaping control characters.
 		slog.Warn("[rerender] deferred: transcript unavailable", "task", task.ID, "session", task.SessionID, "error", err)
 		s.invalidateColsCache(taskID)
-		return false
+		return false, ""
 	}
 	if err := agent.KickWidthRerender(s.runner, task, cfg, rows, cols); err != nil {
 		// Don't fail the resize on a kick failure — runner.KickRerender's
@@ -1430,10 +1583,10 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 		// retries (a transient daemon error shouldn't permanently break
 		// the gate).
 		s.invalidateColsCache(taskID)
-		return false
+		return false, ""
 	}
 	// runner.KickRerender already logs via slog with task=, cols=, rows=.
-	return true
+	return true, ""
 }
 
 // --- Stream Output (SSE) ---
@@ -2074,6 +2227,18 @@ func writeErr(w http.ResponseWriter, status int, msg string, err error) {
 	writeJSON(w, status, map[string]string{"error": text})
 }
 
+// writeCodedErrCause is writeErr plus a stable machine-readable `code` field.
+func writeCodedErrCause(w http.ResponseWriter, status int, msg, code string, err error) {
+	text := msg
+	switch {
+	case err != nil && msg != "":
+		text = msg + ": " + err.Error()
+	case err != nil:
+		text = err.Error()
+	}
+	writeJSON(w, status, map[string]string{"error": text, "code": code})
+}
+
 func sanitizeName(prompt string) string {
 	// Take first 40 runes, replace newlines with spaces.
 	runes := []rune(prompt)
@@ -2086,4 +2251,71 @@ func sanitizeName(prompt string) string {
 		}
 	}
 	return string(runes)
+}
+
+// keepPlaceHold evaluates the keep-place gates for a kick that every earlier
+// gate (margin, idle, prompt) would fire, and reports whether one holds it.
+// reason is "draft" or "scrolled". A hold starts the per-width deferral clock.
+//
+// The rendered-composer read re-emulates the session's output tail, so it runs
+// ONLY here — on the kick-evaluation path, after the cheap gates passed and
+// only when no draft-aware bridge answered — never per poll or per resize that
+// is not evaluating a kick, so it costs nothing in steady state.
+func (s *Server) keepPlaceHold(taskID string, sess agent.SessionHandle, cols uint16, cs kickClientState) (bool, string) {
+	in := agent.ComposerDraftInput{TypedFlag: cs.ComposerDirty}
+	in.BridgeAware, in.BridgeHas = s.bridgeDraftSignal(taskID)
+	if !in.BridgeAware {
+		in.ScreenHas, in.ScreenFound = s.composerFromScreen(sess)
+	}
+	s.kickDeferMu.Lock()
+	clock, ok := s.kickDeferSince[taskID]
+	if ok && clock.cols == cols {
+		in.DeferredFor = time.Since(clock.at)
+	}
+	s.kickDeferMu.Unlock()
+
+	has, _, capped := agent.ComposerDraft(in)
+	if capped {
+		uxlog.Log("[rerender] typed-flag deferral cap reached task=%s cols=%d after %s: no longer holding the kick", taskID, cols, in.DeferredFor.Round(time.Second))
+	}
+	reason := ""
+	switch {
+	case has:
+		reason = "draft"
+	case cs.ScrolledUp:
+		reason = "scrolled"
+	default:
+		return false, ""
+	}
+	s.kickDeferMu.Lock()
+	if c, held := s.kickDeferSince[taskID]; !held || c.cols != cols {
+		s.kickDeferSince[taskID] = kickDeferClock{cols: cols, at: time.Now()}
+	}
+	s.kickDeferMu.Unlock()
+	if reason == "draft" {
+		uxlog.Log("[rerender] deferred task=%s cols=%d: unsent composer draft — preserving typed text", taskID, cols)
+	} else {
+		uxlog.Log("[rerender] deferred task=%s cols=%d: client scrolled up — preserving the user's place", taskID, cols)
+	}
+	return true, reason
+}
+
+// composerFromScreen reads the rendered Claude composer from the session's
+// output tail. found=false (not Claude's composer, or no marker on screen) is
+// "unknown", never "empty".
+func (s *Server) composerFromScreen(sess agent.SessionHandle) (has, found bool) {
+	cols, rows := sess.PTYSize()
+	tail := agent.SubstantiveTail(sess.RecentOutputTail, 64*1024, agent.NeedsInputMaxExpandBytes)
+	s.kickScreenMu.Lock()
+	defer s.kickScreenMu.Unlock()
+	draft, found := s.kickScreen.InputDraft(tail, cols, rows)
+	return strings.TrimSpace(draft) != "", found
+}
+
+// clearKickDefer forgets a task's keep-place deferral clock once a kick is no
+// longer held.
+func (s *Server) clearKickDefer(taskID string) {
+	s.kickDeferMu.Lock()
+	delete(s.kickDeferSince, taskID)
+	s.kickDeferMu.Unlock()
 }

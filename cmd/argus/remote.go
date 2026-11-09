@@ -11,12 +11,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/drn/argus/internal/apiclient"
-	"github.com/drn/argus/internal/apistore"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/tui"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/apiclient"
+	"github.com/argus-foundry/argus/internal/apistore"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/tui"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // runRemoteTUI launches the TUI pointed at a remote argus host. The local

@@ -4,10 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/skew"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/skew"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestSetSkew_StoresTier pins that the tiered verdict survives SetSkew, not just

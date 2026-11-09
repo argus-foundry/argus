@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func callAPIGet(t *testing.T, s *Server, args string) ToolCallResult {

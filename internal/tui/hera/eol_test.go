@@ -3,9 +3,9 @@ package hera
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/db"
-	heramodel "github.com/drn/argus/internal/hera/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestModel_SubtreeArchivedWorkers(t *testing.T) {

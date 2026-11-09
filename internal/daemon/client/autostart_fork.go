@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/db"
 )
 
 // autoStartFork is the test-hostile body of AutoStart: it fork/execs the
@@ -33,6 +33,9 @@ func autoStartFork(sockPath string) (*Client, error) {
 		}
 	}
 
+	// Identify the daemon (if any) that owns the socket now, BEFORE spawning.
+	prev := liveBootedAt(sockPath)
+
 	cmd := exec.Command(daemonExe, "daemon", "start") //nolint:gosec // daemonExe is os.Executable() / argusd symlink
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -44,20 +47,10 @@ func autoStartFork(sockPath string) (*Client, error) {
 	// Release the child process so it isn't reaped when we exit.
 	cmd.Process.Release() //nolint:errcheck // detach-only; non-fatal if it fails
 
-	// Poll for the socket to become available.
-	const (
-		pollInterval = 50 * time.Millisecond
-		maxWait      = 3 * time.Second
-	)
-	deadline := time.Now().Add(maxWait)
-	for time.Now().Before(deadline) {
-		time.Sleep(pollInterval)
-		if client, err := Connect(sockPath); err == nil {
-			return client, nil
-		}
-	}
-
-	return nil, fmt.Errorf("daemon did not become ready within %s", maxWait)
+	// Wait for a daemon that is NOT the one that owned the socket before the
+	// spawn (it kills its predecessor shortly after starting); see
+	// awaitSuccessor. Allow time for that 2s SIGTERM grace.
+	return awaitSuccessor(sockPath, prev, 50*time.Millisecond, 10*time.Second)
 }
 
 // buildSupervisorStartCmd builds — but does NOT start — the detached

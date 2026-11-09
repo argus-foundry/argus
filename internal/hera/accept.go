@@ -1,10 +1,12 @@
 package hera
 
 import (
+	"errors"
 	"fmt"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // acceptDefaultBody is the check-in sent to an accepted role, per Aaron's
@@ -29,6 +31,9 @@ type AcceptStore interface {
 	HeraLiveBindingByRole(roleID int64) (*db.HeraBinding, error)
 	Get(taskID string) (*model.Task, error)
 	SetStatus(taskID string, status model.Status) error
+	// EndHeraCoordinatorBindingsForTask ends the task's live coordinator-kind
+	// bindings (sub-coordinator accept; see AcceptRole).
+	EndHeraCoordinatorBindingsForTask(taskID, reason string) (int, error)
 }
 
 // AcceptSender is the message-delivery seam AcceptRole uses to notify the
@@ -82,15 +87,27 @@ func AcceptRole(store AcceptStore, sender AcceptSender, fromRoleID, roleID int64
 		return false, fmt.Errorf("accept: set status complete for task %s: %w", taskID, err)
 	}
 
+	// An accepted sub-coordinator is finished with its team: end its coordinator
+	// hat so it no longer pins the idle session against the finished-session
+	// reaper (fix-probe-and-accept). Worker/freelance hats are untouched, and
+	// plain workers hold no coordinator binding, so this is a no-op for them.
+	// Revive undoes it (db.RestoreAcceptedHeraCoordinatorBindings).
+	var endErr error
+	if n, err := store.EndHeraCoordinatorBindingsForTask(taskID, db.HeraEndReasonAccepted); err != nil {
+		endErr = fmt.Errorf("accept: end coordinator binding for task %s: %w", taskID, err)
+	} else if n > 0 {
+		uxlog.Log("[hera] accept: ended %d coordinator binding(s) of task %s (accepted sub-coordinator)", n, taskID)
+	}
+
 	if sender != nil {
 		body := acceptDefaultBody
 		if message != "" {
 			body += "\n\n" + message
 		}
 		if _, sErr := sender.Send(fromRoleID, roleID, body, AcceptTldr, nil); sErr != nil {
-			return true, fmt.Errorf("accept: notify role %d: %w", roleID, sErr)
+			return true, errors.Join(endErr, fmt.Errorf("accept: notify role %d: %w", roleID, sErr))
 		}
 	}
 
-	return true, nil
+	return true, endErr
 }

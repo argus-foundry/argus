@@ -5,7 +5,8 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testenv"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // Set once before any test or t.Parallel: fixture commits must never read the
@@ -20,9 +21,10 @@ func runAgentTests(m *testing.M) int {
 			panic(err)
 		}
 	}
-	// A Codex-launched test otherwise ignores fixture HOME and reads the live
-	// session database. Individual account tests set their own explicit homes.
-	for _, name := range []string{"GIT_CONFIG_PARAMETERS", "GIT_CONFIG", "CODEX_HOME", "CODEX_SQLITE_HOME"} {
+	// Agent/host variables (CODEX_HOME, ARGUS_*, CLAUDE_*) are scrubbed by the
+	// shared denylist; individual account tests set their own explicit homes.
+	testenv.Scrub()
+	for _, name := range []string{"GIT_CONFIG_PARAMETERS", "GIT_CONFIG"} {
 		if err := os.Unsetenv(name); err != nil {
 			panic(err)
 		}

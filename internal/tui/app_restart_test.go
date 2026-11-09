@@ -8,9 +8,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/drn/argus/internal/daemon"
-	dclient "github.com/drn/argus/internal/daemon/client"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/daemon"
+	dclient "github.com/argus-foundry/argus/internal/daemon/client"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // fakeShutdownDaemon is a minimal unix-socket RPC server exposing just enough
@@ -85,7 +86,7 @@ func TestGracefulShutdown_Calls(t *testing.T) {
 	c, err := dclient.Connect(fd.sock)
 	testutil.NoError(t, err)
 
-	gracefulDaemonShutdown(c)
+	gracefulDaemonShutdown(c, fd.sock)
 
 	testutil.Equal(t, fd.shutdownCalls.Load(), int32(1))
 }
@@ -99,7 +100,111 @@ func TestGracefulShutdown_Fails(t *testing.T) {
 	testutil.NoError(t, err)
 
 	// Must not panic or hang even though the daemon reports a Shutdown error.
-	gracefulDaemonShutdown(c)
+	gracefulDaemonShutdown(c, fd.sock)
+
+	// Own connection + the fresh-connection retry.
+	testutil.Equal(t, fd.shutdownCalls.Load(), int32(2))
+}
+
+// TestGracefulShutdown_FreshConn pins the loop fix's shutdown half: when the
+// TUI's own connection is dead (Shutdown over it fails) but a live daemon
+// still owns the socket, the daemon must still be told to exit via a fresh
+// connection — otherwise AutoStart connects to it and the loop re-arms.
+func TestGracefulShutdown_FreshConn(t *testing.T) {
+	fd := newFakeShutdownDaemon(t, false)
+	c, err := dclient.Connect(fd.sock)
+	testutil.NoError(t, err)
+	c.Close() //nolint:errcheck // simulate our connection dying
+
+	gracefulDaemonShutdown(c, fd.sock)
 
 	testutil.Equal(t, fd.shutdownCalls.Load(), int32(1))
+}
+
+// TestReconnectLive_Adopts: a live daemon answers on a fresh connection, so
+// the App swaps clients, resets the failure streak, and reports true (the
+// caller then spawns nothing).
+func TestReconnectLive_Adopts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	fd := newFakeShutdownDaemon(t, false)
+	app := New(testDB(t), agent.NewRunner(nil), true)
+	app.sockPathFn = func() string { return fd.sock }
+	app.daemonFailures = 5
+	_, stop := wireApp(t, app)
+	defer stop()
+
+	if !app.reconnectLiveDaemon() {
+		t.Fatal("reconnectLiveDaemon = false, want true with a live daemon")
+	}
+	syncUI(t, app.tapp)
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	testutil.Equal(t, app.daemonFailures, 0)
+	if app.daemonClient == nil || app.restartedClient == nil {
+		t.Fatal("daemonClient not swapped to the fresh connection")
+	}
+	testutil.Equal(t, fd.shutdownCalls.Load(), int32(0))
+}
+
+// TestReconnectLive_NoDaemon: nothing answers → false, state untouched.
+func TestReconnectLive_NoDaemon(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := New(testDB(t), agent.NewRunner(nil), true)
+	app.sockPathFn = func() string { return filepath.Join(t.TempDir(), "n.sock") }
+	app.daemonFailures = 4
+	if app.reconnectLiveDaemon() {
+		t.Fatal("reconnectLiveDaemon = true with no daemon")
+	}
+	testutil.Equal(t, app.daemonFailures, 4)
+}
+
+// tickHarness builds an App whose daemon client is DEAD (connected then
+// closed) so every tick's Ping fails, with sockPathFn aimed at sock.
+func tickHarness(t *testing.T, sock string, deadSock string, restarts *atomic.Int32) *App {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	dead, err := dclient.Connect(deadSock)
+	testutil.NoError(t, err)
+	dead.Close() //nolint:errcheck // simulate the TUI's connection dying
+	app := New(testDB(t), dead, true)
+	app.daemonConnected = true
+	app.sockPathFn = func() string { return sock }
+	app.restartDaemonFn = func() { restarts.Add(1) }
+	app.daemonFailures = 2 // the next failed ping is the 3rd
+	return app
+}
+
+// TestTick_LiveDaemonNoRestart is the regression for the incident: 3 failed
+// pings on a dead connection while a live daemon answers on a fresh one must
+// adopt the live daemon and NOT call restartDaemonFn.
+func TestTick_LiveDaemonNoRestart(t *testing.T) {
+	fd := newFakeShutdownDaemon(t, false)
+	var restarts atomic.Int32
+	app := tickHarness(t, fd.sock, fd.sock, &restarts)
+	_, stop := wireApp(t, app)
+	defer stop()
+
+	app.onTick()
+	syncUI(t, app.tapp)
+
+	testutil.Equal(t, restarts.Load(), int32(0))
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	testutil.Equal(t, app.daemonRestarting, false)
+	testutil.Equal(t, app.daemonFailures, 0)
+	testutil.Equal(t, fd.shutdownCalls.Load(), int32(0))
+}
+
+// TestTick_NoDaemonRestarts: nothing answers on a fresh connection either, so
+// the 3rd failure still triggers the (cooldown-gated) restart.
+func TestTick_NoDaemonRestarts(t *testing.T) {
+	fd := newFakeShutdownDaemon(t, false)
+	var restarts atomic.Int32
+	app := tickHarness(t, filepath.Join(t.TempDir(), "n.sock"), fd.sock, &restarts)
+	_, stop := wireApp(t, app)
+	defer stop()
+
+	app.onTick()
+
+	waitForCond(t, app.tapp, "restartDaemonFn to fire", func() bool { return restarts.Load() == 1 })
 }

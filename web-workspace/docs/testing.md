@@ -39,3 +39,12 @@ Specs use desktop Chromium contexts and explicit responsive viewport checks. The
 ```
 
 The master iphone and desktop projects run separately against a fresh instance of the same harness binary. The master config excludes workspace specs so the two frontends retain independent test selection.
+
+## API adoption fixtures
+
+The adoption suites stay inside web-workspace to keep this delivery frontend-only. They reuse the existing Playwright dependency. Their config owns port 17750 and uses synthetic API responses; no harness or daemon is contacted.
+
+```sh
+npm ci --prefix web-tests
+node web-tests/node_modules/@playwright/test/cli.js test -c web-workspace/tests/browser/playwright.config.mjs
+```

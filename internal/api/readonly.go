@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/mcp"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/mcp"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 const (

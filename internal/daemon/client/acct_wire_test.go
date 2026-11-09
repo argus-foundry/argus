@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // wireRecorder is a "Daemon" RPC service that records the task projection the
@@ -158,7 +158,7 @@ func newWireRecorderClient(t *testing.T) (*Client, *wireRecorder) {
 // account and sandbox override, which BuildCmd reads on the supervisor side.
 func TestAcctWireKickRecycle(t *testing.T) {
 	c, rec := newWireRecorderClient(t)
-	task := &model.Task{ID: "k", Account: "work", SandboxOverride: "disabled", Kind: model.KindResident}
+	task := &model.Task{ID: "k", Account: "work", SandboxOverride: "disabled", SessionID: "fresh-sid", Kind: model.KindResident}
 
 	t.Run("kick", func(t *testing.T) {
 		testutil.NoError(t, c.KickRerender(task, config.Config{}, 24, 80))
@@ -174,6 +174,7 @@ func TestAcctWireKickRecycle(t *testing.T) {
 		defer rec.mu.Unlock()
 		testutil.Equal(t, rec.recycle.Account, "work")
 		testutil.Equal(t, rec.recycle.SandboxOverride, "disabled")
+		testutil.Equal(t, rec.recycle.SessionID, "fresh-sid")
 		testutil.Equal(t, rec.recycle.Kind, model.KindResident)
 	})
 }
@@ -240,4 +241,11 @@ func TestSupAcctEnv(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	testutil.Equal(t, got, "dir="+acctDir)
+}
+
+func TestRecycleCarriesSessionID(t *testing.T) {
+	for peer, want := range map[int]bool{0: true, 11: false, 12: true, 13: true} {
+		c := &Client{peerProtocol: peer}
+		testutil.Equal(t, c.RecycleCarriesSessionID(), want)
+	}
 }

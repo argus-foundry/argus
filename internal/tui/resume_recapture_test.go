@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/claudesession"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func seedTUITranscript(t *testing.T, home, worktree, id string, mod time.Time) {
@@ -58,4 +58,32 @@ func TestApp_refreshResumeSessionID(t *testing.T) {
 		app.refreshResumeSessionID(task, false) // resume=false → untouched
 		testutil.Equal(t, task.SessionID, original)
 	})
+}
+
+// A resume restores the coordinator binding a hera_accept ended; a fresh start
+// leaves it ended.
+func TestApp_refreshResumeSessionID_RestoresAcceptedCoordinatorHat(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	app := New(d, agent.NewRunner(nil), false)
+
+	orch, err := d.CreateHeraOrchestrator("child", "")
+	testutil.NoError(t, err)
+	_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "c", Kind: db.HeraKindCoordinator, ArgusProject: "p"}, "tt", "/wt/tt")
+	testutil.NoError(t, err)
+	_, err = d.EndHeraCoordinatorBindingsForTask("tt", db.HeraEndReasonAccepted)
+	testutil.NoError(t, err)
+	task := &model.Task{ID: "tt", Name: "t", Backend: "codex"}
+
+	app.refreshResumeSessionID(task, false)
+	g, err := d.LiveHeraKeepAliveBinding("tt")
+	testutil.NoError(t, err)
+	testutil.True(t, g == nil)
+
+	app.refreshResumeSessionID(task, true)
+	g, err = d.LiveHeraKeepAliveBinding("tt")
+	testutil.NoError(t, err)
+	testutil.True(t, g != nil)
 }

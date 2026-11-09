@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // accountFileDB opens a file-backed DB whose sibling config.toml defines a
@@ -190,8 +190,10 @@ func TestResolveOrchestratorAccount(t *testing.T) {
 	})
 }
 
-func TestPinnedAccount(t *testing.T) {
-	testutil.Equal(t, PinnedAccount(""), "default")
-	testutil.Equal(t, PinnedAccount("default"), "default")
-	testutil.Equal(t, PinnedAccount("work"), "work")
+func TestInheritableAccount(t *testing.T) {
+	testutil.Equal(t, InheritableAccount(nil), "")
+	testutil.Equal(t, InheritableAccount(&model.Task{}), "")
+	testutil.Equal(t, InheritableAccount(&model.Task{Account: "work", AccountRouted: true}), "")
+	testutil.Equal(t, InheritableAccount(&model.Task{Account: "default"}), "default")
+	testutil.Equal(t, InheritableAccount(&model.Task{Account: "work"}), "work")
 }

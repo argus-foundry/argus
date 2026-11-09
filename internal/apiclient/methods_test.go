@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // allOK mounts a single catch-all handler that returns 200 + `body` for any

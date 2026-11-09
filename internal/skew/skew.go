@@ -29,9 +29,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/drn/argus/internal/buildid"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/buildid"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // BootInfoProvider is the subset of the daemon client's API an evaluation needs.

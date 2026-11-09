@@ -18,11 +18,11 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // --- `argus coord-hook`: the context-budget Stop hook ---
@@ -307,7 +307,7 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 	dec := stopHookDecision{
 		Decision: "block",
 		Reason: fmt.Sprintf(
-			"Context budget reached (%d/%d cache-read tokens). Reach a safe seam: bring design.md's open questions current, write a handoff_note, then call hera_status(request_recycle=true) to recycle.",
+			"Context budget reached (%d/%d cache-read tokens). Reach a safe seam: bring design.md's open questions current, write a handoff_note that includes an \"Open with the user\" section (the user's last unresolved question or request, your latest answer or thinking on it, and any decision the user still owes — or \"none\"), then call hera_status(request_recycle=true) to recycle.",
 			size, budget,
 		),
 	}

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestExtract(t *testing.T) {
@@ -182,8 +182,8 @@ func TestExtract(t *testing.T) {
 		},
 		{
 			name:    "incomplete URL with no dot in host excluded",
-			content: "agent typing https://gi and https://github.com/drn/argus done",
-			want:    []Link{{Label: "https://github.com/drn/argus", URL: "https://github.com/drn/argus"}},
+			content: "agent typing https://gi and https://github.com/argus-foundry/argus done",
+			want:    []Link{{Label: "https://github.com/argus-foundry/argus", URL: "https://github.com/argus-foundry/argus"}},
 		},
 		{
 			name:    "URL with one-letter TLD excluded",

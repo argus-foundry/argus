@@ -5,11 +5,11 @@ import (
 
 	"testing"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // recycleTestConfig returns a config whose "test" backend is a
@@ -178,7 +178,9 @@ func TestHeraRecycleRunner_Restart_EndToEnd(t *testing.T) {
 	// seed prompt (mission text) set before the restart landed.
 	updated, err := database.Get(task.ID)
 	testutil.NoError(t, err)
-	testutil.Equal(t, updated.SessionID, "")
+	// Recycle mints a fresh pinned ID (not "", not the stale one): an empty
+	// ID leaves the live session un-resumable (ctrl+n re-render refuses).
+	testutil.Equal(t, updated.SessionID != "" && updated.SessionID != "stale-sid-1", true)
 	testutil.Contains(t, updated.Prompt, "You are the coordinator.")
 
 	// Wait for the old session to die and the fresh one to land.
@@ -294,4 +296,29 @@ func TestHeraRecycleRunner_Restart_UnknownTaskErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for an unknown task")
 	}
+}
+
+type legacyIDRunner struct{ agent.SessionRunner }
+
+func (legacyIDRunner) RecycleCarriesSessionID() bool  { return false }
+func (legacyIDRunner) Get(string) agent.SessionHandle { return nil }
+func (legacyIDRunner) Start(*model.Task, config.Config, uint16, uint16, bool) (agent.SessionHandle, error) {
+	return nil, nil
+}
+func (legacyIDRunner) Recycle(*model.Task, config.Config, uint16, uint16) error { return nil }
+
+// A runner whose peer cannot carry the ID must not get one persisted.
+func TestRestartSessionWithSeedPrompt_LegacyPeerKeepsEmptyID(t *testing.T) {
+	database, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	task, _ := seedHeraRecycleCoordinator(t, database, t.TempDir(), "mission")
+	task.SessionID = "stale-sid-1"
+	testutil.NoError(t, database.Update(task))
+
+	cfg := recycleTestConfig()
+	testutil.NoError(t, restartSessionWithSeedPrompt(database, legacyIDRunner{}, func() config.Config { return cfg }, task, "seed", db.HeraRoleKind("")))
+	got, err := database.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.SessionID, "")
 }

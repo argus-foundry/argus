@@ -3,7 +3,7 @@ package apiclient
 import (
 	"context"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // TaskJSON mirrors api.taskJSON — the wire shape returned by /api/tasks*.
@@ -250,13 +250,27 @@ type MoveAccountResp struct {
 	To      string `json:"to"`
 	Resumed bool   `json:"resumed"`
 	Started bool   `json:"started"`
+
+	FromBackend         string `json:"from_backend"`
+	ToBackend           string `json:"to_backend"`
+	Handoff             bool   `json:"handoff"`
+	ConversationCarried bool   `json:"conversation_carried"`
 }
 
 // MoveTaskAccount moves a Claude task to another account (a configured name,
 // "default", or "auto") and resumes it there. force interrupts a busy agent.
 func (c *Client) MoveTaskAccount(ctx context.Context, id, account string, force bool) (*MoveAccountResp, error) {
+	return c.moveTask(ctx, id, map[string]any{"account": account, "force": force})
+}
+
+// MoveTaskBackend moves a task to another agent CLI (Claude <-> Codex) by a
+// restart in place with a handoff; the conversation is not carried over.
+func (c *Client) MoveTaskBackend(ctx context.Context, id, backend, account string, force bool) (*MoveAccountResp, error) {
+	return c.moveTask(ctx, id, map[string]any{"backend": backend, "account": account, "force": force})
+}
+
+func (c *Client) moveTask(ctx context.Context, id string, body map[string]any) (*MoveAccountResp, error) {
 	var resp MoveAccountResp
-	body := map[string]any{"account": account, "force": force}
 	if err := c.doJSON(ctx, "POST", "/api/tasks/"+id+"/account", body, &resp); err != nil {
 		return nil, err
 	}

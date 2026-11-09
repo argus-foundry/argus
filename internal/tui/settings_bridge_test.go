@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestSettingsBridgeToggle(t *testing.T) {
@@ -54,4 +54,19 @@ func TestSettingsRerenderKeepPlaceToggle(t *testing.T) {
 	testutil.True(t, sv.handleEnter())
 	sv.Refresh()
 	testutil.True(t, sv.database.Config().UI.RerenderKeepPlace)
+}
+
+func TestSettingsAutoRerenderOnResizeToggle(t *testing.T) {
+	sv := testSettingsView(t)
+	key := "ui.auto_rerender_on_resize"
+	selectRowInCategory(t, sv, catBridge, srBridge, key)
+	testutil.Contains(t, sv.SelectedRow().label, "OFF")
+	testutil.True(t, sv.handleEnter())
+	sv.Refresh()
+	testutil.True(t, sv.database.Config().UI.AutoRerenderOnResize)
+	selectRowInCategory(t, sv, catBridge, srBridge, key)
+	testutil.Contains(t, sv.SelectedRow().label, "ON")
+	testutil.True(t, sv.handleEnter())
+	sv.Refresh()
+	testutil.False(t, sv.database.Config().UI.AutoRerenderOnResize)
 }

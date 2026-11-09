@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func callMove(t *testing.T, s *Server, args string) ToolCallResult {
@@ -61,6 +61,12 @@ func TestTaskMoveAccount_Call(t *testing.T) {
 		testutil.True(t, cr.IsError)
 		testutil.Contains(t, cr.Content[0].Text, "cannot move itself")
 	})
+	t.Run("backend move needs no account", func(t *testing.T) {
+		got = agent.AccountMoveInput{}
+		cr := callMove(t, s, `{"task_id":"w1","backend":"codex"}`)
+		testutil.False(t, cr.IsError)
+		testutil.Equal(t, got, agent.AccountMoveInput{TaskID: "w1", Backend: "codex"})
+	})
 	t.Run("missing arguments", func(t *testing.T) {
 		testutil.True(t, callMove(t, s, `{"account":"auto"}`).IsError)
 		testutil.True(t, callMove(t, s, `{"task_id":"w1"}`).IsError)
@@ -84,4 +90,11 @@ func TestTaskMoveAccount_Description(t *testing.T) {
 	d := accountMoveToolDefs[0].Description
 	testutil.Contains(t, d, "copies the conversation")
 	testutil.Contains(t, d, "/api/accounts")
+}
+
+func TestTaskMoveAccount_DescriptionNamesHandoffLosses(t *testing.T) {
+	d := accountMoveToolDefs[0].Description
+	for _, want := range []string{"handoff", "NOT a resume", "bridge mod", "needs-input", "hera_new_orchestrator"} {
+		testutil.Contains(t, d, want)
+	}
 }

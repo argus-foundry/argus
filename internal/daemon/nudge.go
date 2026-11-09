@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/drn/argus/internal/notify"
+	"github.com/argus-foundry/argus/internal/notify"
 )
 
 // ErrNudgeNoSession is returned by runnerNudger.Nudge when the target task has

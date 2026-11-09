@@ -5,14 +5,15 @@ import (
 	"testing"
 	"time"
 
-	heramodel "github.com/drn/argus/internal/hera/model"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/planview"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/planview"
 	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 )
 
 func TestSplitLaunchPaneSizes(t *testing.T) {
@@ -481,8 +482,8 @@ func TestPanes_KickRetriesAfterDeferred(t *testing.T) {
 	advance(KickRetryInterval)
 	p.Draw(sim)
 	testutil.Equal(t, len(kicksFor(*kicks, "t-wkr")), 2)
-	// Further deferrals back off without giving up, capped at one minute.
-	for _, interval := range []time.Duration{20 * time.Second, 40 * time.Second, 60 * time.Second, 60 * time.Second} {
+	// Further deferrals back off without giving up, capped at kickRetryMax (15s).
+	for _, interval := range []time.Duration{15 * time.Second, 15 * time.Second, 15 * time.Second, 15 * time.Second} {
 		count := len(kicksFor(*kicks, "t-wkr"))
 		advance(interval - time.Millisecond)
 		p.Draw(sim)
@@ -1464,14 +1465,14 @@ func TestPanes_FullscreenToggleRearmsKick(t *testing.T) {
 	// the final width.
 	p.Machine().ToggleFullscreen()
 	p.Draw(sim)
-	advance(KickDebounce / 3)
+	advance(ZoomKickDebounce / 3)
 	p.Machine().ToggleFullscreen()
 	p.Draw(sim)
-	advance(KickDebounce / 3)
+	advance(ZoomKickDebounce / 3)
 	p.Machine().ToggleFullscreen()
 	p.Draw(sim)
 	testutil.Equal(t, len(*kicks), 0)
-	advance(KickDebounce)
+	advance(ZoomKickDebounce)
 	p.Draw(sim)
 	final := kicksFor(*kicks, "t-coord")
 	testutil.Equal(t, len(final), 1)
@@ -1616,4 +1617,177 @@ func TestHeraPage_TaskScrolledUp(t *testing.T) {
 	testutil.Equal(t, p.TaskScrolledUp(""), false)
 	p.CoordPane().ScrollUp(2)
 	testutil.Equal(t, p.TaskScrolledUp("t-coord"), true)
+}
+
+// TestPanes_ZoomToggleSkipsDragDebounceAndResetsBackoff (9a): Ctrl+Z is a
+// discrete toggle, so it evaluates after only ZoomKickDebounce (not the 300ms
+// rail-traversal KickDebounce), and a coordinator that was deferring busy with
+// a long backoff must get a FRESH first retry interval, not inherit the stale
+// doubled delay (the 20s-60s waits seen live).
+func TestPanes_ZoomToggleSkipsDragDebounceAndResetsBackoff(t *testing.T) {
+	d := memDB(t)
+	orch := seedOrch(t, d, "orch")
+	seedBoundRole(t, d, orch, "coord", db.HeraKindCoordinator, "t-coord")
+	seedBoundRole(t, d, orch, "wkr", db.HeraKindWorker, "t-wkr")
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{
+		"t-coord": {id: "t-coord", alive: true},
+		"t-wkr":   {id: "t-wkr", alive: true},
+	}))
+	kicks, advance := newDeferringKickRecorder(p)
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "wkr"), true)
+	p.Machine().SetRegion(FocusCoord)
+
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	defer sim.Fini()
+	sim.SetSize(160, 30)
+	p.SetRect(0, 0, 160, 30)
+
+	p.Draw(sim)
+	advance(KickDebounce)
+	p.Draw(sim) // initial kick, deferred busy
+	// Burn the backoff up to the cap.
+	for range 4 {
+		advance(kickRetryMax)
+		p.Draw(sim)
+	}
+	testutil.Equal(t, p.coordKickPending.retryDelay, kickRetryMax)
+
+	*kicks = nil
+	p.Machine().ToggleFullscreen()
+	p.Draw(sim) // layout shift re-arms
+	testutil.Equal(t, len(kicksFor(*kicks, "t-coord")), 0)
+	advance(ZoomKickDebounce) // well under KickDebounce
+	p.Draw(sim)
+	testutil.Equal(t, len(kicksFor(*kicks, "t-coord")), 1)
+	// Deferred again: the retry delay restarted at KickRetryInterval.
+	testutil.Equal(t, p.coordKickPending.deadline.Sub(p.kickClockNow()), KickRetryInterval)
+}
+
+// resize-without-restart: with the automatic kick disabled no evaluation is
+// scheduled at all — not on bind, not after the dwell, not on a zoom re-arm.
+func TestPanes_AutoRerenderOff_NoKickEvaluation(t *testing.T) {
+	d := memDB(t)
+	orch := seedOrch(t, d, "orch")
+	seedBoundRole(t, d, orch, "coord", db.HeraKindCoordinator, "t-coord")
+	seedBoundRole(t, d, orch, "wkr", db.HeraKindWorker, "t-wkr")
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{
+		"t-coord": {id: "t-coord", alive: true},
+		"t-wkr":   {id: "t-wkr", alive: true},
+	}))
+	on := false
+	p.SetAutoRerender(func() bool { return on })
+	kicks, advance := newKickRecorder(p)
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "wkr"), true)
+	p.Machine().SetRegion(FocusCoord)
+
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	defer sim.Fini()
+	sim.SetSize(160, 30)
+	p.SetRect(0, 0, 160, 30)
+
+	p.Draw(sim)
+	advance(KickDebounce * 3)
+	p.Draw(sim)
+	testutil.Equal(t, len(*kicks), 0) // bind + dwell: nothing scheduled
+
+	p.Machine().ToggleFullscreen() // zoom re-arm path
+	p.Draw(sim)
+	advance(ZoomKickDebounce * 3)
+	p.Draw(sim)
+	testutil.Equal(t, len(*kicks), 0)
+
+	// Flip the setting on live: the same page now evaluates (no restart needed).
+	on = true
+	p.Machine().ToggleFullscreen() // back to split: width change re-arms
+	p.Draw(sim)
+	advance(KickDebounce * 3)
+	p.Draw(sim)
+	testutil.Equal(t, len(*kicks) > 0, true)
+}
+
+// With the setting on (and nil = on for unwired pages) the debounce behaves
+// exactly as before: the dwell holds the kick, then it fires once per pane.
+func TestPanes_SettingOn_KickDebounceUnchanged(t *testing.T) {
+	d := memDB(t)
+	orch := seedOrch(t, d, "orch")
+	seedBoundRole(t, d, orch, "wkr", db.HeraKindWorker, "t-wkr")
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{"t-wkr": {id: "t-wkr", alive: true}}))
+	p.SetAutoRerender(func() bool { return true })
+	kicks, advance := newKickRecorder(p)
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "wkr"), true)
+
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	defer sim.Fini()
+	sim.SetSize(120, 30)
+	p.SetRect(0, 0, 120, 30)
+
+	p.Draw(sim)
+	advance(KickDebounce / 2)
+	p.Draw(sim)
+	testutil.Equal(t, len(*kicks), 0)
+	advance(KickDebounce)
+	p.Draw(sim)
+	testutil.Equal(t, len(kicksFor(*kicks, "t-wkr")), 1)
+}
+
+// resize-without-restart: each Hera pane carries its OWN owed notice on its own
+// top border (title left, notice right), evaluated per bound task.
+func TestPanes_OwedNotice_PerPaneTopBorder(t *testing.T) {
+	d := memDB(t)
+	orch := seedOrch(t, d, "orch")
+	seedBoundRole(t, d, orch, "coord", db.HeraKindCoordinator, "t-coord")
+	seedBoundRole(t, d, orch, "wkr", db.HeraKindWorker, "t-wkr")
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{
+		"t-coord": {id: "t-coord", alive: true},
+		"t-wkr":   {id: "t-wkr", alive: true},
+	}))
+	// Only the worker's history is owed a re-render.
+	p.SetOwedFunc(func(taskID string, _ agentview.TerminalAdapter, cols int) (bool, string) {
+		return taskID == "t-wkr", "width-returned"
+	}, func() string { return "ctrl+n" })
+	var rerendered []string
+	p.OnRerender = func(id string) { rerendered = append(rerendered, id) }
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "wkr"), true)
+
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	defer sim.Fini()
+	sim.SetSize(200, 30)
+	p.SetRect(0, 0, 200, 30)
+	p.Draw(sim)
+
+	var noticeRow string
+	var noticeX, noticeY int
+	count := 0
+	for y := 0; y < 30; y++ {
+		var b strings.Builder
+		for x := 0; x < 200; x++ {
+			c, _, _ := sim.Get(x, y)
+			b.WriteString(c)
+		}
+		row := b.String()
+		if i := strings.Index(row, "width changed · ctrl+n re-render"); i >= 0 {
+			count++
+			noticeRow, noticeY = row, y
+			noticeX = len([]rune(row[:i])) + 2
+		}
+	}
+	testutil.Equal(t, count, 1) // the coordinator pane has none
+	testutil.Contains(t, noticeRow, "Agent")
+
+	// Clicking the notice asks for a re-render of THAT pane's task.
+	h := p.MouseHandler()
+	h(tview.MouseLeftDown, tcell.NewEventMouse(noticeX, noticeY, tcell.Button1, 0), func(tview.Primitive) {})
+	testutil.DeepEqual(t, rerendered, []string{"t-wkr"})
 }

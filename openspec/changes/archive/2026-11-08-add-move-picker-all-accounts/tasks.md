@@ -1,0 +1,3 @@
+- [x] Backend: same-account move restarts in place
+- [x] TUI local + remote picker rows via shared `accountChoice`
+- [x] Tests, README, base spec merged

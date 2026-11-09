@@ -3,13 +3,14 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // Sentinel errors returned by the task_messages methods. Callers use
@@ -84,7 +85,7 @@ func (d *DB) insertMessageLocked(m *model.TaskMessage) (*model.TaskMessage, erro
 
 	// Inbox-full check (per-recipient unread count).
 	var unread int
-	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM task_messages WHERE to_task_id=? AND read_at=''`, m.To).Scan(&unread); err != nil {
+	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM task_messages WHERE to_task_id=? AND read_at='' AND `+notSystemSenderSQL, m.To, model.SystemTaskID).Scan(&unread); err != nil {
 		return nil, fmt.Errorf("count unread: %w", err)
 	}
 	if unread >= MaxUnreadPerRecipient {
@@ -132,9 +133,11 @@ func (d *DB) insertMessageLocked(m *model.TaskMessage) (*model.TaskMessage, erro
 // double-counting it).
 type InboxFilter struct {
 	UnreadOnly bool
-	Sender     string
-	Since      time.Time
-	Limit      int
+	// ExcludeSystem drops daemon-originated system notes (model.SystemTaskID).
+	ExcludeSystem bool
+	Sender        string
+	Since         time.Time
+	Limit         int
 }
 
 // MaxInboxLimit caps a single Inbox call. 500 matches MaxUnreadPerRecipient
@@ -163,6 +166,10 @@ func (d *DB) Inbox(toID string, f InboxFilter) ([]*model.TaskMessage, error) {
 	args := []any{toID}
 	if f.UnreadOnly {
 		q += ` AND read_at=''`
+	}
+	if f.ExcludeSystem {
+		q += ` AND ` + notSystemSenderSQL
+		args = append(args, model.SystemTaskID)
 	}
 	if f.Sender != "" {
 		q += ` AND from_task_id=?`
@@ -241,14 +248,15 @@ func (d *DB) ackMessagesLocked(toID string, ids []string) (int, error) {
 	return int(n), nil
 }
 
-// UnreadCount returns the number of unread messages addressed to toID.
+// UnreadCount returns the number of unread messages addressed to toID,
+// excluding daemon-originated system notes (they are not mail).
 // Cheap — indexed by idx_msg_to_unread.
 func (d *DB) UnreadCount(toID string) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	var n int
-	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM task_messages WHERE to_task_id=? AND read_at=''`, toID).Scan(&n); err != nil {
+	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM task_messages WHERE to_task_id=? AND read_at='' AND `+notSystemSenderSQL, toID, model.SystemTaskID).Scan(&n); err != nil {
 		return 0, fmt.Errorf("unread count: %w", err)
 	}
 	return n, nil
@@ -339,12 +347,13 @@ func (d *DB) insertSystemMessageLocked(m *model.TaskMessage) (*model.TaskMessage
 
 	now := time.Now()
 
-	var unread int
-	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM task_messages WHERE to_task_id=? AND read_at=''`, m.To).Scan(&unread); err != nil {
-		return nil, fmt.Errorf("count unread: %w", err)
-	}
-	if unread >= MaxUnreadPerRecipient {
-		return nil, ErrMessageInboxFull
+	// System notes never count toward the inbox cap, and a new note replaces
+	// the task's previous unread note of the same type.
+	if typ := systemNoteType(m.Body); typ != "" {
+		if _, err := d.conn.Exec(`DELETE FROM task_messages WHERE to_task_id=? AND from_task_id=? AND read_at='' AND `+systemTypeExpr+`=?`,
+			m.To, model.SystemTaskID, typ); err != nil {
+			return nil, fmt.Errorf("coalesce system notes: %w", err)
+		}
 	}
 
 	if m.ID == "" {
@@ -393,4 +402,82 @@ func scanMessage(row scanner) (*model.TaskMessage, error) {
 	m.CreatedAt = parseTime(createdAt)
 	m.ReadAt = parseTime(readAt)
 	return m, nil
+}
+
+// notSystemSenderSQL is the single predicate (bound to model.SystemTaskID) that
+// every unread count, the inbox-full cap and the ExcludeSystem filter share, so
+// they cannot drift apart.
+const notSystemSenderSQL = `from_task_id<>?`
+
+// systemTypeExpr extracts the JSON "type" of a system note body in SQL.
+const systemTypeExpr = `CASE WHEN json_valid(body) THEN json_extract(body,'$.type') END`
+
+// systemNoteType returns the JSON "type" field of a system note body, or ""
+// when the body is not a typed JSON object (untyped notes never coalesce).
+func systemNoteType(body string) string {
+	var v struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal([]byte(body), &v) != nil {
+		return ""
+	}
+	return v.Type
+}
+
+// CollapseSystemNotices is the idempotent startup cleanup for the pre-coalescing
+// backlog: for every (recipient, type) it deletes all but the newest UNREAD
+// system note. Read notes and untyped notes are untouched. Returns the number of
+// rows removed.
+func (d *DB) CollapseSystemNotices() (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	res, err := d.conn.Exec(`
+		DELETE FROM task_messages
+		WHERE from_task_id=? AND read_at='' AND CASE WHEN json_valid(body) THEN json_extract(body,'$.type') END IS NOT NULL
+		  AND EXISTS (
+			SELECT 1 FROM task_messages n
+			WHERE n.from_task_id=task_messages.from_task_id AND n.to_task_id=task_messages.to_task_id
+			  AND n.read_at=''
+			  AND CASE WHEN json_valid(n.body) THEN json_extract(n.body,'$.type') END =
+			      CASE WHEN json_valid(task_messages.body) THEN json_extract(task_messages.body,'$.type') END
+			  AND (n.created_at>task_messages.created_at OR (n.created_at=task_messages.created_at AND n.id>task_messages.id))
+		  )`, model.SystemTaskID)
+	if err != nil {
+		return 0, fmt.Errorf("collapse system notices: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// legacySystemNoticesMigratedKey marks the one-shot legacy-backlog migration done.
+const legacySystemNoticesMigratedKey = "migration.system_notices_v1"
+
+// MigrateLegacySystemNotices is the ONE-SHOT cleanup of the pre-coalescing
+// system-note backlog: collapse to the newest unread note per (task, type) and
+// mark the survivors read (they are all stale). Newly inserted notes stay unread
+// by design, which is why this must not run on every start. Guarded by a config
+// marker set only after success, so a failure retries on the next start.
+// Returns the rows removed and the survivors marked read.
+func (d *DB) MigrateLegacySystemNotices() (removed, marked int, err error) {
+	if v, gerr := d.GetConfigValue(legacySystemNoticesMigratedKey); gerr != nil {
+		return 0, 0, gerr
+	} else if v != "" {
+		return 0, 0, nil
+	}
+	if removed, err = d.CollapseSystemNotices(); err != nil {
+		return 0, 0, err
+	}
+	d.mu.Lock()
+	res, merr := d.conn.Exec(`UPDATE task_messages SET read_at=? WHERE from_task_id=? AND read_at=''`,
+		formatTime(time.Now()), model.SystemTaskID)
+	d.mu.Unlock()
+	if merr != nil {
+		return removed, 0, fmt.Errorf("mark legacy system notices read: %w", merr)
+	}
+	n, _ := res.RowsAffected()
+	if err = d.SetConfigValue(legacySystemNoticesMigratedKey, formatTime(time.Now())); err != nil {
+		return removed, int(n), err
+	}
+	return removed, int(n), nil
 }

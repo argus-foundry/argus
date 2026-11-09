@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 type moveTestSession struct {
@@ -29,6 +29,7 @@ type moveTestRunner struct {
 	live     *moveTestSession
 	kicked   *model.Task
 	started  *model.Task
+	recycled *model.Task
 	startErr error
 }
 
@@ -42,6 +43,12 @@ func (r *moveTestRunner) Get(string) agent.SessionHandle {
 func (r *moveTestRunner) KickRerender(task *model.Task, _ config.Config, _, _ uint16) error {
 	cp := *task
 	r.kicked = &cp
+	return nil
+}
+
+func (r *moveTestRunner) Recycle(task *model.Task, _ config.Config, _, _ uint16) error {
+	cp := *task
+	r.recycled = &cp
 	return nil
 }
 
@@ -116,9 +123,6 @@ func TestHandleMoveTaskAccount(t *testing.T) {
 
 	t.Run("bad target is 400", func(t *testing.T) {
 		s, task := moveServer(t, &moveTestRunner{})
-		w := postMove(s, task.ID, `{"account":"default"}`)
-		testutil.Equal(t, w.Code, http.StatusBadRequest)
-		testutil.Contains(t, w.Body.String(), "already on account")
 		testutil.Equal(t, postMove(s, task.ID, `{"account":"ghost"}`).Code, http.StatusBadRequest)
 		testutil.Equal(t, postMove(s, task.ID, `not json`).Code, http.StatusBadRequest)
 	})
@@ -136,5 +140,42 @@ func TestHandleMoveTaskAccount(t *testing.T) {
 		testutil.Contains(t, w.Body.String(), "spawn failed")
 		got, _ := s.db.Get(task.ID)
 		testutil.Equal(t, got.Account, "work")
+	})
+}
+
+func TestHandleMoveTaskAccount_BackendHandoff(t *testing.T) {
+	t.Run("live session is recycled onto Codex with a handoff", func(t *testing.T) {
+		r := &moveTestRunner{live: &moveTestSession{idle: true}}
+		s, task := moveServer(t, r)
+		testutil.NoError(t, s.db.SetBackend("cx", config.Backend{Command: "codex"}))
+		w := postMove(s, task.ID, `{"backend":"cx"}`)
+		testutil.Equal(t, w.Code, http.StatusOK)
+		var res agent.AccountMoveResult
+		testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+		testutil.Equal(t, res.ToBackend, "cx")
+		testutil.True(t, res.Handoff)
+		testutil.False(t, res.ConversationCarried)
+		testutil.Contains(t, w.Body.String(), `"handoff":true`)
+		testutil.NotNil(t, r.recycled)
+		testutil.Equal(t, r.recycled.Backend, "cx")
+		testutil.Contains(t, r.recycled.Prompt, "did NOT carry over")
+		testutil.Nil(t, r.kicked)
+	})
+
+	t.Run("exited session starts through the restart path", func(t *testing.T) {
+		r := &moveTestRunner{}
+		s, task := moveServer(t, r)
+		testutil.NoError(t, s.db.SetBackend("cx", config.Backend{Command: "codex"}))
+		w := postMove(s, task.ID, `{"backend":"cx"}`)
+		testutil.Equal(t, w.Code, http.StatusOK)
+		testutil.NotNil(t, r.started)
+		testutil.Equal(t, r.started.Backend, "cx")
+		testutil.Equal(t, r.started.SessionID, "")
+	})
+
+	t.Run("same-family backend is 400", func(t *testing.T) {
+		s, task := moveServer(t, &moveTestRunner{})
+		testutil.NoError(t, s.db.SetBackend("cl2", config.Backend{Command: "claude"}))
+		testutil.Equal(t, postMove(s, task.ID, `{"backend":"cl2"}`).Code, http.StatusBadRequest)
 	})
 }

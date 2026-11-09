@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/drn/argus/internal/tui/terminal"
+import "github.com/argus-foundry/argus/internal/tui/terminal"
 
 func (a *App) setRerendering(taskID string, active bool) {
 	a.rerenderPanes(func(pane *terminal.TerminalPane) { pane.SetRerenderingForTask(taskID, active) })

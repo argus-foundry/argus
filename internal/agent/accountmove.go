@@ -11,12 +11,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/drn/argus/internal/backendkind"
-	"github.com/drn/argus/internal/claudesession"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/backendkind"
+	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // ErrAccountMoveBusy rejects moving a task whose agent is actively working,
@@ -60,6 +60,9 @@ type AccountMoveInput struct {
 	TaskID  string
 	Account string
 	Force   bool
+	// Backend, when set, makes this a move to another agent CLI: a restart in
+	// place with a handoff seed (MoveTaskBackend), not a resume.
+	Backend string
 	// Rows/Cols size the restarted PTY (0 → 24x80; the pane resizes it later).
 	Rows, Cols uint16
 }
@@ -73,6 +76,13 @@ type AccountMoveResult struct {
 	To      string `json:"to"`
 	Resumed bool   `json:"resumed"`
 	Started bool   `json:"started"`
+
+	// Set only by a backend move (MoveTaskBackend), a restart with handoff.
+	// ConversationCarried is always false: the conversation never comes along.
+	FromBackend         string `json:"from_backend,omitempty"`
+	ToBackend           string `json:"to_backend,omitempty"`
+	Handoff             bool   `json:"handoff,omitempty"`
+	ConversationCarried bool   `json:"conversation_carried,omitempty"`
 }
 
 // accountMoveRunner is the slice of a session runner a move needs: the live
@@ -87,10 +97,13 @@ type accountMoveRunner interface {
 
 // MoveTaskAccount moves a Claude task to another account without any model
 // turn: it copies the task's newest transcript into the target account,
-// switches and persists the task's account (clearing the routed flag),
+// switches and persists the task's account (a named target pins it, "auto" keeps it routable),
 // and restarts a live session in place under the target with --resume. The
 // task row, worktree, branch and hera bindings are untouched.
 func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveInput) (*model.Task, AccountMoveResult, error) {
+	if strings.TrimSpace(in.Backend) != "" {
+		return MoveTaskBackend(database, runner, in)
+	}
 	if !claimAccountMove(in.TaskID) {
 		return nil, AccountMoveResult{}, errAccountMovePending
 	}
@@ -133,7 +146,10 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	}
 	moved := *task
 	moved.Account = storedAccount(to)
-	moved.AccountRouted = false
+	// An auto move leaves the task routable like one created unpinned; a move
+	// to a named account (or explicit "default") is a pin.
+	routed := strings.TrimSpace(in.Account) == AutoMoveTarget
+	moved.AccountRouted = routed
 	if _, err := resolveSpawnClaudeConfigDir(&moved, cfg, true); err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: %w", ErrAccount, err)
 	}
@@ -141,21 +157,26 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	if err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: target account %q: %w", ErrAccount, to, err)
 	}
-	if filepath.Clean(srcDir) == filepath.Clean(dstDir) {
+	same := to == from
+	if !same && filepath.Clean(srcDir) == filepath.Clean(dstDir) {
 		// e.g. the backend pins CLAUDE_CONFIG_DIR through env_vars: switching
 		// the stored account would not change the login at all.
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: accounts %q and %q resolve to the same Claude config dir for this backend", ErrAccount, from, to)
 	}
-	resumed, err := copyClaudeTranscript(srcDir, dstDir, task.Worktree, task.SessionID)
-	if err != nil {
+	var resumed bool
+	if same {
+		// Re-picking the current account is a plain in-place restart: the
+		// transcript is already in this account's dir, nothing to copy.
+		resumed, _ = claudeResumeAvailable(task, cfg)
+	} else if resumed, err = copyClaudeTranscript(srcDir, dstDir, task.Worktree, task.SessionID); err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("copy transcript to account %q: %w", to, err)
 	}
 
 	prevAccount, prevRouted := task.Account, task.AccountRouted
-	if err := database.SetTaskAccount(task.ID, moved.Account, false); err != nil {
+	if err := database.SetTaskAccount(task.ID, moved.Account, routed); err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("persist account move: %w", err)
 	}
-	task.Account, task.AccountRouted = moved.Account, false
+	task.Account, task.AccountRouted = moved.Account, routed
 	res := AccountMoveResult{From: from, To: to, Resumed: resumed}
 	logAccountMove(task.ID, res, "persisted")
 
@@ -232,9 +253,6 @@ func resolveMoveTarget(cfg config.Config, backendCommand, from, requested string
 	}
 	if !cfg.AccountSupports(target, backendCommand) {
 		return "", fmt.Errorf("%w: account %q does not support this task's backend", ErrAccount, target)
-	}
-	if NormalizeAccount(target) == from {
-		return "", fmt.Errorf("%w: task is already on account %q", ErrAccount, from)
 	}
 	return NormalizeAccount(target), nil
 }

@@ -12,7 +12,7 @@ import (
 // point passed to git worktree add (empty means the project default) — used by
 // stacked-PR workflows where each task branches off the previous task's branch.
 // Result is an opaque JSON string the agent writes via the task_set_result MCP
-// tool; the daemon never inspects it. By convention, agents that fail should
+// tool; the daemon projects explicit failures for REST/SSE. Agents that fail should
 // write {"failed": true, "reason": "..."} so a Hera coordinator can decide how
 // to proceed.
 type Task struct {
@@ -58,6 +58,7 @@ type Task struct {
 	Pinned        bool      `json:"pinned,omitempty"`
 	BaseBranch    string    `json:"base_branch,omitempty"`
 	Result        string    `json:"result,omitempty"`
+	ResultAt      time.Time `json:"-"`
 	CreatedAt     time.Time `json:"created_at"`
 	StartedAt     time.Time `json:"started_at,omitempty"`
 	EndedAt       time.Time `json:"ended_at,omitempty"`

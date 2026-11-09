@@ -151,22 +151,27 @@ The server SHALL create a task from a JSON body containing `prompt`, `project`, 
 
 ### Requirement: Task listing and retrieval with runtime idle state
 
-The server SHALL list tasks and SHALL support optional filtering by `status`, `project`, and `archived` (`0`/default excludes archived, `1` returns only archived, `all` returns both). For each task the server SHALL derive a runtime `idle` flag that is true only when the task is `in_progress` and either has no live session or its session is waiting for input; non-`in_progress` tasks SHALL never be reported idle. Retrieving a task that does not exist SHALL return 404.
+The server SHALL list tasks and SHALL support optional filtering by `status`, `project`, and `archived` (`0`/default excludes archived, `1` returns only archived, `all` returns both). For each task the server SHALL derive `live`, true whenever the runner holds an input-addressable session and no kill+resume restart is pending, regardless of workflow status, and `idle`, true only when the session is live and waiting for input; an absent session SHALL NOT be reported idle. A pending restart SHALL report `live`, `idle` and `needs_input` all false. `needs_input` SHALL require a live `in_progress` session. Retrieving a task that does not exist SHALL return 404.
 
 #### Scenario: Lists all non-archived tasks
 
 - **WHEN** a list request omits the archived filter
 - **THEN** the server returns the non-archived tasks
 
-#### Scenario: In-progress task without a live session reports idle
+#### Scenario: Live busy in_review task
 
-- **WHEN** a task is `in_progress` but has no live session
-- **THEN** its listed entry reports `idle: true`
+- **WHEN** an `in_review` task has a live, non-idle session
+- **THEN** its entry reports `live: true` and no `idle`
 
-#### Scenario: Non-in-progress task never idle
+#### Scenario: Absent session is not idle
 
-- **WHEN** a task is `pending`
-- **THEN** its listed entry reports idle false
+- **WHEN** a task of any status has no session
+- **THEN** its entry reports `live: false` and no `idle`
+
+#### Scenario: Pending restart never advertises input
+
+- **WHEN** a live task has a pending kill+resume restart
+- **THEN** its entry reports `live: false`, no `idle` and no `needs_input`
 
 #### Scenario: Filter by status and project
 
@@ -415,6 +420,38 @@ Derived from: `internal/api/hera.go` (`heraOrchJSON`, `heraRoleJSON`, `handleHer
 
 - **WHEN** a role's bound task is flagged by the daemon's idle-detection system as needing input
 - **THEN** that role's `needs_input` field is `true`, and `false` otherwise
+
+### Requirement: Hera roster resolved model choices
+
+Every role in `GET /api/hera` SHALL carry `archetype` and `model_resolution` with `requested_model`, `effective_model` (null when the CLI picks its own default or resolution is unavailable, never a fabricated ID), `effort`, `source` (`task_override`, `profile`, `backend_default`, `cli_default`, `unavailable`), `basis` (`current_config` for a bound role, `planned_intent` for an unbound one), `profile`, and `warning` (null or a safe message). Resolution SHALL use `agent.ResolveModel` precedence through the shared `internal/hera/tiering` package, SHALL NOT expose filesystem paths or credentials, and SHALL NOT claim a current-config result is an observed running model.
+
+#### Scenario: Requested and effective differ
+- **WHEN** a bound task has an invalid `model` override and a valid profile
+- **THEN** `requested_model` is the override, `effective_model` is the profile's model, and `source` is `profile`
+
+#### Scenario: Unbound planned role
+- **WHEN** a role has no binding
+- **THEN** `basis` is `planned_intent`
+
+#### Scenario: Missing profile
+- **WHEN** an explicitly bound profile is missing or invalid
+- **THEN** `warning` is `profile "<name>" missing or invalid` and the roster still returns 200
+
+### Requirement: Hera roster context measurements
+
+Every role in `GET /api/hera` SHALL carry `context`, null when the bound task has no valid `context_size` observation. Otherwise it SHALL carry `tokens`, `denominator_tokens`, `denominator_kind` (`worker_window` for worker/freelance, `coordinator_recycle_budget` for coordinators), `percent` clamped to 0-100, and `observed_at`. `observed_at` SHALL stay null unless the producer supplies a verified timestamp. A malformed observation SHALL yield `context: null` for that role only. All measurements SHALL arrive in the single roster response, with no per-role transcript reads.
+
+#### Scenario: Worker versus coordinator denominator
+- **WHEN** a worker and a coordinator each report 120000 tokens
+- **THEN** the worker's percent uses `worker_context_window` and the coordinator's uses `coordinator_context_budget`
+
+#### Scenario: Unavailable is not zero
+- **WHEN** a role has no, or unparseable, `context_size`
+- **THEN** `context` is null
+
+#### Scenario: Missing budget
+- **WHEN** the applicable budget is not positive
+- **THEN** `tokens` is retained and `denominator_tokens` and `percent` are null
 
 ### Requirement: Reliable pane-delivery endpoint
 
@@ -936,3 +973,130 @@ The system SHALL expose `POST /api/tasks/{id}/pin` accepting `{"pinned":<bool>}`
 
 - **WHEN** exactly one valid pin object and optional whitespace occupy at most 1 KiB through EOF
 - **THEN** the request succeeds with the stored flags
+
+### Requirement: Resize reports client-side keep-place state
+
+`POST /api/tasks/{id}/resize` SHALL accept optional boolean `scrolled_up` and `composer_dirty` fields (absent means false) and SHALL return a `deferred` field: `"scrolled"`, `"draft"` or empty. When the resize would trigger the size-drift kill + resume, the daemon SHALL defer it when the composer holds unsent text (the Claude mod's report, else the rendered Claude composer read from the session's output tail when it is found, else `composer_dirty`) and otherwise when `scrolled_up` is true; the draft gate outranks the scroll gate. A deferral SHALL keep the task's cols cache invalidated so a later same-size resize re-evaluates, and SHALL be logged. `composer_dirty` alone SHALL stop holding after 10 minutes of deferrals at one width; the scroll gate is uncapped. The rendered-composer read SHALL run only while a kick is being evaluated. With `ui.rerender_keep_place` off both fields SHALL be ignored.
+
+#### Scenario: Scrolled-up client
+
+- **WHEN** a resize crosses the rerender margin with `scrolled_up` true and an empty composer
+- **THEN** no kick is queued, the response carries `deferred: "scrolled"`, and a later same-size resize with `scrolled_up` false kicks
+
+#### Scenario: Client flag only
+
+- **WHEN** no mod report exists, the composer is not found on screen, and `composer_dirty` is true
+- **THEN** the kick is deferred with `deferred: "draft"` until the flag clears or 10 minutes pass at that width
+
+#### Scenario: Screen overrides a stale flag
+
+- **WHEN** the rendered Claude composer is found empty and `composer_dirty` is true
+- **THEN** the flag does not hold the kick
+
+#### Scenario: Old client
+
+- **WHEN** a resize omits both fields
+- **THEN** behavior is unchanged from before this requirement
+
+#### Scenario: Setting off
+
+- **WHEN** `ui.rerender_keep_place` is off
+- **THEN** both fields are ignored and no screen read occurs
+
+#### Scenario: Steady state
+
+- **WHEN** a resize does not cross the margin, or the cols are unchanged
+- **THEN** the rendered-composer read does not run
+
+### Requirement: Task usage endpoint
+`GET /api/tasks/{id}/usage` SHALL return `{task_id, session_id, provider, measured_at, source, totals, turns, next_cursor}` where `totals` is `{input_tokens, cached_input_tokens, output_tokens}`, each turn is `{turn_id, input_tokens, cached_input_tokens, output_tokens}` listed newest first, and `input_tokens` includes `cached_input_tokens`. Counters SHALL be `null` when unreported and `0` only when measured zero. Omitting `session_id` SHALL select the task's current session even before its first measurement, returning that session ID with null totals and empty turns. A requested session not recorded for the task SHALL be 404, including for unsupported backends. `limit` defaults to 50 and is capped at 200; a non-positive or non-numeric `limit` or an invalid `before` cursor SHALL be 400. A task whose backend has no usage telemetry, or with no measurement yet, SHALL return 200 with `totals=null` and `turns=[]`. The endpoint SHALL require authentication, expose counts only, and never launch a CLI or model call. A reader failure SHALL NOT replace stored counters, and an older observation SHALL NOT overwrite a newer one. Sessions SHALL never be combined. Usage SHALL reuse the context reader's account storage, rollout metadata identity and uncaptured process launch checks. Identical observations SHALL make no row changes and turns outside retention SHALL NOT be reinserted. For a running task the daemon SHALL emit `task.usage_changed` with `{session_id, turn_id, measured_at}` and no counts after the stored observation advances, whether GET or the watcher ingests first. A new retained turn SHALL count as a change even when the session measurement timestamp is unchanged.
+
+#### Scenario: Codex session and turns
+- **WHEN** a Codex task's rollout holds two turns with token_count events
+- **THEN** GET returns cumulative totals, both turns newest first, and re-reading changes nothing
+
+#### Scenario: Replaced session
+- **WHEN** the task's recorded session changes
+- **THEN** the default GET reflects the new session only, with null totals and empty turns until measured, and `session_id=<old>` still returns the old session's own totals
+
+#### Scenario: Unsupported provider
+- **WHEN** the task's backend has no usage reader
+- **THEN** GET returns 200 with `totals=null` and `turns=[]`
+
+#### Scenario: GET ingests before watcher
+- **WHEN** a GET ingests a changed observation before the next watcher tick
+- **THEN** one usage change event is published and the unchanged watcher read does not duplicate it
+
+#### Scenario: Uncaptured replacement launch
+- **WHEN** a fresh live process has no captured session ID and only an older conversation is readable or stored
+- **THEN** default GET returns null totals and empty turns without ingesting the older conversation
+
+#### Scenario: Unpinned current session before measurement
+- **WHEN** an unpinned task resolves and validates a newer main thread without a token measurement
+- **THEN** default GET returns that thread ID with null totals and empty turns, whether stopped or live, without creating a measured usage row
+
+### Requirement: Task failure projection
+
+`GET /api/tasks` and `GET /api/tasks/{id}` SHALL include `failure`, `null` or `{"reason","source":"task_result","recorded_at"}`, derived from a Result object whose `failed` is boolean `true`. `recorded_at` SHALL be the persisted time the result last changed and SHALL be omitted when none was persisted. `reason` SHALL be bounded to 4 KiB. A malformed, non-object or unrelated Result SHALL yield `failure: null` and never an error. User stop, transport loss and nonzero exit SHALL NOT produce a failure. Standalone and Hera-bound tasks SHALL share the projection.
+
+#### Scenario: Explicit failed result
+
+- **WHEN** a task's Result is `{"failed":true,"reason":"validation failed"}`
+- **THEN** its entry reports that reason, source `task_result` and the persisted `recorded_at`
+
+#### Scenario: Malformed result
+
+- **WHEN** a task's Result is not valid JSON
+- **THEN** the request succeeds with `failure: null`
+
+### Requirement: Stored pin state in task snapshots
+
+Every task returned by `GET /api/tasks` and `GET /api/tasks/{id}` SHALL include a boolean `pinned` equal to the stored task's pin state. The field SHALL always be emitted, including false, so clients can distinguish an unpinned task from an older daemon that omits the field. Existing filters, routes and `task.updated` invalidation behavior SHALL remain unchanged.
+
+#### Scenario: Pinned and unpinned task snapshots
+
+- **WHEN** either task GET returns a pinned or unpinned task
+- **THEN** its response explicitly contains `pinned:true` or `pinned:false` matching storage
+
+#### Scenario: Snapshots after pin lifecycle mutations
+
+- **WHEN** a task is pinned, unpinned, archived or restored by pinning
+- **THEN** both task GETs reflect its stored pin state
+- **AND** archiving clears the pin while pinning clears archived
+### Requirement: Archived tasks reject REST input
+
+The system SHALL load the task before writing any byte for `POST /api/tasks/{id}/input`. An unknown task SHALL return 404 `{"error":"task not found","code":"task_not_found"}`; an archived task SHALL return 409 `{"error":"task is archived","code":"task_archived"}` for both user and system `X-Input-Origin`, with zero bytes reaching the session and no change to needs-input state or input timestamps; a non-archived task with no session SHALL return 404 with code `no_active_session`; allowed input SHALL keep the raw body, 64 KiB limit and `{"status":"ok","bytes":"N"}` response. Input SHALL read the body before acquiring the per-task lock and SHALL check archive state while holding it. Archive, unarchive and input SHALL be serialized per task so that once an archive success is committed no later input reaches the session. A rejection SHALL emit no event and no log line SHALL contain input bytes.
+
+#### Scenario: Archived live session
+
+- **WHEN** a task with a live session is archived and input is posted with either origin
+- **THEN** the response is 409 `task_archived` and the session's byte count and input timestamps are unchanged
+
+#### Scenario: Concurrent archive and input
+
+- **WHEN** inputs race an archive request
+- **THEN** no input that begins after the archive response returns succeeds and no bytes are written after it
+
+#### Scenario: Distinct failures
+
+- **WHEN** the task is unknown, or live without a session, or live with a session
+- **THEN** the responses are 404 `task_not_found`, 404 `no_active_session`, and 200 respectively
+
+### Requirement: Cached provider usage is available to web Settings
+
+The authenticated REST API SHALL expose current valid cached provider usage needed by web Settings: Claude five-hour and weekly windows for each configured Claude account, and the default Codex weekly reading. Each available window SHALL include its percentage and a reset timestamp when known. The endpoint SHALL read caches only; it SHALL NOT start provider probes or sign-in status lookups. Missing or expired windows SHALL be represented as unavailable.
+
+#### Scenario: Provider snapshots are available
+
+- **WHEN** web Settings requests usage and the daemon has valid provider snapshots
+- **THEN** the response includes the percentages and known reset timestamps for each available window
+
+#### Scenario: Valid depleted Codex reading has no reset time
+
+- **WHEN** a valid cached Codex depleted reading has no reset timestamp
+- **THEN** the response includes its percentage and omits the reset timestamp
+
+#### Scenario: No current snapshot exists
+
+- **WHEN** a provider cache is empty or its reading has expired
+- **THEN** the response represents that provider window as unavailable

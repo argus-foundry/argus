@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/notify"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/notify"
 )
 
 // Store is the narrow DB surface the Service needs. Satisfied by *db.DB.
@@ -112,7 +112,10 @@ func (s *Service) Deliver(msg *db.HeraMessage) {
 			"from_role_id", fromRoleID, "err", roleErr)
 	}
 
-	doorbellLine := fmt.Sprintf("[hera from %s] msg #%d — %s", msg.SenderName(fromRoleName), msg.ID, msg.Tldr)
+	// The trailing hint nudges recipients to fetch (and thereby mark read) the
+	// body instead of acting on the tldr alone; the "[hera from " prefix must stay
+	// (internal/notify matches on it).
+	doorbellLine := fmt.Sprintf("[hera from %s] msg #%d — %s · read: hera_inbox", msg.SenderName(fromRoleName), msg.ID, msg.Tldr)
 	deliveryID := heraDeliveryID(msg.ID)
 	s.notifier.ReliableNotify(binding.ArgusTaskID, doorbellLine, deliveryID, notify.NotifyOpts{})
 

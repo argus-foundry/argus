@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Status is the identity behind one Claude config directory.

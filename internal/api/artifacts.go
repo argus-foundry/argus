@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/drn/argus/internal/artifacts"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/artifacts"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // handleListArtifacts returns the registered-artifact metadata for a task.

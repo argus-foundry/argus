@@ -5,8 +5,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/kb"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/kb"
 )
 
 // residentMemoryDir returns the vault-relative working-memory folder: the

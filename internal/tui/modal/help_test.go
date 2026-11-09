@@ -7,9 +7,9 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/keymap"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/keymap"
 )
 
 func TestHelpModal_Defaults(t *testing.T) {
@@ -70,6 +70,10 @@ func TestHelpModal_Draw(t *testing.T) {
 	testutil.Contains(t, body, "return to previous screen")
 	testutil.Contains(t, body, "Projects View (rail)")
 	testutil.Contains(t, body, "Agent View")
+	// resize-without-restart: the generated Agent View section lists the
+	// on-demand re-render chord.
+	testutil.Contains(t, body, "re-render at this width")
+	testutil.Contains(t, body, "ctrl+n")
 	// Plan-DAG view keys (Stage 7): the plan diagram nav + fan-out + drill must
 	// be discoverable — fail the build if any binding is silently dropped.
 	testutil.Contains(t, body, "Projects View (plan DAG)")

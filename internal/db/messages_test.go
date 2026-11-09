@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func newMessage(from, to string, kind model.MessageKind, body string) *model.TaskMessage {
@@ -472,16 +472,14 @@ func TestDB_InsertSystemMessage(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects when recipient inbox is full", func(t *testing.T) {
+	t.Run("never rejected as inbox-full", func(t *testing.T) {
 		d := testDB(t)
 		for i := range MaxUnreadPerRecipient {
 			_, err := d.InsertMessage(newMessage(fmt.Sprintf("S%d", i), "T", model.KindNote, "x"))
 			testutil.NoError(t, err)
 		}
 		_, err := d.InsertSystemMessage(newMessage("argus:system", "T", model.KindNote, "bounce"))
-		if !errors.Is(err, ErrMessageInboxFull) {
-			t.Fatalf("expected ErrMessageInboxFull, got %v", err)
-		}
+		testutil.NoError(t, err)
 	})
 
 	t.Run("bypasses rate limit — 51 messages from same system sender succeed", func(t *testing.T) {
@@ -533,4 +531,181 @@ func TestDB_SetArchived_UnarchiveLeavesMessagesAlone(t *testing.T) {
 	unread, err := d.UnreadCount(task.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, unread, 1)
+}
+
+func sysNote(typ string) *model.TaskMessage {
+	return newMessage(model.SystemTaskID, "T", model.KindNote, `{"type":"`+typ+`","n":"`+generateID()+`"}`)
+}
+
+func TestDB_SystemNotes_Coalesce(t *testing.T) {
+	d := testDB(t)
+	_, err := d.InsertSystemMessage(sysNote("ARGUS_HOST_SUSPENDED"))
+	testutil.NoError(t, err)
+	_, err = d.InsertSystemMessage(sysNote("ARGUS_BOUNCED"))
+	testutil.NoError(t, err)
+	last, err := d.InsertSystemMessage(sysNote("ARGUS_HOST_SUSPENDED"))
+	testutil.NoError(t, err)
+	// Other task untouched.
+	other := sysNote("ARGUS_HOST_SUSPENDED")
+	other.To = "U"
+	_, err = d.InsertSystemMessage(other)
+	testutil.NoError(t, err)
+
+	msgs, err := d.Inbox("T", InboxFilter{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 2)
+	ids := map[string]bool{msgs[0].ID: true, msgs[1].ID: true}
+	if !ids[last.ID] {
+		t.Fatalf("newest suspend note missing: %v", ids)
+	}
+	u, err := d.Inbox("U", InboxFilter{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(u), 1)
+}
+
+func TestDB_SystemNotes_CoalesceKeepsReadAndUntyped(t *testing.T) {
+	d := testDB(t)
+	first, err := d.InsertSystemMessage(sysNote("ARGUS_BOUNCED"))
+	testutil.NoError(t, err)
+	_, err = d.AckMessages("T", []string{first.ID})
+	testutil.NoError(t, err)
+	_, err = d.InsertSystemMessage(sysNote("ARGUS_BOUNCED"))
+	testutil.NoError(t, err)
+	// Untyped bodies never coalesce.
+	_, err = d.InsertSystemMessage(newMessage(model.SystemTaskID, "T", model.KindNote, "plain"))
+	testutil.NoError(t, err)
+	_, err = d.InsertSystemMessage(newMessage(model.SystemTaskID, "T", model.KindNote, "plain"))
+	testutil.NoError(t, err)
+	msgs, err := d.Inbox("T", InboxFilter{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 4) // read bounce + new bounce + 2 plain
+}
+
+func TestDB_SystemNotes_NotCountedUnread(t *testing.T) {
+	d := testDB(t)
+	for _, typ := range []string{"A", "B", "C"} {
+		_, err := d.InsertSystemMessage(sysNote(typ))
+		testutil.NoError(t, err)
+	}
+	n, err := d.UnreadCount("T")
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 0)
+	_, err = d.InsertMessage(newMessage("S1", "T", model.KindNote, "real"))
+	testutil.NoError(t, err)
+	n, err = d.UnreadCount("T")
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 1)
+	// Still listed.
+	msgs, err := d.Inbox("T", InboxFilter{UnreadOnly: true})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 4)
+	// ExcludeSystem filter drops them.
+	msgs, err = d.Inbox("T", InboxFilter{UnreadOnly: true, ExcludeSystem: true})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 1)
+}
+
+func TestDB_SystemNotes_DoNotCountTowardCap(t *testing.T) {
+	d := testDB(t)
+	// Backlog of 500 system rows inserted raw (pre-coalescing legacy state).
+	for i := range MaxUnreadPerRecipient {
+		_, err := d.conn.Exec(`INSERT INTO task_messages (id, from_task_id, to_task_id, kind, body, in_reply_to, created_at, read_at) VALUES (?,?,?,?,?,?,?,?)`,
+			fmt.Sprintf("raw%d", i), model.SystemTaskID, "T", "note", `{"type":"X"}`, "", formatTime(time.Now()), "")
+		testutil.NoError(t, err)
+	}
+	_, err := d.InsertMessage(newMessage("S1", "T", model.KindNote, "real"))
+	testutil.NoError(t, err)
+}
+
+func TestDB_CollapseSystemNotices(t *testing.T) {
+	d := testDB(t)
+	ins := func(id, to, typ, readAt string, at time.Time) {
+		t.Helper()
+		_, err := d.conn.Exec(`INSERT INTO task_messages (id, from_task_id, to_task_id, kind, body, in_reply_to, created_at, read_at) VALUES (?,?,?,?,?,?,?,?)`,
+			id, model.SystemTaskID, to, "note", `{"type":"`+typ+`"}`, "", formatTime(at), readAt)
+		testutil.NoError(t, err)
+	}
+	base := time.Now().Add(-time.Hour)
+	for i := range 5 {
+		ins(fmt.Sprintf("a%d", i), "T", "S", "", base.Add(time.Duration(i)*time.Minute))
+	}
+	ins("b0", "T", "B", "", base)
+	ins("r0", "T", "S", formatTime(base), base) // already read: kept
+	ins("u0", "U", "S", "", base)
+	_, err := d.InsertMessage(newMessage("S1", "T", model.KindNote, "real"))
+	testutil.NoError(t, err)
+
+	n, err := d.CollapseSystemNotices()
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 4)
+	msgs, err := d.Inbox("T", InboxFilter{})
+	testutil.NoError(t, err)
+	ids := map[string]bool{}
+	for _, m := range msgs {
+		ids[m.ID] = true
+	}
+	for _, want := range []string{"a4", "b0", "r0"} {
+		if !ids[want] {
+			t.Fatalf("expected %s kept, got %v", want, ids)
+		}
+	}
+	testutil.Equal(t, len(msgs), 4) // a4, b0, r0, real
+	// Idempotent.
+	n, err = d.CollapseSystemNotices()
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 0)
+}
+
+// TestDB_MigrateLegacySystemNotices pins the one-shot startup wiring: migrate()
+// collapses the legacy backlog and marks survivors read exactly once; a note
+// inserted afterwards stays unread across later migrate() calls.
+func TestDB_MigrateLegacySystemNotices(t *testing.T) {
+	d := testDB(t) // first migrate ran on an empty DB and set the marker
+	// Simulate a pre-upgrade DB: clear the marker, add legacy rows.
+	_, err := d.conn.Exec(`DELETE FROM config WHERE key=?`, legacySystemNoticesMigratedKey)
+	testutil.NoError(t, err)
+	for i := range 3 {
+		_, err := d.conn.Exec(`INSERT INTO task_messages (id, from_task_id, to_task_id, kind, body, in_reply_to, created_at, read_at) VALUES (?,?,?,?,?,?,?,?)`,
+			fmt.Sprintf("m%d", i), model.SystemTaskID, "T", "note", `{"type":"ARGUS_HOST_SUSPENDED"}`, "", formatTime(time.Now().Add(time.Duration(i)*time.Second)), "")
+		testutil.NoError(t, err)
+	}
+	testutil.NoError(t, d.migrate())
+	msgs, err := d.Inbox("T", InboxFilter{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 1)
+	testutil.Equal(t, msgs[0].ID, "m2")
+	testutil.False(t, msgs[0].ReadAt.IsZero()) // survivor marked read
+
+	// One-shot: a fresh (post-upgrade) note is NOT touched by later starts.
+	fresh, err := d.InsertSystemMessage(sysNote("ARGUS_HOST_SUSPENDED"))
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.migrate())
+	unread, err := d.Inbox("T", InboxFilter{UnreadOnly: true})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(unread), 1)
+	testutil.Equal(t, unread[0].ID, fresh.ID)
+}
+
+func TestDB_MigrateLegacySystemNotices_RetriesAfterFailure(t *testing.T) {
+	d := testDB(t)
+	_, err := d.conn.Exec(`DELETE FROM config WHERE key=?`, legacySystemNoticesMigratedKey)
+	testutil.NoError(t, err)
+	_, err = d.conn.Exec(`INSERT INTO task_messages (id, from_task_id, to_task_id, kind, body, in_reply_to, created_at, read_at) VALUES ('x',?,?,?,?,?,?,?)`,
+		model.SystemTaskID, "T", "note", `{"type":"A"}`, "", formatTime(time.Now()), "")
+	testutil.NoError(t, err)
+	// Break the mark step: a read-only trigger makes the UPDATE fail.
+	_, err = d.conn.Exec(`CREATE TRIGGER block_mark BEFORE UPDATE ON task_messages BEGIN SELECT RAISE(ABORT,'blocked'); END`)
+	testutil.NoError(t, err)
+	_, _, err = d.MigrateLegacySystemNotices()
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	v, err := d.GetConfigValue(legacySystemNoticesMigratedKey)
+	testutil.NoError(t, err)
+	testutil.Equal(t, v, "") // marker NOT set, so it retries
+	_, err = d.conn.Exec(`DROP TRIGGER block_mark`)
+	testutil.NoError(t, err)
+	_, marked, err := d.MigrateLegacySystemNotices()
+	testutil.NoError(t, err)
+	testutil.Equal(t, marked, 1)
 }

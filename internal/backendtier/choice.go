@@ -3,13 +3,14 @@ package backendtier
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Choice carries the identity scored by routing through to task creation.
-type Choice struct{ Backend, Account, Reason string }
+type Choice struct{ Backend, Account, Reason, Step string }
 
 // ResolveChoice optionally restricts selection to a backend and an account
 // pin. A blank account permits each tier to select its own identity.
@@ -19,6 +20,7 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 		warnUnknownStrategy(strategy)
 	}
 	var best, unread, over Choice
+	unreadSpawns := 0
 	var score, overPct float64
 	var rd readings
 	haveReadings := false
@@ -49,6 +51,7 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 		choice := Choice{Backend: tier.Backend, Account: selected}
 		var pct float64
 		var known bool
+		var at readingTimes
 		switch tier.Probe {
 		case config.ProbeNone:
 		case config.ProbeClaudeUsage, config.ProbeCodexUsage:
@@ -57,11 +60,31 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 			}
 			if tier.Probe == config.ProbeClaudeUsage {
 				pct, known = rd.claude(selected)
+				if rd.claudeAt != nil {
+					at = rd.claudeAt(selected)
+				}
 			} else if selected == "" || selected == config.DefaultAccountName {
 				pct, known = rd.codex()
+				if rd.codexAt != nil {
+					at = rd.codexAt()
+				}
 			}
 		default:
 			continue
+		}
+		if tier.Probe == config.ProbeClaudeUsage || tier.Probe == config.ProbeCodexUsage {
+			if known {
+				rememberReading(string(tier.Probe), selected, pct, at)
+			} else if stale, _, ok := recallReading(string(tier.Probe), selected); ok {
+				pct, known = stale, true
+			}
+		}
+		if known {
+			adj, n := penalized(tier.Backend, selected, pct, at.probed)
+			if n > 0 {
+				uxlog.Log("[routing] burst penalty backend=%q account=%q spawns=%d usage=%.2f->%.2f", tier.Backend, selected, n, pct, adj)
+				pct = adj
+			}
 		}
 		choice.Reason = fmt.Sprintf("strategy=%s probe=%s known=%t usage=%.2f threshold=%d", strategy, tier.Probe, known, pct, tier.ThresholdPct)
 		if strategy != config.StrategyHeadroom {
@@ -71,8 +94,10 @@ func ResolveChoice(cfg config.Config, backend, account string) Choice {
 			continue
 		}
 		if !known {
-			if unread.Backend == "" {
-				unread = choice
+			// Fewest recent spawns wins so a burst of unread tiers rotates;
+			// list order breaks ties (strict <).
+			if n := recentSpawns(tier.Backend, selected, time.Time{}); unread.Backend == "" || n < unreadSpawns {
+				unread, unreadSpawns = choice, n
 			}
 			continue
 		}

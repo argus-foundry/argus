@@ -1,0 +1,146 @@
+[38;2;59;130;246mGIT:[38;2;153;153;153m [38;2;100;116;139margus-paint/dogfood-pr2[38;2;153;153;153m ([38;2;100;116;139mclean[38;2;153;153;153m)[39m
+[3G[38;2;255;107;128m⏵⏵[6Gbypass[13Gpermissions[25Gon[38;2;153;153;153m (shift+tab[39Gto[42Gcycle)[39m
+[2C[7A[?25h[?2026l[?2026h[?25l[2D[7B[10A  old line is cheap. When you want history[44Gre-wrapped,[56Gyou[60Gask[64Gfor[68Git.[137G[K[2B[38;2;59;130;246margus:[38;2;153;153;153m 0 unread • budget 52% • working[39m                                                                                                  [38;2;153;153;153m[-][39m[K[1B[K[2B[38;2;153;153;153m❯ [39m[K[1B[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[2C[1B[38;2;71;85;105mwork[38;2;153;153;153m [46G [38;2;59;130;246mARGUS PAINT: HIDE SIZE-DRIFT REPLAY[2C[1BCONTEXT:[38;2;153;153;153m [38;2;106;219;109m⛁[38;2;153;153;153m [38;2;138;216;90m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[42G⛁[44G[38;2;153;153;153m 18%[49G [38;2;100;116;139m(185k/1000k)[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;100;116;139mOpus 5.5[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;100;116;139mW:[38;2;153;153;153m [38;2;250;162;49m89%[2C[1B[38;2;71;85;105m───────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;2;59;130;246mPWD:[38;2;153;153;153m [38;2;100;116;139m…orktrees/ARGUS/coord-argus-paint[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;59;130;246mGIT:[38;2;153;153;153m [38;2;100;116;139margus-paint/dogfood-pr2[38;2;153;153;153m ([38;2;100;116;139mclean[38;2;153;153;153m)[39m
+[3G[38;2;255;107;128m⏵⏵[6Gbypass[13Gpermissions[25Gon[38;2;153;153;153m (shift+tab[39Gto[42Gcycle)[39m
+[2C[7A[?25h[?2026l[?2026h[?25l[2D[7B[10A  If you pick C, I'll write the spec for[42Gyou[46Gto[49Greview[56Gin[59GPlannotator[71Gbefore[78Gany[82Gcode.[137G[K[2B[38;2;215;119;87m·[39m [38;2;223;134;102mSketching…[38;2;215;119;87m [38;2;153;153;153m(running Stop hooks… 1/2 · 2m 28s · ↓[39m [38;2;153;153;153m2.4k tokens)[39m[K[1B[38;2;153;153;153m  ⎿  Tip: Running multiple Claude sessions? Use /color and /rename to tell them apart at a glance.[1B[38;2;59;130;246margus:[38;2;153;153;153m 0 unread • budget 52% • working[39m                                                                                                  [38;2;153;153;153m[-][39m[K[2C[1B[K[1B[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[38;2;153;153;153m❯ [39m[K[1B[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[2C[1B[38;2;71;85;105mwork[38;2;153;153;153m [38;2;71;85;105m──────────────────────────────────────[38;2;153;153;153m [38;2;59;130;246mARGUS PAINT: HIDE SIZE-DRIFT REPLAY[39m
+[3G[38;2;59;130;246mCONTEXT:[38;2;153;153;153m [38;2;106;219;109m⛁[38;2;153;153;153m [38;2;138;216;90m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [45G18%[50G[38;2;100;116;139m(185k/1000k)[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;100;116;139mOpus[70G5.5[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;100;116;139mW:[38;2;153;153;153m [38;2;250;162;49m89%[39m
+[3G[38;2;71;85;105m───────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;2;59;130;246mPWD:[38;2;153;153;153m [38;2;100;116;139m…orktrees/ARGUS/coord-argus-paint[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;59;130;246mGIT:[38;2;153;153;153m [38;2;100;116;139margus-paint/dogfood-pr2[38;2;153;153;153m ([38;2;100;116;139mclean[38;2;153;153;153m)[39m
+[3G[38;2;255;107;128m⏵⏵[6Gbypass[13Gpermissions[25Gon[38;2;153;153;153m (shift+tab[39Gto[42Gcycle)[39m
+[2C[7A[?25h[?2026l]0;◑ Argus restart replay hiding spikes[?2026h[?25l[2D[7B[26C[10A[38;2;153;153;153m4[39m
+
+
+
+
+
+
+
+
+
+[2C[7A[?25h[?2026l[?2026h[?25l[2D[7B[2C[12A[38;2;228;144;112mSketching…[39m
+
+
+
+
+
+
+
+
+
+
+
+[2C[7A[?25h[?2026l[?2026h[?25l[2D[7B[2C[12A[38;2;230;149;117mSketching…[39m
+
+
+
+
+
+
+
+
+
+
+
+[2C[7A[?25h[?2026l]0;✳ Argus restart replay hiding spikes]9;4;0;[?2026h[?25l[2D[7B[2K[G[1A[11A[38;2;153;153;153m✻[3GCogitated fo[16G 2m 28s · done 4:58 PM[39m[K[1B[38;2;59;130;246margus:[38;2;153;153;153m 0 unread •[19Gb[21Gdget 54% • working[39m                                                            [137G[38;2;153;153;153m[-][1B[39m[K[1B[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[39m❯ [K[1B[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[39m  [38;2;71;85;105mwork[38;2;153;153;153m [38;2;71;85;105m──────────────────────────────────────[38;2;153;153;153m [38;2;59;130;246mARGUS PAINT: HIDE SIZE-DRIFT REPLAY[39m[K[2C[1B[38;2;59;130;246mCONTEXT:[38;2;153;153;153m [38;2;106;219;109m⛁[38;2;153;153;153m [38;2;138;216;90m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m  18%  [38;2;100;116;139m(185k/1000k)[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;100;116;139mOpus 5.5[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;100;116;139mW:[38;2;153;153;153m [38;2;250;162;49m89%[2C[1B[38;2;71;85;105m───────────────────────────────────────────────────────────────────────────────[2C[1B[38;2;59;130;246mPWD:[38;2;153;153;153m [38;2;100;116;139m…orktrees/ARGUS/coord-argus-paint[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;59;130;246mGIT:[38;2;153;153;153m [38;2;100;116;139margus-paint/dogfood-pr2[38;2;153;153;153m ([38;2;100;116;139mclean[38;2;153;153;153m)[39m[K[2C[1B[38;2;255;107;128m⏵⏵ bypass permissions on[38;2;153;153;153m (shift+tab to[42Gcycle)[39m[K[1B[K[2C[7A[?25h[?2026l[?2026h[?25l[2D[7B[52C[4A[38;2;100;116;139m7[39m
+
+
+
+[2C[7A[?25h[?2026l]9;Claude is waiting for your input[?2026h[?25l[2D[7B[100C[5A[38;2;153;153;153mnew task? [38;2;177;185;249m/clear[38;2;153;153;153m to save [38;2;177;185;249m165.8k tokens[39m
+
+
+
+
+[2C[7A[?25h[?2026l(B[?2004h[<u[>5u[>4;2m[?2026h[?25l[2D[7B[H[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[H
+[38;2;255;255;255m⏺[3G[39mThe[7Gtwo[11Gresearch[20Gspikes[27Gstill[33Ghaven't[41Greported[50Gback,[56Gso[59Gthere's[67Gno[70Grecommendation[85Gfor
+[3Gyou[7Gyet.[12GI'm[16Gstill[22Gwatching[31Gfor[35Gtheir[41Gresults.
+
+[38;2;153;153;153m✻[3GBrewed[10Gfor[14G2m[17G5s[20G·[22Gdone[27G4:55[32GPM[39m
+
+[38;2;78;186;101m⏺[3G[39mMCP[7Gtask[12Gkxil05u8t[22G(argus/hera_inbox)[41Gcompleted.
+
+[38;2;78;186;101m⏺[3G[39m[1mSkill[22m(set-topic)
+[38;2;153;153;153m [3G⎿[5G [39mSuccessfully[19Gloaded[26Gskill
+
+[38;2;78;186;101m⏺[3G[39m[1mBash[22m(~/.claude/bin/set-session-topic.sh[43G--initial[53G"Argus[60Gpaint:[67Ghide[72Gsize-drift
+[7Greplay")
+[38;2;153;153;153m [3G⎿[5G (No[10Goutput)[39m
+
+[3G[38;2;153;153;153mCalled[10Gargus[16G(ctrl+o[24Gto[27Gexpand)[39m
+
+[3G[38;2;153;153;153mCalled[10Gargus[16G[1m2[22m times[24G(ctrl+o[32Gto[35Gexpand)[39m
+
+[38;2;255;255;255m⏺[3G[39mBoth[8Gspikes[15Gare[19Gback,[25Gso[28Ghere's[35Gthe[39Gdecision[48Gyou're[55Gowed.
+
+[3G[1mThe[7Gdecision:[17G[22mwhen[22Ga[24Gpane[29Gchanges[37Gwidth,[44Gshould[51Gargus[57Gstop[62Grestarting[73GClaude[80GCode
+[3Galtogether,[15Gor[18Gkeep[23Gthe[27Grestart[35Gand[39Ghide[44Git?
+
+[3G[1mWhat[8Gthe[12Gspikes[19Gfound[22m
+
+[3G-[5G[1mYour[10Gfork[15Ghunch[21G(B):[26Git[29Gisn't[35Ga[37Gfork.[43G[22mThe[47Greplacement[59Gkeeps[65Gthe[69Gsame[74Gsession[82GID[85Gand
+[5Gwrites[12Gto[15Gthe[19Gsame[24Gtranscript[35Gfile,[41Gand[45Gno[48Glock[53Gwarning[61Gappears.[70GBut[74Gif[77Gyou[81Gtype
+[5Ginto[10Gthe[14Gold[18Gsession[26Gwhile[32Gthe[36Greplacement[48Gis[51Gstarting,[61Gthe[65Gtwo[69Gcopies[76Gsplit[82Gthe
+[5Gconversation.[19GThe[23Gnext[28Gresume[35Gfollows[43Gone[47Gbranch[54Gand[58Gsilently[67Gdrops[73Gyour[78Gturn:[84Gthe
+[5Gtest[10Glost[15Ga[17Gmessage[25Gthis[30Gway.[35GB[37Gis[40Gsafe[45Gonly[50Gif[53Gargus[59Gblocks[66Ginput[72Gfrom[77Gthe[81Gmoment
+[5Gthe[9Greplacement[21Gstarts[28Guntil[34Gthe[38Gswap.[44GIt[47Galso[52Gmeans[58Gtwo[62Gterminals[72Gper[76Gtask[81Gin[84Gthe
+[5Gsupervisor,[17Gwhich[23Gis[26Ga[28Gmedium-to-large[44Gbuild[50Gof[53Ga[55Gfew[59Gthousand[68Glines.
+[3G-[5G[1mNo[8Grestart[16G(C):[21GClaude[28GCode[33Galready[41Gredraws[49Gthe[53Glive[58Garea[63Gitself.[71G[22mOn[74Ga[76Gwidth[82Gchange
+[5Git[8Grepaints[17Gthe[21Gvisible[29Gscreen,[37Gre-wrapped[48Gto[51Gthe[55Gnew[59Gwidth,[66Gin[69Gboth[74Gdirections.[86GThe
+[5Gspike[11Gconfirmed[21Gthis[26Gfrom[31Greal[36Gsession[44Glogs.[50GThe[54Gcatch[60Gis[63Golder[69Gtext[74Gabove[80Gthe
+[5Gscreen:
+[5G-[7GIt[10Gstays[16Gat[19Gthe[23Gwidth[29Git[32Gwas[36Gwritten.[45GAfter[51Gnarrowing,[62Gwide[67Gold[71Glines[77Gget[81Gcut[85Goff
+[7Gon[10Gthe[14Gright,[21Gwhich[27Gis[30Gwhat[35Gargus[41Gdoes[46Gtoday[52Gbefore[59Gthe[63Grestart.
+[5G-[7GWrapping[16Gthem[21Gwhile[27Gdrawing[35Gworks[41Gfor[45Gplain[51Gtext[56Gbut[60Gmangles[68Gtables[75Gand[79Gboxes,[86Gso
+[7Gthat's[14Gout.
+[5G-[7GAbout[13Ga[15Gdozen[21Grows[26Gnear[31Gthe[35Gresize[42Gpoint[48Gshow[53Gup[56Gtwice[62Gin[65Gscrollback[76Gat[79Gdifferent
+[7Gwidths.
+
+[3G[1mYour[8Goptions[22m
+
+[3G-[5G[1mC:[8Gstop[13Grestarting.[25G[22mClaude[32GCode[37Gredraws[45Gthe[49Glive[54Garea,[60Gand[64Gold[68Gtext[73Gstays[79Gat[82Gits
+[5Goriginal[14Gwidth[20Gand[24Gis[27Gcut[31Goff[35Gwhen[40Gthe[44Gpane[49Gnarrows.[58GA[60Gkey[64Gre-renders[75Ghistory[83Gon
+[5Gdemand[12Gwhen[17Gyou[21Gwant[26Gold[30Gtext[35Gre-wrapped,[47Gand[51Ga[53Gsetting[61Gbrings[68Gback[73Gtoday's
+[5Gautomatic[15Grestart.
+[3G-[5G[1mB:[8Gwarm[13Gstandby.[22G[22mSame[27Grestart,[36Gbut[40Gdone[45Gin[48Gthe[52Gbackground[63Gand[67Gswapped[75Gin[78Gwhen[83Gready.
+[5GYour[10Gtyping[17Gis[20Gheld[25Gduring[32Gthe[36Gswap.
+[3G-[5G[1mA:[8Ghide[13Gthe[17Greplay.[25G[22mSame[30Grestart,[39Gbut[43Gthe[47Gold[51Gpicture[59Gstays[65Gon[68Gscreen[75Gand[79Gyour
+[5Gkeystrokes[16Gare[20Gheld[25Guntil[31Gthe[35Gnew[39Gsession[47Gis[50Gready.
+
+[3G[1mTradeoffs[22m
+
+[3G-[5G[1mC:[22m
+[5G-[7GUpside:[15Gno[18Grestart,[27Gno[30Greplay[37Gand[41Gno[44Ginput[50Ghold,[56Gand[60Git[63Gremoves[71Ga[73Glarge[79Gamount[86Gof
+[7Gfragile[15Grestart[23Gmachinery.
+[5G-[7GDownside:[17Gafter[23Gzooming[31Gout[35Gof[38Gfullscreen,[50Gwide[55Gold[59Glines[65Gare[69Gcut[73Goff[77Guntil[83Gyou
+[7Gpress[13Gre-render,[24Gand[28Ga[30Gfew[34Grows[39Gnear[44Gthe[48Gresize[55Gappear[62Gtwice[68Gin[71Gscrollback.[83GThe
+[7Glive[12Gredraw[19Gis[22Gproven[29Gin[32Gonly[37Gtwo[41Gcurrent[49Glogs,[55Gso[58Ga[60Gfuture[67GClaude[74GCode[79Grelease
+[7Gcould[13Gchange[20Git.
+[3G-[5G[1mB:[22m
+[5G-[7GUpside:[15Ghistory[23Gis[26Gre-wrapped[37Gand[41Gthe[45Gswap[50Gis[53Ginvisible.
+[5G-[7GDownside:[17Git's[22Gthe[26Gbiggest[34Gbuild,[41Gand[45Ga[47Gslip[52Gin[55Gthe[59Ginput-blocking[74Grule[79Gsilently
+[7Gloses[13Ga[15Gturn.
+[3G-[5G[1mA:[22m
+[5G-[7GUpside:[15Gthe[19Gsmallest[28Gchange.
+[5G-[7GDownside:[17Gthe[21Gfull[26Grestart[34Gstill[40Ghappens,[49Gand[53Gyou[57Gwait[62Gon[65Git[68Gevery[74Gtime.
+
+[3G[1mMy[6Grecommendation:[22GC,[25Gwith[30Gthe[34Gon-demand[44Gre-render[54Gkey[58Gand[62Ga[64Gsetting[72Gto[75Grestore[22m
+[3G[1mautomatic[13Grestarts.[23G[22mIt's[28Gwhat[33Gyou[37Gwere[42Gafter:[49Gold[53Gtext[58Gis[61Gjust[66Gtext,[72Gand[76Gthe[80Grestart
+[3Gonly[8Gexists[15Gto[18Gre-wrap[26Git.[30GMost[35Gwidth[41Gchanges[49Gare[53Gfullscreen[64Gtoggles,[73Gwhere[79Gthe[83Glive
+[3Garea[8Gmatters[16Gand[20Ga[22Gcut-off[30Gold[34Gline[39Gis[42Gcheap.[49GWhen[54Gyou[58Gwant[63Ghistory[71Gre-wrapped,[83Gyou
+[3Gask[7Gfor[11Git.
+
+[3GIf[6Gyou[10Gpick[15GC,[18GI'll[23Gwrite[29Gthe[33Gspec[38Gfor[42Gyou[46Gto[49Greview[56Gin[59GPlannotator[71Gbefore[78Gany[82Gcode.
+
+[38;2;153;153;153m✻[3GCogitated[13Gfor[17G2m[20G28s[24G·[26Gdone[31G4:58[36GPM[39m
+[38;2;59;130;246margus:[38;2;153;153;153m 0[10Gunread[17G•[19Gbudget[26G54%[30G•[32Gworking[85G[-][39m
+
+[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────[39m
+❯ 
+[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;2;71;85;105mwork[38;2;153;153;153m [38;2;71;85;105m──────────────────────────────────────[38;2;153;153;153m [38;2;59;130;246mARGUS[53GPAINT:[60GHIDE[65GSIZE-DRIFT[76GREPLAY[39m
+[3G[38;2;59;130;246mCONTEXT:[38;2;153;153;153m [38;2;106;219;109m⛁[38;2;153;153;153m [38;2;138;216;90m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [38;2;75;82;95m⛁[38;2;153;153;153m [45G18%[50G[38;2;100;116;139m(187k/1000k)[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;100;116;139mOpus[70G5.5[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;100;116;139mW:[38;2;153;153;153m [38;2;250;162;49m89%[39m
+[3G[38;2;71;85;105m───────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;2;59;130;246mPWD:[38;2;153;153;153m [38;2;100;116;139m…orktrees/ARGUS/coord-argus-paint[38;2;153;153;153m [38;2;100;116;139m|[38;2;153;153;153m [38;2;59;130;246mGIT:[38;2;153;153;153m [38;2;100;116;139margus-paint/dogfood-pr2[38;2;153;153;153m ([38;2;100;116;139mclean[38;2;153;153;153m)[39m
+[3G[38;2;255;107;128m⏵⏵[6Gbypass[13Gpermissions[25Gon[38;2;153;153;153m (shift+tab[39Gto[42Gcycle)[39m
+[49G[38;2;153;153;153mnew[53Gtask?[59G[38;2;177;185;249m/clear[38;2;153;153;153m to[69Gsave[74G[38;2;177;185;249m165.8k[81Gtokens[39m
+[2C[8A[?25h[?2026l

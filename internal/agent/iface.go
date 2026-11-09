@@ -5,9 +5,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // ErrStartAmbiguous wraps a SessionProvider.Start error that means "the
@@ -195,3 +195,12 @@ var _ SessionProvider = (*Runner)(nil)
 var _ SessionRunner = (*Runner)(nil)
 var _ SessionHandle = (*Session)(nil)
 var _ agentview.TerminalAdapter = (*Session)(nil)
+
+// RecycleIDCapable is an optional SessionRunner capability: reports whether
+// Recycle will actually deliver task.SessionID to the spawn. In-process runners
+// always do (and need not implement it); a supervisor-proxying client answers
+// false for a peer too old to carry RecycleReq.SessionID, so the caller can
+// avoid persisting an ID the session will never be launched with.
+type RecycleIDCapable interface {
+	RecycleCarriesSessionID() bool
+}

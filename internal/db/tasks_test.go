@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // recordingSink captures events emitted via the global events bus so tests

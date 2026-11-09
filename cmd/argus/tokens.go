@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"text/tabwriter"
 
-	"github.com/drn/argus/internal/api"
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/api"
+	"github.com/argus-foundry/argus/internal/db"
 )
 
 // scopeRe constrains scope identifiers to safe ASCII so they round-trip

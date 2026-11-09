@@ -1,13 +1,14 @@
 package client
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 )
 
 func TestCliUsage(t *testing.T) {
@@ -57,4 +58,87 @@ func TestCliRoutingUsage(t *testing.T) {
 	fd.mu.Unlock()
 	_, err = c.RoutingUsage()
 	testutil.Error(t, err)
+}
+
+func TestCliRouteRedial(t *testing.T) {
+	fd := newFakeDaemon(t)
+	fd.mu.Lock()
+	fd.routing = backendtier.Usage{Claude: map[string]usagebudget.Reading{"personal": {Percentage: 8}}}
+	fd.mu.Unlock()
+	c := fakeClient(t, fd)
+
+	// Simulate the daemon bounce: this client's connection is dead for good.
+	testutil.NoError(t, c.rpc.Close())
+	_, origErr := c.RoutingUsage()
+	testutil.Error(t, origErr)
+
+	got, err := c.RoutingUsageResilient()
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Claude["personal"].Percentage, 8.0)
+
+	// Daemon gone entirely: the ORIGINAL call error surfaces (not the dial
+	// error), nothing panics.
+	c.sockPath = filepath.Join(t.TempDir(), "gone.sock")
+	_, err = c.RoutingUsageResilient()
+	testutil.Error(t, err)
+	testutil.Equal(t, err.Error(), origErr.Error())
+
+	// A live connection never takes the fallback path: one call, no new dial.
+	lfd := newFakeDaemon(t)
+	live := fakeClient(t, lfd)
+	_, err = live.RoutingUsage() // completes the dial, so it is counted
+	testutil.NoError(t, err)
+	lfd.mu.Lock()
+	acceptsBefore := lfd.accepts
+	lfd.mu.Unlock()
+	_, err = live.RoutingUsageResilient()
+	testutil.NoError(t, err)
+	lfd.mu.Lock()
+	defer lfd.mu.Unlock()
+	testutil.Equal(t, lfd.accepts, acceptsBefore)
+	testutil.Equal(t, lfd.routingCalls, 2)
+}
+
+func TestCliRouteFresh(t *testing.T) {
+	fd := newFakeDaemon(t)
+	fd.mu.Lock()
+	fd.routing = backendtier.Usage{Claude: map[string]usagebudget.Reading{"personal": {Percentage: 9}}}
+	fd.mu.Unlock()
+	c := fakeClient(t, fd)
+	got, err := c.RoutingUsageFresh()
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Claude["personal"].Percentage, 9.0)
+
+	// After a bounce the resilient variant re-dials and still probes.
+	testutil.NoError(t, c.rpc.Close())
+	got, err = c.RoutingUsageFreshResilient()
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Claude["personal"].Percentage, 9.0)
+	fd.mu.Lock()
+	calls := fd.freshCalls
+	fd.mu.Unlock()
+	testutil.Equal(t, calls, 2)
+}
+
+func TestCliAcctRedial(t *testing.T) {
+	fd := newFakeDaemon(t)
+	fd.mu.Lock()
+	fd.usage = map[string]usagebudget.Reading{"personal": {Percentage: 15}}
+	fd.mu.Unlock()
+	c := fakeClient(t, fd)
+
+	// Daemon bounce: the original connection is dead for good, yet the
+	// account-move picker's usage source must still read the live daemon
+	// instead of reporting every account unknown (auto then picked the
+	// over-budget default account).
+	testutil.NoError(t, c.rpc.Close())
+	_, err := c.AccountUsage()
+	testutil.Error(t, err)
+
+	got := c.AccountUsageSource()(config.Config{})
+	testutil.Equal(t, got["personal"].Percentage, 15.0)
+
+	// Daemon gone entirely: unknown (nil), no panic.
+	c.sockPath = filepath.Join(t.TempDir(), "gone.sock")
+	testutil.Nil(t, c.AccountUsageSource()(config.Config{}))
 }

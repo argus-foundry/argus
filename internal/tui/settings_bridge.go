@@ -3,7 +3,7 @@ package tui
 import (
 	"strconv"
 
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Keyed rows let later bridge controls extend this section without new keys.
@@ -19,6 +19,7 @@ func (sv *SettingsView) bridgeRows() []settingsRow {
 		{"bridge.band", "Hera band", cfg.Band},
 		{"bridge.toasts", "Message toasts", cfg.Toasts},
 		{"ui.rerender_keep_place", "Keep place on re-render", sv.database.Config().UI.RerenderKeepPlace},
+		{"ui.auto_rerender_on_resize", "Auto re-render on resize", sv.database.Config().UI.AutoRerenderOnResize},
 	} {
 		state := "OFF"
 		if item.enabled {
@@ -43,6 +44,9 @@ func (sv *SettingsView) toggleBridge(key string) bool {
 	}
 	if key == "ui.rerender_keep_place" {
 		value = sv.database.Config().UI.RerenderKeepPlace
+	}
+	if key == "ui.auto_rerender_on_resize" {
+		value = sv.database.Config().UI.AutoRerenderOnResize
 	}
 	if err := sv.database.SetConfigValue(key, strconv.FormatBool(!value)); err != nil {
 		uxlog.Log("[bridge] settings persist failed key=%s error=%v", key, err)

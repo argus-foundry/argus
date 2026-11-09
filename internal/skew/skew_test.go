@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/buildid"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/buildid"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 var errSentinel = errors.New("boom")

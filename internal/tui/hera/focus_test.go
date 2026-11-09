@@ -3,7 +3,7 @@ package hera
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestFocusMachine_AdvanceRetreat(t *testing.T) {

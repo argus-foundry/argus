@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/drn/argus/internal/tui/settings"
+	"github.com/argus-foundry/argus/internal/tui/settings"
 )
 
 // PluginSection is the persisted form of a plugin-registered settings

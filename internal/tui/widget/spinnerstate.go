@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/drn/argus/internal/spinner"
+	"github.com/argus-foundry/argus/internal/spinner"
 )
 
 // activeSpinner holds the currently active spinner. Accessed from multiple

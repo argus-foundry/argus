@@ -3,7 +3,7 @@ package db
 import (
 	"fmt"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 )
 
 // BackendTiers returns the Settings-UI-edited backend-tier-routing list, in

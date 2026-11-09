@@ -6,12 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/hera"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hera/tiering"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/hera"
 )
 
 // writeLibraryProfile writes <HOME>/.argus/profiles/<name>.toml. The caller MUST
@@ -146,14 +147,14 @@ func TestResolveHeraTier_ContextPercent_SameSizeDifferentKind_DifferentPercent(t
 // unconfigured (zero, or otherwise non-positive) budget resolves to 0 rather
 // than panicking or reporting a nonsensical percentage.
 func TestContextPercent_ZeroBudget(t *testing.T) {
-	testutil.Equal(t, contextPercent(80000, 0), 0)
+	testutil.Equal(t, tiering.ContextPercent(80000, 0), 0)
 }
 
 // TestContextPercent_CapsAtHundred pins the clamp: a worker's context_size
 // can run past the coordinator-oriented budget (workers carry no hard-stop),
 // and the percentage caps at 100 rather than reporting e.g. 150.
 func TestContextPercent_CapsAtHundred(t *testing.T) {
-	testutil.Equal(t, contextPercent(300000, 200000), 100)
+	testutil.Equal(t, tiering.ContextPercent(300000, 200000), 100)
 }
 
 // TestValidProfileNames_OnlyValid: validProfileNames returns only profiles that

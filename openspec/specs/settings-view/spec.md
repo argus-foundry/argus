@@ -578,3 +578,32 @@ Settings SHALL expose, in the Bridge category, a toggle "Keep place on re-render
 - **WHEN** the user turns the toggle off
 - **THEN** subsequent kicks, draft reports and restores behave as before the feature
 
+### Requirement: Web Settings displays provider usage windows
+
+The web Settings view SHALL display current cached usage for configured Claude accounts and the default Codex account. For Claude it SHALL display each available five-hour and weekly window; for Codex it SHALL display its available weekly window. Each available window SHALL show its usage percentage and, when known, its reset time. A valid reading with no known reset SHALL retain its percentage and identify the reset time as unavailable. Missing or expired windows SHALL be shown as unavailable, and the view SHALL expire readings at their reset time and refresh readings while Settings is open without initiating provider probes or sign-in lookups.
+
+#### Scenario: Claude account has both windows
+
+- **WHEN** a configured Claude account has valid five-hour and weekly readings
+- **THEN** Settings shows both percentages and reset times for that account
+
+#### Scenario: Codex has a valid weekly reading
+
+- **WHEN** the daemon has a valid cached Codex weekly reading
+- **THEN** Settings shows its percentage and reset time when known
+
+#### Scenario: Codex depleted hold has no reset timestamp
+
+- **WHEN** a valid cached Codex depleted reading has no known reset time
+- **THEN** Settings shows its percentage and identifies the reset time as unavailable
+
+#### Scenario: Reading is missing, expired, or reaches reset
+
+- **WHEN** a provider window has no current valid cached reading or its reset time passes
+- **THEN** Settings identifies that window as unavailable
+
+#### Scenario: Settings refreshes usage
+
+- **WHEN** Settings remains open while readings change
+- **THEN** the displayed readings refresh using existing cached snapshots and no provider probe or sign-in lookup starts
+

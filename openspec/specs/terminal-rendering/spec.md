@@ -682,7 +682,7 @@ Transcript-guarded width-repair stops SHALL give the agent three seconds after S
 
 ### Requirement: In-pane width repair status
 
-The TUI SHALL display a small border indicator while a pane's repair is deferred, stopping, or restarting. Deferred repair SHALL say “Re-render pending”; active stop or restart SHALL say “Re-rendering…”. Terminal content, including deferred user prompts, SHALL remain readable. The indicator SHALL clear when repair resolves, restart fails, the session exits cleanly, or the pane rebinds, including inactive Hera panes.
+The TUI SHALL display a small border indicator on the right side of a pane's top border. While a pane's repair is deferred, stopping, or restarting it SHALL say “Re-render pending” (deferred) or “Re-rendering…” (active stop or restart). When no repair is in flight but the pane's history is owed a re-render (setting `ui.auto_rerender_on_resize` off and drift at least `RerenderMargin`), it SHALL show the owed notice `width changed · <key> re-render`. Precedence SHALL be “Re-rendering…” over “Re-render pending” over the owed notice; at most one is drawn. Terminal content, including deferred user prompts, SHALL remain readable, and the indicator SHALL be truncated before it can overlap the left-side title. The indicator SHALL clear when repair resolves, restart fails, the session exits cleanly, or the pane rebinds, including inactive Hera panes; the owed notice SHALL additionally clear when the width returns inside the margin.
 
 #### Scenario: Busy agent defers repair
 
@@ -693,6 +693,16 @@ The TUI SHALL display a small border indicator while a pane's repair is deferred
 
 - **WHEN** a restarted session is attached successfully or evaluation finds no repair necessary
 - **THEN** the indicator SHALL disappear
+
+#### Scenario: Owed notice yields to in-flight status
+
+- **WHEN** a hotkey re-render is deferred while the owed notice is showing
+- **THEN** the border shows “Re-render pending” and not the owed notice
+
+#### Scenario: Owed notice draws on the top border's right side
+
+- **WHEN** a SimulationScreen frame is drawn for a drifted pane with the setting off
+- **THEN** the top border row contains the pane title on the left and `width changed · ctrl+n re-render` right-aligned
 
 ### Requirement: Unresolved width anchors survive intermediate no-drift binds
 
@@ -1025,4 +1035,143 @@ A terminal pane SHALL own at most two replay emulators at any time (published pl
 
 - **WHEN** a rebuild panics after acquiring its emulator
 - **THEN** the in-flight flag is cleared and the emulator is retained for reuse
+
+### Requirement: Scroll replay of a live session emulates at its initial width
+
+The scroll-mode replay of a live session SHALL build its emulator at the widest of the pane width, the session's current PTY width and the session's initial PTY width (when the handle reports one), then clip to the pane. The live PTY width alone SHALL NOT be used, because it follows resizes while the committed history stays baked at the width the session started at.
+
+#### Scenario: Shrunk pane does not fragment wide history
+- **WHEN** a live session started at 282 columns has its PTY shrunk to 142 by a Ctrl+Z and the user is scrolled up
+- **THEN** the replay emulator is built at 282 columns and painted clipped to the pane, with no left-edge word fragments or right-edge letter column
+
+#### Scenario: Growing past the initial width
+- **WHEN** the live PTY is wider than the initial width
+- **THEN** the replay emulator is built at the live PTY width
+
+#### Scenario: Handle without an initial size
+- **WHEN** the session handle reports no initial PTY size
+- **THEN** the replay emulator width is the larger of the pane and the live PTY width, as before
+
+### Requirement: Reused emulators release scrollback memory
+
+When a pane RIS-resets an emulator for reuse, the system SHALL zero the retained scrollback lines before clearing, so the memory is reclaimable rather than held at its peak.
+
+#### Scenario: Reset frees retained lines
+
+- **WHEN** an emulator holding scrollback is reset for reuse
+- **THEN** the heap retained by its scrollback drops to near zero
+
+### Requirement: Replay scrollback is a bounded sliding window
+
+A replay emulator SHALL hold at most a cell budget of scrollback (default 1,000,000 cells), and the budget SHALL be a window over the session log, not a floor: scrolling to the top of a budget-limited window SHALL rebuild it further back in the log (dropping the newest end), and scrolling to the bottom of a back-shifted window SHALL slide it forward again, so every byte of history stays reachable at bounded memory. A slide SHALL reuse the existing single-flight async rebuild and generation guard, SHALL read the log only on an actual slide, SHALL keep the same content line under the viewport top (preserving any scroll made during the rebuild), and SHALL apply ESC-boundary alignment, scroll-region clamping and OSC filtering to the window. Each trim, slide and release SHALL be logged.
+
+#### Scenario: Scrolling through a log larger than the budget
+
+- **WHEN** the user scrolls from the live bottom to the very first line of a log several times the budget, and back
+- **THEN** every step shows contiguous content, the cursor line is stable across each window seam, the first and last lines are reachable, and retained memory stays within the budget throughout
+
+#### Scenario: Window slides only when needed
+
+- **WHEN** the viewport is well inside the current window
+- **THEN** no log read or rebuild occurs
+
+#### Scenario: Top of the log is a clamp
+
+- **WHEN** a window already starts at the log's first byte and the user scrolls past its top
+- **THEN** the scroll position clamps and no rebuild runs
+
+### Requirement: Idle panes release replay emulators
+
+A pane not drawn for 5 minutes SHALL release its spare slots and published replay emulator, and reset its live emulator, by shrinking them in place (never Close). The replay release SHALL be skipped while a rebuild is in flight. On return the live emulator SHALL be rebuilt from the log before the first painted frame, so no blank or torn frame is shown.
+
+#### Scenario: Idle pane releases memory
+
+- **WHEN** a pane has not been drawn for the idle threshold and no rebuild is in flight
+- **THEN** its replay emulators retain no scrollback and the published replay emulator is cleared
+
+#### Scenario: Active pane is untouched
+
+- **WHEN** a pane was drawn within the idle threshold
+- **THEN** nothing is released
+
+### Requirement: Dead-session replay slides within its final frame
+
+A dead session's replay SHALL be bounded to the log offset of its final alt-screen exit (the whole log's last `CSI ?1049l`; the log size when there is none or it sits at offset 0), computed once per (session, log size) and cached. Within `[0, bound)` the replay window SHALL slide back and forward exactly like a live session's, so every byte up to the final frame stays reachable at bounded memory, and the post-exit teardown output SHALL never be shown.
+
+#### Scenario: Scrolling a dead session through a log larger than the budget
+
+- **WHEN** the user scrolls a dead session from its last frame to the very first line and back
+- **THEN** every step shows contiguous content, the cursor line is stable across window seams, and the resume hint printed after the alt-screen exit is never displayed
+
+#### Scenario: The bound is found against the whole log
+
+- **WHEN** the final alt-screen exit lies outside the most recent tail read, or spans a scan-block boundary
+- **THEN** the replay still ends at that exit
+
+#### Scenario: A grown log is rescanned
+
+- **WHEN** the session's log grows (the session was restarted)
+- **THEN** the bound is recomputed rather than served from the cache
+
+### Requirement: Live panes honor synchronized output
+
+While a live pane's output stream is inside an open DEC private mode 2026 block (`CSI ?2026h` without its `CSI ?2026l`), the pane SHALL NOT feed that block to its emulator and SHALL keep painting the last completed frame. The block SHALL be fed and painted as soon as it closes. Sequences split across read boundaries SHALL be recognized. A block still open after 150ms, or holding more than 128KiB, SHALL be flushed so a missing `?2026l` can never freeze a pane; the flush SHALL be logged at most once per 10 seconds per pane. The hold SHALL be dropped on every reset or rebind of the live emulator. Replay and preview paths are unaffected.
+
+#### Scenario: Frame split across reads
+
+- **WHEN** a `?2026h` frame has arrived without its `?2026l`
+- **THEN** the pane SHALL keep painting the previous frame, and SHALL paint the new frame in one step once the close arrives
+
+#### Scenario: Sequence split across chunks
+
+- **WHEN** the opening sequence itself is split between two reads
+- **THEN** the partial prefix SHALL be withheld until it resolves
+
+#### Scenario: Lost close
+
+- **WHEN** no `?2026l` arrives within 150ms of the block opening
+- **THEN** the withheld bytes SHALL be fed and painted, driven by a timer wake with no output required
+
+#### Scenario: Rebind during a block
+
+- **WHEN** the pane is reset or rebound while holding an open block
+- **THEN** no hold SHALL survive into the new session
+
+#### Scenario: Echo latency
+
+- **WHEN** a key was pressed recently and its echo frame closes
+- **THEN** the frame SHALL paint under the fast echo cap, adding no latency beyond the frame the agent was already drawing
+
+#### Scenario: Writes inside a block do not cost a frame
+
+- **WHEN** a write begins and ends inside the same open block
+- **THEN** the repaint pump SHALL NOT be woken for it
+
+### Requirement: Scroll replay emulates each log segment at its authored width
+
+When a width index exists for the session log, the replay SHALL feed the log in segments and resize the emulator at each recorded offset so each segment is emulated at the PTY size it was authored for, start a window that begins mid-log at the size in force at its start, and return the emulator to its build size after the last segment so painting and anchoring are unchanged. Without an index, or when the log is read from the ring-only fallback, the replay SHALL behave as a single-width feed.
+
+#### Scenario: Relative redraw across a width change
+- **WHEN** a segment authored at 20 columns redraws its two-row UI with a relative cursor-up of 2, and the PTY was later widened to 40
+- **THEN** the replay shows the redrawn UI wrapped at 20 columns and the content above it intact
+
+#### Scenario: No index
+- **WHEN** the session has no width index
+- **THEN** the log is emulated at one width as before
+
+#### Scenario: Window starts mid-log
+- **WHEN** a sliding window begins after a recorded size change
+- **THEN** the window is fed starting at the size in force at its first byte
+
+### Requirement: Live bind replays each log segment at its authored size
+
+When the live emulator is built or rebuilt from the session log (fresh bind, rebind, or ring-wrap rebuild) and a width index exists for the log, the replay SHALL emulate each segment at the PTY size it was authored for, using the offset of the first replayed byte within the log, and return the emulator to its build size afterwards. When the history comes from the ring-only fallback, which has no log offsets, or no index exists, the replay SHALL be a single-size feed.
+
+#### Scenario: Recycled session resized after spawn
+- **WHEN** a session was spawned at 140x69, resized to the 88x48 pane near the end of its log, and a pane binds to it
+- **THEN** the pane shows the final message above exactly one footer, with no overlaid stale footer glyphs
+
+#### Scenario: Ring-only history
+- **WHEN** no session log exists and the history comes from the ring buffer
+- **THEN** no width index is applied and the history is fed as one write
 

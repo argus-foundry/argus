@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestShouldKickRerender(t *testing.T) {
@@ -229,6 +229,30 @@ func TestComposerDraft(t *testing.T) {
 			testutil.Equal(t, got, tc.want)
 			testutil.Equal(t, src, tc.wantSrc)
 			testutil.Equal(t, capped, tc.wantCapped)
+		})
+	}
+}
+
+// resize-without-restart: the owed-notice predicate is the SAME drift test the
+// kick uses (either anchor, RerenderMargin boundary), minus the idle/prompt
+// gates — it reports that history is owed, not that it may be repaired now.
+func TestRerenderOwed(t *testing.T) {
+	tests := []struct {
+		name                           string
+		initCols, committed, panelCols int
+		want                           bool
+	}{
+		{"unknown init width never owed", 0, 0, 200, false},
+		{"just under margin", 80, 0, 80 + RerenderMargin - 1, false},
+		{"at margin wider", 80, 0, 80 + RerenderMargin, true},
+		{"at margin narrower", 120, 0, 120 - RerenderMargin, true},
+		{"committed anchor drifted though init matches", 80, 142, 84, true},
+		{"committed anchor within margin", 80, 90, 84, false},
+		{"width returned to authored", 80, 0, 80, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			testutil.Equal(t, RerenderOwed(tc.initCols, tc.committed, tc.panelCols), tc.want)
 		})
 	}
 }

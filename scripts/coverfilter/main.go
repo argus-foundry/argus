@@ -119,7 +119,7 @@ func (s stats) percent() float64 {
 //
 // A coverage profile line looks like:
 //
-//	github.com/drn/argus/internal/api/server.go:10.20,12.30 4 1
+//	github.com/argus-foundry/argus/internal/api/server.go:10.20,12.30 4 1
 //
 // where the trailing two integers are statement count and execution count.
 func filter(r io.Reader, w io.Writer, patterns []string) (stats, error) {

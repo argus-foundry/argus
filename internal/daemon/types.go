@@ -3,9 +3,9 @@ package daemon
 import (
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/buildid"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/buildid"
 )
 
 // BootInfoResp describes the daemon's boot-time identity. Used by the TUI to
@@ -138,15 +138,20 @@ type BootInfoResp struct {
 //   - v11 (add-sandbox-session-signal): spawned agents receive the reserved
 //     ARGUS_SANDBOXED=1 signal only when actually wrapped in sandbox-exec.
 //     No wire fields change; spawn surface v20 identifies this new contract.
-//   - v12 (add-resident-agent): + Kind on StartReq, KickReq, and RecycleReq.
+//   - v12 (fix-recycle-session-id): + RecycleReq.SessionID, the fresh pinned
+//     --session-id a recycle mints daemon-side. Additive and zero-value-safe: a
+//     pre-v12 supervisor ignores it and the recycled session launches without
+//     --session-id (the old behavior), so the failure mode on a stale
+//     supervisor is exactly the pre-fix one, never worse.
+//   - v13 (add-resident-agent): + Kind on StartReq, KickReq, and RecycleReq.
 //     BuildCmd gates the resident's forced permission mode, --settings rules,
-//     and ?caller= on it; a pre-v12 supervisor drops it and would spawn the
+//     and ?caller= on it; a pre-v13 supervisor drops it and would spawn the
 //     resident unprotected, so the client refuses.
 //
 // StartResp.SessionID is additive and zero-value-safe: newer clients preserve
 // their existing ID when an older server omits it. Supervisor surface v19
 // identifies the launch recovery behavior that makes this field necessary.
-const ProtocolVersion = 12
+const ProtocolVersion = 13
 
 // SupervisorProtocolMatch reports whether a supervisor's handshake version
 // equals the daemon's. A mismatch is NOT fatal and NEVER triggers an auto-
@@ -348,6 +353,7 @@ type KickReq struct {
 type RecycleReq struct {
 	MCPPort         int
 	TaskID          string
+	SessionID       string // fresh pinned --session-id minted by the recycle (pin-style families); "" for capture-style
 	Prompt          string
 	Project         string
 	Backend         string

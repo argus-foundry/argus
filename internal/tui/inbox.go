@@ -6,10 +6,10 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/tui/modal"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/tui/modal"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // openInbox shows the read-only inbox viewer for taskID, restoring the
@@ -136,7 +136,7 @@ func taskInboxEntry(m *model.TaskMessage, from string) modal.InboxEntry {
 		Source:  "task",
 		From:    from,
 		Summary: summary,
-		Unread:  m.ReadAt.IsZero(),
+		Unread:  m.ReadAt.IsZero() && m.From != model.SystemTaskID, // system notes are not mail
 		ReadAt:  m.ReadAt,
 		Body:    m.Body,
 	}

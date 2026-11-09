@@ -6,7 +6,7 @@ import (
 
 	xvt "github.com/charmbracelet/x/vt"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestStrip(t *testing.T) {

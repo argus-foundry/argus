@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestTaskMutationsPersistentSink(t *testing.T) {
@@ -55,7 +55,9 @@ func TestTaskMutationsPersistentSink(t *testing.T) {
 		}},
 		{"result", []string{"result"}, func(d *db.DB, task *model.Task) error {
 			task.Result = "opaque result"
-			return d.SetResult(task.ID, task.Result)
+			err := d.SetResult(task.ID, task.Result)
+			task.ResultAt = d.ResultAt(task.ID)
+			return err
 		}},
 		{"archive", []string{"archived"}, func(d *db.DB, task *model.Task) error {
 			task.SetArchived(true)

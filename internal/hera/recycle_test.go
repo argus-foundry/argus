@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // --- recycle_coord (add-coordinator-context-management) ---
@@ -188,7 +188,7 @@ func TestBuildRecycleSeedPrompt_ComposesMissionPlanStateAndHandoffNote(t *testin
 
 	testutil.NoError(t, d.SetMeta(task.ID, db.HeraMetaNamespace, "handoff_note", "watch the fan-in reconciliation"))
 
-	prompt, err := BuildRecycleSeedPrompt(d, role.ID)
+	prompt, err := BuildRecycleSeedPrompt(d, role.ID, "")
 	testutil.NoError(t, err)
 
 	testutil.Contains(t, prompt, "You are the coordinator for the config-management rollout.")
@@ -225,7 +225,7 @@ func TestBuildRecycleSeedPrompt_WorkerRoleWordingNotCoordinatorSpecific(t *testi
 	_, _, role := seedRecycleRole(t, d, db.HeraKindWorker, "myorch", "w1", "/wt/w1", "argus/w1-branch",
 		"You are the worker implementing the config-management rollout.")
 
-	prompt, err := BuildRecycleSeedPrompt(d, role.ID)
+	prompt, err := BuildRecycleSeedPrompt(d, role.ID, "")
 	testutil.NoError(t, err)
 
 	testutil.Contains(t, prompt, "You are the worker implementing the config-management rollout.")
@@ -233,5 +233,18 @@ func TestBuildRecycleSeedPrompt_WorkerRoleWordingNotCoordinatorSpecific(t *testi
 
 	if strings.Contains(prompt, "prior coordinator session") {
 		t.Fatalf("seed prompt still uses coordinator-specific wording for a worker role: %q", prompt)
+	}
+}
+
+func TestBuildRecycleSeedPrompt_LastExchangeAndRelayDirective(t *testing.T) {
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	_, _, role := seedRecycleCoordinator(t, d, "myorch", "/wt/coord", "argus/coord-branch", "mission text")
+	prompt, err := BuildRecycleSeedPrompt(d, role.ID, "\n## Last exchange with the user before the reset\nthe question\n")
+	testutil.NoError(t, err)
+	testutil.Contains(t, prompt, "the question")
+	testutil.Contains(t, prompt, "FIRST user-visible")
+	if strings.Index(prompt, "the question") > strings.Index(prompt, "mission text") {
+		t.Fatal("last exchange must precede the original prompt")
 	}
 }

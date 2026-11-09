@@ -3,9 +3,9 @@ package hera
 import (
 	"testing"
 
-	heramodel "github.com/drn/argus/internal/hera/model"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/gdamore/tcell/v2"
 )
 

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/db"
 )
 
 // Sentinel errors returned by Registry. Use errors.Is for matching.

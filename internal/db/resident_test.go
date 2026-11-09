@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func residentDir(t *testing.T) string { return filepath.Join(t.TempDir(), "resident") }
@@ -297,3 +297,14 @@ func TestResident_SweepFiltersExcludeResidentRow(t *testing.T) {
 type sinkFunc func(model.Event)
 
 func (f sinkFunc) Emit(ev model.Event) { f(ev) }
+
+func TestResident_SetTaskBackendMoveRejected(t *testing.T) {
+	d := testDB(t)
+	r, _, err := d.EnsureResidentTask(t.TempDir())
+	testutil.NoError(t, err)
+	_, err = d.SetTaskBackendMove(r.ID, TaskBackendMove{Backend: "codex", Prompt: "seed"})
+	testutil.ErrorIs(t, err, ErrResidentProtected)
+	got, _ := d.Get(r.ID)
+	testutil.Equal(t, got.Backend, r.Backend)
+	testutil.Equal(t, got.Prompt, r.Prompt)
+}

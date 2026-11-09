@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Attachment is a user-uploaded file to be written into the worktree before
@@ -164,6 +165,14 @@ func resolveTaskAccount(cfg config.Config, input CreateInput, backend string) (s
 	return account, nil
 }
 
+// accountLedgerName normalizes a stored account ("" = default) for comparison.
+func accountLedgerName(a string) string {
+	if a == "" {
+		return config.DefaultAccountName
+	}
+	return a
+}
+
 // CreateAndStart is the single entry point for fully-transactional task
 // creation. It performs, in order: resolve project config, create worktree,
 // run OnWorktreeCreated hook, persist task row, generate session ID, and
@@ -189,16 +198,31 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	}
 
 	// Resolve the backend and account before any side effect so a bad account
-	// never leaves a worktree behind. Preserve an explicitly pinned default;
-	// an implicit default stays blank so child workers may route accounts.
+	// never leaves a worktree behind. An explicit account (named or "default")
+	// is a pin. Anything else is unpinned: routing chooses, the task is stored
+	// account_routed (blank when routing lands on default) so children route too.
 	explicitDefault := input.Account == config.DefaultAccountName
-	choice := resolveTaskChoice(input.Backend, input.Project, cfg, input.Account)
-	backend := choice.Backend
 	projectAccount := cfg.ProjectAccounts[input.Project]
-	routed := false
-	if input.Account == "" && (projectAccount == "" || cfg.ValidateAccount(projectAccount) != nil) && choice.Account != "" && cfg.AccountSupports(choice.Account, cfg.Backends[backend].Command) {
+	unpinned := input.Account == "" && (projectAccount == "" || cfg.ValidateAccount(projectAccount) != nil)
+	if len(cfg.BackendRouting.Tiers) > 0 {
+		// Fresh read before spawn: never route on a snapshot older than the burst.
+		backendtier.FreshenBeforeSpawn()
+	}
+	choice := resolveTaskChoice(input.Backend, input.Project, cfg, input.Account, true)
+	backend := choice.Backend
+	// The burst ledger was charged to choice.Account; roll it back if the spawn
+	// fails, and move it if the task ends up running on a different account.
+	reservedAccount := choice.Account
+	reserved := choice.Backend != ""
+	spawned := false
+	defer func() {
+		if reserved && !spawned {
+			backendtier.ReleaseSpawn(backend, reservedAccount)
+			uxlog.Log("[routing] spawn failed; rolled back reservation backend=%q account=%q", backend, reservedAccount)
+		}
+	}()
+	if unpinned && choice.Account != "" && cfg.AccountSupports(choice.Account, cfg.Backends[backend].Command) {
 		input.Account = choice.Account
-		routed = true
 	}
 	account, err := resolveTaskAccount(cfg, input, backend)
 	if err != nil {
@@ -207,10 +231,19 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	if account == config.DefaultAccountName && !explicitDefault {
 		account = ""
 	}
-	// A routed blank account needs no flag: children inherit blank anyway.
-	routed = routed && account != ""
-	uxlog.Log("[backendtier] spawn backend=%q account=%q reason=%s", backend, account, choice.Reason)
-	slog.Info("[backendtier] spawn", "backend", backend, "account", account, "reason", choice.Reason)
+	if reserved && !strings.EqualFold(accountLedgerName(account), accountLedgerName(reservedAccount)) {
+		uxlog.Log("[routing] reservation moved backend=%q %q→%q (task runs on %q)", backend, reservedAccount, account, account)
+		backendtier.ReleaseSpawn(backend, reservedAccount)
+		backendtier.RecordSpawn(backend, account)
+		reservedAccount = account
+	}
+	routed := unpinned
+	mode := "pinned"
+	if routed {
+		mode = "auto"
+	}
+	uxlog.Log("[routing] account decision mode=%s step=%s backend=%q account=%q routed=%t reason=%s", mode, choice.Step, backend, account, routed, choice.Reason)
+	slog.Info("[routing] account decision", "mode", mode, "step", choice.Step, "backend", backend, "account", account, "routed", routed, "reason", choice.Reason)
 
 	// Compensating-action stack: each successful side effect appends an undo
 	// closure. unwind runs them LIFO. We run cleanups outside any critical
@@ -316,8 +349,8 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 
 	// Step 4: generate session ID for families that pin it at start;
 	// capture-style families recover theirs post-exit.
-	if resolved, berr := ResolveBackend(task, cfg); berr == nil && FamilyOf(resolved.Command).PinsSessionID {
-		task.SessionID = model.GenerateSessionID()
+	if sid := FreshSessionID(task, cfg); sid != "" {
+		task.SessionID = sid
 		if uErr := database.Update(task); uErr != nil {
 			slog.Warn("CreateAndStart: persist session ID failed (continuing)", "id", taskID, "err", uErr)
 		}
@@ -389,12 +422,15 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 		// retry; see the fix-ambiguous-start-timeout-unwind openspec change
 		// and its daemon-rpc.md gotcha for the disclosed follow-up.
 		if errors.Is(err, ErrStartAmbiguous) {
+			spawned = true // the daemon may still start it; keep the reservation
 			slog.Warn("CreateAndStart: start RPC ambiguous, preserving task/worktree", "id", taskID, "err", err)
 			return nil, nil, fmt.Errorf("start session: daemon has not confirmed yet — task and worktree preserved, retry manually once the daemon responds: %w", err)
 		}
 		unwind("runner.Start", err)
 		return nil, nil, fmt.Errorf("start session: %w", err)
 	}
+
+	spawned = true
 
 	// Step 6: flip to InProgress and record PID. Happens after AfterStart so
 	// startGen is already post-bumped by the time any tick can observe the
@@ -501,4 +537,18 @@ func appendAttachmentList(prompt string, paths []string) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// FreshSessionID returns the session ID a freshly (re)started task should be
+// launched with: a newly minted UUID when the task's resolved backend family
+// pins its ID at start (`--session-id`, e.g. Claude), else "" so capture-style
+// families (Codex, ...) recover theirs after exit. Shared by CreateAndStart
+// step 4 and the recycle restart so the two cannot drift: BuildCmd never mints
+// an ID itself, so clearing without re-minting leaves a pin-style session
+// running with no resumable ID.
+func FreshSessionID(task *model.Task, cfg config.Config) string {
+	if resolved, err := ResolveBackend(task, cfg); err == nil && FamilyOf(resolved.Command).PinsSessionID {
+		return model.GenerateSessionID()
+	}
+	return ""
 }

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // writeBundle creates a fake .app directory with an XML Info.plist + optional

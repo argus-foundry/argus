@@ -12,17 +12,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/gitutil"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/skew"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/hera"
-	"github.com/drn/argus/internal/tui/widget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/skew"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/hera"
+	"github.com/argus-foundry/argus/internal/tui/terminal"
+	"github.com/argus-foundry/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/gdamore/tcell/v2"
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
@@ -3116,4 +3117,42 @@ func TestSmoke_JumpSwitcherFilterAndEnter(t *testing.T) {
 		testutil.Equal(t, app.agentState.TaskID, "ts-zeta")
 		testutil.Equal(t, app.tasklist.SelectedTask().ID, "ts-zeta")
 	})
+}
+
+// TestSmoke_ReleaseIdlePaneMemory exercises the tick hook on the real event
+// loop: before the loop exists it is a no-op; with it, every pane (agent view
+// plus the two Hera panes) is visited exactly once, on the tview goroutine.
+func TestSmoke_ReleaseIdlePaneMemory(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[*terminal.TerminalPane]int{}
+	old := releaseIdlePane
+	releaseIdlePane = func(p *terminal.TerminalPane, _ time.Time) {
+		mu.Lock()
+		seen[p]++
+		mu.Unlock()
+	}
+	defer func() { releaseIdlePane = old }()
+
+	app := New(testDB(t), agent.NewRunner(nil), true)
+	app.releaseIdlePaneMemory() // tapp nil → must not touch any pane
+	mu.Lock()
+	testutil.Equal(t, len(seen), 0)
+	mu.Unlock()
+
+	_, stop := wireApp(t, app)
+	defer stop()
+	app.releaseIdlePaneMemory() // loop exists but Run() hasn't enabled the hook: still a no-op
+	syncUI(t, app.tapp)
+	mu.Lock()
+	testutil.Equal(t, len(seen), 0)
+	mu.Unlock()
+	app.idleReleaseEnabled.Store(true)
+	app.releaseIdlePaneMemory()
+	syncUI(t, app.tapp)
+	mu.Lock()
+	defer mu.Unlock()
+	testutil.Equal(t, len(seen), 3)
+	for _, p := range []*terminal.TerminalPane{app.agentPane, app.heraPage.CoordPane(), app.heraPage.AgentPane()} {
+		testutil.Equal(t, seen[p], 1)
+	}
 }

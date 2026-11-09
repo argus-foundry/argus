@@ -12,16 +12,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/backendkind"
-	"github.com/drn/argus/internal/config"
-	injectantigravity "github.com/drn/argus/internal/inject/antigravity"
-	injectcursor "github.com/drn/argus/internal/inject/cursor"
-	injectopencode "github.com/drn/argus/internal/inject/opencode"
-	"github.com/drn/argus/internal/mcplimits"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/routing"
-	"github.com/drn/argus/internal/skills"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/backendkind"
+	"github.com/argus-foundry/argus/internal/config"
+	injectantigravity "github.com/argus-foundry/argus/internal/inject/antigravity"
+	injectcursor "github.com/argus-foundry/argus/internal/inject/cursor"
+	injectopencode "github.com/argus-foundry/argus/internal/inject/opencode"
+	"github.com/argus-foundry/argus/internal/mcplimits"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/routing"
+	"github.com/argus-foundry/argus/internal/skills"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // ModelDelivery is how a family receives the resolved model at launch.
@@ -133,6 +133,11 @@ type Family struct {
 	// ContextProvider and ContextSource label ContextReader's responses, even
 	// when nothing is measured yet.
 	ContextProvider, ContextSource string
+	// UsageReader measures the task's session and per-turn token spend from
+	// the CLI's own on-disk records; nil means no usage telemetry. It must be
+	// read-only and bounded. UsageProvider and UsageSource label responses.
+	UsageReader                func(task *model.Task, cfg config.Config) (UsageReading, bool, error)
+	UsageProvider, UsageSource string
 
 	// KnownModels is the curated model list for pickers; nil means
 	// custom-only (any typed id is accepted).
@@ -476,6 +481,9 @@ var families = []*Family{
 		ContextReader:   readCodexContext,
 		ContextProvider: ContextProviderOpenAI,
 		ContextSource:   ContextSourceCodex,
+		UsageReader:     readCodexUsage,
+		UsageProvider:   ContextProviderOpenAI,
+		UsageSource:     ContextSourceCodex,
 		// Keep this list synced with the Codex CLI's own `/model` picker and
 		// the seed diligence profiles' archetype.*.models.codex entries.
 		KnownModels:   []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"},

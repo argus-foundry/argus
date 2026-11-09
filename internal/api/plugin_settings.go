@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/tui/settings"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/tui/settings"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // pluginSectionMaxBodyBytes caps a single POST /api/plugins/settings/sections

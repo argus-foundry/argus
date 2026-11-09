@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // PRResult is the per-branch outcome of a batched GraphQL PR-state lookup.

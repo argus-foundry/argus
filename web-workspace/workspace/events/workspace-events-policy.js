@@ -8,7 +8,7 @@ export function patchEvent(tasks,event){
  if(type==='task.archived')return {tasks:tasks.map(task=>task.id===id?{...task,archive_pending:true}:task),resnapshot:true};
  if(type==='task.deleted')return {tasks:tasks.filter(task=>task.id!==id),resnapshot:false};
  if(type in changes)return {tasks:tasks.map(task=>task.id===id?{...task,...changes[type]}:task),resnapshot:!tasks.some(task=>task.id===id)};
- return {tasks,resnapshot:!['message.sent','message.acked','session.focus','task.context_changed','task.suggestion_changed'].includes(type)};
+ return {tasks,resnapshot:!['message.sent','message.acked','session.focus','task.context_changed','task.usage_changed','hera.board_changed','task.suggestion_changed'].includes(type)};
 }
 export class SSEFrames {
  constructor(){this.buffer='';this.data=[];this.name='';}

@@ -3,7 +3,7 @@ package client
 import (
 	"fmt"
 
-	"github.com/drn/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/daemon"
 )
 
 // ResidentState reads the daemon-owned resident state. Call off the UI thread.

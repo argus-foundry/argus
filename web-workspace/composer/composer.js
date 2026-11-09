@@ -1,3 +1,4 @@
+import {replyText} from '../tasks/messages/coordinator-inbox.js';
 import {captureFocus} from '../shared/focus-recovery.js';
 import { $ } from '../shared/dom.js';
 import { log } from '../core/api.js';
@@ -33,6 +34,11 @@ export class TaskComposer {
     this.context = new ComposerContext(this.bridge);
     this.identity = new ComposerIdentity(api, () => { this.context.identity(this.identity.raw); this.render(); });
     this.attachments = new ComposerAttachments(api, this);
+  }
+  reply(task,item){
+    if(this.task?.id!==task.id)return;
+    $('draft').value=replyText($('draft').value,item);this.captureDraft();this.focus();
+    log('composer','inbox reply drafted');
   }
   captureDraft() { if (this.task) this.drafts.set(this.task.id, $('draft').value); this.render(); }
   focus() {

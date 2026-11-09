@@ -17,17 +17,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/daemon"
-	dclient "github.com/drn/argus/internal/daemon/client"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/hera"
-	"github.com/drn/argus/internal/launchagent"
-	"github.com/drn/argus/internal/notify"
-	"github.com/drn/argus/internal/skew"
-	"github.com/drn/argus/internal/tui"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/daemon"
+	dclient "github.com/argus-foundry/argus/internal/daemon/client"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hera"
+	"github.com/argus-foundry/argus/internal/launchagent"
+	"github.com/argus-foundry/argus/internal/notify"
+	"github.com/argus-foundry/argus/internal/skew"
+	"github.com/argus-foundry/argus/internal/tui"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 func main() {
@@ -283,9 +283,20 @@ func runTUI() {
 		// caches it would read are empty here, so route on the daemon's.
 		// Cached + refreshed off-thread: resolution runs on the UI goroutine in
 		// per-tick Hera refresh, where a synchronous RPC froze typing.
-		routingUsage := backendtier.NewCachedUsage(client.RoutingUsage, time.Minute, 5*time.Minute)
+		routingUsage := backendtier.NewCachedUsage(client.RoutingUsageResilient, time.Minute, 5*time.Minute)
 		routingUsage.Prime()
 		defer backendtier.SetUsageSource(routingUsage.Read)()
+		// Fresh read before every spawn: ask the daemon to probe now (debounced)
+		// and publish the result so the resolution right after sees it. Runs on
+		// the spawn goroutine, never the UI one; an older daemon without the RPC
+		// just leaves the cached snapshot in place.
+		defer backendtier.SetFreshener(func() {
+			if u, ferr := client.RoutingUsageFreshResilient(); ferr == nil {
+				routingUsage.Store(u)
+			} else {
+				uxlog.Log("[routing] fresh usage read failed, routing on cached readings: %v", ferr)
+			}
+		})()
 		defer client.Close()
 	}
 

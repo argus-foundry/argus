@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // ErrScheduleNotFound is returned by GetSchedule and DeleteSchedule when the

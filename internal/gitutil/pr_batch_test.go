@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // These tests cover the batched GraphQL PR-state fetcher (Stage 1, Prove-It).
@@ -26,9 +26,9 @@ const graphQLSuccess = `{
   "data": {
     "rateLimit": {"cost": 1, "remaining": 4999},
     "repo": {
-      "t1": {"nodes": [{"state": "OPEN", "isDraft": false, "reviewDecision": "APPROVED", "url": "https://github.com/drn/argus/pull/11"}]},
+      "t1": {"nodes": [{"state": "OPEN", "isDraft": false, "reviewDecision": "APPROVED", "url": "https://github.com/argus-foundry/argus/pull/11"}]},
       "t2": {"nodes": []},
-      "t3": {"nodes": [{"state": "MERGED", "isDraft": false, "reviewDecision": "APPROVED", "url": "https://github.com/drn/argus/pull/13"}]}
+      "t3": {"nodes": [{"state": "MERGED", "isDraft": false, "reviewDecision": "APPROVED", "url": "https://github.com/argus-foundry/argus/pull/13"}]}
     }
   }
 }`
@@ -73,7 +73,7 @@ func TestFetchPRStatesBatch_ParsesPerBranchResults(t *testing.T) {
 		"argus/deleted": "t3",
 	}
 
-	res, cost, err := FetchPRStatesBatch(context.Background(), "drn/argus", branches)
+	res, cost, err := FetchPRStatesBatch(context.Background(), "argus-foundry/argus", branches)
 	testutil.NoError(t, err)
 
 	// Exactly ONE query for the whole batch, regardless of branch count.
@@ -83,7 +83,7 @@ func TestFetchPRStatesBatch_ParsesPerBranchResults(t *testing.T) {
 	testutil.Equal(t, cost, 1)
 
 	testutil.Equal(t, res["argus/open"].State, model.PRApproved)
-	testutil.Equal(t, res["argus/open"].URL, "https://github.com/drn/argus/pull/11")
+	testutil.Equal(t, res["argus/open"].URL, "https://github.com/argus-foundry/argus/pull/11")
 	testutil.Equal(t, res["argus/open"].Merged, false)
 
 	// Empty nodes → none.
@@ -92,7 +92,7 @@ func TestFetchPRStatesBatch_ParsesPerBranchResults(t *testing.T) {
 
 	// Merged PR with a deleted head branch still resolves to merged-closed.
 	testutil.Equal(t, res["argus/deleted"].State, model.PRMergedClosed)
-	testutil.Equal(t, res["argus/deleted"].URL, "https://github.com/drn/argus/pull/13")
+	testutil.Equal(t, res["argus/deleted"].URL, "https://github.com/argus-foundry/argus/pull/13")
 	testutil.Equal(t, res["argus/deleted"].Merged, true)
 }
 
@@ -128,7 +128,7 @@ func TestFetchPRStatesBatch_OneQueryForNBranches(t *testing.T) {
 		"argus/none":    "t2",
 		"argus/deleted": "t3",
 	}
-	_, _, err := FetchPRStatesBatch(context.Background(), "drn/argus", branches)
+	_, _, err := FetchPRStatesBatch(context.Background(), "argus-foundry/argus", branches)
 	testutil.NoError(t, err)
 	testutil.Equal(t, fake.calls, 1)
 }
@@ -139,7 +139,7 @@ func TestFetchPRStatesBatch_QueryErrorReturnsError(t *testing.T) {
 	installGraphQLRunner(t, fake.run)
 
 	branches := map[string]string{"argus/open": "t1"}
-	_, _, err := FetchPRStatesBatch(context.Background(), "drn/argus", branches)
+	_, _, err := FetchPRStatesBatch(context.Background(), "argus-foundry/argus", branches)
 	testutil.Error(t, err)
 }
 
@@ -159,7 +159,7 @@ func TestFetchPRStatesBatch_NonZeroExitReturnsError(t *testing.T) {
 	fake := &fakeGraphQLRunner{out: "boom", code: 1, err: nil}
 	installGraphQLRunner(t, fake.run)
 
-	_, _, err := FetchPRStatesBatch(context.Background(), "drn/argus", map[string]string{"argus/open": "t1"})
+	_, _, err := FetchPRStatesBatch(context.Background(), "argus-foundry/argus", map[string]string{"argus/open": "t1"})
 	testutil.Error(t, err)
 }
 
@@ -168,7 +168,7 @@ func TestFetchPRStatesBatch_BadJSONReturnsError(t *testing.T) {
 	fake := &fakeGraphQLRunner{out: "{not json", code: 0}
 	installGraphQLRunner(t, fake.run)
 
-	_, _, err := FetchPRStatesBatch(context.Background(), "drn/argus", map[string]string{"argus/open": "t1"})
+	_, _, err := FetchPRStatesBatch(context.Background(), "argus-foundry/argus", map[string]string{"argus/open": "t1"})
 	testutil.Error(t, err)
 }
 
@@ -183,7 +183,7 @@ func TestFetchPRStatesBatch_BadAliasConnReturnsError(t *testing.T) {
 	fake := &fakeGraphQLRunner{out: badAlias, code: 0}
 	installGraphQLRunner(t, fake.run)
 
-	_, _, err := FetchPRStatesBatch(context.Background(), "drn/argus", map[string]string{"argus/open": "t1"})
+	_, _, err := FetchPRStatesBatch(context.Background(), "argus-foundry/argus", map[string]string{"argus/open": "t1"})
 	testutil.Error(t, err)
 }
 
@@ -193,15 +193,15 @@ func TestFetchPRStatesBatch_UnknownAliasIgnored(t *testing.T) {
   "data": {
     "rateLimit": {"cost": 2, "remaining": 4998},
     "repo": {
-      "t1": {"nodes": [{"state": "OPEN", "isDraft": false, "reviewDecision": "APPROVED", "url": "https://github.com/drn/argus/pull/11"}]},
-      "t99": {"nodes": [{"state": "OPEN", "isDraft": false, "url": "https://github.com/drn/argus/pull/99"}]}
+      "t1": {"nodes": [{"state": "OPEN", "isDraft": false, "reviewDecision": "APPROVED", "url": "https://github.com/argus-foundry/argus/pull/11"}]},
+      "t99": {"nodes": [{"state": "OPEN", "isDraft": false, "url": "https://github.com/argus-foundry/argus/pull/99"}]}
     }
   }
 }`
 	fake := &fakeGraphQLRunner{out: extraAlias, code: 0}
 	installGraphQLRunner(t, fake.run)
 
-	res, cost, err := FetchPRStatesBatch(context.Background(), "drn/argus", map[string]string{"argus/open": "t1"})
+	res, cost, err := FetchPRStatesBatch(context.Background(), "argus-foundry/argus", map[string]string{"argus/open": "t1"})
 	testutil.NoError(t, err)
 	testutil.Equal(t, cost, 2)
 	testutil.Equal(t, len(res), 1)
@@ -213,7 +213,7 @@ func TestFetchPRStatesBatch_EmptyBranchesNoQuery(t *testing.T) {
 	fake := &fakeGraphQLRunner{out: graphQLSuccess, code: 0}
 	installGraphQLRunner(t, fake.run)
 
-	res, cost, err := FetchPRStatesBatch(context.Background(), "drn/argus", map[string]string{})
+	res, cost, err := FetchPRStatesBatch(context.Background(), "argus-foundry/argus", map[string]string{})
 	testutil.NoError(t, err)
 	testutil.Equal(t, fake.calls, 0)
 	testutil.Equal(t, len(res), 0)
@@ -229,9 +229,9 @@ func TestParsePRRepo_FromCachedURL(t *testing.T) {
 		url  string
 		want string
 	}{
-		{name: "https pull url", url: "https://github.com/drn/argus/pull/780", want: "drn/argus"},
+		{name: "https pull url", url: "https://github.com/argus-foundry/argus/pull/780", want: "argus-foundry/argus"},
 		{name: "anutron repo", url: "https://github.com/anutron/things-mcp/pull/3", want: "anutron/things-mcp"},
-		{name: "trailing slash tolerated", url: "https://github.com/drn/argus/", want: "drn/argus"},
+		{name: "trailing slash tolerated", url: "https://github.com/argus-foundry/argus/", want: "argus-foundry/argus"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo, ok := ParsePRRepo(tc.url)
@@ -252,34 +252,34 @@ func TestParsePRRepo_Unparseable(t *testing.T) {
 // Scenario: Group branches sharing a repo into one group.
 // Scenario: Falls back to worktree default repo (resolveDefault seam) when no url.
 func TestGroupBranchesByRepo(t *testing.T) {
-	// Two tasks carry a cached url on drn/argus, one has none (→ default repo
+	// Two tasks carry a cached url on argus-foundry/argus, one has none (→ default repo
 	// via the stubbed resolver), one carries a url on a different repo.
 	inputs := []BranchRepoInput{
-		{ID: "t1", Branch: "argus/a", Worktree: "/wt/t1", CachedURL: "https://github.com/drn/argus/pull/1"},
-		{ID: "t2", Branch: "argus/b", Worktree: "/wt/t2", CachedURL: "https://github.com/drn/argus/pull/2"},
+		{ID: "t1", Branch: "argus/a", Worktree: "/wt/t1", CachedURL: "https://github.com/argus-foundry/argus/pull/1"},
+		{ID: "t2", Branch: "argus/b", Worktree: "/wt/t2", CachedURL: "https://github.com/argus-foundry/argus/pull/2"},
 		{ID: "t3", Branch: "argus/c", Worktree: "/wt/t3", CachedURL: ""},
 		{ID: "t4", Branch: "feat/x", Worktree: "/wt/t4", CachedURL: "https://github.com/anutron/gmail-mcp/pull/9"},
 	}
 
-	// Stub the worktree-default resolver: t3 → drn/argus (joins the dominant group).
+	// Stub the worktree-default resolver: t3 → argus-foundry/argus (joins the dominant group).
 	resolveDefault := func(_ context.Context, worktree string) (string, bool) {
 		if worktree == "/wt/t3" {
-			return "drn/argus", true
+			return "argus-foundry/argus", true
 		}
 		return "", false
 	}
 
 	groups := GroupBranchesByRepo(context.Background(), inputs, resolveDefault)
 
-	// drn/argus has 3 distinct branches (t1, t2, t3 — cached + default fallback);
+	// argus-foundry/argus has 3 distinct branches (t1, t2, t3 — cached + default fallback);
 	// anutron/gmail-mcp has 1.
-	testutil.Equal(t, len(groups["drn/argus"]), 3)
+	testutil.Equal(t, len(groups["argus-foundry/argus"]), 3)
 	testutil.Equal(t, len(groups["anutron/gmail-mcp"]), 1)
 
 	// Each group maps branch → []sanitized id (the alias keys). Distinct branches
 	// carry a single-element slice.
-	testutil.DeepEqual(t, groups["drn/argus"]["argus/a"], []string{"t1"})
-	testutil.DeepEqual(t, groups["drn/argus"]["argus/c"], []string{"t3"})
+	testutil.DeepEqual(t, groups["argus-foundry/argus"]["argus/a"], []string{"t1"})
+	testutil.DeepEqual(t, groups["argus-foundry/argus"]["argus/c"], []string{"t3"})
 	testutil.DeepEqual(t, groups["anutron/gmail-mcp"]["feat/x"], []string{"t4"})
 }
 
@@ -287,8 +287,8 @@ func TestGroupBranchesByRepo(t *testing.T) {
 // must BOTH appear under that branch — neither silently overwritten/dropped.
 func TestGroupBranchesByRepo_SharedBranchKeepsBothTasks(t *testing.T) {
 	inputs := []BranchRepoInput{
-		{ID: "t1", Branch: "argus/shared", Worktree: "/wt/t1", CachedURL: "https://github.com/drn/argus/pull/1"},
-		{ID: "t2", Branch: "argus/shared", Worktree: "/wt/t2", CachedURL: "https://github.com/drn/argus/pull/1"},
+		{ID: "t1", Branch: "argus/shared", Worktree: "/wt/t1", CachedURL: "https://github.com/argus-foundry/argus/pull/1"},
+		{ID: "t2", Branch: "argus/shared", Worktree: "/wt/t2", CachedURL: "https://github.com/argus-foundry/argus/pull/1"},
 	}
 	resolveDefault := func(_ context.Context, _ string) (string, bool) { return "", false }
 
@@ -296,8 +296,8 @@ func TestGroupBranchesByRepo_SharedBranchKeepsBothTasks(t *testing.T) {
 
 	// One repo, one distinct branch, but BOTH task aliases under it.
 	testutil.Equal(t, len(groups), 1)
-	testutil.Equal(t, len(groups["drn/argus"]), 1)
-	testutil.DeepEqual(t, groups["drn/argus"]["argus/shared"], []string{"t1", "t2"})
+	testutil.Equal(t, len(groups["argus-foundry/argus"]), 1)
+	testutil.DeepEqual(t, groups["argus-foundry/argus"]["argus/shared"], []string{"t1", "t2"})
 }
 
 // A task whose repo cannot be resolved at all (no url, default resolver fails)

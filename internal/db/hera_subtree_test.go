@@ -3,7 +3,7 @@ package db
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // bind creates a live binding for role→task and fails on error. Worktree is

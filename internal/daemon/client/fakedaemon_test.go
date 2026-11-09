@@ -12,14 +12,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/buildid"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/buildid"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 )
 
 // fakeDaemon is a minimal in-process daemon-like server for stream tests.
@@ -39,6 +39,9 @@ type fakeDaemon struct {
 	usage          map[string]usagebudget.Reading // AccountUsage reply
 	usageMissing   bool                           // simulate an older daemon
 	routing        backendtier.Usage              // RoutingUsage reply
+	freshCalls     int                            // RoutingUsageFresh invocations
+	routingCalls   int                            // RoutingUsage invocations
+	accepts        int                            // connections accepted
 	resident       daemon.ResidentStateResp
 	residentViewed bool
 	residentSent   daemon.ResidentSendReq
@@ -102,6 +105,18 @@ func (s *FakeRPCService) RoutingUsage(_ *daemon.Empty, resp *backendtier.Usage) 
 	if s.fd.usageMissing {
 		return errors.New("rpc: can't find method Daemon.RoutingUsage")
 	}
+	s.fd.routingCalls++
+	*resp = s.fd.routing
+	return nil
+}
+
+func (s *FakeRPCService) RoutingUsageFresh(_ *daemon.Empty, resp *backendtier.Usage) error {
+	s.fd.mu.Lock()
+	defer s.fd.mu.Unlock()
+	if s.fd.usageMissing {
+		return errors.New("rpc: can't find method Daemon.RoutingUsageFresh")
+	}
+	s.fd.freshCalls++
 	*resp = s.fd.routing
 	return nil
 }
@@ -202,6 +217,9 @@ func (fd *fakeDaemon) serve() {
 		if err != nil {
 			return
 		}
+		fd.mu.Lock()
+		fd.accepts++
+		fd.mu.Unlock()
 		go fd.handle(conn, server)
 	}
 }

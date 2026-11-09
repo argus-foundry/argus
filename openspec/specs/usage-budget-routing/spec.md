@@ -55,7 +55,7 @@ The headless Claude `/usage` probe SHALL run with the same parent-session marker
 
 Usage routing SHALL prefer fresh session.measure readings from live Claude bridges on the requested account. For each of five_hour and seven_day, it SHALL use the freshest measurement with a valid percentage and future reset, then return the fuller valid window. The headless probe SHALL run only when no fresh applicable reading exists. Default and named accounts SHALL remain isolated.
 
-At startup and every 30 minutes, the headless poller SHALL probe the default account and each distinct valid Claude tier account using its CLAUDE_CONFIG_DIR, with inherited auth overrides and parent-session markers stripped as for spawning. Caches SHALL be isolated per account. Each account's fresh bridge reading SHALL skip its hidden probe; errors SHALL leave that account's previous reading unchanged and fail open under existing staleness rules.
+At startup and every 5 minutes, the headless poller SHALL probe the default account and each distinct valid Claude tier account using its CLAUDE_CONFIG_DIR, with inherited auth overrides and parent-session markers stripped as for spawning. Caches SHALL be isolated per account. Each account's fresh bridge reading SHALL skip its hidden probe; errors SHALL leave that account's previous reading unchanged and fail open under existing staleness rules.
 
 #### Scenario: Live account reading
 

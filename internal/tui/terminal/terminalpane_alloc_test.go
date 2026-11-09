@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/argus-foundry/argus/internal/testutil"
 	xvt "github.com/charmbracelet/x/vt"
-	"github.com/drn/argus/internal/testutil"
 	"github.com/gdamore/tcell/v2"
 )
 

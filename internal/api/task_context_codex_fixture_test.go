@@ -1,15 +1,16 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 type codexCtxEnv struct {
@@ -26,7 +27,9 @@ func codexTokenLine(ts string, in, out, window int64) string {
 
 func newCodexCtxEnv(t *testing.T, sessionID string) *codexCtxEnv {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	s, d := testServer(t)
+	testutil.NoError(t, s.Shutdown(context.Background()))
 	dir := t.TempDir()
 	t.Setenv("CODEX_SQLITE_HOME", dir)
 	t.Setenv("CODEX_HOME", dir)

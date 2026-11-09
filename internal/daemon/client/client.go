@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/usagebudget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // rpcTimeout is the maximum time to wait for any single RPC call to the daemon.
@@ -130,6 +130,20 @@ type Client struct {
 // accountProtocolVersion is the first supervisor protocol that carries
 // Task.Account on Start/Kick/Recycle.
 const accountProtocolVersion = 8
+
+// recycleSessionIDProtocolVersion is the first supervisor protocol that carries
+// the fresh pinned SessionID on RecycleReq.
+const recycleSessionIDProtocolVersion = 12
+
+// RecycleCarriesSessionID implements agent.RecycleIDCapable from the cached
+// handshake version (no round trip). An unhandshaken peer (0) is assumed
+// capable, mirroring checkAccountSupported.
+func (c *Client) RecycleCarriesSessionID() bool {
+	c.mu.Lock()
+	peer := c.peerProtocol
+	c.mu.Unlock()
+	return peer == 0 || peer >= recycleSessionIDProtocolVersion
+}
 
 // checkAccountSupported refuses to hand an explicit-account task to a
 // handshaken supervisor too old to carry the account: it would silently spawn
@@ -255,7 +269,7 @@ func (c *Client) Close() error {
 
 // residentProtocolVersion is the first supervisor protocol that carries
 // Task.Kind on Start/Kick/Recycle.
-const residentProtocolVersion = 12
+const residentProtocolVersion = 13
 
 // checkResidentSupported refuses to hand the resident to a handshaken
 // supervisor too old to carry Task.Kind: it would rebuild the task as a plain
@@ -627,9 +641,10 @@ func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, 
 
 // Recycle drives a same-task restart with a fresh (empty) context through the
 // daemon/supervisor (add-coordinator-context-management D5). Mirrors
-// KickRerender's wire contract exactly except resume is always false and no
-// SessionID is shipped — the caller (internal/daemon's RecycleRunner adapter)
-// must already have persisted task.SessionID="" and task.Prompt=<seed prompt>
+// KickRerender's wire contract exactly except resume is always false and
+// the fresh task.SessionID (pinned families) rides along on RecycleReq — the
+// caller (internal/daemon's RecycleRunner adapter) must already have persisted
+// the fresh SessionID and task.Prompt=<seed prompt>
 // before calling. Against a supervisor that predates this RPC method the call
 // errors, which the caller (RecycleCoord) surfaces rather than silently
 // no-ops — unlike a kick-rerender, a failed recycle must not look like
@@ -645,6 +660,7 @@ func (c *Client) Recycle(task *model.Task, _ config.Config, rows, cols uint16) e
 	if err := c.call("Daemon.Recycle", &daemon.RecycleReq{
 		MCPPort:         c.currentMCPPort(),
 		TaskID:          task.ID,
+		SessionID:       task.SessionID,
 		Prompt:          task.Prompt,
 		Project:         task.Project,
 		Backend:         task.Backend,
@@ -915,12 +931,70 @@ func (c *Client) RoutingUsage() (backendtier.Usage, error) {
 	return usage, err
 }
 
+// RoutingUsageFresh asks the daemon to probe usage now (debounced) and returns
+// the result. It can outlast the normal RPC deadline: a probe round may take
+// several seconds (the daemon caps it at 5s).
+func (c *Client) RoutingUsageFresh() (backendtier.Usage, error) {
+	var usage backendtier.Usage
+	err := c.callWithTimeout("Daemon.RoutingUsageFresh", &daemon.Empty{}, &usage, 15*time.Second)
+	return usage, err
+}
+
+// RoutingUsageResilient is RoutingUsage that survives a daemon bounce. This
+// client's connection is never re-dialed, so after the daemon restarts every
+// call on it fails with "connection is shut down" and tier routing in the TUI
+// silently saw every account as unknown (fail-open → the depleted default
+// account). On failure it asks the socket once through a short-lived fresh
+// connection; the original error is returned if that also fails.
+func (c *Client) RoutingUsageResilient() (backendtier.Usage, error) {
+	return c.resilientUsage((*Client).RoutingUsage)
+}
+
+// RoutingUsageFreshResilient is RoutingUsageFresh with the same
+// reconnect-once behavior as RoutingUsageResilient.
+func (c *Client) RoutingUsageFreshResilient() (backendtier.Usage, error) {
+	return c.resilientUsage((*Client).RoutingUsageFresh)
+}
+
+func (c *Client) resilientUsage(call func(*Client) (backendtier.Usage, error)) (backendtier.Usage, error) {
+	return resilient(c, call)
+}
+
+// AccountUsageResilient is AccountUsage with the same reconnect-once behavior
+// as RoutingUsageResilient: AccountUsageSource is bound to the client dialed
+// at TUI startup, which is dead after any daemon bounce.
+func (c *Client) AccountUsageResilient() (map[string]usagebudget.Reading, error) {
+	return resilient(c, (*Client).AccountUsage)
+}
+
+// resilient runs call on c, and on failure once more over a short-lived fresh
+// connection to c's socket. The original error is returned if that also fails.
+func resilient[T any](c *Client, call func(*Client) (T, error)) (T, error) {
+	usage, err := call(c)
+	if err == nil || c == nil || c.sockPath == "" {
+		return usage, err
+	}
+	fresh, derr := Connect(c.sockPath)
+	if derr != nil {
+		uxlog.Log("[routing] usage RPC failed (%v) and fresh dial failed: %v", err, derr)
+		return usage, err
+	}
+	defer func() { _ = fresh.Close() }()
+	u2, ferr := call(fresh)
+	if ferr != nil {
+		uxlog.Log("[routing] usage RPC failed (%v) and fresh-connection retry failed: %v", err, ferr)
+		return usage, err
+	}
+	uxlog.Log("[routing] usage RPC recovered over a fresh daemon connection after: %v", err)
+	return u2, nil
+}
+
 // AccountUsageSource adapts AccountUsage for agent.SetAccountUsageSource. A
 // failed read (an older daemon, a dropped socket) logs and reports every
 // account unknown.
 func (c *Client) AccountUsageSource() func(config.Config) map[string]usagebudget.Reading {
 	return func(config.Config) map[string]usagebudget.Reading {
-		usage, err := c.AccountUsage()
+		usage, err := c.AccountUsageResilient()
 		if err != nil {
 			uxlog.Log("[account] usage read from daemon failed, treating every account as unknown: %v", err)
 			return nil

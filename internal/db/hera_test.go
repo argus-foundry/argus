@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // heraTestDB opens a fresh in-memory DB with FK enforcement on (OpenInMemory
@@ -1340,4 +1340,81 @@ func TestLiveHeraKeepAliveBinding(t *testing.T) {
 	got, err = d.LiveHeraKeepAliveBinding("tf")
 	testutil.NoError(t, err)
 	testutil.True(t, got == nil) // ended binding no longer counts
+}
+
+func TestAcceptedCoordinatorBindingEndAndRestore(t *testing.T) {
+	d := testDB(t)
+	parent, err := d.CreateHeraOrchestrator("parent", "")
+	testutil.NoError(t, err)
+	child, err := d.CreateHeraOrchestrator("child", "")
+	testutil.NoError(t, err)
+	wr, err := d.CreateHeraRole(CreateHeraRoleInput{OrchestratorID: parent.ID, Name: "sub", Kind: HeraKindWorker, ArgusProject: "p"})
+	testutil.NoError(t, err)
+	cr, err := d.CreateHeraRole(CreateHeraRoleInput{OrchestratorID: child.ID, Name: "coord", Kind: HeraKindCoordinator, ArgusProject: "p"})
+	testutil.NoError(t, err)
+	_, err = d.CreateHeraBinding(CreateHeraBindingInput{RoleID: wr.ID, ArgusTaskID: "t", WorktreePath: "/wt/t"})
+	testutil.NoError(t, err)
+	cb, err := d.CreateHeraBinding(CreateHeraBindingInput{RoleID: cr.ID, ArgusTaskID: "t", WorktreePath: "/wt/t"})
+	testutil.NoError(t, err)
+
+	live := func() int {
+		bs, err := d.ListHeraLiveBindingsByTask("t")
+		testutil.NoError(t, err)
+		return len(bs)
+	}
+	testutil.Equal(t, live(), 2)
+
+	// nothing ended yet: restore is a no-op
+	n, err := d.RestoreAcceptedHeraCoordinatorBindings("t")
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 0)
+
+	// Only the coordinator hat ends; the worker hat stays live.
+	n, err = d.EndHeraCoordinatorBindingsForTask("t", HeraEndReasonAccepted)
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 1)
+	testutil.Equal(t, live(), 1)
+	got, err := d.LiveHeraKeepAliveBinding("t")
+	testutil.NoError(t, err)
+	testutil.True(t, got == nil) // the reaper guard no longer applies
+
+	// Restore re-opens the SAME binding row (identity + accrued cost kept).
+	n, err = d.RestoreAcceptedHeraCoordinatorBindings("t")
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 1)
+	testutil.Equal(t, live(), 2)
+	got, err = d.LiveHeraKeepAliveBinding("t")
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.BindingID, cb.ID)
+	// idempotent
+	n, err = d.RestoreAcceptedHeraCoordinatorBindings("t")
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 0)
+
+	// A binding ended for another reason is never resurrected.
+	_, err = d.EndHeraCoordinatorBindingsForTask("t", "left")
+	testutil.NoError(t, err)
+	n, err = d.RestoreAcceptedHeraCoordinatorBindings("t")
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 0)
+}
+
+func TestRestoreAcceptedSkipsNukedOrchestratorAndSupersededBinding(t *testing.T) {
+	d := testDB(t)
+	child, err := d.CreateHeraOrchestrator("child", "")
+	testutil.NoError(t, err)
+	cr, err := d.CreateHeraRole(CreateHeraRoleInput{OrchestratorID: child.ID, Name: "coord", Kind: HeraKindCoordinator, ArgusProject: "p"})
+	testutil.NoError(t, err)
+	_, err = d.CreateHeraBinding(CreateHeraBindingInput{RoleID: cr.ID, ArgusTaskID: "t", WorktreePath: "/wt/t"})
+	testutil.NoError(t, err)
+	_, err = d.EndHeraCoordinatorBindingsForTask("t", HeraEndReasonAccepted)
+	testutil.NoError(t, err)
+
+	// A newer binding for the same role (task moved on) supersedes the accepted one.
+	nb, err := d.CreateHeraBinding(CreateHeraBindingInput{RoleID: cr.ID, ArgusTaskID: "other", WorktreePath: "/wt/o"})
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.EndHeraBinding(nb.ID, "left"))
+	n, err := d.RestoreAcceptedHeraCoordinatorBindings("t")
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 0)
 }

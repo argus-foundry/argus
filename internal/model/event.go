@@ -31,12 +31,15 @@ const (
 	EventTypeTaskDeleted       = "task.deleted"
 	EventTypeTaskRenamed       = "task.renamed"
 	EventTypeTaskUpdated       = "task.updated"
-	EventTypeTaskForked        = "task.forked"
-	EventTypeMessageSent       = "message.sent"
-	EventTypeMessageAcked      = "message.acked"
-	EventTypeSessionStarted    = "session.started"
-	EventTypeSessionExited     = "session.exited"
-	EventTypeSessionIdle       = "session.idle"
+	// EventTypeTaskFailureChanged carries {"failure": null | TaskFailure}
+	// after a Result write changes the explicit-failure projection.
+	EventTypeTaskFailureChanged = "task.failure_changed"
+	EventTypeTaskForked         = "task.forked"
+	EventTypeMessageSent        = "message.sent"
+	EventTypeMessageAcked       = "message.acked"
+	EventTypeSessionStarted     = "session.started"
+	EventTypeSessionExited      = "session.exited"
+	EventTypeSessionIdle        = "session.idle"
 
 	// EventTypeSessionNeedsInput fires when a session transitions into or out
 	// of the "blocked waiting on the user" state (the red ? in the TUI). One
@@ -46,6 +49,10 @@ const (
 	// (internal/api/push.go) so external consumers render the signal without
 	// re-deriving argus's detection heuristic from session logs.
 	EventTypeSessionNeedsInput = "session.needs_input"
+
+	// EventTypeSessionRuntimeChanged carries {"live","idle","needs_input"}
+	// whenever any of the task's REST runtime flags changes.
+	EventTypeSessionRuntimeChanged = "session.runtime_changed"
 
 	// EventTypeSessionFocus fires when the TUI's agent view gains or loses
 	// human focus for a task. Payload: {"focused":true|false}. Emitted by
@@ -80,6 +87,11 @@ const (
 	// EventTypeResidentCreated fires once when the daemon creates the
 	// resident row. Payload: {"name":"resident"}.
 	EventTypeResidentCreated = EventTypeResidentPrefix + "created"
+
+	// EventTypeTaskUsageChanged invites a GET /api/tasks/{id}/usage after a
+	// changed token observation. Payload: {"session_id":"s","turn_id":"t","measured_at":"RFC3339"};
+	// identity and timing only, never the counts themselves.
+	EventTypeTaskUsageChanged = "task.usage_changed"
 
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.

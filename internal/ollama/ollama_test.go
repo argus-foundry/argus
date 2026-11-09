@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // writeBrewStub writes a shell script at <dir>/<name> that echoes its args

@@ -1,11 +1,11 @@
 package tui
 
 import (
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/tui/hera"
-	"github.com/drn/argus/internal/tui/keymap"
-	"github.com/drn/argus/internal/tui/widget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/tui/hera"
+	"github.com/argus-foundry/argus/internal/tui/keymap"
+	"github.com/argus-foundry/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -142,6 +142,7 @@ func (a *App) agentActionRegistry() map[keymap.Action]func() {
 		keymap.ActAgentSession:   func() { a.openSessionPicker() },
 		keymap.ActAgentOpenPR:    func() { a.openPR() },
 		keymap.ActAgentZoom:      func() { a.toggleAgentZen() },
+		keymap.ActAgentRerender:  func() { a.rerenderHotkeyClassic() },
 		keymap.ActAgentCopy: func() {
 			if !a.copyStagedClipboard() {
 				a.flashNotice("Nothing to copy")
@@ -272,6 +273,17 @@ func (a *App) heraLiteralRows() []paletteRow {
 		{Label: "toggle fullscreen", Key: "ctrl+z", invoke: func() { a.heraPage.Machine().ToggleFullscreen() }},
 	}
 	if taskID := a.heraPage.FocusedTerminalTaskID(); taskID != "" {
+		// resize-without-restart: the Hera pane's agent.rerender (a CtxAgent
+		// keymap action that Hera panes route literally) with its live key.
+		key := ""
+		if b, ok := a.activeKeymap().BindingFor(keymap.CtxAgent, keymap.ActAgentRerender); ok {
+			key = b.String()
+		}
+		rows = append(rows, paletteRow{
+			Label:  a.activeKeymap().ActionLabel(keymap.ActAgentRerender),
+			Key:    key,
+			invoke: func() { a.rerenderHotkeyHera(taskID) },
+		})
 		rows = append(rows, paletteRow{
 			Label: "copy staged clipboard",
 			Key:   "ctrl+y",

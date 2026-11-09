@@ -3,9 +3,9 @@ package tui
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/widget"
 )
 
 // TestUpdateAttentionBar_GatesFinishedStickyTask proves the agent-view attention

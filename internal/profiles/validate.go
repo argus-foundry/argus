@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 )
 
 // Validate checks a resolved profile for conformance and returns ALL errors

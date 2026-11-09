@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // settingsResponse is the JSON shape returned by GET /api/settings.
@@ -40,7 +40,8 @@ type bridgeSettings struct {
 // uiSettings is the slice of UI behavior settings that affect daemon-side
 // decisions too (the web resize-kick gate), so remote clients can manage them.
 type uiSettings struct {
-	RerenderKeepPlace bool `json:"rerender_keep_place"`
+	RerenderKeepPlace    bool `json:"rerender_keep_place"`
+	AutoRerenderOnResize bool `json:"auto_rerender_on_resize"`
 }
 
 type sandboxJSON struct {
@@ -71,7 +72,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	cfg := s.db.Config()
 	writeJSON(w, http.StatusOK, settingsResponse{
 		Bridge: bridgeSettings{Enabled: cfg.Bridge.Enabled, Delivery: cfg.Bridge.Delivery, Band: cfg.Bridge.Band, Toasts: cfg.Bridge.Toasts},
-		UI:     uiSettings{RerenderKeepPlace: cfg.UI.RerenderKeepPlace},
+		UI:     uiSettings{RerenderKeepPlace: cfg.UI.RerenderKeepPlace, AutoRerenderOnResize: cfg.UI.AutoRerenderOnResize},
 		Sandbox: sandboxJSON{
 			Enabled:          cfg.Sandbox.Enabled,
 			Available:        isSandboxAvailable(),
@@ -115,7 +116,8 @@ type bridgeUpdate struct {
 }
 
 type uiUpdate struct {
-	RerenderKeepPlace *bool `json:"rerender_keep_place,omitempty"`
+	RerenderKeepPlace    *bool `json:"rerender_keep_place,omitempty"`
+	AutoRerenderOnResize *bool `json:"auto_rerender_on_resize,omitempty"`
 }
 
 // Each *Update mirrors the corresponding response section but with pointer
@@ -201,6 +203,9 @@ func buildSettingsUpdates(req updateSettingsReq) map[string]string {
 	}
 	if u := req.UI; u != nil && u.RerenderKeepPlace != nil {
 		out["ui.rerender_keep_place"] = boolStr(*u.RerenderKeepPlace)
+	}
+	if u := req.UI; u != nil && u.AutoRerenderOnResize != nil {
+		out["ui.auto_rerender_on_resize"] = boolStr(*u.AutoRerenderOnResize)
 	}
 	if s := req.Sandbox; s != nil {
 		if s.Enabled != nil {

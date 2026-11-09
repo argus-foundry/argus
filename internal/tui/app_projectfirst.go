@@ -1,8 +1,8 @@
 package tui
 
 import (
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 func (a *App) setupProjectFirst(f *NewTaskForm) {

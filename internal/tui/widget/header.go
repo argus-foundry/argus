@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/drn/argus/internal/spinner"
-	"github.com/drn/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/spinner"
+	"github.com/argus-foundry/argus/internal/tui/theme"
 	"github.com/gdamore/tcell/v2"
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"

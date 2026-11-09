@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // seedRecyclePlainTask creates a plain (non-hera) task for taskRecycleRunner
@@ -31,7 +31,7 @@ func seedRecyclePlainTask(t *testing.T, database *db.DB, worktree, prompt string
 }
 
 func TestBuildTaskRecycleSeedPrompt(t *testing.T) {
-	got := buildTaskRecycleSeedPrompt("original mission text", "did X, next do Y")
+	got := buildTaskRecycleSeedPrompt("original mission text", "did X, next do Y", "")
 
 	testutil.Contains(t, got, "did X, next do Y")
 	testutil.Contains(t, got, "original mission text")
@@ -124,11 +124,13 @@ func TestTaskRecycleRunner_Restart_ClearsSessionAndSeedsPrompt(t *testing.T) {
 	t.Cleanup(runner.StopAll)
 
 	r := newTaskRecycleRunner(database, runner, func() config.Config { return cfg })
-	testutil.NoError(t, r.restart(task.ID, "the seed prompt"))
+	testutil.NoError(t, r.restart(task.ID, func(*model.Task) string { return "the seed prompt" }))
 
 	updated, err := database.Get(task.ID)
 	testutil.NoError(t, err)
-	testutil.Equal(t, updated.SessionID, "")
+	// Recycle mints a fresh pinned ID (not "", not the stale one): an empty
+	// ID leaves the live session un-resumable (ctrl+n re-render refuses).
+	testutil.Equal(t, updated.SessionID != "" && updated.SessionID != "stale-sid-1", true)
 	testutil.Equal(t, updated.Prompt, "the seed prompt")
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -157,7 +159,7 @@ func TestTaskRecycleRunner_Restart_NoLiveSession_StartsFresh(t *testing.T) {
 	cfg := recycleTestConfig()
 	r := newTaskRecycleRunner(database, runner, func() config.Config { return cfg })
 
-	testutil.NoError(t, r.restart(task.ID, "the seed prompt"))
+	testutil.NoError(t, r.restart(task.ID, func(*model.Task) string { return "the seed prompt" }))
 	t.Cleanup(runner.StopAll)
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -179,7 +181,7 @@ func TestTaskRecycleRunner_Restart_UnknownTaskErrors(t *testing.T) {
 	cfg := recycleTestConfig()
 	r := newTaskRecycleRunner(database, runner, func() config.Config { return cfg })
 
-	if err := r.restart("no-such-task", "seed"); err == nil {
+	if err := r.restart("no-such-task", func(*model.Task) string { return "seed" }); err == nil {
 		t.Fatal("expected an error for an unknown task")
 	}
 }
@@ -202,7 +204,7 @@ func TestTaskRecycleRunner_AwaitIdleAndRestart_NoSessionRestartsImmediately(t *t
 	r := newTaskRecycleRunner(database, runner, func() config.Config { return cfg })
 	r.sleep = func(time.Duration) {}
 
-	r.awaitIdleAndRestart(task.ID, "the seed prompt")
+	r.awaitIdleAndRestart(task.ID, func(*model.Task) string { return "the seed prompt" })
 	t.Cleanup(runner.StopAll)
 
 	updated, err := database.Get(task.ID)
@@ -243,7 +245,7 @@ func TestTaskRecycleRunner_AwaitIdleAndRestart_NeverIdleGivesUp(t *testing.T) {
 	r.sleep = func(time.Duration) {}
 	r.idleTimeout = 0 // expire on the very first deadline check
 
-	r.awaitIdleAndRestart(task.ID, "the seed prompt")
+	r.awaitIdleAndRestart(task.ID, func(*model.Task) string { return "the seed prompt" })
 
 	// Restart must NOT have happened: SessionID/Prompt unchanged.
 	updated, err := database.Get(task.ID)

@@ -101,3 +101,7 @@ The `macos/` SwiftPM package (ArgusKit SDK + Argus SwiftUI app) is a thin REST/S
 ## Client-request tests must live in `ClientRequestTests` (shared `MockURLProtocol`)
 
 **`MockURLProtocol` is process-global static state and only that suite is `.serialized`**, so a new suite using it runs in parallel and corrupts every other client test; add new client tests as an `extension ClientRequestTests` (see `SandboxProposalTests.swift`).
+
+## Keep place across a resize kick (keep-place-clients)
+
+**`ArgusClient.resize` reports `scrolledUp`/`composerDirty` and decodes `deferred`; the controller retries the SAME size while the daemon holds the kick.** The typed fold is the pure `KeepPlace.composerTyped`, fed from `enqueueInput` (post-Ctrl+Z-sanitize, user keyboard/paste only). The retry stops on no deferral, `terminalView.window == nil` (detached view) or `teardown()`; a new size cancels a pending retry of the old one. `ResizeResult.deferred` decodes as empty from an older daemon. Unverified without the GUI: SwiftTerm's real `canScroll`/scroll-position behavior on the alt screen and the timers end to end.

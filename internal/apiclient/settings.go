@@ -53,7 +53,8 @@ type BridgeSettingsJSON struct {
 
 // UISettingsJSON mirrors api.uiSettings.
 type UISettingsJSON struct {
-	RerenderKeepPlace bool `json:"rerender_keep_place"`
+	RerenderKeepPlace    bool `json:"rerender_keep_place"`
+	AutoRerenderOnResize bool `json:"auto_rerender_on_resize"`
 }
 
 // BridgeUpdate is a partial update; nil fields remain unchanged.
@@ -66,7 +67,8 @@ type BridgeUpdate struct {
 
 // UIUpdate is a partial update; nil fields remain unchanged.
 type UIUpdate struct {
-	RerenderKeepPlace *bool `json:"rerender_keep_place,omitempty"`
+	RerenderKeepPlace    *bool `json:"rerender_keep_place,omitempty"`
+	AutoRerenderOnResize *bool `json:"auto_rerender_on_resize,omitempty"`
 }
 
 // SandboxUpdate is the partial-update payload for the sandbox section.

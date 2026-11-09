@@ -1100,7 +1100,7 @@ An explicit Hera revive SHALL restart an idle live session with a fresh identity
 
 ### Requirement: Deferred Hera kicks back off
 
-Consecutive deferred pane kicks SHALL retry at 10, 20, 40, then 60 second intervals, capped at 60 seconds with no hard give-up. Rebinding SHALL reset the backoff.
+Consecutive deferred pane kicks SHALL retry at 10 then 15 second intervals, capped at 15 seconds with no hard give-up. Rebinding or a fullscreen toggle SHALL reset the backoff.
 
 #### Scenario: Repeated deferrals
 
@@ -1270,4 +1270,39 @@ The finished-session check SHALL NOT stop the session of a non-archived task tha
 #### Scenario: Worker and archived tasks are still stopped
 - **WHEN** a complete worker-bound task, or an archived coordinator task, stays idle across two checks
 - **THEN** its session is stopped
+
+### Requirement: Session log width index
+
+A session SHALL record its PTY size history in `<sessions>/<task>.sizes`, one `<logOffset> <cols> <rows>` line per size, where logOffset is the number of bytes written to the session log when the size took effect. The index SHALL be truncated and seeded with the starting size at offset 0 whenever the log is truncated for a new session, SHALL gain a line only when the size actually changes, and SHALL be removed with the task's other session files. A reader SHALL ignore malformed lines, a torn final line, and offsets that decrease.
+
+#### Scenario: Resize is recorded at the log offset
+- **WHEN** the PTY is resized after N bytes have been logged
+- **THEN** a line with offset N and the new size is appended, and repeating the same size appends nothing
+
+#### Scenario: New session resets the index
+- **WHEN** a session starts and truncates its log
+- **THEN** the index contains only the starting size at offset 0
+
+#### Scenario: Torn index
+- **WHEN** the last line is incomplete or an offset goes backwards
+- **THEN** those lines are ignored and earlier marks still apply
+
+### Requirement: Restarted sessions spawn at the reported pane size
+
+A recycle (coordinator or plain-task) or dead-session restart SHALL start the new session at the size resolved in this order: the fresh viewer-reported pane size for the task's role (`db.InitialPTYSize`), then the outgoing session's live PTY size when non-zero, then 24x80. The resolution SHALL happen before the supervisor RPC using the existing `Rows`/`Cols` fields, SHALL NOT change the supervisor protocol version, and SHALL be logged with its source.
+
+#### Scenario: Fresh report wins over a stale PTY
+
+- **WHEN** a coordinator is recycled whose PTY was last sized 80x24 but a fresh coordinator-pane report says 150x45
+- **THEN** the new session starts at 150x45 and the log names source `report`
+
+#### Scenario: No report falls back to the live PTY
+
+- **WHEN** no fresh report exists and the outgoing PTY is 120x40
+- **THEN** the new session starts at 120x40 with source `pty`
+
+#### Scenario: No session and no report
+
+- **WHEN** the outgoing session is gone and no report exists
+- **THEN** the new session starts at 24x80 with source `default`
 

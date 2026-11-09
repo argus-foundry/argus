@@ -14,19 +14,19 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/clipboard"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/hostsleep"
-	"github.com/drn/argus/internal/mcp"
-	"github.com/drn/argus/internal/mergesafety"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/notify"
-	"github.com/drn/argus/internal/push"
-	"github.com/drn/argus/internal/sysmetrics"
-	"github.com/drn/argus/internal/tui/settings"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/clipboard"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hostsleep"
+	"github.com/argus-foundry/argus/internal/mcp"
+	"github.com/argus-foundry/argus/internal/mergesafety"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/notify"
+	"github.com/argus-foundry/argus/internal/push"
+	"github.com/argus-foundry/argus/internal/sysmetrics"
+	"github.com/argus-foundry/argus/internal/tui/settings"
 )
 
 // TaskCreator creates a task from name, prompt, project, and optional
@@ -81,6 +81,21 @@ type Server struct {
 	// cached value.
 	lastResizeMu   sync.Mutex
 	lastResizeCols map[string]uint16
+
+	// kickDeferSince is the per-task, per-width clock for keep-place deferrals
+	// of the resize-driven kick: started at the first deferral at a width and
+	// cleared by any non-deferral outcome. It bounds how long a client-reported
+	// typed flag may hold the kick (agent.KickDeferCap).
+	kickDeferMu    sync.Mutex
+	kickDeferSince map[string]kickDeferClock
+	// kickScreen re-emulates a session's output tail to read the rendered
+	// Claude composer; kickScreenMu serializes its (non-reentrant) use.
+	kickScreenMu sync.Mutex
+	kickScreen   agent.ScreenRenderer
+
+	// taskLocks serializes archive, input, resume and restart per task so an
+	// archive success happens-before any later input or session start.
+	taskLocks taskLocker
 
 	// pluginSections is the in-memory mirror of the `plugin_settings` table
 	// (PR 7 of the plugin substrate). The DB is the source of truth; this
@@ -195,6 +210,7 @@ func New(database *db.DB, runner agent.SessionRunner, token string, creator Task
 		eventBus:       newEventBus(),
 		stopCh:         make(chan struct{}),
 		lastResizeCols: make(map[string]uint16),
+		kickDeferSince: make(map[string]kickDeferClock),
 		pluginSections: settings.NewRegistry(),
 		metrics:        sysmetrics.New(db.DataDir()),
 		hostSleep:      hostsleep.NewMonitor(),

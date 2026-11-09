@@ -3,10 +3,10 @@ package client
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestCheckAccountSupported(t *testing.T) {
@@ -48,7 +48,7 @@ func TestStart_RefusesAccountOnOldSupervisor(t *testing.T) {
 func configZero() config.Config { return config.Config{} }
 
 func TestCheckResidentSupported(t *testing.T) {
-	testutil.Equal(t, residentProtocolVersion, 12)
+	testutil.Equal(t, residentProtocolVersion, 13)
 	testutil.True(t, residentProtocolVersion <= daemon.ProtocolVersion)
 	cases := []struct {
 		name    string
@@ -57,9 +57,9 @@ func TestCheckResidentSupported(t *testing.T) {
 		wantErr bool
 	}{
 		{"never handshaken resident", 0, model.KindResident, false},
-		{"old supervisor resident", 11, model.KindResident, true},
+		{"old supervisor resident", 12, model.KindResident, true},
 		{"current supervisor resident", residentProtocolVersion, model.KindResident, false},
-		{"old supervisor plain", 11, "", false},
+		{"old supervisor plain", 12, "", false},
 		{"current supervisor plain", residentProtocolVersion, "", false},
 	}
 	for _, tc := range cases {
@@ -77,7 +77,7 @@ func TestCheckResidentSupported(t *testing.T) {
 }
 
 func TestStart_RefusesResidentOnOldSupervisor(t *testing.T) {
-	c := &Client{peerProtocol: 11}
+	c := &Client{peerProtocol: 12}
 	res := &model.Task{ID: "t", Kind: model.KindResident}
 	_, err := c.Start(res, configZero(), 24, 80, false)
 	testutil.Error(t, err)

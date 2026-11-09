@@ -3,6 +3,8 @@ package tui
 import (
 	"os"
 	"testing"
+
+	"github.com/argus-foundry/argus/internal/testenv"
 )
 
 // TestMain installs no-op stubs for the package-level openers so the tui
@@ -20,5 +22,7 @@ func TestMain(m *testing.M) {
 	editorOpener = func(string, string) error { return nil }
 	terminalOpener = func(string) error { return nil }
 	prOpener = func(string) error { return nil }
-	os.Exit(m.Run())
+	os.Exit(testenv.Main(m))
 }
+
+func TestEnvScrubbed(t *testing.T) { testenv.AssertScrubbed(t) }

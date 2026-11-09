@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // These tests pin the worktree-keyed binding lookup added for BUG-059 and the

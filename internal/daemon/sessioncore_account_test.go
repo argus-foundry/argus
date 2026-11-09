@@ -4,10 +4,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // taskRecordingRunner records the task each session-core handler rebuilds
@@ -62,6 +62,17 @@ func TestSessionCore_RebuildCarriesAccount(t *testing.T) {
 		testutil.Equal(t, r.recycled.SandboxOverride, "enabled")
 		testutil.True(t, r.recycled.IsResident())
 	})
+	t.Run("recycle carries the minted session id", func(t *testing.T) {
+		var resp StatusResp
+		testutil.NoError(t, c.Recycle(&RecycleReq{TaskID: "a", SessionID: "fresh-sid"}, &resp))
+		testutil.Equal(t, r.recycled.SessionID, "fresh-sid")
+	})
+}
+
+func TestProtocolVersionCoversRecycleSessionID(t *testing.T) {
+	if ProtocolVersion < 12 {
+		t.Fatalf("RecycleReq carries SessionID, which landed in v12; ProtocolVersion is %d", ProtocolVersion)
+	}
 }
 
 func TestProtocolVersionCoversTaskAccount(t *testing.T) {
@@ -71,7 +82,7 @@ func TestProtocolVersionCoversTaskAccount(t *testing.T) {
 }
 
 func TestProtocolVersionCoversResidentKind(t *testing.T) {
-	if ProtocolVersion < 12 {
-		t.Fatalf("launch requests carry Task.Kind, which landed in v12; ProtocolVersion is %d", ProtocolVersion)
+	if ProtocolVersion < 13 {
+		t.Fatalf("launch requests carry Task.Kind, which landed in v13; ProtocolVersion is %d", ProtocolVersion)
 	}
 }

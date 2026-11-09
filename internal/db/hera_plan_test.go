@@ -3,7 +3,7 @@ package db
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // planTestOrch creates an orchestrator and returns its id.

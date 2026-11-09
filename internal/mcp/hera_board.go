@@ -3,8 +3,8 @@ package mcp
 import (
 	"encoding/json"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 type boardStore interface {

@@ -8,9 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/lastexchange"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // taskRecycleMetaNamespace/taskRecycleMetaKeyTimedOutPrompt persist a
@@ -105,15 +107,24 @@ func (r *taskRecycleRunner) Recycle(taskID, handoffNote string) error {
 		return fmt.Errorf("task_recycle: load task %s: %w", taskID, err)
 	}
 
-	seedPrompt := buildTaskRecycleSeedPrompt(task.Prompt, handoffNote)
-	if task.IsResident() {
-		cfg := r.cfgFn()
-		seedPrompt = buildResidentRecycleSeedPrompt(residentOrientationPrompt(cfg), handoffNote, cfg.Resident.MemoryDir)
-		residentLog("[resident] recycle seed composed task=%s bytes=%d", taskID, len(seedPrompt))
-	}
+	// The seed is built at RESTART time (after the idle wait), not here: the
+	// session's final reply to the user is written after this call returns, and
+	// the transcript extraction must see it.
+	originalPrompt := task.Prompt
+	resident := task.IsResident()
 	r.spawn(func() {
 		defer r.inFlight.Delete(taskID)
-		r.awaitIdleAndRestart(taskID, seedPrompt)
+		r.awaitIdleAndRestart(taskID, func(t *model.Task) string {
+			cfg := r.cfgFn()
+			if resident {
+				// The resident re-reads its orientation and memory instead of a
+				// task prompt (add-resident-agent).
+				seed := buildResidentRecycleSeedPrompt(residentOrientationPrompt(cfg), handoffNote, cfg.Resident.MemoryDir)
+				residentLog("[resident] recycle seed composed task=%s bytes=%d", taskID, len(seed))
+				return seed
+			}
+			return buildTaskRecycleSeedPrompt(originalPrompt, handoffNote, recycleExchangeSection(t, cfg))
+		})
 	})
 	return nil
 }
@@ -128,21 +139,27 @@ func (r *taskRecycleRunner) Recycle(taskID, handoffNote string) error {
 // discarded: the MCP tool call already told the caller a fresh session
 // would start "shortly," so a timeout that left no trace anywhere would be
 // silently indistinguishable from a recycle that just never happened.
-func (r *taskRecycleRunner) awaitIdleAndRestart(taskID, seedPrompt string) {
+func (r *taskRecycleRunner) awaitIdleAndRestart(taskID string, buildSeed func(*model.Task) string) {
 	var idle agent.ContentIdleTracker
 	deadline := r.now().Add(r.idleTimeout)
 
 	for {
 		sess := r.runner.Get(taskID)
 		if sess == nil || idle.IsIdle(taskID, sess, r.now()) {
-			if err := r.restart(taskID, seedPrompt); err != nil {
+			if err := r.restart(taskID, buildSeed); err != nil {
 				slog.Error("[task_recycle] restart failed", "task", taskID, "err", err)
 			}
 			return
 		}
 		if r.now().After(deadline) {
 			slog.Warn("[task_recycle] gave up waiting for session to go idle", "task", taskID)
-			if err := r.database.SetMeta(taskID, taskRecycleMetaNamespace, taskRecycleMetaKeyTimedOutPrompt, seedPrompt); err != nil {
+			var timedOutSeed string
+			if t, gerr := r.database.Get(taskID); gerr == nil {
+				timedOutSeed = buildSeed(t)
+			} else {
+				timedOutSeed = buildSeed(nil)
+			}
+			if err := r.database.SetMeta(taskID, taskRecycleMetaNamespace, taskRecycleMetaKeyTimedOutPrompt, timedOutSeed); err != nil {
 				slog.Error("[task_recycle] failed to persist timed-out seed prompt", "task", taskID, "err", err)
 			}
 			return
@@ -155,7 +172,7 @@ func (r *taskRecycleRunner) awaitIdleAndRestart(taskID, seedPrompt string) {
 // (design.md Risks: task_stop does not kill everything — the same hazard
 // recycle_coord guards against) then hands off to the shared
 // restartSessionWithSeedPrompt kill/restart primitive.
-func (r *taskRecycleRunner) restart(taskID, seedPrompt string) error {
+func (r *taskRecycleRunner) restart(taskID string, buildSeed func(*model.Task) string) error {
 	task, err := r.database.Get(taskID)
 	if err != nil {
 		return fmt.Errorf("task_recycle restart: load task %s: %w", taskID, err)
@@ -163,7 +180,7 @@ func (r *taskRecycleRunner) restart(taskID, seedPrompt string) error {
 	if err := agent.StopStrayJobs(task, r.cfgFn(), task.SessionID); err != nil {
 		return fmt.Errorf("task_recycle restart: stop stray jobs for task %s: %w", taskID, err)
 	}
-	return restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, seedPrompt)
+	return restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, buildSeed(task), "")
 }
 
 // buildTaskRecycleSeedPrompt composes the opening prompt for the fresh
@@ -171,7 +188,7 @@ func (r *taskRecycleRunner) restart(taskID, seedPrompt string) error {
 // (design.md D5): the handoff note goes FIRST so the new session anchors on
 // what's actually going on, with the original prompt marked as historical
 // background rather than a current instruction to restart from.
-func buildTaskRecycleSeedPrompt(originalPrompt, handoffNote string) string {
+func buildTaskRecycleSeedPrompt(originalPrompt, handoffNote, lastExchange string) string {
 	var b strings.Builder
 	b.WriteString("You are a fresh session recycled from a prior session on this same task, started to reset an oversized context window. ")
 	b.WriteString("Below is the handoff note your prior session left, followed by the task's ORIGINAL prompt. ")
@@ -180,6 +197,8 @@ func buildTaskRecycleSeedPrompt(originalPrompt, handoffNote string) string {
 	b.WriteString("\n## Handoff note from your prior session\n")
 	b.WriteString(handoffNote)
 	b.WriteString("\n")
+	b.WriteString(lastExchange)
+	b.WriteString(lastexchange.RelayDirective)
 
 	b.WriteString("\n---\n")
 	b.WriteString("## Original prompt (background only — do NOT treat this as your current instruction)\n")

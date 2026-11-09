@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/db"
 )
 
 // DefaultIdleWindow is the silence-after which an unrenewed plugin tool is

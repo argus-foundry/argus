@@ -50,7 +50,7 @@ struct NewTaskSheet: View {
                         Picker("Account", selection: Binding(
                             get: { account },
                             set: { account = $0; accountPicked = $0 })) {
-                            ForEach(usableAccounts) { Text($0.displayLabel).tag($0.name) }
+                            ForEach(usableAccounts) { Text(NewTaskAccount.pickerLabel($0)).tag($0.name) }
                         }
                     }
 

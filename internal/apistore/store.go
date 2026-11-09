@@ -21,13 +21,13 @@ import (
 	"io"
 	"sync"
 
-	"github.com/drn/argus/internal/apiclient"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/sandboxprop"
-	"github.com/drn/argus/internal/tui/settings"
-	"github.com/drn/argus/internal/tui/store"
+	"github.com/argus-foundry/argus/internal/apiclient"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/sandboxprop"
+	"github.com/argus-foundry/argus/internal/tui/settings"
+	"github.com/argus-foundry/argus/internal/tui/store"
 )
 
 // Compile-time assertion: Store implements tui/store.Store.
@@ -469,6 +469,9 @@ func (s *Store) SetConfigValue(key, value string) error {
 	case "ui.rerender_keep_place":
 		b := value == "true"
 		upd.UI = &apiclient.UIUpdate{RerenderKeepPlace: &b}
+	case "ui.auto_rerender_on_resize":
+		b := value == "true"
+		upd.UI = &apiclient.UIUpdate{AutoRerenderOnResize: &b}
 	case "sandbox.enabled":
 		b := value == "true"
 		upd.Sandbox = &apiclient.SandboxUpdate{Enabled: &b}
@@ -510,6 +513,7 @@ func (s *Store) SetConfigValue(key, value string) error {
 	if err == nil && upd.UI != nil {
 		s.configMu.Lock()
 		s.cachedConfig.UI.RerenderKeepPlace = response.UI.RerenderKeepPlace
+		s.cachedConfig.UI.AutoRerenderOnResize = response.UI.AutoRerenderOnResize
 		s.configMu.Unlock()
 	}
 	return err
@@ -717,4 +721,10 @@ func (s *Store) Accounts(ctx context.Context) ([]apiclient.AccountJSON, error) {
 // calls agent.MoveTaskAccount directly.
 func (s *Store) MoveTaskAccount(ctx context.Context, id, account string, force bool) (*apiclient.MoveAccountResp, error) {
 	return s.c.MoveTaskAccount(ctx, id, account, force)
+}
+
+// MoveTaskBackend moves a task to another CLI with a handoff on the remote
+// daemon (same endpoint, `backend` set).
+func (s *Store) MoveTaskBackend(ctx context.Context, id, backend, account string, force bool) (*apiclient.MoveAccountResp, error) {
+	return s.c.MoveTaskBackend(ctx, id, backend, account, force)
 }

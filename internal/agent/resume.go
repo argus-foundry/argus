@@ -6,11 +6,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/drn/argus/internal/claudesession"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // ResumableSessionAvailable asks the backend family whether the exact stored
@@ -163,4 +163,23 @@ func RefreshResumeSessionID(database *db.DB, task *model.Task) {
 		return
 	}
 	uxlog.Log("[resume] session refreshed task=%s %s -> %s", task.ID, old, sid)
+}
+
+// RestoreAcceptedCoordinatorHat re-opens the coordinator binding(s) that a
+// hera_accept ended on this task (fix-probe-and-accept) so a resumed
+// sub-coordinator is a working coordinator again. Call it wherever an existing
+// task's session is resumed on user intent (TUI resume, REST resume/restart).
+// Idempotent and a no-op for any task whose coordinator binding was not ended
+// by an accept; a failure is logged (the resume itself must not fail on it) and
+// returned so callers that can surface it do.
+func RestoreAcceptedCoordinatorHat(database *db.DB, taskID string) error {
+	n, err := database.RestoreAcceptedHeraCoordinatorBindings(taskID)
+	if err != nil {
+		uxlog.Log("[hera] resume: restoring accepted coordinator binding of task %s failed: %v", taskID, err)
+		return err
+	}
+	if n > 0 {
+		uxlog.Log("[hera] resume: restored %d coordinator binding(s) of task %s", n, taskID)
+	}
+	return nil
 }

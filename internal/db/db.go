@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 
 	_ "modernc.org/sqlite"
 )
@@ -20,6 +20,8 @@ const schemaVersion = 2
 type DB struct {
 	conn *sql.DB
 	mu   sync.Mutex
+	// resultMu orders result commits through publication without holding mu in the sink.
+	resultMu sync.Mutex
 
 	// cfgLoader overlays ~/.argus/config.toml (next to the DB file) onto the
 	// assembled Config in Config(). Nil for in-memory/test DBs so they never

@@ -7,13 +7,14 @@ import (
 	"strings"
 	"time"
 
-	heramodel "github.com/drn/argus/internal/hera/model"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/hera/tiering"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/tui/theme"
-	"github.com/drn/argus/internal/tui/widget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -2509,12 +2510,12 @@ func contextIndicator(role *heramodel.RoleView) (reserve bool, glyph rune, style
 	if !role.Live || role.Archived {
 		return reserve, 0, tcell.StyleDefault
 	}
-	switch {
-	case role.ContextPercent >= 90:
+	switch tiering.ContextLevel(role.ContextPercent) {
+	case tiering.ContextLevelCritical:
 		return reserve, '!', theme.StyleContextCritical
-	case role.ContextPercent >= 65:
+	case tiering.ContextLevelHot:
 		return reserve, '•', theme.StyleContextHot
-	case role.ContextPercent >= 40:
+	case tiering.ContextLevelWarm:
 		return reserve, '•', theme.StyleContextWarm
 	default:
 		return reserve, 0, tcell.StyleDefault

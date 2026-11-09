@@ -3,8 +3,8 @@ package db
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestDB_BackendTiers_EmptyByDefault(t *testing.T) {

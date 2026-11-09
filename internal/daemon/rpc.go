@@ -5,15 +5,15 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/hera"
-	"github.com/drn/argus/internal/kb"
-	"github.com/drn/argus/internal/selfupdate"
-	"github.com/drn/argus/internal/usagebudget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hera"
+	"github.com/argus-foundry/argus/internal/kb"
+	"github.com/argus-foundry/argus/internal/selfupdate"
+	"github.com/argus-foundry/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // RPCService implements the JSON-RPC methods exposed by the daemon. The
@@ -50,6 +50,16 @@ func (s *RPCService) AccountUsage(_ *Empty, resp *map[string]usagebudget.Reading
 // account plus Codex) so a TUI process resolving tiers locally routes on real
 // readings; its own usagebudget/Codex caches are never populated.
 func (s *RPCService) RoutingUsage(_ *Empty, resp *backendtier.Usage) error {
+	*resp = backendtier.LocalUsage(s.daemon.db.Config())
+	return nil
+}
+
+// RoutingUsageFresh is RoutingUsage preceded by a fresh probe round (debounced
+// and bounded, see Daemon.freshenUsage): a TUI process about to spawn asks for
+// readings that postdate any burst. An older daemon lacks this method; the
+// client then keeps its cached snapshot.
+func (s *RPCService) RoutingUsageFresh(_ *Empty, resp *backendtier.Usage) error {
+	s.daemon.freshenUsage()
 	*resp = backendtier.LocalUsage(s.daemon.db.Config())
 	return nil
 }

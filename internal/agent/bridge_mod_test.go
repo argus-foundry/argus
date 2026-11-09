@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/backendkind"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/backendkind"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestBuildCmd_BridgeModPluginDir(t *testing.T) {

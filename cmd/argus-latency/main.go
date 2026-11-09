@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/drn/argus/internal/latencyreport"
+	"github.com/argus-foundry/argus/internal/latencyreport"
 )
 
 func main() {

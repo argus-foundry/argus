@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/shirou/gopsutil/v4/process"
 )
 
@@ -56,31 +56,43 @@ func (s *Server) serveReaderContext(w http.ResponseWriter, task *model.Task, fam
 // no captured ID. A pinned ID can legitimately resume a much older conversation.
 func (s *Server) readReaderContext(task *model.Task, fam *agent.Family, cfg config.Config) (agent.ContextReading, bool, error) {
 	rd, ok, err := fam.ContextReader(task, cfg)
-	if err != nil || !ok || task.SessionID != "" || s.runner == nil {
+	if err != nil || !ok {
 		return rd, ok, err
+	}
+	matches, err := s.readerSessionMatchesLaunch(task, rd.SessionID, rd.SessionStartedAt)
+	if err != nil || !matches {
+		return agent.ContextReading{}, false, err
+	}
+	return rd, true, nil
+}
+
+// readerSessionMatchesLaunch permits pinned resumes and rejects uncaptured old launches.
+func (s *Server) readerSessionMatchesLaunch(task *model.Task, sessionID string, sessionStartedAt time.Time) (bool, error) {
+	if task.SessionID != "" || s.runner == nil {
+		return true, nil
 	}
 	sess := s.runner.Get(task.ID)
 	if sess == nil || !sess.Alive() {
-		return rd, ok, nil
+		return true, nil
 	}
 	if s.runner.HasPendingRestart(task.ID) {
-		return agent.ContextReading{}, false, nil
+		return false, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	p, err := process.NewProcessWithContext(ctx, int32(sess.PID()))
 	if err != nil {
-		return agent.ContextReading{}, false, err
+		return false, err
 	}
 	started, err := p.CreateTimeWithContext(ctx)
 	if err != nil {
-		return agent.ContextReading{}, false, err
+		return false, err
 	}
-	if started <= 0 || rd.SessionStartedAt.IsZero() || rd.SessionStartedAt.Before(time.UnixMilli(started)) {
-		uxlog.Log("[context] skip previous launch task=%s session=%s", task.ID, rd.SessionID)
-		return agent.ContextReading{}, false, nil
+	if started <= 0 || sessionStartedAt.IsZero() || sessionStartedAt.Before(time.UnixMilli(started)) {
+		uxlog.Log("[context] skip previous launch task=%s session=%s", task.ID, sessionID)
+		return false, nil
 	}
-	return rd, true, nil
+	return true, nil
 }
 
 // contextSessionLive reports whether a running, non-restarting process owns the task.

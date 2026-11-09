@@ -5,7 +5,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/drn/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/gitutil"
 )
 
 // lineNumWidth is the number of characters reserved for line numbers.

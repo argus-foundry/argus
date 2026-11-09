@@ -6,10 +6,10 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/terminalpane"
-	"github.com/drn/argus/internal/tui/views"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/terminalpane"
+	"github.com/argus-foundry/argus/internal/tui/views"
 )
 
 // pluginSurrenderApp builds an App parked in modePluginView with a minimal

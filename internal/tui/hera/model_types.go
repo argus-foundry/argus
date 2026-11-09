@@ -1,6 +1,6 @@
 package hera
 
-import heramodel "github.com/drn/argus/internal/hera/model"
+import heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
 // Model, OrchView, RoleView, Selection, and HeraReader are the hera
 // orchestration read model. Their real definitions and BuildModel live in

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/notify"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/notify"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // --- fakes ---
@@ -265,6 +265,8 @@ func TestServiceSend_DoorbellLineFormat(t *testing.T) {
 	testutil.Contains(t, line, "[hera from my-coordinator]")
 	testutil.Contains(t, line, "short summary")
 	testutil.Contains(t, line, "msg #1")
+	// Exact shape: the prefix stays (notify matches on it) and a fetch hint trails.
+	testutil.Equal(t, line, "[hera from my-coordinator] msg #1 — short summary · read: hera_inbox")
 }
 
 func TestServiceSend_FallbackRoleNameOnLookupFailure(t *testing.T) {

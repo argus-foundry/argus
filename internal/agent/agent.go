@@ -18,18 +18,18 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/drn/argus/internal/backendkind"
-	"github.com/drn/argus/internal/claudeenv"
-	"github.com/drn/argus/internal/claudesession"
-	"github.com/drn/argus/internal/codexctx"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/mcplimits"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/profiles"
-	"github.com/drn/argus/internal/review"
-	"github.com/drn/argus/internal/skills"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/backendkind"
+	"github.com/argus-foundry/argus/internal/claudeenv"
+	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/codexctx"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/mcplimits"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/profiles"
+	"github.com/argus-foundry/argus/internal/review"
+	"github.com/argus-foundry/argus/internal/skills"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	_ "modernc.org/sqlite"
 )
 
@@ -171,7 +171,7 @@ func resolveDefaultBackendName(explicit, project string, cfg config.Config, acco
 	if backend != "" {
 		return backend
 	}
-	return resolveTaskChoice(explicit, project, cfg, account).Backend
+	return resolveTaskChoice(explicit, project, cfg, account, false).Backend
 }
 
 // ResolveBackend returns the backend config for a task.
@@ -220,16 +220,38 @@ type ResolvedProfile struct {
 // Resolution reads ~/.argus/profiles and the worktree's .argus/profiles, so it
 // MUST run daemon-side (outside the sandbox, where global ~/.argus reads EPERM).
 func ResolveModel(task *model.Task, backend config.Backend, cfg config.Config) (string, *ResolvedProfile) {
+	m, rp, _ := ResolveModelDetailed(task, backend, cfg)
+	return m, rp
+}
+
+// ResolveModelDetailed is ResolveModel plus whether the returned model came
+// from a valid task.Model override (as opposed to a profile or backend default),
+// so read-only surfaces can label the source without re-deriving precedence.
+func ResolveModelDetailed(task *model.Task, backend config.Backend, cfg config.Config) (string, *ResolvedProfile, bool) {
+	return resolveModelDetailed(task, backend, func() *ResolvedProfile {
+		return resolveProfile(task, backend, cfg)
+	})
+}
+
+// ResolveModelFromProfile shares launch precedence with a snapshot's validated profile.
+// A nil profile means validation failed or no profile was available.
+func ResolveModelFromProfile(task *model.Task, backend config.Backend, cfg config.Config, profile *profiles.Profile) (string, *ResolvedProfile, bool) {
+	return resolveModelDetailed(task, backend, func() *ResolvedProfile {
+		return modelFromProfile(task, backend, cfg, profile)
+	})
+}
+
+func resolveModelDetailed(task *model.Task, backend config.Backend, resolve func() *ResolvedProfile) (string, *ResolvedProfile, bool) {
 	if m := strings.TrimSpace(task.Model); m != "" {
 		if backendAllowsModel(m, backend) {
-			return m, nil
+			return m, nil, true
 		}
 		uxlog.Log("[profiles] task %q: explicit model %q not valid for resolved backend; falling through to default", task.ID, m)
 	}
-	if rp := resolveProfile(task, backend, cfg); rp != nil {
-		return rp.Model, rp
+	if rp := resolve(); rp != nil {
+		return rp.Model, rp, false
 	}
-	return strings.TrimSpace(backend.Model), nil
+	return strings.TrimSpace(backend.Model), nil, false
 }
 
 // resolveProfile loads and validates the task's bound diligence profile and
@@ -273,13 +295,21 @@ func resolveProfile(task *model.Task, backend config.Backend, cfg config.Config)
 		return nil
 	}
 
+	return modelFromProfile(task, backend, cfg, p)
+}
+
+func modelFromProfile(task *model.Task, backend config.Backend, cfg config.Config, p *profiles.Profile) *ResolvedProfile {
+	arch := strings.TrimSpace(task.Archetype)
+	if p == nil || arch == "" {
+		return nil
+	}
 	backendName := profileBackendName(resolvedBackendName(task, cfg), backend)
 	m := strings.TrimSpace(p.Archetype[arch].Models[backendName])
 	if m == "" {
 		return nil
 	}
 	if !backendAllowsModel(m, backend) {
-		uxlog.Log("[profiles] task %q: profile %q model %q not valid for resolved backend; falling through to default", task.ID, profName, m)
+		uxlog.Log("[profiles] task %q: profile %q model %q not valid for resolved backend; falling through to default", task.ID, p.Name, m)
 		return nil
 	}
 	return &ResolvedProfile{Name: p.Name, Archetype: arch, Model: m}

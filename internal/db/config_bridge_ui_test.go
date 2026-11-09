@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestBridgeUISettingsOverlay(t *testing.T) {
@@ -46,4 +46,19 @@ func TestRerenderKeepPlaceOverlay(t *testing.T) {
 	testutil.True(t, d.Config().UI.RerenderKeepPlace)
 	testutil.NoError(t, os.WriteFile(filepath.Join(dir, config.FileName), []byte("[ui]\nrerender_keep_place = false\n"), 0600))
 	testutil.False(t, d.Config().UI.RerenderKeepPlace)
+}
+
+func TestAutoRerenderOnResizeOverlay(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(filepath.Join(dir, "data.sql"))
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	testutil.False(t, d.Config().UI.AutoRerenderOnResize) // default off
+	testutil.NoError(t, d.SetConfigValue("ui.auto_rerender_on_resize", "true"))
+	testutil.True(t, d.Config().UI.AutoRerenderOnResize)
+	testutil.NoError(t, os.WriteFile(filepath.Join(dir, config.FileName), []byte("[ui]\nauto_rerender_on_resize = false\n"), 0600))
+	testutil.False(t, d.Config().UI.AutoRerenderOnResize) // file overlay wins over DB true
+	// An absent key keeps the default.
+	testutil.NoError(t, os.WriteFile(filepath.Join(dir, config.FileName), []byte("[ui]\nshow_elapsed = true\n"), 0600))
+	testutil.True(t, d.Config().UI.AutoRerenderOnResize) // DB value shows when file omits the key
 }

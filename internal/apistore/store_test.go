@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/drn/argus/internal/apiclient"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/apiclient"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // fakeAPI is the smallest possible REST stub Store_test needs. Each test
@@ -545,6 +545,22 @@ func TestStore_MoveTaskAccount(t *testing.T) {
 	testutil.Equal(t, *got, apiclient.MoveAccountResp{From: "default", To: "personal", Resumed: true, Started: true})
 	testutil.Contains(t, captured, `"account":"auto"`)
 	testutil.Contains(t, captured, `"force":true`)
+}
+
+func TestStore_MoveTaskBackend(t *testing.T) {
+	f := newFakeAPI(t)
+	var captured string
+	f.mux.HandleFunc("/api/tasks/t1/account", func(w http.ResponseWriter, r *http.Request) {
+		captured = readBody(r)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"from":"default","to":"default","resumed":false,"started":true,"from_backend":"cl","to_backend":"cx","handoff":true}`))
+	})
+	got, err := f.store().MoveTaskBackend(context.Background(), "t1", "cx", "default", false)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.ToBackend, "cx")
+	testutil.True(t, got.Handoff)
+	testutil.False(t, got.ConversationCarried)
+	testutil.Contains(t, captured, `"backend":"cx"`)
 }
 
 func TestStore_MoveTaskAccount_Error(t *testing.T) {

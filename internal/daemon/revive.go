@@ -2,13 +2,15 @@ package daemon
 
 import (
 	"fmt"
+	"log/slog"
+	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/hera"
-	"github.com/drn/argus/internal/mcp"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hera"
+	"github.com/argus-foundry/argus/internal/mcp"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // HeraReviveRunner implements hera.ReviveRunner against the daemon's real
@@ -70,9 +72,11 @@ func (r *HeraReviveRunner) HasPendingRestart(taskID string) bool {
 }
 
 // KickRerender stops and resumes taskID's live session in place, at its
-// existing PTY dimensions — there is no rendering surface to fit here, unlike
-// the TUI's Enter-key revive which also resizes to the current pane's width
-// (doubling as its own BUG-074 size-drift fix).
+// current PTY dimensions — there is no rendering surface to fit here, unlike
+// the TUI's Enter-key revive which also resizes to the current pane's width.
+// The live PTY size already follows every viewer resize (Session.Resize), so it
+// IS the last pane size reported to this session; resize-without-restart audit:
+// no change needed here, unlike the recycle path whose outgoing size could be stale.
 func (r *HeraReviveRunner) KickRerender(taskID string) error {
 	task, err := r.database.Get(taskID)
 	if err != nil {
@@ -111,7 +115,12 @@ func (r *HeraReviveRunner) RestartDead(taskID string) error {
 	cfg := r.cfgFn()
 	agent.RefreshResumeSessionID(r.database, task)
 	resume := task.SessionID != ""
-	sess, _, err := r.runner.StartOrReattach(task, cfg, 24, 80, resume)
+	// No live session to read a size from: use the freshest viewer-reported pane
+	// (else Start's 24x80) so the revived agent commits history at the width a
+	// pane will actually show, instead of always 24x80.
+	rows, cols, source := resolveSpawnSize(r.database, "", nil, time.Now())
+	slog.Info("[spawn-size] revive restart", "task", taskID, "source", source, "rows", rows, "cols", cols)
+	sess, _, err := r.runner.StartOrReattach(task, cfg, rows, cols, resume)
 	if err != nil {
 		return fmt.Errorf("revive restart: start task %s: %w", taskID, err)
 	}

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // streamPendingRestartWaitInterval is how often handleStream checks whether
@@ -239,6 +239,25 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 		}
 		return nil
 	}
+	// Supervisor mode: a cached handle reads dead when its client was DETACHED
+	// (the old daemon's cleanup() closes the supervisor client, which closes
+	// every RemoteSession's done channel) or its stream gave up — neither is
+	// the process exiting, and the daemon keeps serving open TUI connections
+	// during that teardown. Only the supervisor knows; ask it, and say
+	// "unknown" (an error) when it cannot be asked (root cause of the
+	// post-restart SessionStatus false negative).
+	if p, ok := c.runner.(sessionProber); ok && !sess.Alive() {
+		info, err := p.ProbeSession(req.TaskID)
+		if err != nil {
+			slog.Warn("rpc.SessionStatus: cached handle is closed and the supervisor cannot be asked, not reporting death", "task", req.TaskID, "err", err)
+			return err
+		}
+		if info.Alive {
+			*resp = info
+			resp.TaskID = req.TaskID
+			return nil
+		}
+	}
 	cols, rows := sess.PTYSize()
 	initCols, initRows := sess.InitialPTYSize()
 	resp.TaskID = req.TaskID
@@ -417,12 +436,14 @@ func (c *sessionCore) kickRerender(req *KickReq, resp *StatusResp, widthRepair b
 // Recycle stops a coordinator's session and queues an in-place restart with a
 // fresh (empty) context (add-coordinator-context-management D5), mirroring
 // KickRerender's wire/promotion contract exactly except resume is always
-// false. req.Prompt already carries the assembled seed prompt and no
-// SessionID is shipped — a recycle never resumes.
+// false. req.Prompt already carries the assembled seed prompt and
+// req.SessionID the freshly minted pinned ID (empty for capture-style
+// families) — a recycle never resumes.
 func (c *sessionCore) Recycle(req *RecycleReq, resp *StatusResp) error {
-	slog.Info("rpc.Recycle", "task", req.TaskID)
+	slog.Info("rpc.Recycle", "task", req.TaskID, "session", req.SessionID)
 	task := &model.Task{
 		ID:              req.TaskID,
+		SessionID:       req.SessionID,
 		Prompt:          req.Prompt,
 		Project:         req.Project,
 		Backend:         req.Backend,

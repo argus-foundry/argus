@@ -40,7 +40,7 @@ let historyState, events, attention, deleteFocus;
 let split, rosterWatch, taskSettings, settings, newTask, terminal, currentTask, tasks = [], refreshAbort, refreshGeneration = 0;
 const taskTabs = new Map();
 const taskLinks = new TaskHeaderLinks(api);
-const railActions = new RailActions(api, async () => { navigation.pinned = railActions.pinned; await refreshTasks(); }, () => { navigation.pinned=railActions.pinned; navigation.render(); });
+const railActions = new RailActions(api, async () => { navigation.pinned = railActions.pinned; await refreshTasks(); }, () => { railActions.retain(tasks);navigation.pinned=railActions.pinned; navigation.render(); });
 const heraKanban = new HeraKanban(api,()=>navigation.render(),()=>refreshTasks());
 const sessions = new ClaudeSessions(api, async (task, status) => { if(status !== 'unchanged')tools.invalidateIdentity(task.id); if (currentTask?.id === task.id && status !== 'unchanged') { composer.context.invalidate(); terminal?.reconnect(); } await refreshTasks();if(taskSettings?.active&&taskSettings.task?.id===task.id)await taskSettings.load(); });
 const composer = new TaskComposer((text, task, options) => terminal.send(text, task, options), api);
@@ -60,7 +60,13 @@ const review = new TaskReview(api, () => {
   selectTab('tab-review');
   if (layout.compact.matches && layout.visible.tools) layout.close('tools');
 }, writeLocation);
-const tools = new TaskTools(api, review);
+const tools = new TaskTools(api, review, {
+  changed:(roleID,unread)=>{
+    for(const orch of navigation.roster.orchestrators||[])for(const role of orch.roles||[])if(role.role_id===roleID)role.board_unread=unread;
+    navigation.update(tasks,currentTask?.id,undefined,{roster:navigation.roster},{defer:true});
+  },
+  reply:(task,item)=>composer.reply(task,item),
+});
 const navigation = new TaskNavigation(selectTask, (project, action) => {
   if (!settings.leaveForTask()) return;
   taskSettings.leaveForTask();
@@ -69,6 +75,7 @@ const navigation = new TaskNavigation(selectTask, (project, action) => {
   });
 }, {
   heraKanban,
+  openInbox:(task,roleID)=>{selectTask(task);tools.inboxRoleID=roleID;if(currentTask?.id!==task.id)return;tools.selectTab('tool-inbox');if(!layout.visible.tools)layout.toggle('tools');$('tool-inbox').focus();},
   bulkAction: tasks => taskBatch.open(tasks),
   deleteTask: task => {deleteFocus=taskNeighbor(task)?.id;taskDelete.open(task);},
   projectConfiguration: project => { taskSettings.leaveForTask(); settings.openProject(project); },
@@ -176,6 +183,7 @@ historyState = new WorkspaceHistory(restoreLocation);
 async function refreshTasks() {
   if (!connection.connected) return;
   events?.beginSnapshot();
+  const pinSnapshot=railActions.beginSnapshot();
   refreshAbort?.abort();
   refreshAbort = new AbortController();
   const generation = ++refreshGeneration;
@@ -187,7 +195,7 @@ async function refreshTasks() {
     ]);
     if (generation !== refreshGeneration || !connection.connected) return;
     tasks = events ? events.snapshot(result.tasks || [],tasks) : result.tasks || [];
-    terminal?.retain(new Set(tasks.map(task=>task.id))); railActions.reconcile(tasks);
+    terminal?.retain(new Set(tasks.map(task=>task.id))); railActions.reconcile(tasks,pinSnapshot);
     attention?.update(tasks,currentTask?.id);
     navigation.update(tasks, currentTask?.id, projects, hierarchy); tools.updateRoster(navigation.roster);
 
@@ -253,12 +261,12 @@ $('fit-session').addEventListener('click', async () => {
   catch (error) { notice(`Could not fit the session. ${error.message}`); }
 });
 window.addEventListener('pagehide', () => { attention?.destroy(); sessions.clear(); taskLinks.clear(); stagedClipboard.select(null); railActions.clear(); heraKanban.clear(); rosterWatch?.stop(); split?.clear(); newTask.clear(); refreshAbort?.abort(); terminal?.destroy(); composer.clear(); review.clear(); tools.clear(); archive.clear(); taskDelete.clear(); taskBatch.clear(); settings.clear(); taskSettings.dismiss(); });
-events = new WorkspaceEvents(api, { refresh: refreshTasks, context: event => composer.context.event(event), suggestion: event => { if (connection.connected) composer.suggestion.event(event); }, event: event => {
+events = new WorkspaceEvents(api, { refresh: refreshTasks, pin:event=>railActions.event(event,tasks), context: event => composer.context.event(event), suggestion: event => { if (connection.connected) composer.suggestion.event(event); }, event: event => {
   if (!connection.connected) return;
   tools.event(event);
   if(event.type==='task.deleted')removeDeletedTask({id:event.task_id});
   const result = patchEvent(tasks, event); tasks = result.tasks;
-  terminal?.retain(new Set(tasks.map(task=>task.id))); railActions.reconcile(tasks);
+  terminal?.retain(new Set(tasks.map(task=>task.id))); railActions.retain(tasks);
   navigation.update(tasks,currentTask?.id,undefined,undefined,{defer:true});
   if (currentTask) { const next=tasks.find(task=>task.id===currentTask.id); if(next){currentTask=next;composer.task=next;composer.render();tools.updateTask(next);header(next);terminal?.attach(next);}else historyState.restore(); }
   split?.select(currentTask,tasks,navigation.roster);
@@ -266,6 +274,8 @@ events = new WorkspaceEvents(api, { refresh: refreshTasks, context: event => com
   if(result.resnapshot)events.scheduleSnapshot();
   log('events','applied',{count:tasks.length});
 } });
+events.callbacks.board=event=>{tools.event(event);events.scheduleSnapshot();};
+events.callbacks.reconcile=()=>tools.event({type:'resync'});
 split = new SplitWorkspace(() => terminal);
 rosterWatch = new WorkspaceRoster(api, () => navigation.roles?.size>0||split.enabled&&split.visible, result => {
   const hierarchy=result.warning?{roster:navigation.roster,warning:result.warning}:result;

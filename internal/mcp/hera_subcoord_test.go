@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestSubCoord_HeraPlanNode_AcceptsSubCoordKindAndGoal covers:

@@ -1,0 +1,5 @@
+- [x] Make `computeRuntimeState` status-independent and absent-session-not-idle
+- [x] Clear all flags on pending restart
+- [x] Publish `session.runtime_changed` from the idle watcher
+- [x] Tests: all statuses, pending restart, list vs get, 404, auth, event frames
+- [x] Document in rest-api and events-bus specs, README, events gotchas

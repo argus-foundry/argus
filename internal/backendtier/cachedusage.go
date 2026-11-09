@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // ErrNoUsageSnapshot is returned by CachedUsage.Read when no usable snapshot
@@ -48,6 +48,13 @@ func (c *CachedUsage) Prime() {
 	c.inflight = true
 	c.mu.Unlock()
 	c.refresh()
+}
+
+// Store publishes u as the current snapshot, e.g. a fresh-before-spawn read.
+func (c *CachedUsage) Store(u Usage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.snap, c.fetched, c.have = u, c.now(), true
 }
 
 // Read returns the cached snapshot without ever performing I/O on the calling

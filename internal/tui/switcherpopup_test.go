@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/db"
-	heramodel "github.com/drn/argus/internal/hera/model"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/hera"
-	"github.com/drn/argus/internal/tui/taskview"
+	"github.com/argus-foundry/argus/internal/db"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/hera"
+	"github.com/argus-foundry/argus/internal/tui/taskview"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )

@@ -9,14 +9,14 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 
-	"github.com/drn/argus/internal/bridge"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // maxBridgeBody caps a bridge event batch. The mod buffers at most a couple
@@ -358,12 +358,13 @@ func (s *Server) handleBridgeDraft(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"draft": map[string]any{"text": d.Text, "cursor": d.Cursor}})
 }
 
-// bridgeDraftPending reports whether the task's live bridge says the composer
-// holds unsent text and the keep-place setting is on.
-func (s *Server) bridgeDraftPending(id string) bool {
-	if !s.db.Config().UI.RerenderKeepPlace {
-		return false
-	}
+// bridgeDraftSignal reports the live bridge's composer-draft answer: aware is
+// true only for a live bridge whose mod proved it reports drafts, and has is
+// then authoritative (false means empty, not unknown).
+func (s *Server) bridgeDraftSignal(id string) (aware, has bool) {
 	st, live := s.bridgeState(id, time.Now())
-	return live && st.HasDraft
+	if !live || !st.DraftAware {
+		return false, false
+	}
+	return true, st.HasDraft
 }

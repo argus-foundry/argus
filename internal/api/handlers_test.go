@@ -19,19 +19,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/clipboard"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/push"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/clipboard"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/push"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 func testServer(t *testing.T) (*Server, *db.DB) {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	d, err := db.OpenInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +112,7 @@ func TestHandleListTasks(t *testing.T) {
 		testutil.Equal(t, len(resp["tasks"]), 2)
 	})
 
-	t.Run("in_progress without session reports idle", func(t *testing.T) {
+	t.Run("in_progress without session is neither live nor idle", func(t *testing.T) {
 		req := authedReq("GET", "/api/tasks?status=in_progress", "")
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
@@ -121,7 +122,8 @@ func TestHandleListTasks(t *testing.T) {
 		testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		testutil.Equal(t, len(resp["tasks"]), 1)
 		testutil.Equal(t, resp["tasks"][0].Name, "task-b")
-		testutil.True(t, resp["tasks"][0].Idle)
+		testutil.Equal(t, resp["tasks"][0].Idle, false)
+		testutil.Equal(t, resp["tasks"][0].Live, false)
 	})
 
 	t.Run("non-in_progress task is never idle", func(t *testing.T) {
@@ -194,10 +196,15 @@ func TestComputeRuntimeState(t *testing.T) {
 		wantIdle bool
 		wantLive bool
 	}{
-		{"pending never idle", model.StatusPending, false, false, false, false},
-		{"in_review never idle", model.StatusInReview, false, false, false, false},
-		{"complete never idle", model.StatusComplete, false, false, false, false},
-		{"in_progress no session is idle", model.StatusInProgress, false, false, true, false},
+		{"pending no session", model.StatusPending, false, false, false, false},
+		{"in_review no session", model.StatusInReview, false, false, false, false},
+		{"complete no session", model.StatusComplete, false, false, false, false},
+		{"in_progress no session is not idle", model.StatusInProgress, false, false, false, false},
+		{"in_review busy session is live", model.StatusInReview, true, false, false, true},
+		{"in_review idle session is idle and live", model.StatusInReview, true, true, true, true},
+		{"complete busy session is live", model.StatusComplete, true, false, false, true},
+		{"pending idle session is idle and live", model.StatusPending, true, true, true, true},
+		{"idle flag without session is ignored", model.StatusInReview, false, true, false, false},
 		{"in_progress active session not idle", model.StatusInProgress, true, false, false, true},
 		{"in_progress idle session is idle but live", model.StatusInProgress, true, true, true, true},
 	}
@@ -475,6 +482,7 @@ func TestHandleResumeTask(t *testing.T) {
 	})
 
 	t.Run("heals desync when runner has a live session", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
 		if testing.Short() {
 			t.Skip("starts a real PTY-backed sleep; skipped in -short")
 		}
@@ -500,6 +508,7 @@ func TestHandleResumeTask(t *testing.T) {
 		// produces the "session already exists for task X" error.
 		sess, err := srv.runner.Start(task, d.Config(), 24, 80, false)
 		testutil.NoError(t, err)
+		srv.runner = idleGuardSessionRunner(srv.runner, sess)
 		// The heal path is non-destructive — it never stops the session, so
 		// the test owns the lifecycle. If the heal logic ever starts
 		// stopping/restarting, this cleanup needs revisiting.
@@ -4547,4 +4556,37 @@ func TestCreateUpdateBackend_ResponseCarriesFamilyMetadata(t *testing.T) {
 	testutil.Equal(t, updated.Name, "antigravity")
 	testutil.Equal(t, updated.Kind, "claude")
 	testutil.Equal(t, updated.SessionSwitcher, true)
+}
+
+// Restarting an accepted sub-coordinator's task re-opens the coordinator
+// binding hera_accept ended (fix-probe-and-accept).
+func TestHandleRestartTask_RestoresAcceptedCoordinatorHat(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a real PTY-backed sleep; skipped in -short")
+	}
+	srv, d := testServer(t)
+	mux := srv.routes()
+	testutil.NoError(t, d.SetBackend("sh-sleep", config.Backend{Command: "sleep 30"}))
+	task := &model.Task{Name: "sub", Status: model.StatusComplete, Backend: "sh-sleep", Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
+	orch, err := d.CreateHeraOrchestrator("child", "")
+	testutil.NoError(t, err)
+	_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "c", Kind: db.HeraKindCoordinator, ArgusProject: "p"}, task.ID, task.Worktree)
+	testutil.NoError(t, err)
+	_, err = d.EndHeraCoordinatorBindingsForTask(task.ID, db.HeraEndReasonAccepted)
+	testutil.NoError(t, err)
+
+	req := authedReq("POST", "/api/tasks/"+task.ID+"/restart", "")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	testutil.Equal(t, w.Code, http.StatusOK)
+	t.Cleanup(func() {
+		if sess := srv.runner.Get(task.ID); sess != nil {
+			_ = srv.runner.Stop(task.ID)
+			<-sess.Done()
+		}
+	})
+	g, err := d.LiveHeraKeepAliveBinding(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, g != nil)
 }

@@ -3,7 +3,7 @@ package backendkind
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestOf(t *testing.T) {

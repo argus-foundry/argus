@@ -7,7 +7,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func pickerChoices() []AccountChoice {
@@ -83,4 +83,31 @@ func TestAccountPickerModal_Draw(t *testing.T) {
 			testutil.Equal(t, m.Title(), "Move task")
 		})
 	}
+}
+
+func TestAccountPickerModal_LabelAndNote(t *testing.T) {
+	choices := []AccountChoice{
+		{Name: "auto"},
+		{Name: "@codex:default", Label: "Codex · default", Detail: "restart with handoff", Note: "Loses the bridge mod"},
+	}
+	m := NewAccountPickerModal("Move task", "", choices)
+	press := tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)
+	draw := func() string {
+		screen := tcell.NewSimulationScreen("UTF-8")
+		testutil.NoError(t, screen.Init())
+		screen.SetSize(90, 20)
+		m.SetRect(0, 0, 90, 20)
+		m.Draw(screen)
+		screen.Show()
+		return strings.Join(screenText(screen, 90, 20), "\n")
+	}
+	text := draw()
+	testutil.Contains(t, text, "Codex · default  restart with handoff")
+	if strings.Contains(text, "Loses the bridge mod") {
+		t.Fatal("note shows only for the highlighted row")
+	}
+	m.InputHandler()(press, func(tview.Primitive) {})
+	testutil.Contains(t, draw(), "Loses the bridge mod")
+	m.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), func(tview.Primitive) {})
+	testutil.Equal(t, m.Selected(), "@codex:default") // Name, not Label
 }

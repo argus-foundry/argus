@@ -7,7 +7,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/drn/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/daemon"
 )
 
 // runKBCommand handles: argus kb search|ingest|list|status

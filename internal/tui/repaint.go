@@ -4,9 +4,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/tui/terminal"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/tui/terminal"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 const (
@@ -49,10 +49,14 @@ type repaintSubscription struct {
 type repaintWriter struct {
 	pump   *repaintPump
 	active atomic.Bool
+	sync   terminal.SyncTracker
 }
 
 func (w *repaintWriter) Write(b []byte) (int, error) {
-	if len(b) > 0 && w.active.Load() {
+	// A write wholly inside an open DEC 2026 block would paint nothing the pane
+	// is willing to show (it holds the block until it closes), so it must not
+	// cost a full tview draw. The write that opens or closes a block still wakes.
+	if len(b) > 0 && w.active.Load() && w.sync.Observe(b) {
 		w.pump.wake()
 	}
 	return len(b), nil
@@ -75,6 +79,16 @@ func (p *repaintPump) wake() {
 	case p.wakes <- struct{}{}:
 	default:
 	}
+}
+
+// wakeAfter wakes the pump once after d. A pane holding an open synchronized-
+// output block asks for it so a lost `?2026l` (which produces no output) still
+// gets a draw at the hold's expiry. Safe from any goroutine; no-op on nil.
+func (p *repaintPump) wakeAfter(d time.Duration) {
+	if p == nil {
+		return
+	}
+	time.AfterFunc(d, p.wake)
 }
 
 // noteKey records user input (key or paste) so the echo that follows paints at
@@ -258,6 +272,7 @@ func (a *App) startOutputRepaint() {
 	// Bracketed paste bypasses InputCapture, so the panes report it themselves.
 	for _, pane := range []*terminal.TerminalPane{a.agentPane, a.residentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane()} {
 		pane.OnUserInput = a.repaint.noteKey
+		pane.OnSyncHold = a.repaint.wakeAfter
 	}
 	go a.repaint.run()
 }

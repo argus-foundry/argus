@@ -4,7 +4,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestDB_ExcludeCleanupBranch_RecordsBranch(t *testing.T) {

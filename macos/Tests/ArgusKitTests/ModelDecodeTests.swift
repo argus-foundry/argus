@@ -461,25 +461,27 @@ struct ModelDecodeTests {
         #expect(old.sessionSwitcher == nil)
     }
 
-    @Test("NewTaskAccount.requestValue sends the explicit pick, default included")
+    @Test("NewTaskAccount.requestValue pins a named pick; default routes")
     func newTaskAccountGating() {
         let d = Account(name: "default")
         let w = Account(name: "work", supports: AccountSupports(claude: true))
         let c = Account(name: "cx", supports: AccountSupports(codex: true))
         #expect(NewTaskAccount.requestValue(selected: "work", accounts: [d, w], backend: "claude") == "work")
-        #expect(NewTaskAccount.requestValue(selected: "default", accounts: [d, w], backend: "") == "default")
+        #expect(NewTaskAccount.requestValue(selected: "default", accounts: [d, w], backend: "") == nil)
         #expect(NewTaskAccount.requestValue(selected: "work", accounts: [d, w], backend: "codex") == nil)
         #expect(NewTaskAccount.requestValue(selected: "cx", accounts: [d, w, c], backend: "codex") == "cx")
         #expect(NewTaskAccount.requestValue(selected: "default", accounts: [d], backend: "claude") == nil)
         #expect(NewTaskAccount.requestValue(selected: "", accounts: [d, w], backend: "claude") == nil)
     }
 
-    @Test("NewTaskAccount.requestValue sends default even when another account resolves as default")
+    @Test("NewTaskAccount.requestValue: default routes even when another account resolves as default")
     func newTaskAccountExplicitDefault() {
         let d = Account(name: "default")
         let w = Account(name: "work", supports: AccountSupports(claude: true), isDefault: true)
-        #expect(NewTaskAccount.requestValue(selected: "default", accounts: [d, w], backend: "claude") == "default")
+        #expect(NewTaskAccount.requestValue(selected: "default", accounts: [d, w], backend: "claude") == nil)
         #expect(NewTaskAccount.requestValue(selected: "work", accounts: [d, w], backend: "claude") == "work")
+        #expect(NewTaskAccount.pickerLabel(d) == "default (auto-routed)")
+        #expect(NewTaskAccount.pickerLabel(w) == "work")
     }
 
     @Test("NewTaskAccount.preselect keeps a usable pick, else the resolved default")

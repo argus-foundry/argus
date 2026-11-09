@@ -7,9 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // CountOrphanedWorktrees returns the number of worktree directories under
@@ -192,8 +192,9 @@ func PrunePrepare(database *db.DB, opts PruneOptions) (*PrunePlan, error) {
 
 	// Remove session logs and their size sidecars.
 	for _, t := range pruned {
-		os.Remove(SessionLogPath(t.ID))  //nolint:errcheck
-		os.Remove(SessionSizePath(t.ID)) //nolint:errcheck
+		os.Remove(SessionLogPath(t.ID))   //nolint:errcheck
+		os.Remove(SessionSizePath(t.ID))  //nolint:errcheck
+		os.Remove(SessionSizesPath(t.ID)) //nolint:errcheck
 	}
 
 	var toClean []*model.Task

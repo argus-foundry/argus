@@ -120,6 +120,10 @@ func (d *DB) createTables() error {
 	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN base_branch TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
 	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN result      TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
 
+	// result_at is the observation time of the last result change (RFC3339, ''
+	// when never written); the failure projection reports it as recorded_at.
+	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN result_at   TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
+
 	// archetype (add-diligence-profiles): the authoritative model-resolution key
 	// read by agent.ResolveModel. Idempotent ADD for databases predating it;
 	// existing rows read empty (no archetype → no profile consulted).
@@ -479,6 +483,10 @@ func (d *DB) createTables() error {
 	}
 
 	if err := d.createHeraTables(); err != nil {
+		return err
+	}
+
+	if err := d.createTaskUsageTables(); err != nil {
 		return err
 	}
 

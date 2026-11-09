@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 )
 
 // SelectReading selects the fullest valid window at read time, so expiry of

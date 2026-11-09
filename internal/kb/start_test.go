@@ -3,7 +3,7 @@ package kb
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestStart_IncrementalScanError exercises Start's incremental-error branch.

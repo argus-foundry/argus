@@ -6,12 +6,12 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/modal"
-	"github.com/drn/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/modal"
+	"github.com/argus-foundry/argus/internal/tui/widget"
 )
 
 type inboxFixture struct {
@@ -95,6 +95,7 @@ func TestLoadInboxEntries(t *testing.T) {
 	testutil.Equal(t, byBody["still unread"].Unread, true)
 	testutil.Equal(t, byBody["still unread"].Summary, "question")
 	testutil.Equal(t, byBody["ARGUS_BOUNCED"].From, "system")
+	testutil.False(t, byBody["ARGUS_BOUNCED"].Unread) // system notes are not unread mail
 
 	h := byBody["hera body"]
 	testutil.Equal(t, h.Source, "hera")
@@ -107,7 +108,7 @@ func TestLoadInboxEntries(t *testing.T) {
 	// Loading must never ack/mark read in either store.
 	unread, err := f.d.UnreadCount(f.recv.ID)
 	testutil.NoError(t, err)
-	testutil.Equal(t, unread, 2)
+	testutil.Equal(t, unread, 1)
 	heraUnread, err := f.d.HeraInbox(f.workerID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(heraUnread), 1)
@@ -185,7 +186,7 @@ func TestSmoke_InboxModal(t *testing.T) {
 	testutil.Equal(t, len(waitInboxLoaded(t, app)), 5)
 	unread, err := f.d.UnreadCount(f.recv.ID)
 	testutil.NoError(t, err)
-	testutil.Equal(t, unread, 3)
+	testutil.Equal(t, unread, 1) // system notes (incl. "late") are not counted
 
 	sim.InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
 	syncUI(t, app.tapp)

@@ -17,12 +17,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/claudeenv"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/sanitize"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	xvt "github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
-	"github.com/drn/argus/internal/claudeenv"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/sanitize"
-	"github.com/drn/argus/internal/uxlog"
 )
 
 // probeTimeout bounds one probe run. A var (not const) so tests can shorten it.

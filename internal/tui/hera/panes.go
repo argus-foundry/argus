@@ -3,12 +3,12 @@ package hera
 import (
 	"time"
 
-	heramodel "github.com/drn/argus/internal/hera/model"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/tui/keyenc"
-	"github.com/drn/argus/internal/tui/terminal"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/tui/keyenc"
+	"github.com/argus-foundry/argus/internal/tui/terminal"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -279,10 +279,22 @@ const KickDebounce = 300 * time.Millisecond
 // "rerender deferred" uxlog line every 300ms for the whole busy stretch
 // (BUG-077). 10s keeps retry pressure on the daemon negligible while still
 // catching the agent going idle well within a session's lifetime. Consecutive
-// deferrals double the dwell up to 60s; a rebind resets it.
+// deferrals back off to kickRetryMax; a rebind or a zoom toggle resets it.
 const KickRetryInterval = 10 * time.Second
 
-const kickRetryMax = 60 * time.Second
+// kickRetryMax caps the deferral backoff. It was 60s, which starved a
+// constantly-busy coordinator for minutes: the retry only samples "idle" once
+// per interval, and a coordinator idles in short gaps between tool calls. The
+// interim view (replay at the authored width) keeps a pending pane readable,
+// so a tight cap costs only one cheap IsIdle/InitialPTYSize decision per
+// pane per 15s while it buys the earliest possible repair after a gap (9a).
+const kickRetryMax = 15 * time.Second
+
+// ZoomKickDebounce is the dwell for a Ctrl+Z fullscreen toggle. A toggle is a
+// discrete user action, not a drag or a rail traversal, so it skips the 300ms
+// KickDebounce dwell meant to collapse kick storms; the short dwell only
+// collapses an accidental double-tap into one evaluation at the settled width.
+const ZoomKickDebounce = 100 * time.Millisecond
 
 // kickPending tracks an armed-but-unfired size-drift kick candidate for one
 // pane (HeraPage.coordKickPending / agentKickPending). The zero value means
@@ -358,6 +370,12 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 	if p.kickRerender == nil || bound == "" || cols <= 0 {
 		return
 	}
+	// resize-without-restart: with ui.auto_rerender_on_resize off no automatic
+	// evaluation is scheduled at all (no dwell, no zoom re-arm, no RPCs); the
+	// pane's owed notice and the hotkey cover it. Nil means on (tests, remote).
+	if !p.AutoRerenderOn() {
+		return
+	}
 	now := p.kickClockNow()
 	// Zoom re-arm: a Ctrl+Z fullscreen toggle changes this pane's width without
 	// rebinding it, so the per-bind kickedFor gate below would swallow the
@@ -366,9 +384,10 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 	// the toggle moved the width — rapid toggling keeps pushing the deadline, so
 	// it collapses into one evaluation at the settled width.
 	if p.layoutShifted && pending.taskID == bound && pending.cols != cols {
-		uxlog.Log("[hera-view] fullscreen width change task=%s cols %d->%d: re-arming size-drift kick evaluation", bound, pending.cols, cols)
+		uxlog.Log("[hera-view] fullscreen width change task=%s cols %d->%d: re-arming size-drift kick evaluation (dwell=%s, retry backoff reset from %s)", bound, pending.cols, cols, ZoomKickDebounce, pending.retryDelay)
 		*kickedFor = ""
-		pending.deadline = now.Add(KickDebounce)
+		pending.deadline = now.Add(ZoomKickDebounce)
+		pending.retryDelay = 0 // a fresh user action restarts the backoff
 	}
 	if *kickedFor == bound {
 		if pending.taskID == bound {
@@ -416,6 +435,39 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 		uxlog.Log("[rerender] retry armed task=%s delay=%s", deferredFor, retryDelay)
 	})
 }
+
+// SetOwedFunc wires the owed-re-render notice evaluator + live key hint onto
+// both terminal panes, and makes a click on either pane's notice fire
+// OnRerender for that pane's bound task (resize-without-restart).
+func (p *HeraPage) SetOwedFunc(fn terminal.OwedFunc, hint func() string) {
+	p.coordPane.SetOwedFunc(fn, hint)
+	p.agentPane.SetOwedFunc(fn, hint)
+	p.coordPane.OnOwedClick = func() {
+		if p.coordBound != "" && p.OnRerender != nil {
+			p.OnRerender(p.coordBound)
+		}
+	}
+	p.agentPane.OnOwedClick = func() {
+		if p.agentBound != "" && p.OnRerender != nil {
+			p.OnRerender(p.agentBound)
+		}
+	}
+}
+
+// InvalidateOwed marks both panes' owed-re-render state stale (re-evaluated once
+// at their next Draw). Safe from any goroutine.
+func (p *HeraPage) InvalidateOwed() {
+	p.coordPane.InvalidateOwed()
+	p.agentPane.InvalidateOwed()
+}
+
+// SetAutoRerender wires the live ui.auto_rerender_on_resize setting
+// (resize-without-restart). Left nil (tests, remote mode) the automatic kick is ON,
+// i.e. byte-identical to the behavior before the setting existed.
+func (p *HeraPage) SetAutoRerender(fn func() bool) { p.autoRerender = fn }
+
+// AutoRerenderOn reports whether the automatic size-drift kick is enabled.
+func (p *HeraPage) AutoRerenderOn() bool { return p.autoRerender == nil || p.autoRerender() }
 
 // SetKeepPlace wires the live ui.rerender_keep_place setting (kick-timing-keep-place).
 // Left nil (tests, remote mode), the keep-place hold is ON.

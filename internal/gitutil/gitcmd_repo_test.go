@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // initRepo initializes a git repo at dir with one initial commit on master.

@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/apiclient"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/apiclient"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // newStore is a one-call test helper: hook handlers onto a fresh mux, get
@@ -296,6 +296,7 @@ func TestStore_SetConfigValue_KeyMapping(t *testing.T) {
 		{"bridge.band", "false"},
 		{"bridge.toasts", "false"},
 		{"ui.rerender_keep_place", "false"},
+		{"ui.auto_rerender_on_resize", "true"},
 		{"defaults.backend", "claude"},
 		{"default_backend", "codex"},
 		{"defaults.share_project", "argus"},
@@ -663,3 +664,19 @@ func TestStore_ListMetaByNamespace_NeverNil(t *testing.T) {
 }
 
 func errorsNew(msg string) error { return &plainErr{msg} }
+
+func TestStore_AutoRerenderOnResizeRefreshesEffectiveCache(t *testing.T) {
+	s, _ := newStore(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
+			var body apiclient.SettingsUpdate
+			testutil.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			testutil.NotNil(t, body.UI)
+			testutil.NotNil(t, body.UI.AutoRerenderOnResize)
+			testutil.True(t, *body.UI.AutoRerenderOnResize)
+			_, _ = w.Write([]byte(`{"ui":{"rerender_keep_place":true,"auto_rerender_on_resize":true}}`))
+		})
+	})
+	s.cachedConfig = config.DefaultConfig()
+	testutil.NoError(t, s.SetConfigValue("ui.auto_rerender_on_resize", "true"))
+	testutil.True(t, s.Config().UI.AutoRerenderOnResize)
+}

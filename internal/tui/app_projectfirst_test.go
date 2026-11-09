@@ -5,14 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/hera"
-	"github.com/drn/argus/internal/tui/keymap"
-	"github.com/drn/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/hera"
+	"github.com/argus-foundry/argus/internal/tui/keymap"
+	"github.com/argus-foundry/argus/internal/tui/widget"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -154,7 +154,7 @@ func TestSmoke_ProjectFirst(t *testing.T) {
 						testutil.Equal(t, form.SelectedProject(), "gamma")
 						testutil.Equal(t, form.resolvedBranch(), "")
 						testutil.Equal(t, form.boundProfile(), "default")
-						testutil.Equal(t, form.Account(), "default")
+						testutil.Equal(t, form.selectedAccountName(), "default")
 						testutil.Equal(t, string(form.prompt), "keep this prompt")
 						testutil.Equal(t, form.EnteredName(), "keep-name")
 						testutil.Equal(t, form.focused, ntFieldPrompt)

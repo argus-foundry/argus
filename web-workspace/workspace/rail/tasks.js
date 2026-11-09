@@ -1,3 +1,4 @@
+import {coordinatorRoles} from '../../tasks/messages/coordinator-inbox.js';
 import {captureFocus} from '../../shared/focus-recovery.js';
 import {TaskSelection} from './task-selection.js';
 import {coordinators} from './hera-kanban.js';
@@ -64,6 +65,7 @@ export class TaskNavigation {
       this.projects.map(project => project.name), this.selected, this.selection?.active,[...this.selection?.ids||[]],
       [...this.pinned], [...coordinatorMap].map(([id,orch])=>[id,orch.id,orch.root,orch.kanban_status,orch.pinned,this.actions.heraKanban?.pending.has(orch.id)]),
       [...this.roles || []].map(([id, role]) => [id, role.role_id, role.name, role.kind, role.live, role.status, role.ready_to_close, role.archived, role.needs_input]),
+      (this.roster.orchestrators||[]).flatMap(orch=>(orch.roles||[]).filter(role=>role.kind==='coordinator').map(role=>[role.role_id,role.task_id,role.board_unread])),
       [...this.hierarchy.parents], [...this.hierarchy.attention], [...this.hierarchy.failed],
       this.tasks.map(task => this.actions.pinKnown?.(task) ?? true),
     ]);
@@ -102,7 +104,7 @@ export class TaskNavigation {
     const coordinatorMap = this.coordinators();
     this.renderedKey = this.renderKey(coordinatorMap);
     log('rail', 'rendered', { count: this.tasks.length });
-    const restore=captureFocus($('task-groups'),()=>$(this.filter==='archive'?'archive-filter':'active-filter'),{selector:'.task-row,.task-archive,.task-more,.task-control'});
+    const restore=captureFocus($('task-groups'),()=>$(this.filter==='archive'?'archive-filter':'active-filter'),{selector:'.task-row,.task-archive,.task-more,.task-control,.task-mail'});
     const scrollTop = $('task-groups').scrollTop;
     const focusedKanban=document.activeElement?.dataset.kanbanKey;
     const focusedKey=document.activeElement?.dataset.rowKey;
@@ -123,7 +125,7 @@ export class TaskNavigation {
     const hasGroups=fragment.childNodes.length>0;
     $('task-groups').replaceChildren(fragment);
     if (focusedTaskAction) queueMicrotask(() => {
-      const control=[...$('task-groups').querySelectorAll('.task-control')].find(item => item.dataset.taskId === focusedTask && item.dataset.taskAction === focusedTaskAction && (!focusedKey || item.dataset.rowKey===focusedKey));
+      const control=[...$('task-groups').querySelectorAll('.task-control,.task-mail')].find(item => item.dataset.taskId === focusedTask && item.dataset.taskAction === focusedTaskAction && (!focusedKey || item.dataset.rowKey===focusedKey));
       const group=control?.closest('.kanban-group');
       if(group&&!group.open)group.querySelector('summary')?.focus({preventScroll:true});
       else if(control?.getClientRects().length)control.focus({preventScroll:true});
@@ -158,6 +160,15 @@ export class TaskNavigation {
     if(this.selection?.active){
       row.classList.toggle('batch-selected',this.selection.ids.has(task.id));row.setAttribute('aria-pressed',String(this.selection.ids.has(task.id)));row.removeAttribute('aria-current');item.append(this.selection.checkbox(task));
       return taskFamily(this,item,entry,query,key,coordinatorMap);
+    }
+    const mailbox=coordinatorRoles(this.roster,task.id).find(role=>role.board_unread>0);
+    if(mailbox&&!task.archived){
+      row.querySelector('.task-status-icon').style.visibility='hidden';
+      const mail=button('',()=>this.actions.openInbox?.(this.latestTask(task),mailbox.role_id),'task-mail');
+      mail.dataset.taskId=task.id;mail.dataset.taskAction='inbox';mail.dataset.rowKey=key;
+      mail.setAttribute('aria-label',`Open Inbox for ${task.name}`);mail.dataset.tooltip='Unread coordinator Inbox';
+      const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 16 16');svg.setAttribute('aria-hidden','true');
+      const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d','M2 3h12v10H2ZM2 3l6 5 6-5');svg.append(path);mail.append(svg);item.append(mail);
     }
     const action = button('', event => {
       event.stopPropagation();

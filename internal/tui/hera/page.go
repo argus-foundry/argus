@@ -4,16 +4,16 @@ import (
 	"maps"
 	"time"
 
-	heramodel "github.com/drn/argus/internal/hera/model"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/tui/keymap"
-	"github.com/drn/argus/internal/tui/planview"
-	"github.com/drn/argus/internal/tui/terminal"
-	"github.com/drn/argus/internal/tui/theme"
-	"github.com/drn/argus/internal/tui/widget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/tui/keymap"
+	"github.com/argus-foundry/argus/internal/tui/planview"
+	"github.com/argus-foundry/argus/internal/tui/terminal"
+	"github.com/argus-foundry/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -87,7 +87,11 @@ type HeraPage struct {
 	kickRerender RerenderKicker
 	// keepPlace is the live ui.rerender_keep_place setting; nil means on.
 	keepPlace func() bool
-	prMeta    map[string]map[string]string
+
+	// autoRerender is the live ui.auto_rerender_on_resize setting; nil means on
+	// (resize-without-restart).
+	autoRerender func() bool
+	prMeta       map[string]map[string]string
 	// needsInput is the authoritative per-task needs-input set the App pushes each
 	// tick (App.needsInputIDs — the SAME idle-gated agent.DetectNeedsInput set the
 	// task list consumes). doRefresh threads it into heramodel.BuildModel so each live role
@@ -283,6 +287,10 @@ type HeraPage struct {
 	// "Nothing to copy" notice. nil-safe: unwired in remote mode / when the
 	// runner is not daemon-backed, in which case ctrl+y is an inert no-op.
 	OnCopyClipboard func(taskID string)
+
+	// OnRerender fires for the agent.rerender hotkey or a click on a pane's owed
+	// re-render notice, with the pane's bound task (resize-without-restart).
+	OnRerender func(taskID string)
 
 	// clipReady is set by the App each tick (SetClipboardHint): true when the
 	// focused terminal pane's task has an agent-staged clipboard payload. It no
@@ -1082,6 +1090,19 @@ func (p *HeraPage) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 		// which of Ctrl/Alt they report for this chord, and the loose check is the
 		// proven pattern already wired for the agent view's pane navigation.
 		ctrlAlt := event.Modifiers()&(tcell.ModCtrl|tcell.ModAlt) != 0
+		// agent.rerender (resize-without-restart) is a CtxAgent keymap action that
+		// Hera panes route here (they never go through handleAgentKey). Resolved
+		// through the live keymap, so a rebind is honored; intercepted only when a
+		// terminal pane with a bound task is focused — otherwise the key falls
+		// through to the PTY like any other.
+		if p.terminalPaneFocused() && p.OnRerender != nil {
+			if act, ok := p.keys().Resolve(keymap.CtxAgent, event); ok && act == keymap.ActAgentRerender {
+				if id := p.FocusedTerminalTaskID(); id != "" {
+					p.OnRerender(id)
+					return
+				}
+			}
+		}
 		switch event.Key() {
 		case tcell.KeyCtrlZ:
 			// Fullscreen the focused content pane (plugin parity). ALWAYS consume

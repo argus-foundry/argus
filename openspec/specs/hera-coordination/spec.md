@@ -812,3 +812,46 @@ Derived from: `internal/db/schema.go`, `internal/db/hera_cost.go`.
 - **WHEN** a database created before this change is opened
 - **THEN** the index exists afterwards and existing rows are unchanged
 
+### Requirement: Accepting a sub-coordinator ends its coordinator binding; revive restores it
+
+When hera_accept (or the plan-DAG gater's auto-accept) marks a role's task complete, it SHALL also end every live coordinator-kind binding on that task, stamped with end reason accepted, so the finished-session check can stop the idle session. Worker and freelance bindings SHALL be left live so the role stays messageable and revivable. A failure to end the binding SHALL be reported with the accept (the task still completes and the check-in is still sent). Reviving or resuming the task (hera_revive, hera_send's dead auto-revive, TUI resume including the third-Enter revive, REST resume and restart) SHALL re-open the most recent accepted-ended coordinator binding, keeping the same binding, provided its role and orchestrator are not archived or nuked and the task holds no live binding in that orchestrator; a restore failure SHALL be reported to the caller, not swallowed. A daemon-bounce reattach SHALL NOT restore it.
+
+#### Scenario: Accepted sub-coordinator's coordinator hat ends
+- **WHEN** a coordinator accepts a sub-coordinator's worker role
+- **THEN** the task becomes complete, its coordinator binding ends with reason accepted, and its worker binding stays live
+
+#### Scenario: Revive restores the coordinator hat
+- **WHEN** an accepted sub-coordinator's task is revived or resumed
+- **THEN** its coordinator binding is live again and the revived session is a working coordinator
+
+#### Scenario: Restore failure is reported
+- **WHEN** the session was restarted but the coordinator binding could not be restored
+- **THEN** the revive reports that failure instead of succeeding silently
+
+#### Scenario: Plain workers are unaffected
+- **WHEN** a worker with no coordinator binding is accepted
+- **THEN** acceptance behaves exactly as before
+
+### Requirement: Resume and restart honor Hera close-out
+
+`POST /api/tasks/{id}/resume` and `/restart` SHALL accept an optional JSON body `{"force_revive":bool}` (empty body means false; malformed JSON, non-object JSON, bodies exceeding 1024 bytes, and trailing data are 400 `invalid_body`). For a task holding a live worker or freelance Hera binding that satisfies the shared close-out predicate (`ready_to_close` meta, or a terminal done/failed role status), an ordinary request SHALL return 409 `{"error":"task awaits Hera close-out","code":"hera_closeout","can_force_revive":true}` without spawning, reattaching or changing task status, markers or role status. Coordinator and unbound tasks SHALL keep normal behavior. The existing busy (`task_running`) and pending-restart (`agent_restarting`) 409s SHALL apply for every task status and take precedence over the close-out guard, and unknown tasks SHALL return 404 `task_not_found`. With `force_revive:true` the server SHALL snapshot and then clear close-out state (ClearHeraCloseout semantics) before launching, and SHALL restore the snapshot only on a definite launch failure (500 `start_failed`). Rollback SHALL preserve original row absence and timestamps and SHALL compare the current state against the cleared state in one transaction so newer writes survive. An ambiguous launch outcome (`agent.ErrStartAmbiguous`) SHALL return 503 `start_ambiguous` without restoring close-out markers; callers SHALL check task runtime before retrying. The server SHALL never retry with force on its own. Resume, restart and archive/input SHALL share one per-task lock. Request bodies SHALL be read and validated before acquiring this lock so stalled uploads cannot block other task operations. Status and session events keep the existing emission points: `session.started` only when a process actually starts, `task.status_changed` only on an actual status transition.
+
+#### Scenario: Ordinary resume of a closed-out worker
+
+- **WHEN** a worker with `ready_to_close=true` is resumed without force
+- **THEN** the response is 409 `hera_closeout` and status, markers and sessions are untouched
+
+#### Scenario: Forced revival definitely fails to launch
+
+- **WHEN** `force_revive:true` is sent and the launch definitely fails
+- **THEN** the response is 500 `start_failed` and the prior markers and role status are restored only where the cleared state is unchanged
+
+#### Scenario: Forced revival has an ambiguous launch outcome
+
+- **WHEN** `force_revive:true` is sent and the launch returns `agent.ErrStartAmbiguous`
+- **THEN** the response is 503 `start_ambiguous` and close-out markers and role status are not rolled back
+
+#### Scenario: Forced revival succeeds
+
+- **WHEN** `force_revive:true` is sent and the session starts
+- **THEN** markers are cleared, status is in_progress, and the response is `resumed` or `restarted` (`healed:true` on reattach)
