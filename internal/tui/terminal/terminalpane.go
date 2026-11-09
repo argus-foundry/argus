@@ -1537,13 +1537,24 @@ const liveRebuildHistorySize = 8 * 1024 * 1024
 // The returned bytes are NOT ESC-boundary aligned. Callers should pass
 // through AlignToEscBoundary before feeding x/vt.
 func readLiveRebuildHistory(sess agentview.TerminalAdapter, taskID string) (raw []byte, total uint64) {
+	raw, total, _ = readLiveRebuildHistoryAt(sess, taskID)
+	return raw, total
+}
+
+// readLiveRebuildHistoryAt is readLiveRebuildHistory plus the SESSION-LOG
+// offset of raw[0], which the .sizes width index (agent.LoadSessionSizes) is
+// keyed in. origin is -1 when raw is the ring-only fallback: the ring's byte
+// space is not the log's, so no width index may be applied to it.
+func readLiveRebuildHistoryAt(sess agentview.TerminalAdapter, taskID string) (raw []byte, total uint64, origin int64) {
 	if sess == nil {
-		return nil, 0
+		return nil, 0, -1
 	}
 	var logRaw []byte
+	var logSize int64
 	if taskID != "" {
-		logRaw, _ = readLogTailForTask(taskID, liveRebuildHistorySize)
+		logRaw, logSize = readLogTailForTask(taskID, liveRebuildHistorySize)
 	}
+	logOrigin := logSize - int64(len(logRaw))
 	if len(logRaw) == 0 {
 		// No log — fall back to the ring buffer only. StartSession discards
 		// its os.OpenFile error, so a transient disk/permissions hiccup at
@@ -1552,7 +1563,8 @@ func readLiveRebuildHistory(sess agentview.TerminalAdapter, taskID string) (raw 
 		// snapshots (bytes, total) atomically; using RecentOutput() + a
 		// separate TotalWritten() call leaves a window where readLoop
 		// advances total past the bytes we sampled.
-		return ringOnlyRebuildHistory(sess.RecentOutputTailWithTotal(256 * 1024))
+		r, tot := ringOnlyRebuildHistory(sess.RecentOutputTailWithTotal(256 * 1024))
+		return r, tot, -1
 	}
 	ringTail, ringTotal := sess.RecentOutputTailWithTotal(256 * 1024)
 	if len(ringTail) < minLogAnchorBytes {
@@ -1560,7 +1572,7 @@ func readLiveRebuildHistory(sess agentview.TerminalAdapter, taskID string) (raw 
 		// a brand-new session whose log is equally short. The log is the
 		// richer source and nothing is appended to it, so there is nothing to
 		// mis-splice; record the handle's own total.
-		return logRaw, ringTotal
+		return logRaw, ringTotal, logOrigin
 	}
 	// Reconcile the two sources by CONTENT, never by comparing ringTotal to
 	// logSize: those counters share a coordinate space only for an in-process
@@ -1579,13 +1591,14 @@ func readLiveRebuildHistory(sess agentview.TerminalAdapter, taskID string) (raw 
 		// it is the safe source — 256KB of history instead of 8MB, but never
 		// a splice of two unrelated ranges. Self-heals: once the session has
 		// produced a ring's worth of fresh output the anchor matches again.
-		return ringOnlyRebuildHistory(ringTail, ringTotal)
+		r, tot := ringOnlyRebuildHistory(ringTail, ringTotal)
+		return r, tot, -1
 	case covered == len(ringTail):
 		// The log covers the ring tail in full. Trim to the ring's head so
 		// the caller's emuFedTotal = ringTotal is EXACT: a log that ran a few
 		// bytes ahead would otherwise be fed here and then re-fed by the next
 		// incremental delta.
-		return logRaw[:end], ringTotal
+		return logRaw[:end], ringTotal, logOrigin
 	default:
 		// The log holds only a leading part of the ring tail because
 		// readLoop's log write lagged its ring write (rare; a heavy output
@@ -1596,7 +1609,7 @@ func readLiveRebuildHistory(sess agentview.TerminalAdapter, taskID string) (raw 
 		out := make([]byte, 0, len(logRaw)+len(ringTail)-covered)
 		out = append(out, logRaw...)
 		out = append(out, ringTail[covered:]...)
-		return out, ringTotal
+		return out, ringTotal, logOrigin
 	}
 }
 
@@ -2734,7 +2747,7 @@ func (tp *TerminalPane) renderLive(screen tcell.Screen, x, y, w, h int, ptyCols,
 				tp.oscStrip.Reset()
 				tp.paintCacheValid = false
 			}
-			history, finalTotal := readLiveRebuildHistory(sess, tp.taskID)
+			history, finalTotal, historyOrigin := readLiveRebuildHistoryAt(sess, tp.taskID)
 			if len(history) == 0 {
 				if tp.emuFedTotal == 0 {
 					msg := "Waiting for output..."
@@ -2765,7 +2778,24 @@ func (tp *TerminalPane) renderLive(screen tcell.Screen, x, y, w, h int, ptyCols,
 				// history is actually being fed into; clamping to the
 				// (possibly narrower) pane here would neutralize scroll
 				// margins that are perfectly valid at the wider build size.
-				_, _ = SafeEmuWrite(tp.emu, tp.oscStrip.Filter(ClampScrollRegion(AlignToEscBoundary(history), tp.emuCols, tp.emuRows)))
+				//
+				// Replay each log segment at the PTY size it was AUTHORED for
+				// (the .sizes index, #1177) instead of one write at the build
+				// size. A recycled/resized session's tail was authored at the
+				// pane size while its head was authored wider/taller; feeding
+				// all of it in one wide-and-tall grid lands the tail's relative
+				// cursor-up redraws on the wrong rows and overlays two renders
+				// of the dynamic footer (live Hera-pane garble). The ring-only
+				// fallback has no log offsets, so it stays a plain feed.
+				var marks []agent.SizeMark
+				if historyOrigin >= 0 {
+					marks = agent.LoadSessionSizes(tp.taskID)
+				}
+				if len(marks) > 0 {
+					_, _ = feedReplayChunksSized(tp.emu, bytes.NewReader(history), 0, int64(len(history)), historyOrigin, tp.emuCols, tp.emuRows, 0, true, marks)
+				} else {
+					_, _ = SafeEmuWrite(tp.emu, tp.oscStrip.Filter(ClampScrollRegion(AlignToEscBoundary(history), tp.emuCols, tp.emuRows)))
+				}
 				tp.emuFedTotal = finalTotal
 			}
 		} else if ringWrapCaughtUp {
