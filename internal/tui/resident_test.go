@@ -327,6 +327,10 @@ func TestResidentTabIgnoresInvalidName(t *testing.T) {
 			testutil.NoError(t, d.SetConfigValue("resident.name", bad))
 			a.refreshResidentTab()
 			testutil.Equal(t, a.header.TabLabel(widget.TabResident), "")
+			// A tab switch repaints the label without the tick; it must apply
+			// the same validation.
+			a.switchTab(widget.TabSettings)
+			testutil.Equal(t, a.header.TabLabel(widget.TabResident), "")
 			a.toggleResident()
 			testutil.True(t, a.header.ActiveTab() != widget.TabResident)
 			a.handleGlobalKey(tcell.NewEventKey(tcell.KeyRune, '0', 0))

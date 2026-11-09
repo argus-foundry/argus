@@ -8944,10 +8944,13 @@ func (a *App) releaseIdlePaneMemory() {
 	if !a.idleReleaseEnabled.Load() || a.tapp == nil || a.agentPane == nil || a.heraPage == nil {
 		return
 	}
-	panes := []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane()}
+	panes := []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane(), a.residentPane}
 	a.tapp.QueueUpdate(func() {
 		now := time.Now()
 		for _, p := range panes {
+			if p == nil {
+				continue
+			}
 			releaseIdlePane(p, now)
 		}
 	})

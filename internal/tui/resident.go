@@ -36,11 +36,7 @@ type residentReturn struct {
 func (a *App) refreshResidentTab() {
 	d, local := a.db.(*db.DB)
 	cfg := a.db.Config().Resident
-	label := ""
-	// An invalid name (too long, control bytes) must never reach the header.
-	if local && cfg.Enabled && config.ValidResidentName(cfg.Name) == nil {
-		label = cfg.Name
-	}
+	label := residentTabLabel(local, cfg)
 	// The marker is folded into this single label write so the tick can never
 	// clobber it; the stored attention state is applied by applyResidentState.
 	a.header.SetTabLabel(widget.TabResident, a.residentLabelWithMarker(label))
@@ -320,9 +316,17 @@ func (a *App) syncResidentBox() {
 // refreshResidentLabelOnly re-derives just the header label (marker) from the
 // current config after a tab change, without touching the pane attachment.
 func (a *App) refreshResidentLabelOnly() {
-	label := ""
-	if _, local := a.db.(*db.DB); local && a.db.Config().Resident.Enabled {
-		label = a.db.Config().Resident.Name
-	}
+	_, local := a.db.(*db.DB)
+	label := residentTabLabel(local, a.db.Config().Resident)
 	a.header.SetTabLabel(widget.TabResident, a.residentLabelWithMarker(label))
+}
+
+// residentTabLabel is the single rule for the resident tab's label: shown only
+// locally, when enabled, and when the name is valid — an invalid name (too
+// long, control bytes) must never reach the header.
+func residentTabLabel(local bool, cfg config.ResidentConfig) string {
+	if local && cfg.Enabled && config.ValidResidentName(cfg.Name) == nil {
+		return cfg.Name
+	}
+	return ""
 }

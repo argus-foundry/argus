@@ -462,6 +462,9 @@ var SupervisorSpawnPaths = []string{
 	"internal/claudeenv/claudeenv.go",            // parent-session marker denylist + persistence flag BuildCmd applies
 	"internal/agent/codexaccount.go",             // per-task Codex home, env hygiene, sandbox grant
 	"internal/config/accounts.go",                // account → config dir resolution BuildCmd reads
+	"internal/config/resident.go",                // resident allow/ask/deny defaults BuildCmd turns into --settings
+	"internal/db/resident.go",                    // ResidentWorkDir BuildCmd checks for the resident
+	"internal/model/task.go",                     // Task.IsResident, the gate on every resident spawn flag
 	"internal/agent/nonclaude_context.go",        // OpenCode child-only skills config content
 	"internal/agent/omp.go",                      // omp MCP plugin + skills overlay materialization, permission flags
 	"internal/agent/cachedir.go",                 // content-addressed ~/.argus/cache materialization omp launches use
@@ -520,7 +523,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "912dcb707a964a0688e2fb7914b3a679d13f8e12c35dc6832e291367f640a0e5"
+	SpawnSurfaceDigest  = "bcb8b65bd594e6ca700bbe5af2ec2932518af0dcaeb41675ddf074d6c5af7113"
 	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 
