@@ -7,6 +7,7 @@ import (
 	"github.com/argus-foundry/argus/internal/spinner"
 	"github.com/argus-foundry/argus/internal/tui/theme"
 	"github.com/gdamore/tcell/v2"
+	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
 )
 
@@ -20,6 +21,8 @@ const (
 	// details pane in M7). The enum slot is kept so the `2` hotkey is stable.
 	TabHera
 	TabSettings
+	// TabResident is rendered first when enabled, without renumbering 1/2/3.
+	TabResident
 )
 
 var TabLabels = [...]string{"Tasks", "Projects", "Settings"}
@@ -51,11 +54,15 @@ var (
 type Header struct {
 	*tview.Box
 	activeTab Tab
+	// tabObserver (test seam) is called on every SetTab so a navigation that
+	// bypasses the App's switchTab seam is still visible.
+	tabObserver func(Tab)
 
 	// tabLabels holds the per-slot display text. Initialized from TabLabels;
 	// individual slots can be overridden via SetTabLabel. Width computations and
 	// Draw both consume this field so the label and centering always agree.
-	tabLabels [len(TabLabels)]string
+	tabLabels     [len(TabLabels)]string
+	residentLabel string // empty hides the optional first tab
 
 	// Notice: general-purpose status indicator (left side of header).
 	// Auto-expires after HeaderNoticeTTL (BUG-030-style); see expireNotice.
@@ -101,6 +108,10 @@ func (h *Header) expireNotice() {
 // SetTabLabel overrides the display text for a single tab slot. Call before or
 // after construction; takes effect on the next Draw.
 func (h *Header) SetTabLabel(t Tab, label string) {
+	if t == TabResident {
+		h.residentLabel = label
+		return
+	}
 	if idx := int(t); idx >= 0 && idx < len(h.tabLabels) {
 		h.tabLabels[idx] = label
 	}
@@ -108,6 +119,9 @@ func (h *Header) SetTabLabel(t Tab, label string) {
 
 // TabLabel returns the current display text for tab slot t.
 func (h *Header) TabLabel(t Tab) string {
+	if t == TabResident {
+		return h.residentLabel
+	}
 	if idx := int(t); idx >= 0 && idx < len(h.tabLabels) {
 		return h.tabLabels[idx]
 	}
@@ -117,7 +131,13 @@ func (h *Header) TabLabel(t Tab) string {
 // SetTab changes the active tab.
 func (h *Header) SetTab(t Tab) {
 	h.activeTab = t
+	if h.tabObserver != nil {
+		h.tabObserver(t)
+	}
 }
+
+// SetTabObserver registers fn to be called on every SetTab (test seam).
+func (h *Header) SetTabObserver(fn func(Tab)) { h.tabObserver = fn }
 
 // ActiveTab returns the current tab.
 func (h *Header) ActiveTab() Tab {
@@ -186,9 +206,14 @@ func (h *Header) Draw(screen tcell.Screen) {
 	// Compute total width of all tab segments to center them.
 	// Each segment = 1 (open chevron) + len(text) + 1 (close chevron).
 	totalWidth := 0
-	for _, label := range h.tabLabels {
+	tabs := []Tab{TabTasks, TabHera, TabSettings}
+	if h.residentLabel != "" {
+		tabs = append([]Tab{TabResident}, tabs...)
+	}
+	for _, tab := range tabs {
+		label := h.TabLabel(tab)
 		text := fmt.Sprintf(" %s ", label)
-		totalWidth += 1 + len(text) + 1 // open sep + text + close sep
+		totalWidth += 1 + textCells(text) + 1 // open sep + text cells + close sep
 	}
 
 	col := x + (width-totalWidth)/2
@@ -197,17 +222,36 @@ func (h *Header) Draw(screen tcell.Screen) {
 	}
 
 	// Draw tabs
-	for i, label := range h.tabLabels {
+	for _, tab := range tabs {
+		label := h.TabLabel(tab)
 		if col >= x+width {
 			break
 		}
 		text := fmt.Sprintf(" %s ", label)
-		if Tab(i) == h.activeTab {
+		if tab == h.activeTab {
 			col = h.drawSegment(screen, col, y, x+width, text, headerActiveBG, headerActiveFG, true)
 		} else {
 			col = h.drawSegment(screen, col, y, x+width, text, headerInactiveBG, headerInactiveFG, false)
 		}
 	}
+}
+
+// runeCells is the terminal cell advance for r: wide runes (the resident
+// marker) take two, zero-width runes still advance one so width math agrees.
+func runeCells(r rune) int {
+	if w := runewidth.RuneWidth(r); w > 1 {
+		return w
+	}
+	return 1
+}
+
+// textCells sums runeCells over text; it must match drawSegment's advance.
+func textCells(text string) int {
+	n := 0
+	for _, r := range text {
+		n += runeCells(r)
+	}
+	return n
 }
 
 // drawSegment renders a powerline-style segment: opening chevron, text, closing chevron.
@@ -232,7 +276,7 @@ func (h *Header) drawSegment(screen tcell.Screen, col, y, maxCol int, text strin
 			return col
 		}
 		screen.SetContent(col, y, r, nil, textStyle)
-		col++
+		col += runeCells(r)
 	}
 
 	// Closing separator: transition from segment → base

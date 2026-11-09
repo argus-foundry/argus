@@ -23,8 +23,16 @@ type InitialPTYLayout struct {
 	Active      PTYSize
 	Coordinator PTYSize
 	Worker      PTYSize
-	ReportedAt  time.Time
+	// Resident is the resident tab's full-width pane. Absent (zero) from an
+	// older TUI; InitialPTYSize then reports no size for the resident role
+	// rather than substituting Active, which is whatever view the user is on.
+	Resident   PTYSize
+	ReportedAt time.Time
 }
+
+// InitialPTYRoleResident selects InitialPTYLayout.Resident in InitialPTYSize.
+// It is a selector only, never a stored hera role kind.
+const InitialPTYRoleResident HeraRoleKind = "resident"
 
 func (d *DB) PublishInitialPTYLayout(layout InitialPTYLayout) error {
 	if !layout.Active.Valid() || layout.ReportedAt.IsZero() {
@@ -60,6 +68,8 @@ func (d *DB) InitialPTYSize(role HeraRoleKind, now time.Time) (PTYSize, error) {
 	}
 	size := layout.Active
 	switch role {
+	case InitialPTYRoleResident:
+		size = layout.Resident
 	case HeraKindCoordinator:
 		size = layout.Coordinator
 	case HeraKindWorker, HeraKindFreelance:

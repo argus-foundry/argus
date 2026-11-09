@@ -467,3 +467,24 @@ func TestAccountUsage_DefaultReadsLocalCaches(t *testing.T) {
 	testutil.Equal(t, len(AccountUsage(cfg)), 0)
 	restore()
 }
+
+// The resident is not lifecycle-managed: the move must be refused before any
+// transcript is copied into the target account (SetTaskAccount would only
+// reject after the copy, leaving an orphan behind).
+func TestMoveTaskAccount_ResidentRejectedBeforeCopy(t *testing.T) {
+	f := newMoveFixture(t, true)
+	res, _, err := f.d.EnsureResidentTask(t.TempDir())
+	testutil.NoError(t, err)
+	writeTranscript(t, filepath.Join(f.home, ".claude"), res.Worktree, "sid-r", `{"type":"user"}`+"\n")
+
+	r := &moveRunner{sess: &moveSession{idle: true, alive: true}}
+	_, _, err = MoveTaskAccount(f.d, r, AccountMoveInput{TaskID: res.ID, Account: "work"})
+	testutil.ErrorIs(t, err, db.ErrResidentProtected)
+	testutil.ErrorIs(t, err, ErrAccount)
+	testutil.Nil(t, r.kicked)
+	// Neither the target config dir nor a transcript copy was created.
+	_, statErr := os.Stat(f.workDir)
+	testutil.True(t, os.IsNotExist(statErr))
+	after, _ := f.d.Get(res.ID)
+	testutil.Equal(t, after.Account, res.Account)
+}

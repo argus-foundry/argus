@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,136 @@ func TestBuildTaskRecycleSeedPrompt(t *testing.T) {
 	// instruction).
 	if strings.Index(got, "did X, next do Y") > strings.Index(got, "original mission text") {
 		t.Fatal("handoff note must appear before the original prompt")
+	}
+}
+
+func TestResidentRecycleSeedOrder(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, memoryDir, prefix string }{
+		{"default", "", "resident"},
+		{"configured", "custom/memory", "custom/memory"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exchange := "\n## Last exchange with the user before the reset\nQ\n"
+			got := buildResidentRecycleSeedPrompt("persistent orientation", "handoff first", tc.memoryDir, exchange)
+			parts := []string{"handoff first", "## Last exchange with the user before the reset", "Open with the user — relay first", tc.prefix + "/open-loops.md", tc.prefix + "/profile.md", "then continue", "persistent orientation"}
+			previous := -1
+			for _, part := range parts {
+				idx := strings.Index(got, part)
+				testutil.Equal(t, idx > previous, true)
+				previous = idx
+			}
+			testutil.Contains(t, got, "background only")
+
+			// The relay directive is unconditional, even with no exchange.
+			empty := buildResidentRecycleSeedPrompt("persistent orientation", "handoff first", tc.memoryDir, "")
+			testutil.Contains(t, empty, "Open with the user — relay first")
+			testutil.False(t, strings.Contains(empty, "## Last exchange with the user before the reset"))
+		})
+	}
+}
+
+// residentRecycleCaptureRunner records how a recycle restarts the resident.
+// Get reports no session on its first call (so awaitIdleAndRestart proceeds at
+// once) and, when live is set, a live session afterwards so the restart goes
+// through Recycle rather than Start.
+type residentRecycleCaptureRunner struct {
+	agent.SessionRunner
+	live        bool
+	gets        int
+	started     *model.Task
+	startResume bool
+	recycled    *model.Task
+	rows, cols  uint16 // size of the last Start/Recycle launch
+}
+
+type residentRecycleHandle struct{ agent.SessionHandle }
+
+func (residentRecycleHandle) PTYSize() (int, int) { return 24, 80 }
+
+func (r *residentRecycleCaptureRunner) Get(string) agent.SessionHandle {
+	r.gets++
+	if r.live && r.gets > 1 {
+		return residentRecycleHandle{}
+	}
+	return nil
+}
+
+func (r *residentRecycleCaptureRunner) Start(task *model.Task, _ config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, error) {
+	r.rows, r.cols = rows, cols
+	copyTask := *task
+	r.started = &copyTask
+	r.startResume = resume
+	return nil, nil
+}
+
+func (r *residentRecycleCaptureRunner) Recycle(task *model.Task, _ config.Config, rows, cols uint16) error {
+	r.rows, r.cols = rows, cols
+	copyTask := *task
+	r.recycled = &copyTask
+	return nil
+}
+
+// TestResidentRecycleUsesPersistentOrientation pins the resident recycle after
+// fix-recycle-session-id: the restart mints a fresh pinned session ID (never
+// the old one, never a --resume) and launches the resident seed — handoff,
+// then open loops, then the persistent orientation — whether or not a session
+// is still live when the restart runs.
+func TestResidentRecycleUsesPersistentOrientation(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no live session", true: "live session"}[live], func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			database, err := db.OpenInMemory()
+			testutil.NoError(t, err)
+			t.Cleanup(func() { _ = database.Close() })
+			task, _, err := database.EnsureResidentTask(t.TempDir())
+			testutil.NoError(t, err)
+			task.Prompt = "obsolete prior recycle seed"
+			task.Backend = "test"
+			task.SessionID = "old-session"
+			testutil.NoError(t, database.Update(task))
+			// The pre-recycle transcript the seed must carry forward.
+			writeTranscript(t, os.Getenv("HOME"), task.Worktree, "old-session", exchangeTranscript)
+			originalOrientation := residentOrientationPrompt
+			residentOrientationPrompt = func(config.Config) string { return "persistent orientation" }
+			t.Cleanup(func() { residentOrientationPrompt = originalOrientation })
+			runner := &residentRecycleCaptureRunner{live: live}
+			cfg := recycleTestConfig()
+			cfg.Backends["test"] = config.Backend{Command: "claude"} // Claude family: transcript reader applies
+			cfg.Resident.MemoryDir = "custom/memory"
+			r := newTaskRecycleRunner(database, runner, func() config.Config { return cfg })
+			r.spawn = func(f func()) { f() }
+			testutil.NoError(t, r.Recycle(task.ID, "current handoff"))
+
+			launched := runner.started
+			if live {
+				testutil.Nil(t, runner.started)
+				launched = runner.recycled
+			} else {
+				testutil.Nil(t, runner.recycled)
+				testutil.False(t, runner.startResume)
+			}
+			if launched == nil {
+				t.Fatal("recycle never relaunched the resident")
+			}
+			testutil.True(t, launched.IsResident())
+			testutil.True(t, launched.SessionID != "" && launched.SessionID != "old-session")
+			p := launched.Prompt
+			handoff := strings.Index(p, "current handoff")
+			loops := strings.Index(p, "custom/memory/open-loops.md")
+			orient := strings.Index(p, "persistent orientation")
+			relay := strings.Index(p, "Open with the user — relay first")
+			exch := strings.Index(p, "Mostly host CPU load.")
+			testutil.True(t, handoff >= 0 && exch > handoff && relay > exch && loops > relay && orient > loops)
+			testutil.False(t, strings.Contains(p, "obsolete prior recycle seed"))
+
+			// The persisted row matches what was launched, so a later crash
+			// restart resumes the recycled session, not the old one.
+			stored, err := database.Get(task.ID)
+			testutil.NoError(t, err)
+			testutil.Equal(t, stored.SessionID, launched.SessionID)
+			testutil.Equal(t, stored.Prompt, p)
+		})
 	}
 }
 
@@ -296,4 +427,48 @@ func TestTaskRecycleRunner_Recycle_RejectsConcurrentCallsForSameTask(t *testing.
 	unchanged, err := database.Get(task.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, unchanged.Prompt, "original mission")
+}
+
+// A recycle relaunches at the role's own published size: the resident's
+// dedicated pane, never the Active view's; a plain task keeps Active.
+func TestTaskRecycleLaunchSize(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		for _, resident := range []bool{true, false} {
+			name := map[bool]string{true: "resident", false: "plain"}[resident] + map[bool]string{false: " no live session", true: " live session"}[live]
+			t.Run(name, func(t *testing.T) {
+				t.Setenv("HOME", t.TempDir())
+				database, err := db.OpenInMemory()
+				testutil.NoError(t, err)
+				t.Cleanup(func() { _ = database.Close() })
+				var task *model.Task
+				if resident {
+					task, _, err = database.EnsureResidentTask(t.TempDir())
+					testutil.NoError(t, err)
+				} else {
+					task = &model.Task{ID: "plain1", Name: "plain", Status: model.StatusInProgress, Worktree: t.TempDir(), Project: "p"}
+					testutil.NoError(t, database.Add(task))
+				}
+				task.Backend = "test"
+				testutil.NoError(t, database.Update(task))
+				testutil.NoError(t, database.PublishInitialPTYLayout(db.InitialPTYLayout{
+					Active:     db.PTYSize{Rows: 30, Cols: 100},
+					Resident:   db.PTYSize{Rows: 50, Cols: 160},
+					ReportedAt: time.Now(),
+				}))
+				runner := &residentRecycleCaptureRunner{live: live}
+				cfg := recycleTestConfig()
+				cfg.Backends["test"] = config.Backend{Command: "claude"}
+				r := newTaskRecycleRunner(database, runner, func() config.Config { return cfg })
+				r.spawn = func(f func()) { f() }
+				testutil.NoError(t, r.Recycle(task.ID, "handoff"))
+				if resident {
+					testutil.Equal(t, runner.rows, uint16(50))
+					testutil.Equal(t, runner.cols, uint16(160))
+				} else {
+					testutil.Equal(t, runner.rows, uint16(30))
+					testutil.Equal(t, runner.cols, uint16(100))
+				}
+			})
+		}
+	}
 }

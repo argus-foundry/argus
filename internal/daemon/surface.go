@@ -210,7 +210,31 @@ const (
 	//     the supervisor's BuildCmd (fix-recycle-session-id). A stale supervisor
 	//     recycles Claude sessions with no --session-id, leaving the task row
 	//     without a resumable ID (ctrl+n re-render refuses).
-	SupervisorSpawnSurface = 39
+	// 40: the resident agent's launch carries its ask/deny tool rules as an
+	//     inline --settings flag and a non-bypass permission mode is forced
+	//     (add-resident-agent D6), and its Argus MCP URL is bound to its own task
+	//     (?caller=). A stale supervisor spawns the resident without them, so outward actions would not prompt.
+	//     The supervisor also rebuilds Task.Kind from the wire (protocol v13);
+	//     without it BuildCmd cannot tell the resident from a plain task. The
+	//     resident spawn also exports ARGUS_RESIDENT=1 (its Stop hook gates the
+	//     resident lookup on it), strips bypass flags with a shell-words parser
+	//     and refuses an unparseable command, and carries the widened default
+	//     ask list. It launches with --setting-sources project and an inline
+	//     --settings carrying its permissions (user deny/ask merged, never user
+	//     allow), defaultMode, disableBypassPermissionsMode and its own Stop
+	//     coord-hook; the user's CLAUDE.md rides the appended system prompt and
+	//     user skills an --add-dir symlink root. It also carries the account's
+	//     sandbox block with its Bash auto-approve escapes forced off,
+	//     reads user files from the account dir (never an inherited
+	//     $CLAUDE_CONFIG_DIR).
+	//     The sandbox carry is an allowlist of restrictive keys (no `enabled`
+	//     under Argus's own sandbox), the backend command must pass a flag
+	//     allowlist (else the resident refuses to start), and its prompt file
+	//     and skills root live in a private 0700 ~/.argus/resident-launch
+	//     (--allowedTools is refused by that allowlist, not stripped). The
+	//     backend command must also be a single line (an unescaped newline
+	//     would split off every appended flag in sh).
+	SupervisorSpawnSurface = 40
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -456,6 +480,9 @@ var SupervisorSpawnPaths = []string{
 	"internal/claudeenv/claudeenv.go",            // parent-session marker denylist + persistence flag BuildCmd applies
 	"internal/agent/codexaccount.go",             // per-task Codex home, env hygiene, sandbox grant
 	"internal/config/accounts.go",                // account → config dir resolution BuildCmd reads
+	"internal/config/resident.go",                // resident allow/ask/deny defaults BuildCmd turns into --settings
+	"internal/db/resident.go",                    // ResidentWorkDir BuildCmd checks for the resident
+	"internal/model/task.go",                     // Task.IsResident, the gate on every resident spawn flag
 	"internal/agent/nonclaude_context.go",        // OpenCode child-only skills config content
 	"internal/agent/omp.go",                      // omp MCP plugin + skills overlay materialization, permission flags
 	"internal/agent/cachedir.go",                 // content-addressed ~/.argus/cache materialization omp launches use
@@ -514,8 +541,8 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "c083211b5e2420ffdfc7dbf812f02c6c2b44f1b16e4c32652e6558f3e063dfde"
-	StreamSurfaceDigest = "3119cb7016724a7989d50ec738bdaa9551ac6f16f8d50a48f04c908b2237405f"
+	SpawnSurfaceDigest  = "0c37f904d211613a919eff481d9718e23cd9efe7b366d160e63193a8619b050d"
+	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

@@ -25,6 +25,7 @@ import (
 // client ships for KickRerender and Recycle.
 type wireRecorder struct {
 	mu      sync.Mutex
+	start   daemon.StartReq
 	kick    daemon.KickReq
 	recycle daemon.RecycleReq
 
@@ -36,7 +37,10 @@ type wireRecorder struct {
 	kickError     string
 }
 
-func (w *wireRecorder) StartSession(_ *daemon.StartReq, resp *daemon.StartResp) error {
+func (w *wireRecorder) StartSession(req *daemon.StartReq, resp *daemon.StartResp) error {
+	w.mu.Lock()
+	w.start = *req
+	w.mu.Unlock()
 	resp.PID = 123
 	return nil
 }
@@ -154,7 +158,7 @@ func newWireRecorderClient(t *testing.T) (*Client, *wireRecorder) {
 // account and sandbox override, which BuildCmd reads on the supervisor side.
 func TestAcctWireKickRecycle(t *testing.T) {
 	c, rec := newWireRecorderClient(t)
-	task := &model.Task{ID: "k", Account: "work", SandboxOverride: "disabled", SessionID: "fresh-sid"}
+	task := &model.Task{ID: "k", Account: "work", SandboxOverride: "disabled", SessionID: "fresh-sid", Kind: model.KindResident}
 
 	t.Run("kick", func(t *testing.T) {
 		testutil.NoError(t, c.KickRerender(task, config.Config{}, 24, 80))
@@ -162,6 +166,7 @@ func TestAcctWireKickRecycle(t *testing.T) {
 		defer rec.mu.Unlock()
 		testutil.Equal(t, rec.kick.Account, "work")
 		testutil.Equal(t, rec.kick.SandboxOverride, "disabled")
+		testutil.Equal(t, rec.kick.Kind, model.KindResident)
 	})
 	t.Run("recycle", func(t *testing.T) {
 		testutil.NoError(t, c.Recycle(task, config.Config{}, 24, 80))
@@ -170,7 +175,19 @@ func TestAcctWireKickRecycle(t *testing.T) {
 		testutil.Equal(t, rec.recycle.Account, "work")
 		testutil.Equal(t, rec.recycle.SandboxOverride, "disabled")
 		testutil.Equal(t, rec.recycle.SessionID, "fresh-sid")
+		testutil.Equal(t, rec.recycle.Kind, model.KindResident)
 	})
+}
+
+// TestResidentWireStart pins that Start ships Task.Kind: the supervisor's
+// BuildCmd gates the resident's permission protections on it.
+func TestResidentWireStart(t *testing.T) {
+	c, rec := newWireRecorderClient(t)
+	_, err := c.Start(&model.Task{ID: "r", Kind: model.KindResident}, config.Config{}, 24, 80, false)
+	testutil.NoError(t, err)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	testutil.Equal(t, rec.start.Kind, model.KindResident)
 }
 
 // TestSupAcctEnv runs a real session through client→RPC→supervisor→BuildCmd

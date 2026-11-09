@@ -22,7 +22,7 @@ var ErrTaskNotFound = errors.New("task not found")
 
 // taskColumns is the canonical column list for task queries. Order MUST
 // match scanTask's Scan call and the INSERT/UPDATE statements below.
-const taskColumns = `id, name, status, project, branch, prompt, backend, model, worktree, agent_pid, session_id, sandboxed, archived, pinned, base_branch, result, archetype, profile, sandbox_override, account, account_routed, created_at, started_at, ended_at, result_at`
+const taskColumns = `id, name, status, project, branch, prompt, backend, model, worktree, agent_pid, session_id, sandboxed, archived, pinned, base_branch, result, archetype, profile, sandbox_override, account, account_routed, created_at, started_at, ended_at, result_at, kind`
 
 // qualifyColumns prefixes each column in a comma-separated column list with
 // "alias." — needed when selecting taskColumns from a query that JOINs tasks
@@ -57,7 +57,7 @@ func scanTaskExtra(row scanner, extra ...any) (*model.Task, error) {
 	t := &model.Task{}
 	var status, createdAt, startedAt, endedAt, resultAt string
 	var sandboxed, archived, pinned, accountRouted int
-	dest := []any{&t.ID, &t.Name, &status, &t.Project, &t.Branch, &t.Prompt, &t.Backend, &t.Model, &t.Worktree, &t.AgentPID, &t.SessionID, &sandboxed, &archived, &pinned, &t.BaseBranch, &t.Result, &t.Archetype, &t.Profile, &t.SandboxOverride, &t.Account, &accountRouted, &createdAt, &startedAt, &endedAt, &resultAt}
+	dest := []any{&t.ID, &t.Name, &status, &t.Project, &t.Branch, &t.Prompt, &t.Backend, &t.Model, &t.Worktree, &t.AgentPID, &t.SessionID, &sandboxed, &archived, &pinned, &t.BaseBranch, &t.Result, &t.Archetype, &t.Profile, &t.SandboxOverride, &t.Account, &accountRouted, &createdAt, &startedAt, &endedAt, &resultAt, &t.Kind}
 	dest = append(dest, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return nil, err
@@ -78,7 +78,7 @@ func (d *DB) Tasks() ([]*model.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	rows, err := d.conn.Query(`SELECT ` + taskColumns + ` FROM tasks ORDER BY created_at ASC`)
+	rows, err := d.conn.Query(`SELECT ` + taskColumns + ` FROM tasks WHERE kind = '' ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query tasks: %w", err)
 	}
@@ -101,7 +101,7 @@ func (d *DB) TasksChecked() ([]*model.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	rows, err := d.conn.Query(`SELECT ` + taskColumns + ` FROM tasks ORDER BY created_at ASC`)
+	rows, err := d.conn.Query(`SELECT ` + taskColumns + ` FROM tasks WHERE kind = '' ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query tasks: %w", err)
 	}
@@ -122,6 +122,11 @@ func (d *DB) TasksChecked() ([]*model.Task, error) {
 }
 
 func (d *DB) Add(t *model.Task) error {
+	// The resident row is created only by EnsureResidentTask; no generic
+	// create path (task_create, REST, TUI, schedules) may mint one.
+	if t.IsResident() {
+		return fmt.Errorf("%w: cannot create a resident row via Add", ErrResidentProtected)
+	}
 	if err := d.addLocked(t); err != nil {
 		return err
 	}
@@ -138,7 +143,11 @@ func (d *DB) Add(t *model.Task) error {
 func (d *DB) addLocked(t *model.Task) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	return d.insertTaskLocked(t)
+}
 
+// insertTaskLocked inserts t; the caller holds d.mu.
+func (d *DB) insertTaskLocked(t *model.Task) error {
 	if t.ID == "" {
 		t.ID = generateID()
 	}
@@ -162,10 +171,10 @@ func (d *DB) addLocked(t *model.Task) error {
 	if t.Result != "" {
 		resultAt = time.Now()
 	}
-	_, err := d.conn.Exec(`INSERT INTO tasks (id, name, status, project, branch, prompt, backend, model, worktree, agent_pid, session_id, sandboxed, archived, pinned, base_branch, result, archetype, profile, sandbox_override, account, account_routed, created_at, started_at, ended_at, result_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := d.conn.Exec(`INSERT INTO tasks (id, name, status, project, branch, prompt, backend, model, worktree, agent_pid, session_id, sandboxed, archived, pinned, base_branch, result, archetype, profile, sandbox_override, account, account_routed, created_at, started_at, ended_at, result_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.Name, t.Status.String(), t.Project, t.Branch, t.Prompt, t.Backend, t.Model, t.Worktree, t.AgentPID, t.SessionID, sandboxedInt, archivedInt, pinnedInt,
 		t.BaseBranch, t.Result, t.Archetype, t.Profile, t.SandboxOverride, t.Account, boolToInt(t.AccountRouted),
-		formatTime(t.CreatedAt), formatTime(t.StartedAt), formatTime(t.EndedAt), formatTime(resultAt))
+		formatTime(t.CreatedAt), formatTime(t.StartedAt), formatTime(t.EndedAt), formatTime(resultAt), t.Kind)
 	if err == nil {
 		t.ResultAt = resultAt
 	}
@@ -225,6 +234,9 @@ func (d *DB) updateLocked(t *model.Task) (*model.Task, error) {
 	// transition. A missing row (old=nil) falls through to ErrTaskNotFound
 	// below and suppresses events.
 	old, _ := scanTask(d.conn.QueryRow(`SELECT `+taskColumns+` FROM tasks WHERE id=?`, t.ID))
+	if err := residentUpdateGuard(old, t); err != nil {
+		return old, err
+	}
 
 	sandboxedInt := 0
 	if t.Sandboxed {
@@ -282,6 +294,9 @@ func (d *DB) renameLocked(id, name string) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if gerr := residentGuard(d.conn, id); gerr != nil {
+		return "", gerr
+	}
 	var oldName string
 	_ = d.conn.QueryRow(`SELECT name FROM tasks WHERE id=?`, id).Scan(&oldName)
 
@@ -323,6 +338,9 @@ func (d *DB) renameIfNameLocked(id, expected, newName string) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if gerr := residentGuard(d.conn, id); gerr != nil {
+		return false, gerr
+	}
 	res, err := d.conn.Exec(`UPDATE tasks SET name=? WHERE id=? AND name=?`, newName, id, expected)
 	if err != nil {
 		return false, err
@@ -436,6 +454,9 @@ func (d *DB) SetArchived(id string, archived bool) error {
 			res sql.Result
 			err error
 		)
+		if gerr := residentGuard(tx, id); gerr != nil {
+			return gerr
+		}
 		if qerr := tx.QueryRow(`SELECT archived, pinned FROM tasks WHERE id=?`, id).Scan(&oldArchived, &oldPinned); qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
 			return qerr
 		}
@@ -512,6 +533,9 @@ func (d *DB) setPinnedLocked(id string, pinned bool) (oldArchived, oldPinned boo
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if gerr := residentGuard(d.conn, id); gerr != nil {
+		return false, false, gerr
+	}
 	var a, p int
 	if qerr := d.conn.QueryRow(`SELECT archived, pinned FROM tasks WHERE id=?`, id).Scan(&a, &p); qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
 		return false, false, qerr
@@ -561,6 +585,9 @@ func (d *DB) setStatusLocked(id string, s model.Status) (model.Status, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if gerr := residentGuard(d.conn, id); gerr != nil {
+		return model.StatusPending, gerr
+	}
 	var oldStatusStr, startedStr, endedStr string
 	if err := d.conn.QueryRow(`SELECT status, started_at, ended_at FROM tasks WHERE id=?`, id).Scan(&oldStatusStr, &startedStr, &endedStr); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -605,7 +632,7 @@ func (d *DB) FindByNameProject(name, project string) (*model.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	row := d.conn.QueryRow(`SELECT `+taskColumns+` FROM tasks WHERE name=? AND project=? AND archived=0 LIMIT 1`, name, project)
+	row := d.conn.QueryRow(`SELECT `+taskColumns+` FROM tasks WHERE kind='' AND name=? AND project=? AND archived=0 LIMIT 1`, name, project)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -622,6 +649,9 @@ func (d *DB) Delete(id string) error {
 	// (such rows could never be acked, and would still count against the
 	// surviving peer's unread cap).
 	return d.WithTx(func(tx *sql.Tx) error {
+		if err := residentGuard(tx, id); err != nil {
+			return err
+		}
 		res, err := tx.Exec(`DELETE FROM tasks WHERE id=?`, id)
 		if err != nil {
 			return err
@@ -751,7 +781,7 @@ func (d *DB) StuckTaskCandidates() ([]*StuckTaskCandidate, error) {
 		 WHERE hb.argus_task_id = t.id
 		 ORDER BY hb.started_at DESC LIMIT 1) AS orchestrator_name
 		FROM tasks t
-		WHERE t.archived=1 AND t.status='in_review'
+		WHERE t.kind='' AND t.archived=1 AND t.status='in_review'
 		AND NOT EXISTS (SELECT 1 FROM hera_bindings hb WHERE hb.argus_task_id=t.id AND hb.ended_at IS NULL)
 		ORDER BY t.created_at ASC`)
 	if err != nil {
@@ -810,7 +840,7 @@ func (d *DB) CoordinatorTaskForOrchestrator(name string) (*model.Task, bool, err
 // convention (e.g. the notLiveHeraBound fragment below).
 func (d *DB) taskIDsWhereLocked(whereSQL string) ([]string, error) {
 	//nolint:gosec // G202: whereSQL is a fixed literal supplied by the caller, never user input.
-	q := `SELECT id FROM tasks WHERE ` + whereSQL
+	q := `SELECT id FROM tasks WHERE kind='' AND (` + whereSQL + `)`
 	rows, err := d.conn.Query(q)
 	if err != nil {
 		return nil, err
@@ -841,7 +871,7 @@ func (d *DB) pruneTasksLocked(ids []string) (pruned []*model.Task, skippedHeraBo
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	inClause := `id IN (` + strings.Join(placeholders, ",") + `)`
+	inClause := `kind='' AND id IN (` + strings.Join(placeholders, ",") + `)`
 	const notLiveHeraBound = `id NOT IN (SELECT argus_task_id FROM hera_bindings WHERE ended_at IS NULL)`
 
 	//nolint:gosec // G202: inClause is a fixed list of `?` literals and notLiveHeraBound is a constant; ids are bound parameters.
@@ -914,6 +944,9 @@ func (d *DB) SetTaskAccount(id, account string, routed bool) error {
 func (d *DB) setTaskAccountLocked(id, account string, routed bool) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if gerr := residentGuard(d.conn, id); gerr != nil {
+		return false, gerr
+	}
 	var oldAccount string
 	var oldRouted int
 	if err := d.conn.QueryRow(`SELECT account, account_routed FROM tasks WHERE id=?`, id).Scan(&oldAccount, &oldRouted); err != nil {
@@ -962,6 +995,9 @@ func (d *DB) SetTaskBackendMove(id string, m TaskBackendMove) (TaskBackendMove, 
 func (d *DB) setTaskBackendMoveLocked(id string, m TaskBackendMove) (TaskBackendMove, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if gerr := residentGuard(d.conn, id); gerr != nil {
+		return TaskBackendMove{}, gerr
+	}
 	var prev TaskBackendMove
 	var routed int
 	err := d.conn.QueryRow(`SELECT backend, model, account, account_routed, session_id, prompt FROM tasks WHERE id=?`, id).
@@ -1002,7 +1038,7 @@ func ReadTaskWorktreesReadOnly(path string) ([]TaskWorktreeRow, error) {
 		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
-	rows, err := conn.Query(`SELECT id, name, status, archived, worktree FROM tasks WHERE worktree != ''`)
+	rows, err := conn.Query(`SELECT id, name, status, archived, worktree FROM tasks WHERE kind = '' AND worktree != ''`)
 	if err != nil {
 		return nil, err
 	}

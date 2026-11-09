@@ -117,3 +117,32 @@ func TestSetSink_ReturnsPrevious(t *testing.T) {
 		_ = got
 	}
 }
+
+func TestEmit_ResidentEventsRewrittenToResidentNamespace(t *testing.T) {
+	sink := &recordingSink{}
+	prev := SetSink(sink)
+	t.Cleanup(func() { SetSink(prev) })
+
+	MarkResident("res-evt-1")
+	Emit(model.EventTypeTaskUpdated, "res-evt-1", nil)
+	Emit(model.EventTypeSessionIdle, "res-evt-1", nil)
+	Emit(model.EventTypeResidentCreated, "res-evt-1", nil) // already namespaced
+	Emit(model.EventTypeTaskUpdated, "ordinary", nil)
+
+	got := sink.events()
+	testutil.Equal(t, len(got), 4)
+	testutil.Equal(t, got[0].Type, "resident.task.updated")
+	testutil.Equal(t, got[1].Type, "resident.session.idle")
+	testutil.Equal(t, got[2].Type, "resident.created")
+	testutil.Equal(t, got[3].Type, model.EventTypeTaskUpdated)
+}
+
+func TestMarkResident_EmptyIDIgnored(t *testing.T) {
+	sink := &recordingSink{}
+	prev := SetSink(sink)
+	t.Cleanup(func() { SetSink(prev) })
+
+	MarkResident("")
+	Emit(model.EventTypeSessionIdle, "", nil)
+	testutil.Equal(t, sink.events()[0].Type, model.EventTypeSessionIdle)
+}

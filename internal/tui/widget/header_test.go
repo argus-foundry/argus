@@ -5,8 +5,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/gdamore/tcell/v2"
 )
+
+func TestHeaderResidentOrderAndVisibility(t *testing.T) {
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	t.Cleanup(sim.Fini)
+	sim.SetSize(120, 1)
+	h := NewHeader()
+	h.SetRect(0, 0, 120, 1)
+	for _, name := range []string{"Solo", "New name", ""} {
+		t.Run(name, func(t *testing.T) {
+			h.SetTabLabel(TabResident, name)
+			h.SetTab(TabResident)
+			h.Draw(sim)
+			sim.Show()
+			line := readAllScreenText(sim, 120, 1)
+			testutil.Equal(t, h.TabLabel(TabResident), name)
+			if name != "" {
+				testutil.Contains(t, line, name)
+				testutil.True(t, strings.Index(line, name) < strings.Index(line, "Tasks"))
+			} else {
+				testutil.False(t, strings.Contains(line, "New name"))
+			}
+			testutil.True(t, strings.Index(line, "Tasks") < strings.Index(line, "Projects"))
+		})
+	}
+}
 
 func TestHeader_SetTab(t *testing.T) {
 	h := NewHeader()
@@ -207,4 +234,34 @@ func readAllScreenText(screen tcell.SimulationScreen, width, height int) string 
 		lines = append(lines, string(runes))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func TestHeader_WideLabelKeepsCentering(t *testing.T) {
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	t.Cleanup(sim.Fini)
+	const width = 80
+	sim.SetSize(width, 1)
+	h := NewHeader()
+	h.SetRect(0, 0, width, 1)
+	h.SetTabLabel(TabResident, "Sol 界")
+	h.SetTab(TabTasks)
+	h.Draw(sim)
+	sim.Show()
+	total := 0
+	for _, tab := range []Tab{TabResident, TabTasks, TabHera, TabSettings} {
+		total += 2 + textCells(" "+h.TabLabel(tab)+" ")
+	}
+	want := (width - total) / 2
+	cell, _, _ := sim.Get(want, 0)
+	testutil.Equal(t, cell, string(powerlineSep))
+	closing := want + 1 + textCells(" "+h.TabLabel(TabResident)+" ")
+	cell, _, _ = sim.Get(closing, 0)
+	testutil.Equal(t, cell, string(powerlineSep))
+	cell, _, _ = sim.Get(closing+1, 0)
+	testutil.Equal(t, cell, string(powerlineSep))
+	cell, _, _ = sim.Get(want-1, 0)
+	testutil.True(t, cell != string(powerlineSep))
+	testutil.Equal(t, textCells("界"), 2)
+	testutil.Equal(t, textCells("a"), 1)
 }

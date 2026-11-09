@@ -76,6 +76,7 @@ func Open(path string) (*DB, error) {
 		_ = conn.Close()
 		return nil, err
 	}
+	d.markExistingResident()
 	return d, nil
 }
 

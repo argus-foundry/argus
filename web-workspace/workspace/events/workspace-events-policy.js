@@ -6,6 +6,7 @@ export function patchEvent(tasks,event){
   'session.runtime_changed':{live:!!p.live,idle:!!p.live&&!!p.idle,needs_input:!!p.needs_input},
   'task.failure_changed':{failure:p.failure ?? null},
  };
+ if(typeof type==='string'&&type.startsWith('resident.'))return {tasks,resnapshot:false};
  if(type==='task.archived')return {tasks:tasks.map(task=>task.id===id?{...task,archive_pending:true}:task),resnapshot:true};
  if(type==='task.deleted')return {tasks:tasks.filter(task=>task.id!==id),resnapshot:false};
  if(type in changes)return {tasks:tasks.map(task=>task.id===id?{...task,...changes[type]}:task),resnapshot:type==='session.runtime_changed'||!tasks.some(task=>task.id===id)};

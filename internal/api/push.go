@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -635,6 +636,9 @@ func (s *Server) idleWatcherTick(state *idleWatcherState) {
 		if err != nil || task == nil {
 			continue
 		}
+		if task.IsResident() {
+			continue // resident replies are not task idle pushes (add-resident-agent)
+		}
 		name := task.Name
 		if name == "" {
 			name = id
@@ -774,7 +778,56 @@ func (s *Server) detectNeedsInputTick(state *idleWatcherState, running, idle []s
 		}
 	}
 	state.needsInputNow = needsSet
-	s.runner.SetNeedsInputIDs(needs)
+	// The resident is excluded from the generic task needs-input set that the
+	// Tasks list and rail read; its own waiting signal is exposed separately.
+	waiting := s.containsResident(needs)
+	if s.residentWaiting.Swap(waiting) != waiting {
+		uxlog.Log("[resident] waiting changed waiting=%t", waiting)
+		// uxlog is a no-op in the daemon; slog reaches daemon.log.
+		slog.Info("[resident] waiting changed", "waiting", waiting)
+	}
+	s.runner.SetNeedsInputIDs(s.withoutResident(needs))
+}
+
+// ResidentWaiting reports whether the resident agent is currently flagged
+// needs-input by the daemon-side detector. The resident is stripped from the
+// generic needs-input set, so its flag is exposed separately (add-resident-agent D7).
+func (s *Server) ResidentWaiting() bool { return s.residentWaiting.Load() }
+
+// containsResident reports whether ids includes the resident task's id.
+func (s *Server) containsResident(ids []string) bool {
+	if s.db == nil || len(ids) == 0 {
+		return false
+	}
+	r, err := s.db.ResidentTask()
+	if err != nil || r == nil {
+		return false
+	}
+	for _, id := range ids {
+		if id == r.ID {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutResident returns ids minus the resident task's id (add-resident-agent).
+// A lookup error or a missing row leaves ids untouched.
+func (s *Server) withoutResident(ids []string) []string {
+	if s.db == nil || len(ids) == 0 {
+		return ids
+	}
+	r, err := s.db.ResidentTask()
+	if err != nil || r == nil {
+		return ids
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != r.ID {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // autoClearBlockedHeraRoles auto-clears a role's self-reported hera_status

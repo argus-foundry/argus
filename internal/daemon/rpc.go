@@ -353,3 +353,32 @@ func (s *RPCService) SetFocused(req *SetFocusedReq, _ *Empty) error {
 	s.daemon.focusTracker.SetFocused(req.TaskID, req.Focused)
 	return nil
 }
+
+// ResidentState returns the resident agent's state (add-resident-agent). It
+// never errors for an absent or disabled resident: it reports Enabled=false.
+func (s *RPCService) ResidentState(_ *Empty, resp *ResidentStateResp) error {
+	*resp = s.daemon.residentMgr().State()
+	return nil
+}
+
+// ResidentMarkViewed stamps last_viewed_at, clearing the resident's unread
+// state. Frontends call it when the resident pane is shown and focused.
+func (s *RPCService) ResidentMarkViewed(_ *Empty, resp *StatusResp) error {
+	if err := s.daemon.residentMgr().MarkViewed(); err != nil {
+		resp.Error = logRPCErr("rpc.ResidentMarkViewed", err)
+		return nil
+	}
+	resp.OK = true
+	return nil
+}
+
+// ResidentSend queues text for the resident over notify.Notifier's reliable,
+// idle-gated delivery. It is the seam the routines phase builds on.
+func (s *RPCService) ResidentSend(req *ResidentSendReq, resp *StatusResp) error {
+	if err := s.daemon.residentMgr().Send(req.Text, req.DeliveryID); err != nil {
+		resp.Error = logRPCErr("rpc.ResidentSend", err)
+		return nil
+	}
+	resp.OK = true
+	return nil
+}

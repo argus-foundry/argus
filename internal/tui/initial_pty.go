@@ -50,7 +50,7 @@ func (p *initialPTYPublisher) queue(layout db.InitialPTYLayout, save func(db.Ini
 			if err := save(current); err != nil {
 				uxlog.Log("[spawn-size] publication failed: %v", err)
 			} else {
-				uxlog.Log("[spawn-size] published active=%dx%d coord=%d worker=%d", current.Active.Cols, current.Active.Rows, current.Coordinator.Cols, current.Worker.Cols)
+				uxlog.Log("[spawn-size] published active=%dx%d coord=%d worker=%d resident=%dx%d", current.Active.Cols, current.Active.Rows, current.Coordinator.Cols, current.Worker.Cols, current.Resident.Cols, current.Resident.Rows)
 			}
 			p.mu.Lock()
 			if p.wanted == current {
@@ -92,6 +92,10 @@ func (a *App) publishInitialPTYLayout(screen tcell.Screen) {
 	r, coord, worker := hera.SplitLaunchPaneSizes(w, h-2)
 	layout.Coordinator = db.PTYSize{Rows: r, Cols: coord}
 	layout.Worker = db.PTYSize{Rows: r, Cols: worker}
+	// The resident tab is one full-width pane under the header and above the
+	// status bar: exactly the zoomed agent-pane overhead.
+	rr, rc := ptySizeFromHostTerm(w, h, nil)
+	layout.Resident = db.PTYSize{Rows: rr, Cols: rc}
 	if onHera {
 		layout.Active = layout.Worker
 	}

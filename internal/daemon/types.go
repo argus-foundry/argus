@@ -143,11 +143,15 @@ type BootInfoResp struct {
 //     pre-v12 supervisor ignores it and the recycled session launches without
 //     --session-id (the old behavior), so the failure mode on a stale
 //     supervisor is exactly the pre-fix one, never worse.
+//   - v13 (add-resident-agent): + Kind on StartReq, KickReq, and RecycleReq.
+//     BuildCmd gates the resident's forced permission mode, --settings rules,
+//     and ?caller= on it; a pre-v13 supervisor drops it and would spawn the
+//     resident unprotected, so the client refuses.
 //
 // StartResp.SessionID is additive and zero-value-safe: newer clients preserve
 // their existing ID when an older server omits it. Supervisor surface v19
 // identifies the launch recovery behavior that makes this field necessary.
-const ProtocolVersion = 12
+const ProtocolVersion = 13
 
 // SupervisorProtocolMatch reports whether a supervisor's handshake version
 // equals the daemon's. A mismatch is NOT fatal and NEVER triggers an auto-
@@ -227,6 +231,7 @@ type StartReq struct {
 	Archetype       string
 	Profile         string
 	Account         string
+	Kind            string
 	SandboxOverride string
 	Worktree        string
 	Branch          string
@@ -326,6 +331,7 @@ type KickReq struct {
 	Archetype       string
 	Profile         string
 	Account         string
+	Kind            string
 	SandboxOverride string
 	Worktree        string
 	Branch          string
@@ -355,6 +361,7 @@ type RecycleReq struct {
 	Archetype       string
 	Profile         string
 	Account         string
+	Kind            string
 	SandboxOverride string
 	Worktree        string
 	Branch          string
@@ -491,4 +498,29 @@ type ClipboardClearReq struct {
 type SetFocusedReq struct {
 	TaskID  string
 	Focused bool
+}
+
+// ResidentStateResp is the resident agent's daemon-held state (add-resident-agent
+// D7). Name is empty and Enabled false when the resident is off. Reason carries
+// the unmet prerequisite (name, KB, vault, backend) when enabled but unable to
+// run, so frontends can show why.
+type ResidentStateResp struct {
+	Enabled     bool
+	Name        string
+	TaskID      string
+	Running     bool
+	Unread      bool
+	Waiting     bool
+	LastReply   string
+	LastReplyAt string // RFC3339Nano UTC, empty when none
+	ViewedAt    string // RFC3339Nano UTC, empty when never viewed
+	Reason      string
+}
+
+// ResidentSendReq is the request to deliver text to the resident through the
+// reliable, idle-gated notify bus. DeliveryID is optional; supplying one makes
+// the send idempotent (exactly-once per ID).
+type ResidentSendReq struct {
+	Text       string
+	DeliveryID string
 }

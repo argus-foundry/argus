@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -211,4 +212,20 @@ func TestHandoffGitStatus(t *testing.T) {
 	}
 	_, ok = handoffGitStatus("")
 	testutil.False(t, ok)
+}
+
+// The resident's permission policy is Claude-only, so a backend move must
+// refuse it before touching the row (add-resident-agent).
+func TestMoveTaskBackend_ResidentRejected(t *testing.T) {
+	f := bmFixture(t)
+	res, _, err := f.d.EnsureResidentTask(t.TempDir())
+	testutil.NoError(t, err)
+	r := &bmRunner{}
+	_, _, err = MoveTaskAccount(f.d, r, AccountMoveInput{TaskID: res.ID, Backend: "codex"})
+	testutil.ErrorIs(t, err, db.ErrResidentProtected)
+	testutil.ErrorIs(t, err, ErrAccount)
+	testutil.Nil(t, r.recycled)
+	after, _ := f.d.Get(res.ID)
+	testutil.Equal(t, after.Backend, res.Backend)
+	testutil.Equal(t, after.Prompt, res.Prompt)
 }
