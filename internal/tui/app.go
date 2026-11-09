@@ -565,6 +565,10 @@ type App struct {
 	owedAnchors        map[string]owedAnchor
 	owedFetching       map[string]bool
 	autoRerenderLogged bool
+	// autoRerenderCheckedAt/Clock cache the setting read (see autoRerenderOn);
+	// the clock is a test seam, nil = time.Now.
+	autoRerenderCheckedAt time.Time
+	autoRerenderClock     func() time.Time
 	// kickDeferSince / kickRetryAfter bound the keep-place deferral per task:
 	// the first deferral at the current width (agent.KickDeferCap) and the
 	// earliest the next full evaluation may run after a draft deferral.
@@ -5813,12 +5817,29 @@ func (a *App) maybeKickRerender(task *model.Task, sess agent.SessionHandle) {
 	a.maybeKickRerenderGated(task, sess, panelCols, nil, func() bool { return a.agentPane.ScrollOffset() > 0 })
 }
 
+// autoRerenderCacheTTL bounds how stale the cached ui.auto_rerender_on_resize
+// reading can be.
+const autoRerenderCacheTTL = time.Second
+
 // autoRerenderOn reports ui.auto_rerender_on_resize, read live. With it off
 // (the default) a width change only resizes the PTY: the automatic size-drift
 // kick is skipped at its entry points and an owed-re-render notice + the
 // agent.rerender hotkey take over. Logs the effective value on first read and
 // on every live change. UI goroutine only (it owns the log-dedup fields).
+//
+// It is consulted from every pane Draw (the owed notice and the Hera kick gate),
+// and db.Config() runs several SQLite queries, so the value is cached for
+// autoRerenderCacheTTL: a live Settings/config.toml flip takes effect within a
+// second, never a restart, without a DB round trip per frame.
 func (a *App) autoRerenderOn() bool {
+	now := time.Now()
+	if a.autoRerenderClock != nil {
+		now = a.autoRerenderClock()
+	}
+	if a.autoRerenderLogged && now.Sub(a.autoRerenderCheckedAt) < autoRerenderCacheTTL {
+		return a.autoRerenderLast
+	}
+	a.autoRerenderCheckedAt = now
 	on := a.db.Config().UI.AutoRerenderOnResize
 	if !a.autoRerenderLogged || a.autoRerenderLast != on {
 		uxlog.Log("[rerender] auto_rerender_on_resize=%t", on)

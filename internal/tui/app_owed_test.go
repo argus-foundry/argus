@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/drn/argus/internal/agent"
+	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/testutil"
+	"github.com/drn/argus/internal/tui/store"
 )
 
 // resize-without-restart: the owed notice is derived from the session's
@@ -57,7 +61,49 @@ func TestPaneRerenderOwed(t *testing.T) {
 
 	// Setting on: the kick handles it, so no notice.
 	testutil.NoError(t, d.SetConfigValue("ui.auto_rerender_on_resize", "true"))
+	app.autoRerenderCheckedAt = time.Time{} // expire the cached reading
 	owed, reason = app.paneRerenderOwed(task.ID, sess, 140)
 	testutil.False(t, owed)
 	testutil.Equal(t, reason, "setting-on")
+}
+
+// countingStore counts Config() calls: autoRerenderOn runs from every pane Draw,
+// and a real Config() is several SQLite queries.
+type countingStore struct {
+	store.Store
+	configCalls atomic.Int64
+}
+
+func (c *countingStore) Config() config.Config {
+	c.configCalls.Add(1)
+	return c.Store.Config()
+}
+
+func TestAutoRerenderOn_CachedNotPerDraw(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := testDB(t)
+	cs := &countingStore{Store: d}
+	app := New(cs, agent.NewRunner(nil), false)
+	now := time.Now()
+	app.autoRerenderClock = func() time.Time { return now }
+	cs.configCalls.Store(0)
+
+	for range 500 { // 500 pane draws within one cache window
+		testutil.False(t, app.autoRerenderOn())
+	}
+	testutil.Equal(t, cs.configCalls.Load(), int64(1))
+
+	// A live flip is picked up once the cache window passes — no restart.
+	testutil.NoError(t, d.SetConfigValue("ui.auto_rerender_on_resize", "true"))
+	testutil.False(t, app.autoRerenderOn()) // still inside the window
+	now = now.Add(autoRerenderCacheTTL + time.Millisecond)
+	testutil.True(t, app.autoRerenderOn())
+	testutil.Equal(t, cs.configCalls.Load(), int64(2))
+
+	// The owed-notice path (called per Draw) shares the cache.
+	cs.configCalls.Store(0)
+	for range 200 {
+		app.paneRerenderOwed("t", nil, 100)
+	}
+	testutil.Equal(t, cs.configCalls.Load(), int64(0))
 }
