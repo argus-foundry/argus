@@ -234,7 +234,9 @@ const (
 	//     (--allowedTools is refused by that allowlist, not stripped). The
 	//     backend command must also be a single line (an unescaped newline
 	//     would split off every appended flag in sh).
-	SupervisorSpawnSurface = 40
+	// v41: resident's launch policy allows standing-team coordination and
+	// spawn/delete, asks for graduation, and denies membership/plan surgery.
+	SupervisorSpawnSurface = 41
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -541,7 +543,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "0c37f904d211613a919eff481d9718e23cd9efe7b366d160e63193a8619b050d"
+	SpawnSurfaceDigest  = "3805c54326443abdf45f819e79c65e17ec35c0c1f552d3ae2eba80b5055b41ab"
 	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 

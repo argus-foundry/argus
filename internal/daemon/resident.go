@@ -224,6 +224,10 @@ func (m *residentManager) tick() {
 		m.reason(fmt.Sprintf("resident row: %v", err))
 		return
 	}
+	if _, err := m.db.EnsureResidentOrchestrator(task.ID); err != nil {
+		m.reason(fmt.Sprintf("resident orchestrator: %v", err))
+		return
+	}
 	// Every early return above sets its own reason; past them, the reason is
 	// the last unresolved start failure (or none). Setting it any earlier would
 	// reset the log-on-change dedup each tick and re-log a persistent

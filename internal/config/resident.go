@@ -14,6 +14,7 @@ const ResidentNameMaxRunes = 12
 // ResidentConfig is the [resident] block (add-resident-agent). The resident has
 // no default name: choosing one is the act of opting in.
 type ResidentConfig struct {
+	MaxWorkers int `toml:"max_workers"`
 	// Enabled defaults to false. It only takes effect with a valid Name and the
 	// KB prerequisite (see Config.ResidentPrereq).
 	Enabled bool `toml:"enabled"`
@@ -42,9 +43,11 @@ type ResidentConfig struct {
 // DefaultResidentConfig returns the shipped [resident] defaults.
 func DefaultResidentConfig(budget int) ResidentConfig {
 	return ResidentConfig{
+		MaxWorkers:    8,
 		ContextBudget: budget,
 		MemoryDir:     "resident",
 		AllowTools: []string{
+			"mcp__argus__hera_send", "mcp__argus__hera_inbox", "mcp__argus__hera_get_messages", "mcp__argus__hera_mark_read", "mcp__argus__hera_status", "mcp__argus__hera_tree_updates", "mcp__argus__hera_accept", "mcp__argus__hera_revive", "mcp__argus__hera_unblock", "mcp__argus__hera_board_list", "mcp__argus__hera_board_post", "mcp__argus__hera_board_update", "mcp__argus__hera_board_resolve", "mcp__argus__hera_spawn_worker", "mcp__argus__hera_delete_worker",
 			"mcp__argus__kb_search", "mcp__argus__kb_read", "mcp__argus__kb_list", "mcp__argus__kb_ingest",
 			// Safe unprompted: the resident's MCP connection is bound to its own task
 			// at spawn and task_recycle then refuses any other target.
@@ -199,6 +202,7 @@ func DefaultResidentConfig(budget int) ResidentConfig {
 			"mcp__claude_ai_Granola__search_transcripts",
 		},
 		AskTools: []string{
+			"mcp__argus__hera_graduate_worker",
 			// An internal side effect, but it types text into another agent's
 			// session, so it needs confirmation.
 			"mcp__argus__task_message_send",
@@ -358,6 +362,7 @@ func DefaultResidentConfig(budget int) ResidentConfig {
 			"mcp__claude_ai_Granola__update_private_notes",
 		},
 		DenyTools: []string{
+			"mcp__argus__hera_new_orchestrator", "mcp__argus__hera_join", "mcp__argus__hera_move", "mcp__argus__hera_rebind", "mcp__argus__hera_plan", "mcp__argus__hera_plan_node", "mcp__argus__hera_plan_node_update", "mcp__argus__hera_plan_node_cancel", "mcp__argus__hera_block",
 			"mcp__claude_ai_Slack__slack_send_message",
 			"mcp__claude_ai_Slack__slack_schedule_message",
 		},

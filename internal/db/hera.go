@@ -288,6 +288,9 @@ type execer interface {
 // row is inserted. baseBranch is the optional explicit base branch a plan-DAG's
 // root nodes stack on (add-hera-plan-base-branch); pass "" when none.
 func (d *DB) CreateHeraOrchestrator(name, baseBranch string) (*HeraOrchestrator, error) {
+	if name == ResidentOrchestratorName {
+		return nil, fmt.Errorf("%w: orchestrator name resident is reserved", ErrResidentProtected)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -334,7 +337,7 @@ func (d *DB) ListHeraOrchestrators(includeArchived bool) ([]*HeraOrchestrator, e
 
 	// Nuked rows (Tier-2 EOL) are invisible to the rail-feeding lists regardless
 	// of includeArchived — they are recoverable only by primary-key id lookup.
-	query := `SELECT id, name, created_at, archived_at, pinned_at, nuked_at, base_branch, kanban_status FROM hera_orchestrators WHERE nuked_at IS NULL`
+	query := `SELECT id, name, created_at, archived_at, pinned_at, nuked_at, base_branch, kanban_status FROM hera_orchestrators WHERE nuked_at IS NULL AND NOT EXISTS (SELECT 1 FROM hera_bindings rb JOIN tasks rt ON rt.id=rb.argus_task_id WHERE rb.orchestrator_id=hera_orchestrators.id AND rb.ended_at IS NULL AND rt.kind='resident')`
 	if !includeArchived {
 		query += ` AND archived_at IS NULL`
 	}
@@ -458,8 +461,14 @@ func (d *DB) SetHeraOrchestratorKanbanStatus(id int64, status HeraKanbanStatus) 
 // active orchestrators; archived rows with the same name do not block. Returns
 // ErrHeraNotFound if no row matches id, or ErrHeraNameConflict on collision.
 func (d *DB) RenameHeraOrchestrator(id int64, newName string) error {
+	if newName == ResidentOrchestratorName {
+		return ErrResidentProtected
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := d.residentHeraGuard("orchestrator", id); err != nil {
+		return err
+	}
 
 	cur, err := d.heraOrchestratorByID(id)
 	if err != nil {
@@ -490,6 +499,9 @@ func (d *DB) RenameHeraOrchestrator(id int64, newName string) error {
 func (d *DB) DeleteHeraOrchestrator(id int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := d.residentHeraGuard("orchestrator", id); err != nil {
+		return err
+	}
 	res, err := d.conn.Exec(`DELETE FROM hera_orchestrators WHERE id=?`, id)
 	if err != nil {
 		return fmt.Errorf("delete hera orchestrator: %w", err)
@@ -657,6 +669,9 @@ func (d *DB) NukeHeraRole(id int64) error {
 func (d *DB) RenameHeraRole(id int64, newName string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := d.residentHeraGuard("role", id); err != nil {
+		return err
+	}
 
 	cur, err := d.heraRoleByID(id)
 	if err != nil {
@@ -687,6 +702,9 @@ func (d *DB) RenameHeraRole(id int64, newName string) error {
 func (d *DB) DeleteHeraRole(id int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := d.residentHeraGuard("role", id); err != nil {
+		return err
+	}
 	res, err := d.conn.Exec(`DELETE FROM hera_roles WHERE id=?`, id)
 	if err != nil {
 		return fmt.Errorf("delete hera role: %w", err)
@@ -846,6 +864,9 @@ type MoveHeraBindingResult struct {
 func (d *DB) MoveHeraBinding(oldBindingID int64, roleIn CreateHeraRoleInput, taskID, worktreePath string) (*MoveHeraBindingResult, error) {
 	var result MoveHeraBindingResult
 	err := d.WithTx(func(tx *sql.Tx) error {
+		if err := residentGuard(tx, taskID); err != nil {
+			return err
+		}
 		now := formatTime(time.Now())
 
 		var oldRoleID int64
@@ -918,6 +939,9 @@ func (d *DB) MoveHeraBinding(oldBindingID int64, roleIn CreateHeraRoleInput, tas
 func (d *DB) EndHeraBinding(bindingID int64, reason string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := d.residentHeraGuard("binding", bindingID); err != nil {
+		return err
+	}
 	res, err := d.conn.Exec(
 		`UPDATE hera_bindings SET ended_at=?, end_reason=? WHERE id=? AND ended_at IS NULL`,
 		formatTime(time.Now()), reason, bindingID)
@@ -1002,6 +1026,9 @@ func (d *DB) ListHeraOrchLinks() ([]HeraOrchLink, error) {
 func (d *DB) EndHeraBindingsForTask(taskID, reason string) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := residentGuard(d.conn, taskID); err != nil {
+		return 0, err
+	}
 	res, err := d.conn.Exec(
 		`UPDATE hera_bindings SET ended_at=?, end_reason=? WHERE argus_task_id=? AND ended_at IS NULL`,
 		formatTime(time.Now()), reason, taskID)
@@ -1022,6 +1049,9 @@ func (d *DB) EndHeraBindingsForTask(taskID, reason string) (int, error) {
 func (d *DB) EndHeraCoordinatorBindingsForTask(taskID, reason string) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := residentGuard(d.conn, taskID); err != nil {
+		return 0, err
+	}
 	res, err := d.conn.Exec(
 		`UPDATE hera_bindings SET ended_at=?, end_reason=?
 		 WHERE argus_task_id=? AND ended_at IS NULL
@@ -1504,6 +1534,9 @@ func (d *DB) UniqueHeraRoleName(orchID int64, base string) (string, error) {
 // create a genuinely NEW top-level orchestrator instead of idempotently
 // re-fetching an existing one with the same name.
 func (d *DB) UniqueHeraOrchestratorName(base string) (string, error) {
+	if base == ResidentOrchestratorName {
+		return "", fmt.Errorf("%w: orchestrator name resident is reserved", ErrResidentProtected)
+	}
 	if base == "" {
 		base = "orchestrator"
 	}
@@ -1851,6 +1884,14 @@ const (
 func (d *DB) heraSetFlag(query, probeQuery string, id int64, args ...any) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	kind := "role"
+	if probeQuery == heraOrchExistsProbe {
+		kind = "orchestrator"
+	}
+	if err := d.residentHeraGuard(kind, id); err != nil {
+		return err
+	}
+
 	// args carry the timestamp(s) that precede id in the statement.
 	full := append(append([]any{}, args...), id)
 	res, err := d.conn.Exec(query, full...)

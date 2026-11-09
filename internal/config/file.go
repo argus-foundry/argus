@@ -57,7 +57,8 @@ type FileLoader struct {
 
 	// accountSources mirrors the most recent Apply call's finding on which
 	// account settings the file defines (see AccountSources).
-	accountSources AccountSources
+	accountSources            AccountSources
+	residentMaxWorkersDefined bool
 }
 
 // NewFileLoader returns a loader for the given path. An empty path makes Apply a
@@ -99,6 +100,7 @@ func (l *FileLoader) Apply(base Config) Config {
 	if !ok {
 		l.backendRoutingTierDefined = false
 		l.accountSources = AccountSources{}
+		l.residentMaxWorkersDefined = false
 		if l.err != nil && prevErr == nil {
 			slog.Warn("argus config: cannot read config.toml, keeping current config", "path", l.path, "err", l.err)
 		}
@@ -123,6 +125,7 @@ func (l *FileLoader) Apply(base Config) Config {
 		l.err = fmt.Errorf("parsing %s: %w", l.path, derr)
 		l.backendRoutingTierDefined = false
 		l.accountSources = AccountSources{}
+		l.residentMaxWorkersDefined = false
 		if prevErr == nil {
 			slog.Warn("argus config: ignoring config.toml (parse error)", "path", l.path, "err", derr)
 		}
@@ -130,6 +133,7 @@ func (l *FileLoader) Apply(base Config) Config {
 	}
 	l.backendRoutingTierDefined = meta.IsDefined("backend_routing", "tier") && len(merged.BackendRouting.Tiers) > 0
 	l.accountSources = accountSourcesFrom(meta)
+	l.residentMaxWorkersDefined = meta.IsDefined("resident", "max_workers")
 	if changed {
 		slog.Info("argus config: applied config.toml overrides", "path", l.path)
 	}
@@ -237,4 +241,14 @@ func cloneProjects(m map[string]Project) map[string]Project {
 	out := make(map[string]Project, len(m))
 	maps.Copy(out, m)
 	return out
+}
+
+// ResidentMaxWorkersDefined reports a config.toml override for Settings.
+func (l *FileLoader) ResidentMaxWorkersDefined() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.residentMaxWorkersDefined
 }

@@ -1,23 +1,23 @@
 ## 1. Standing orchestrator
 
-- [ ] 1.1 Add `EnsureResidentOrchestrator` (orchestrator `resident`, coordinator role `resident`, binding to the resident task, one transaction, idempotent); call it from the resident manager before first launch.
-- [ ] 1.2 Reserve the orchestrator name `resident` in every orchestrator-creation path (TUI form, `hera_new_orchestrator`, REST); surface a collision as the resident state `Reason`.
-- [ ] 1.3 Exclude the orchestrator, role and binding from the Projects tab model, jump switcher, `/api/hera*` roster, cleanup/merge-safety roll-ups and cascade-nuke candidates; reject generic nuke/hide/detach/move on them; extend `TestResidentExcludedEverywhere`.
-- [ ] 1.4 Startup reconciliation, finished-session reaper and orphan sweep treat the resident binding as live (tests).
+- [x] 1.1 Add `EnsureResidentOrchestrator` (orchestrator `resident`, coordinator role `resident`, binding to the resident task, one transaction, idempotent); call it from the resident manager before first launch.
+- [x] 1.2 Reserve the orchestrator name `resident` in every orchestrator-creation path (TUI form, `hera_new_orchestrator`, REST); surface a collision as the resident state `Reason`.
+- [x] 1.3 Exclude the orchestrator, role and binding from the Projects tab model, jump switcher, `/api/hera*` roster, cleanup/merge-safety roll-ups and cascade-nuke candidates; reject generic nuke/hide/detach/move on them; extend `TestResidentExcludedEverywhere`.
+- [x] 1.4 Startup reconciliation, finished-session reaper and orphan sweep treat the resident binding as live (tests).
 
 ## 2. Spawn and delete
 
-- [ ] 2.1 Require and validate `project` for resident-caller `hera_spawn_worker`; stamp `task_meta(hera, resident_worker)` in the spawn `AfterPersist` hook.
-- [ ] 2.2 Extract `mergesafety.ClassifyTask(ctx, task)` from `internal/api/cleanup_candidates.go` so cleanup and delete share candidate construction; add a local "empty work" check (no commits ahead, clean tree, fails closed).
-- [ ] 2.3 Implement `hera_delete_worker(role, force?)` over `hera.NukeSingleRole` with the three-layer guard (connection-bound caller only, own-orchestrator live worker only, never itself); hide it from non-resident tool listing; no REST/TUI entry point; compute the unmerged summary (branch, commits ahead with subjects, dirty count, PR state, `unknown (reason)` fallbacks) before any force nuke and return it in the result.
-- [ ] 2.5 Add `[resident] max_workers` (default 8; below 1 means default) counted over the standing orchestrator's live worker bindings; `hera_spawn_worker` refuses before creating anything with the cap and live count; Settings → Resident row and config.toml with the override marker; tests for at-cap refusal, freed slot (delete and graduation) reopens, configurable value, config.toml marker.
-- [ ] 2.4 Tests: non-resident coordinator/worker refused, self-reported cwd/id ignored, cross-orchestrator refused, self refused, merged/empty deleted, unmerged refused, force deletes, classifier failure refuses, force result carries the unmerged summary (including an `unknown` field case), delete and spawn raise no prompt, delete of a graduated role is rejected with the task untouched.
+- [x] 2.1 Require and validate `project` for resident-caller `hera_spawn_worker`; stamp `task_meta(hera, resident_worker)` in the spawn `AfterPersist` hook.
+- [x] 2.2 Extract `mergesafety.ClassifyTask(ctx, task)` from `internal/api/cleanup_candidates.go` so cleanup and delete share candidate construction; add a local "empty work" check (no commits ahead, clean tree, fails closed).
+- [x] 2.3 Implement `hera_delete_worker(role, force?)` over `hera.NukeSingleRole` with the three-layer guard (connection-bound caller only, own-orchestrator live worker only, never itself); hide it from non-resident tool listing; no REST/TUI entry point; compute the unmerged summary (branch, commits ahead with subjects, dirty count, PR state, `unknown (reason)` fallbacks) before any force nuke and return it in the result.
+- [x] 2.5 Add `[resident] max_workers` (default 8; below 1 means default) counted over the standing orchestrator's live worker bindings; `hera_spawn_worker` refuses before creating anything with the cap and live count; Settings → Resident row and config.toml with the override marker; tests for at-cap refusal, freed slot (delete and graduation) reopens, configurable value, config.toml marker.
+- [x] 2.4 Tests: non-resident coordinator/worker refused, self-reported cwd/id ignored, cross-orchestrator refused, self refused, merged/empty deleted, unmerged refused, force deletes, classifier failure refuses, force result carries the unmerged summary (including an `unknown` field case), delete and spawn raise no prompt, delete of a graduated role is rejected with the task untouched.
 
 ## 3. Hera tool policy and orientation
 
-- [ ] 3.1 Update `[resident]` defaults: allow (including spawn and delete), ask (`hera_graduate_worker` only), deny per design D9; extend `resident_inventory_test.go` to classify every hera tool.
-- [ ] 3.2 Add the resident-caller fail-closed check at the top of `hera_new_orchestrator` and the reserved-name check for other callers; tests for resident, reserved name and unchanged regular behavior.
-- [ ] 3.3 Update the resident orientation (team, spawn with explicit project, which inbox to read, how to answer or relay worker questions, when to delete and when to force, REPORT every force delete with the worker name and unmerged content in its own conversation, the human-action notices, how to run a graduation: ask Aaron first, then call the tool) and the resident-worker orientation (ask via `hera_send(status=blocked)`, when to ask for graduation, ask rather than self-promote).
+- [x] 3.1 Update `[resident]` defaults: allow (including spawn and delete), ask (`hera_graduate_worker` only), deny per design D9; extend `resident_inventory_test.go` to classify every hera tool.
+- [x] 3.2 Add the resident-caller fail-closed check at the top of `hera_new_orchestrator` and the reserved-name check for other callers; tests for resident, reserved name and unchanged regular behavior.
+- [x] 3.3 Update the resident orientation (team, spawn with explicit project, which inbox to read, how to answer or relay worker questions, when to delete and when to force, REPORT every force delete with the worker name and unmerged content in its own conversation, the human-action notices, how to run a graduation: ask Aaron first, then call the tool) and the resident-worker orientation (ask via `hera_send(status=blocked)`, when to ask for graduation, ask rather than self-promote).
 
 ## 4. Unattended workers
 
@@ -41,7 +41,7 @@
 - [ ] 5b.1 Add `db.GraduateHeraWorker` (one transaction: end worker binding with new end reason `graduated`, create top-level orchestrator named from the role and de-collided, create coordinator role with the worker's project and prompt, bind to the same task and worktree, clear dead-role mail; no orchestrator link); atomicity test with an injected failure at each step.
 - [ ] 5b.2 Implement `hera_graduate_worker(role)` with the `hera_delete_worker` guard shape, fail-closed preflights (coordinator-capable backend with a Codex refusal that the resident orientation turns into an offer to spawn a Claude replacement from a handoff, resumable session id, idle session) and hidden listing; tests for non-resident, self-reported identity, cross-orchestrator, self, non-Claude, busy, no session id.
 - [ ] 5b.3 Post-commit restart in place: clear the resident-worker marker, write `graduated_from`, stop stray jobs, retry until idle with NO deadline and never force (persisted `graduation_pending_restart` marker, resumed on daemon startup), kill-and-resume via the existing primitive (not recycle), clear the marker, then send the coordinator orientation message; tests for normal flags after relaunch, same session id/worktree/branch, no seed prompt, long-busy session not restarted and no job killed, retry resumes after a daemon bounce, crash between steps.
-- [ ] 5b.4 Reject `hera_new_orchestrator` for resident workers (fail-closed, before the scan) with the graduation hint; test ordinary workers unchanged.
+- [x] 5b.4 Reject `hera_new_orchestrator` for resident workers (fail-closed, before the scan) with the graduation hint; test ordinary workers unchanged.
 - [ ] 5b.5 Test that `hera_delete_worker` rejects a graduated role and the resident rail drops it; test the graduate appears in the normal rail and `/api/hera`, uses ordinary coordinator recycle, and is not hidden by the resident filters.
 
 ## 6. Resident view

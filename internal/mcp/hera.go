@@ -613,6 +613,13 @@ func (s *Server) toolHeraNewOrchestrator(id interface{}, args json.RawMessage) *
 		return toolError(id, err.Error())
 	}
 
+	if err := s.residentPromotionGuard(task); err != nil {
+		return residentToolError(id, err.Error())
+	}
+	if p.Name == db.ResidentOrchestratorName {
+		return residentToolError(id, "orchestrator name resident is reserved")
+	}
+
 	// Guard the self-promotion footgun: a task that already holds a live
 	// coordinator binding under a DIFFERENT orchestrator must not bind its own
 	// session as a SECOND coordinator of a new one. Following such a call, the
@@ -1838,6 +1845,34 @@ func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Resp
 			caller.role.Name, caller.role.Kind))
 	}
 
+	if caller.task.IsResident() {
+		src, ok := s.taskDB.(accountConfigSource)
+		if !ok {
+			return residentToolError(id, "cannot verify resident project")
+		}
+		cfg := src.Config()
+		project := strings.TrimSpace(p.Project)
+		if entry, ok := cfg.Projects[project]; project == "" || !ok || entry.Path == "" {
+			return residentToolError(id, "resident spawn requires an explicit registered project")
+		}
+		d, ok := s.taskDB.(interface{ ResidentWorkerCount() (int, error) })
+		if !ok {
+			return residentToolError(id, "cannot verify resident worker cap")
+		}
+		count, err := d.ResidentWorkerCount()
+		if err != nil {
+			return residentToolError(id, err.Error())
+		}
+		cap := cfg.Resident.MaxWorkers
+		if cap < 1 {
+			cap = 8
+			slog.Warn("[resident] invalid max_workers; using default")
+		}
+		if count >= cap {
+			return residentToolError(id, fmt.Sprintf("resident max_workers cap %d reached (live workers: %d)", cap, count))
+		}
+	}
+
 	// Project: explicit override first, then the COORDINATOR'S OWN TASK project
 	// (caller.task.Project — authoritative). We deliberately do NOT trust
 	// role.ArgusProject here: historical roles created before the M4 fix have an
@@ -1860,7 +1895,7 @@ func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Resp
 	// Prepend the orientation prefix so the worker knows it is born-bound and
 	// who its coordinator + orchestrator are. The verbatim user prompt follows
 	// the separator and is also stored on the role row.
-	taskPrompt := agent.HeraWorkerOrientation(caller.orch.Name, caller.role.Name) + "\n\n---\n\n" + prompt
+	taskPrompt := agent.HeraWorkerOrientation(caller.orch.Name, caller.role.Name, caller.task.IsResident()) + "\n\n---\n\n" + prompt
 
 	res, err := s.heraSpawn(HeraSpawnInput{
 		Project:        project,
@@ -1877,6 +1912,10 @@ func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Resp
 		return toolError(id, fmt.Sprintf("spawn worker: %v", err))
 	}
 
+	if caller.task.IsResident() {
+		uxlog.Log("[resident] spawned worker=%s task=%s project=%s", res.Role.Name, res.Task.ID, project)
+		slog.Info("[resident] spawned worker", "worker", res.Role.Name, "task", res.Task.ID, "project", project)
+	}
 	// Report which backend the worker got and who chose it, so a coordinator
 	// forcing a backend by habit (bypassing [backend_routing]) is visible.
 	backendSource := "routed"

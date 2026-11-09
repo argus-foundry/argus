@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/events"
 	"github.com/argus-foundry/argus/internal/model"
@@ -273,7 +274,10 @@ func TestResident_SweepFiltersExcludeResidentRow(t *testing.T) {
 		for _, id := range []string{r.ID, ctl.ID} {
 			role := mkRole(t, d, orch.ID, "w-"+id, HeraKindWorker)
 			b := bind(t, d, role.ID, id)
-			testutil.NoError(t, d.EndHeraBinding(b.ID, HeraEndReasonUserDeleted))
+			// Seed a historical ended row directly: new lifecycle guards forbid
+			// ending a resident binding through the public API.
+			_, err := d.conn.Exec(`UPDATE hera_bindings SET ended_at=?, end_reason=? WHERE id=?`, formatTime(time.Now()), HeraEndReasonUserDeleted, b.ID)
+			testutil.NoError(t, err)
 		}
 		got, err := d.HeraNukeReclaimCandidates()
 		testutil.NoError(t, err)

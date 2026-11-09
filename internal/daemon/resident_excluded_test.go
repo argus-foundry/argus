@@ -10,6 +10,8 @@ import (
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/db"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/heraadopt"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -33,6 +35,8 @@ func newResidentEnv(t *testing.T) *residentEnv {
 	plain := &model.Task{ID: "plain", Name: "plain", Status: model.StatusInProgress, Branch: "argus/plain"}
 	testutil.NoError(t, d.Add(plain))
 	res, _, err := d.EnsureResidentTask(db.ResidentWorkDir())
+	testutil.NoError(t, err)
+	_, err = d.EnsureResidentOrchestrator(res.ID)
 	testutil.NoError(t, err)
 	return &residentEnv{db: d, resident: res, plain: plain, home: home}
 }
@@ -74,6 +78,26 @@ func TestResidentExcludedEverywhere(t *testing.T) {
 		// description of the leak.
 		check func(t *testing.T, e *residentEnv) string
 	}{
+		{"Hera model and jump roster", func(t *testing.T, e *residentEnv) string {
+			m, err := heramodel.BuildModel(e.db, nil, nil, nil, nil)
+			testutil.NoError(t, err)
+			if len(m.Active)+len(m.Pinned)+len(m.Archived)+len(m.Freelance) > 0 {
+				return "standing orchestrator listed"
+			}
+			return ""
+		}},
+		{"startup binding reconciliation", func(t *testing.T, e *residentEnv) string {
+			before, err := e.db.HeraLiveBindingByTask(e.resident.ID)
+			testutil.NoError(t, err)
+			n, err := heraadopt.ReconcileBindings(e.db)
+			testutil.NoError(t, err)
+			after, err := e.db.HeraLiveBindingByTask(e.resident.ID)
+			testutil.NoError(t, err)
+			if n != 0 || after.ID != before.ID {
+				return "resident binding ended"
+			}
+			return ""
+		}},
 		{"db.Tasks", func(t *testing.T, e *residentEnv) string {
 			ts, err := e.db.Tasks()
 			testutil.NoError(t, err)
@@ -264,6 +288,8 @@ func TestResidentExcludedEverywhere(t *testing.T) {
 				t.Fatalf("resident leaked through %s: %s", tc.name, leak)
 			}
 			after, err := e.db.ResidentTask()
+			testutil.NoError(t, err)
+			_, err = e.db.HeraLiveBindingByTask(e.resident.ID)
 			testutil.NoError(t, err)
 			if after == nil || after.Status != model.StatusInProgress || after.Archived || after.Name != model.ResidentTaskName {
 				t.Fatalf("resident row changed: %+v", after)

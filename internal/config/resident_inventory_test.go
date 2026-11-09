@@ -1,12 +1,56 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/testutil"
 )
+
+// Read the actual schemas: a newly registered Hera tool must be assigned a
+// reviewed tier explicitly, rather than silently gaining resident authority.
+func TestResidentHeraInventory(t *testing.T) {
+	r := DefaultResidentConfig(100)
+	tiers := map[string]string{}
+	for _, group := range []struct {
+		tier  string
+		names []string
+	}{{"allow", r.AllowTools}, {"ask", r.AskTools}, {"deny", r.DenyTools}} {
+		for _, name := range group.names {
+			if strings.HasPrefix(name, "mcp__argus__hera_") {
+				testutil.Equal(t, tiers[name], "")
+				tiers[name] = group.tier
+			}
+		}
+	}
+	want := map[string]string{}
+	for _, name := range []string{"send", "inbox", "get_messages", "mark_read", "status", "tree_updates", "accept", "revive", "unblock", "board_list", "board_post", "board_update", "board_resolve", "spawn_worker", "delete_worker"} {
+		want["mcp__argus__hera_"+name] = "allow"
+	}
+	for _, name := range []string{"new_orchestrator", "join", "move", "rebind", "plan", "plan_node", "plan_node_update", "plan_node_cancel", "block"} {
+		want["mcp__argus__hera_"+name] = "deny"
+	}
+	want["mcp__argus__hera_graduate_worker"] = "ask"
+	testutil.DeepEqual(t, tiers, want)
+	files, err := filepath.Glob("../mcp/*.go")
+	testutil.NoError(t, err)
+	re := regexp.MustCompile(`Name:\s*"(hera_[a-z_]*[a-z])"`)
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(file)
+		testutil.NoError(t, err)
+		for _, m := range re.FindAllStringSubmatch(string(data), -1) {
+			name := "mcp__argus__" + m[1]
+			t.Run(m[1], func(t *testing.T) { testutil.True(t, want[name] != "") })
+		}
+	}
+}
 
 // connectorTools classifies one connector's tools (short names, without the
 // mcp__claude_ai_<Connector>__ prefix).

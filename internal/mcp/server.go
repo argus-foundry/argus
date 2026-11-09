@@ -18,6 +18,7 @@ import (
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/hera"
 	"github.com/argus-foundry/argus/internal/kb"
+	"github.com/argus-foundry/argus/internal/mergesafety"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/sandboxprop"
 	"github.com/argus-foundry/argus/internal/todo"
@@ -212,28 +213,29 @@ const maxTaskNameRunes = 200
 
 // Server is the MCP HTTP server.
 type Server struct {
-	db          KBQuerier
-	port        int
-	vaultPath   string // Metis vault path for write-back to Obsidian
-	httpSrv     *http.Server
-	createTask  TaskCreator
-	taskDB      TaskStore
-	taskStopper TaskStopper
-	taskRecycle TaskRecycler    // optional; set via SetTaskRecycler
-	clipboard   ClipboardSetter // optional; set via SetClipboard
-	sandboxProp SandboxProposer // optional; set via SetSandboxProposer
-	schedDB     ScheduleStore   // optional; set via SetScheduleManager
-	schedRunner ScheduleRunner  // optional; set via SetScheduleManager
-	messages    MessageStore    // optional; set via SetMessageManager
-	nudger      MessageNudger   // optional; set via SetMessageManager (best-effort)
-	artifacts   ArtifactStore   // optional; set via SetArtifactManager
-	heraSvc     *hera.Service   // optional; set via SetHeraService
-	heraStore   HeraStore       // optional; set via SetHeraService
-	heraSpawn   HeraSpawner     // optional; set via SetHeraService (born-bound spawn)
-	heraRevive  HeraReviver     // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
-	profileCfg  ConfigStore     // optional; set via SetProfileResolver
-	apiGetMu    sync.RWMutex    // guards apiGet (set after the listener is serving)
-	apiGet      APIGetter       // optional; set via SetAPIGetter (argus_api_get)
+	db               KBQuerier
+	port             int
+	vaultPath        string // Metis vault path for write-back to Obsidian
+	httpSrv          *http.Server
+	createTask       TaskCreator
+	taskDB           TaskStore
+	taskStopper      TaskStopper
+	taskRecycle      TaskRecycler    // optional; set via SetTaskRecycler
+	clipboard        ClipboardSetter // optional; set via SetClipboard
+	sandboxProp      SandboxProposer // optional; set via SetSandboxProposer
+	schedDB          ScheduleStore   // optional; set via SetScheduleManager
+	schedRunner      ScheduleRunner  // optional; set via SetScheduleManager
+	messages         MessageStore    // optional; set via SetMessageManager
+	nudger           MessageNudger   // optional; set via SetMessageManager (best-effort)
+	artifacts        ArtifactStore   // optional; set via SetArtifactManager
+	heraSvc          *hera.Service   // optional; set via SetHeraService
+	heraStore        HeraStore       // optional; set via SetHeraService
+	residentClassify func(context.Context, *model.Task) (mergesafety.Verdict, error)
+	heraSpawn        HeraSpawner  // optional; set via SetHeraService (born-bound spawn)
+	heraRevive       HeraReviver  // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
+	profileCfg       ConfigStore  // optional; set via SetProfileResolver
+	apiGetMu         sync.RWMutex // guards apiGet (set after the listener is serving)
+	apiGet           APIGetter    // optional; set via SetAPIGetter (argus_api_get)
 	// accountMover backs task_move_account; set via SetAccountMover.
 	accountMover accountMoverSlot
 	createMu     sync.Mutex
@@ -1129,6 +1131,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 	if s.heraEnabled() {
 		tools = append(tools, heraToolDefs...)
+		if s.boundResident(req.caller) {
+			tools = append(tools, residentDeleteTool)
+		}
 	}
 	if s.profileResolveEnabled() {
 		tools = append(tools, profileToolDefs...)
@@ -1176,6 +1181,22 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	var params ToolCallParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errorResp(req.ID, -32602, "invalid params")
+	}
+	// A bound resident cannot impersonate another team's coordinator by
+	// supplying a different cwd/orchestrator to an otherwise allowed tool.
+	if strings.HasPrefix(params.Name, "hera_") && s.boundResident(req.caller) {
+		task, err := s.taskDB.Get(req.caller)
+		if err != nil {
+			return residentToolError(req.ID, "cannot verify resident caller")
+		}
+		var args map[string]interface{}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil || args == nil {
+			return residentToolError(req.ID, "invalid Hera arguments")
+		}
+		args["cwd"] = task.Worktree
+		args["orchestrator"] = db.ResidentOrchestratorName
+		args["from_orchestrator"] = db.ResidentOrchestratorName
+		params.Arguments, _ = json.Marshal(args)
 	}
 
 	switch params.Name {
@@ -1234,7 +1255,9 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	case "artifact_register":
 		return s.toolArtifactRegister(req.ID, params.Arguments)
 	case "hera_new_orchestrator":
-		return s.toolHeraNewOrchestrator(req.ID, params.Arguments)
+		return s.toolHeraNewOrchestratorAs(req.ID, params.Arguments, req.caller)
+	case "hera_delete_worker":
+		return s.toolHeraDeleteWorker(req.ID, params.Arguments, req.caller)
 	case "hera_join":
 		return s.toolHeraJoin(req.ID, params.Arguments)
 	case "hera_board_post", "hera_board_update", "hera_board_resolve", "hera_board_list":

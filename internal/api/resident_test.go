@@ -11,9 +11,28 @@ import (
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
+
+func TestResident_RESTHeraExcludesStandingTeam(t *testing.T) {
+	srv, d := testServer(t)
+	res, _, err := d.EnsureResidentTask(filepath.Join(t.TempDir(), "resident"))
+	testutil.NoError(t, err)
+	o, err := d.EnsureResidentOrchestrator(res.ID)
+	testutil.NoError(t, err)
+	task := &model.Task{ID: "errand", Name: "errand", Status: model.StatusInProgress, Project: "p"}
+	testutil.NoError(t, d.Add(task))
+	_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "errand", Kind: db.HeraKindWorker}, task.ID, "/wt/errand")
+	testutil.NoError(t, err)
+	w := serve(srv.routes(), "GET", "/api/hera", "")
+	testutil.Equal(t, w.Code, http.StatusOK)
+	testutil.False(t, strings.Contains(w.Body.String(), `"name":"resident"`))
+	testutil.False(t, strings.Contains(w.Body.String(), `"name":"errand"`))
+	w = serve(srv.routes(), "GET", "/api/tasks", "")
+	testutil.Contains(t, w.Body.String(), "errand")
+}
 
 func TestResidentWaitingUsesStickyDetector(t *testing.T) {
 	srv, d := testServer(t)

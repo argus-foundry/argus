@@ -37,9 +37,12 @@ func TaskBoundOutside(d *db.DB, taskID string, subtreeIDs map[int64]bool) bool {
 	return false
 }
 
-func subtreeIDSet(subtree []*heramodel.OrchView) map[int64]bool {
+func subtreeIDSet(d *db.DB, subtree []*heramodel.OrchView) map[int64]bool {
 	ids := make(map[int64]bool, len(subtree))
 	for _, o := range subtree {
+		if residentOrchestrator(d, o.ID) {
+			continue
+		}
 		ids[o.ID] = true
 	}
 	return ids
@@ -47,10 +50,14 @@ func subtreeIDSet(subtree []*heramodel.OrchView) map[int64]bool {
 
 // PreviewNukeSubtree counts what NukeSubtree would do without mutating anything.
 func PreviewNukeSubtree(d *db.DB, subtree []*heramodel.OrchView) NukePreview {
-	p := NukePreview{Orchestrators: len(subtree)}
-	ids := subtreeIDSet(subtree)
+	p := NukePreview{}
+	ids := subtreeIDSet(d, subtree)
 	seen := make(map[string]bool)
 	for _, o := range subtree {
+		if residentOrchestrator(d, o.ID) {
+			continue
+		}
+		p.Orchestrators++
 		for i := range o.Roles {
 			r := &o.Roles[i]
 			if !r.Live || r.TaskID == "" {
@@ -104,9 +111,12 @@ func archiveNukedTask(d *db.DB, taskID string) {
 // NukeSubtree nukes every orchestrator in subtree, archiving tasks bound only inside it and preserving the rest.
 // Roles are nuked before their task is archived so the reclaim prune sees no live binding.
 func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (reclaimed []string, background func()) {
-	ids := subtreeIDSet(subtree)
+	ids := subtreeIDSet(d, subtree)
 	seen := make(map[string]bool)
 	for _, o := range subtree {
+		if residentOrchestrator(d, o.ID) {
+			continue
+		}
 		for i := range o.Roles {
 			r := &o.Roles[i]
 			reclaim := ""
@@ -134,10 +144,14 @@ func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (re
 // NukeSingleRole nukes one role. Its task is reclaimed only when it is solely
 // bound to this role; a multi-bound task is preserved untouched.
 func NukeSingleRole(d *db.DB, runner NukeRunner, r *heramodel.RoleView) (background func()) {
+	if t, err := d.Get(r.TaskID); err == nil && t.IsResident() {
+		return func() {}
+	}
+
 	var reclaimed []string
 	if r.Live && r.TaskID != "" {
 		live, err := d.ListHeraLiveBindingsByTask(r.TaskID)
-		if err == nil && len(live) == 1 {
+		if err == nil && len(live) == 1 && live[0].RoleID == r.RoleID {
 			reclaimed = []string{r.TaskID}
 		}
 	}
@@ -166,4 +180,10 @@ func reclaimBackground(d *db.DB, runner NukeRunner, taskIDs []string) func() {
 			uxlog.Log("[hera] nuke: reclaim sweep failed: %v", err)
 		}
 	}
+}
+
+func residentOrchestrator(d *db.DB, id int64) bool {
+	resident, err := d.IsResidentOrchestrator(id)
+	// An unreadable orchestrator must never be treated as safe to destroy.
+	return err != nil || resident
 }

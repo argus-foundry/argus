@@ -12,7 +12,6 @@ import (
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/events"
-	"github.com/argus-foundry/argus/internal/gitutil"
 	"github.com/argus-foundry/argus/internal/mergesafety"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/uxlog"
@@ -242,7 +241,7 @@ func (s *Server) runCoordinatorInferencePass(ctx context.Context, tasks []*db.St
 // runCoordinatorInferencePass's doc comment).
 func (s *Server) classifyCoordinatorTask(ctx context.Context, t *model.Task) (mergesafety.Verdict, error) {
 	cfg := s.db.Config()
-	return mergesafety.Classify(ctx, candidateToParams(cleanupCandidateFor(ctx, cfg, t)))
+	return mergesafety.ClassifyTask(ctx, cfg, t)
 }
 
 // candidateToParams adapts a mergesafety.Candidate (the batch-shaped request)
@@ -266,24 +265,7 @@ func candidateToParams(c mergesafety.Candidate) mergesafety.Params {
 // RepoDir/RepoSlug — deliberately NOT special-cased here; ClassifyBatch's own
 // fail-closed "no repo resolvable for a merged-PR lookup" handling covers it.
 func cleanupCandidateFor(ctx context.Context, cfg config.Config, t *model.Task) mergesafety.Candidate {
-	cand := mergesafety.Candidate{
-		ID:            t.ID,
-		Branch:        t.Branch,
-		TaskCreatedAt: t.CreatedAt,
-	}
-	proj := cfg.Projects[t.Project]
-	if proj.Path == "" {
-		return cand
-	}
-	cand.RepoDir = proj.Path
-	if slug, ok := gitutil.ResolveDefaultRepo(ctx, proj.Path); ok {
-		cand.RepoSlug = slug
-	}
-	if short, ref, err := gitutil.ResolveDefaultBranch(proj.Path, proj.Branch); err == nil {
-		cand.DefaultShort = short
-		cand.DefaultRef = ref
-	}
-	return cand
+	return mergesafety.CandidateForTask(ctx, cfg, t)
 }
 
 func verdictIsSafe(m map[string]string) bool {

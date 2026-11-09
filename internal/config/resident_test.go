@@ -205,6 +205,9 @@ func TestDefaultResidentConfig_OutwardActionsNeverAllowed(t *testing.T) {
 		}
 	}
 	for _, tool := range r.AllowTools {
+		if strings.HasPrefix(tool, "mcp__argus__hera_") {
+			continue
+		} // exhaustively reviewed by TestResidentHeraInventory
 		if !strings.HasPrefix(tool, "mcp__") || strings.Contains(tool, "*") {
 			t.Errorf("allow tier entry %q must be a concrete mcp__ tool", tool)
 			continue
