@@ -455,6 +455,12 @@ type UIConfig struct {
 	// the Claude composer draft across a kick. false restores the pre-feature
 	// kick timing exactly. Read live.
 	RerenderKeepPlace bool `toml:"rerender_keep_place"`
+	// AutoRerenderOnResize (default false) restores the automatic size-drift
+	// kick (kill+resume at the new width) on a pane width change. With it off
+	// a width change only resizes the PTY (SIGWINCH) and the pane shows an
+	// owed-re-render notice; the re-render hotkey runs the kick on demand
+	// (resize-without-restart). Governs the TUI only. Read live.
+	AutoRerenderOnResize bool `toml:"auto_rerender_on_resize"`
 	// CrossTabArrows lets modified (Cmd) Left/Right traverse the whole TUI as one
 	// chain: Tasks ⇄ Hera rail ⇄ coord pane ⇄ agent pane ⇄ Settings left ⇄
 	// Settings right. Defaults off; opt in from Settings → Appearance.

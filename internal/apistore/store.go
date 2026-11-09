@@ -469,6 +469,9 @@ func (s *Store) SetConfigValue(key, value string) error {
 	case "ui.rerender_keep_place":
 		b := value == "true"
 		upd.UI = &apiclient.UIUpdate{RerenderKeepPlace: &b}
+	case "ui.auto_rerender_on_resize":
+		b := value == "true"
+		upd.UI = &apiclient.UIUpdate{AutoRerenderOnResize: &b}
 	case "sandbox.enabled":
 		b := value == "true"
 		upd.Sandbox = &apiclient.SandboxUpdate{Enabled: &b}
@@ -510,6 +513,7 @@ func (s *Store) SetConfigValue(key, value string) error {
 	if err == nil && upd.UI != nil {
 		s.configMu.Lock()
 		s.cachedConfig.UI.RerenderKeepPlace = response.UI.RerenderKeepPlace
+		s.cachedConfig.UI.AutoRerenderOnResize = response.UI.AutoRerenderOnResize
 		s.configMu.Unlock()
 	}
 	return err
