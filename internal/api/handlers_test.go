@@ -32,6 +32,7 @@ import (
 
 func testServer(t *testing.T) (*Server, *db.DB) {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	d, err := db.OpenInMemory()
 	if err != nil {
 		t.Fatal(err)

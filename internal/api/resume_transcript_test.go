@@ -91,9 +91,8 @@ func TestSwitchDoesNotUseWidthRepair(t *testing.T) {
 }
 
 func TestResizeMissingTranscriptRetries(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
 	srv, d := testServer(t)
+	home := os.Getenv("HOME")
 	r := &transcriptKickRunner{Runner: agent.NewRunner(nil)}
 	srv.runner = r
 	task := &model.Task{Name: "quiet", Backend: "claude", Worktree: t.TempDir(), SessionID: "11111111-1111-7111-9111-111111111111"}
@@ -114,9 +113,8 @@ func TestResizeMissingTranscriptRetries(t *testing.T) {
 }
 
 func TestExactTranscriptProbe(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
 	srv, d := testServer(t)
+	home := os.Getenv("HOME")
 	physical, err := filepath.EvalSymlinks(t.TempDir())
 	testutil.NoError(t, err)
 	link := filepath.Join(t.TempDir(), "link")

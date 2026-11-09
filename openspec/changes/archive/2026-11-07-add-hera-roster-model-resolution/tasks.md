@@ -1,0 +1,5 @@
+- [x] Extract tiering resolver; TUI delegates
+- [x] Add `agent.ResolveModelDetailed`
+- [x] Add `archetype` / `model_resolution` to heraRoleJSON
+- [x] Tests: resolver precedence, memoization, HTTP shape
+- [x] Docs: README reference, gotchas

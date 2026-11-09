@@ -416,6 +416,38 @@ Derived from: `internal/api/hera.go` (`heraOrchJSON`, `heraRoleJSON`, `handleHer
 - **WHEN** a role's bound task is flagged by the daemon's idle-detection system as needing input
 - **THEN** that role's `needs_input` field is `true`, and `false` otherwise
 
+### Requirement: Hera roster resolved model choices
+
+Every role in `GET /api/hera` SHALL carry `archetype` and `model_resolution` with `requested_model`, `effective_model` (null when the CLI picks its own default or resolution is unavailable, never a fabricated ID), `effort`, `source` (`task_override`, `profile`, `backend_default`, `cli_default`, `unavailable`), `basis` (`current_config` for a bound role, `planned_intent` for an unbound one), `profile`, and `warning` (null or a safe message). Resolution SHALL use `agent.ResolveModel` precedence through the shared `internal/hera/tiering` package, SHALL NOT expose filesystem paths or credentials, and SHALL NOT claim a current-config result is an observed running model.
+
+#### Scenario: Requested and effective differ
+- **WHEN** a bound task has an invalid `model` override and a valid profile
+- **THEN** `requested_model` is the override, `effective_model` is the profile's model, and `source` is `profile`
+
+#### Scenario: Unbound planned role
+- **WHEN** a role has no binding
+- **THEN** `basis` is `planned_intent`
+
+#### Scenario: Missing profile
+- **WHEN** an explicitly bound profile is missing or invalid
+- **THEN** `warning` is `profile "<name>" missing or invalid` and the roster still returns 200
+
+### Requirement: Hera roster context measurements
+
+Every role in `GET /api/hera` SHALL carry `context`, null when the bound task has no valid `context_size` observation. Otherwise it SHALL carry `tokens`, `denominator_tokens`, `denominator_kind` (`worker_window` for worker/freelance, `coordinator_recycle_budget` for coordinators), `percent` clamped to 0-100, and `observed_at`. `observed_at` SHALL stay null unless the producer supplies a verified timestamp. A malformed observation SHALL yield `context: null` for that role only. All measurements SHALL arrive in the single roster response, with no per-role transcript reads.
+
+#### Scenario: Worker versus coordinator denominator
+- **WHEN** a worker and a coordinator each report 120000 tokens
+- **THEN** the worker's percent uses `worker_context_window` and the coordinator's uses `coordinator_context_budget`
+
+#### Scenario: Unavailable is not zero
+- **WHEN** a role has no, or unparseable, `context_size`
+- **THEN** `context` is null
+
+#### Scenario: Missing budget
+- **WHEN** the applicable budget is not positive
+- **THEN** `tokens` is retained and `denominator_tokens` and `percent` are null
+
 ### Requirement: Reliable pane-delivery endpoint
 
 The system SHALL expose a `POST /api/tasks/{id}/notify` endpoint that registers a text delivery for the named task via the reliable notify service. The request body SHALL require `text` (non-empty string), `submit` (must be `true`), and `delivery_id` (non-empty identifier, max 128 bytes, alphanumeric and `-_` only). An optional `deadline_ms` field controls the delivery deadline in milliseconds (default 300,000; minimum 1,000; maximum 3,600,000). The endpoint SHALL be callable by any authenticated token (master, device, or plugin-scoped). On success it SHALL return the delivery_id and its current state (`"submitted"` or `"pending"`). Re-posting a previously submitted delivery_id SHALL be idempotent (200 with state `"submitted"`).

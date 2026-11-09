@@ -4,7 +4,10 @@ import (
 	"net/http"
 	"sort"
 
+	"github.com/drn/argus/internal/config"
+
 	heramodel "github.com/drn/argus/internal/hera/model"
+	"github.com/drn/argus/internal/hera/tiering"
 	"github.com/drn/argus/internal/uxlog"
 )
 
@@ -41,6 +44,66 @@ type heraRoleJSON struct {
 	TokensCacheRead    int64   `json:"tokens_cache_read,omitempty"`
 	TokensOutput       int64   `json:"tokens_output,omitempty"`
 	CostUSD            float64 `json:"cost_usd,omitempty"`
+	// Archetype is the role's diligence archetype ("" when none).
+	Archetype string `json:"archetype"`
+	// ModelResolution is the resolved model choice from current persisted
+	// task/config (basis current_config) or planned intent (unbound role) —
+	// never provider-confirmed launch telemetry.
+	ModelResolution modelResolutionJSON `json:"model_resolution"`
+	// Context is the last observed context size against the kind's denominator;
+	// null when no valid observation exists (never a fabricated zero).
+	Context *roleContextJSON `json:"context"`
+}
+
+type modelResolutionJSON struct {
+	RequestedModel string  `json:"requested_model"`
+	EffectiveModel *string `json:"effective_model"`
+	Effort         string  `json:"effort"`
+	Source         string  `json:"source"`
+	Basis          string  `json:"basis"`
+	Profile        string  `json:"profile"`
+	Warning        *string `json:"warning"`
+}
+
+// roleContextJSON's observed_at stays null: the context_size meta is a scalar
+// with no producer-supplied timestamp, and request/status time is never
+// substituted for it.
+type roleContextJSON struct {
+	Tokens            int     `json:"tokens"`
+	DenominatorTokens *int    `json:"denominator_tokens"`
+	DenominatorKind   string  `json:"denominator_kind"`
+	Percent           *int    `json:"percent"`
+	ObservedAt        *string `json:"observed_at"`
+}
+
+func strPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// applyRoleTiering stamps the archetype, model resolution and context fields.
+func applyRoleTiering(rj *heraRoleJSON, rv heramodel.RoleView, res *tiering.Resolver, cfg config.Config) {
+	r := res.Resolve(&rv)
+	rj.Archetype = rv.Archetype
+	rj.ModelResolution = modelResolutionJSON{
+		RequestedModel: r.RequestedModel,
+		EffectiveModel: strPtr(r.EffectiveModel),
+		Effort:         r.Effort,
+		Source:         r.Source,
+		Basis:          r.Basis,
+		Profile:        r.Profile,
+		Warning:        strPtr(r.Warning),
+	}
+	if c := tiering.ContextFor(&rv, cfg); c != nil {
+		rj.Context = &roleContextJSON{
+			Tokens:            c.Tokens,
+			DenominatorTokens: c.DenominatorTokens,
+			DenominatorKind:   c.DenominatorKind,
+			Percent:           c.Percent,
+		}
+	}
 }
 
 // heraOrchJSON is one orchestrator with its non-freelance roles (coordinator +
@@ -115,6 +178,10 @@ func (s *Server) handleHera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := heraJSON{Orchestrators: []heraOrchJSON{}, Freelance: []heraRoleJSON{}}
+	tierOpts := tiering.DefaultOptions(s.db)
+	tierCfg := tierOpts.Config
+	resolver := tiering.NewResolver(tierOpts)
+	defer resolver.Done()
 
 	// Group hoisted freelance roles by their owning orchestrator so each
 	// orchestrator's per-orchestrator cost/token fetch below can also price
@@ -142,6 +209,7 @@ func (s *Server) handleHera(w http.ResponseWriter, r *http.Request) {
 
 			for _, rv := range o.Roles {
 				rj := heraRoleJSONFrom(rv)
+				applyRoleTiering(&rj, rv, resolver, tierCfg)
 				if tokErr == nil {
 					if t, ok := tokensByRole[rv.RoleID]; ok {
 						rj.TokensInput = t.TokensInput
@@ -155,6 +223,7 @@ func (s *Server) handleHera(w http.ResponseWriter, r *http.Request) {
 			}
 			for _, rv := range freelanceByOrch[o.ID] {
 				rj := heraRoleJSONFrom(rv)
+				applyRoleTiering(&rj, rv, resolver, tierCfg)
 				if tokErr == nil {
 					if t, ok := tokensByRole[rv.RoleID]; ok {
 						rj.TokensInput = t.TokensInput
