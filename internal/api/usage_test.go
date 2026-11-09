@@ -15,7 +15,7 @@ import (
 )
 
 func TestHandleUsageReturnsCachedWindowsWithoutAuthLookups(t *testing.T) {
-	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second) // readings expire against the wall clock, so a fixed date rots
 	oldCodex, oldClaude := codexUsageSnapshot, claudeUsageSnapshot
 	codexUsageSnapshot = func() (backendtier.Reading, bool) {
 		return backendtier.Reading{Percentage: 0, LastProbedAt: now}, true // depleted hold may have no reset
