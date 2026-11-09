@@ -131,6 +131,20 @@ type Client struct {
 // Task.Account on Start/Kick/Recycle.
 const accountProtocolVersion = 8
 
+// recycleSessionIDProtocolVersion is the first supervisor protocol that carries
+// the fresh pinned SessionID on RecycleReq.
+const recycleSessionIDProtocolVersion = 12
+
+// RecycleCarriesSessionID implements agent.RecycleIDCapable from the cached
+// handshake version (no round trip). An unhandshaken peer (0) is assumed
+// capable, mirroring checkAccountSupported.
+func (c *Client) RecycleCarriesSessionID() bool {
+	c.mu.Lock()
+	peer := c.peerProtocol
+	c.mu.Unlock()
+	return peer == 0 || peer >= recycleSessionIDProtocolVersion
+}
+
 // checkAccountSupported refuses to hand an explicit-account task to a
 // handshaken supervisor too old to carry the account: it would silently spawn
 // the session under the default login instead.
@@ -598,9 +612,10 @@ func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, 
 
 // Recycle drives a same-task restart with a fresh (empty) context through the
 // daemon/supervisor (add-coordinator-context-management D5). Mirrors
-// KickRerender's wire contract exactly except resume is always false and no
-// SessionID is shipped — the caller (internal/daemon's RecycleRunner adapter)
-// must already have persisted task.SessionID="" and task.Prompt=<seed prompt>
+// KickRerender's wire contract exactly except resume is always false and
+// the fresh task.SessionID (pinned families) rides along on RecycleReq — the
+// caller (internal/daemon's RecycleRunner adapter) must already have persisted
+// the fresh SessionID and task.Prompt=<seed prompt>
 // before calling. Against a supervisor that predates this RPC method the call
 // errors, which the caller (RecycleCoord) surfaces rather than silently
 // no-ops — unlike a kick-rerender, a failed recycle must not look like
@@ -613,6 +628,7 @@ func (c *Client) Recycle(task *model.Task, _ config.Config, rows, cols uint16) e
 	if err := c.call("Daemon.Recycle", &daemon.RecycleReq{
 		MCPPort:         c.currentMCPPort(),
 		TaskID:          task.ID,
+		SessionID:       task.SessionID,
 		Prompt:          task.Prompt,
 		Project:         task.Project,
 		Backend:         task.Backend,

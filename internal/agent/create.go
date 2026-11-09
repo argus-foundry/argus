@@ -349,8 +349,8 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 
 	// Step 4: generate session ID for families that pin it at start;
 	// capture-style families recover theirs post-exit.
-	if resolved, berr := ResolveBackend(task, cfg); berr == nil && FamilyOf(resolved.Command).PinsSessionID {
-		task.SessionID = model.GenerateSessionID()
+	if sid := FreshSessionID(task, cfg); sid != "" {
+		task.SessionID = sid
 		if uErr := database.Update(task); uErr != nil {
 			slog.Warn("CreateAndStart: persist session ID failed (continuing)", "id", taskID, "err", uErr)
 		}
@@ -537,4 +537,18 @@ func appendAttachmentList(prompt string, paths []string) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// FreshSessionID returns the session ID a freshly (re)started task should be
+// launched with: a newly minted UUID when the task's resolved backend family
+// pins its ID at start (`--session-id`, e.g. Claude), else "" so capture-style
+// families (Codex, ...) recover theirs after exit. Shared by CreateAndStart
+// step 4 and the recycle restart so the two cannot drift: BuildCmd never mints
+// an ID itself, so clearing without re-minting leaves a pin-style session
+// running with no resumable ID.
+func FreshSessionID(task *model.Task, cfg config.Config) string {
+	if resolved, err := ResolveBackend(task, cfg); err == nil && FamilyOf(resolved.Command).PinsSessionID {
+		return model.GenerateSessionID()
+	}
+	return ""
 }

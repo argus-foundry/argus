@@ -826,3 +826,31 @@ func TestCreateAndStart_EmptySandboxOverrideLeavesEmpty(t *testing.T) {
 
 	RemoveWorktreeAndBranch(task.Worktree, task.Branch, repo)
 }
+
+func TestFreshSessionID(t *testing.T) {
+	cfg := config.Config{
+		Defaults: config.Defaults{Backend: "claude"},
+		Backends: map[string]config.Backend{
+			"claude": {Command: "claude"},
+			"codex":  {Command: "codex"},
+		},
+		Projects: map[string]config.Project{},
+	}
+	t.Run("pin-style family mints a fresh uuid", func(t *testing.T) {
+		task := &model.Task{Name: "t", Backend: "claude", SessionID: "old"}
+		a, b := FreshSessionID(task, cfg), FreshSessionID(task, cfg)
+		testutil.Equal(t, a != "" && a != "old" && a != b, true)
+	})
+	t.Run("capture-style family gets empty", func(t *testing.T) {
+		task := &model.Task{Name: "t", Backend: "codex", SessionID: "old"}
+		testutil.Equal(t, FreshSessionID(task, cfg), "")
+	})
+	t.Run("minted id is passed to BuildCmd as --session-id", func(t *testing.T) {
+		task := &model.Task{Name: "t", Backend: "claude", Prompt: "go", Worktree: t.TempDir(), SessionID: "old"}
+		task.SessionID = FreshSessionID(task, cfg)
+		cmd, _, err := BuildCmd(task, cfg, false)
+		testutil.NoError(t, err)
+		testutil.Contains(t, cmd.Args[2], "--session-id '"+task.SessionID+"'")
+		testutil.Equal(t, strings.Contains(cmd.Args[2], "'old'"), false)
+	})
+}

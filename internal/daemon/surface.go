@@ -206,7 +206,11 @@ const (
 	//     handed-back draft into a resumed session's box (kick-timing-keep-place).
 	//     A stale supervisor's sessions never report drafts, so the TUI falls
 	//     back to its typed-since-submit signal and a kick restores nothing.
-	SupervisorSpawnSurface = 38
+	// 39: a recycle's fresh pinned --session-id rides RecycleReq.SessionID into
+	//     the supervisor's BuildCmd (fix-recycle-session-id). A stale supervisor
+	//     recycles Claude sessions with no --session-id, leaving the task row
+	//     without a resumable ID (ctrl+n re-render refuses).
+	SupervisorSpawnSurface = 39
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -511,7 +515,7 @@ var SupervisorStreamPaths = []string{
 // message prints the computed digest to paste back here.
 const (
 	SpawnSurfaceDigest  = "c083211b5e2420ffdfc7dbf812f02c6c2b44f1b16e4c32652e6558f3e063dfde"
-	StreamSurfaceDigest = "745e90036d5fcfc660e8726d8ce9663a4a99b53b0ebbde975e9dc86ab40c9a89"
+	StreamSurfaceDigest = "3119cb7016724a7989d50ec738bdaa9551ac6f16f8d50a48f04c908b2237405f"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,
