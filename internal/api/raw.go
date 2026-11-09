@@ -99,6 +99,10 @@ func (s *Server) handleUpdateTaskRaw(w http.ResponseWriter, r *http.Request) {
 	task.Branch = existing.Branch
 	task.BaseBranch = existing.BaseBranch
 	if err := s.db.Update(&task); err != nil {
+		if errors.Is(err, db.ErrResidentProtected) {
+			writeErr(w, http.StatusConflict, "", err)
+			return
+		}
 		if errors.Is(err, db.ErrTaskNotFound) {
 			writeErr(w, http.StatusNotFound, "", err)
 			return
@@ -132,6 +136,10 @@ func (s *Server) handleAddTaskRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.db.Add(&task); err != nil {
+		if errors.Is(err, db.ErrResidentProtected) {
+			writeErr(w, http.StatusConflict, "", err)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
