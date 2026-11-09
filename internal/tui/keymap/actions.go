@@ -63,12 +63,16 @@ const (
 	ActTaskUp          Action = "tasklist.nav_up"
 
 	// Agent view (all bindings must carry a modifier)
-	ActAgentLinks      Action = "agent.links"
-	ActAgentArtifacts  Action = "agent.artifacts"
-	ActAgentSession    Action = "agent.session"
-	ActAgentOpenPR     Action = "agent.open_pr"
-	ActAgentZoom       Action = "agent.zoom"
-	ActAgentCopy       Action = "agent.copy"
+	ActAgentLinks     Action = "agent.links"
+	ActAgentArtifacts Action = "agent.artifacts"
+	ActAgentSession   Action = "agent.session"
+	ActAgentOpenPR    Action = "agent.open_pr"
+	ActAgentZoom      Action = "agent.zoom"
+	ActAgentCopy      Action = "agent.copy"
+	// ActAgentRerender (resize-without-restart) runs the size-drift kick on
+	// demand. Default ctrl+n: a plain ctrl+letter every terminal delivers with no
+	// setup (cmd+letter / ctrl+shift+letter are not).
+	ActAgentRerender   Action = "agent.rerender"
 	ActAgentPaneLeft   Action = "agent.pane_left"
 	ActAgentPaneRight  Action = "agent.pane_right"
 	ActAgentTaskPrev   Action = "agent.task_prev"
@@ -177,6 +181,7 @@ var defaultSpecs = map[Context]map[Action]string{
 		ActAgentLinks: "ctrl+l", ActAgentSession: "ctrl+r",
 		ActAgentArtifacts: "ctrl+t",
 		ActAgentOpenPR:    "ctrl+p", ActAgentZoom: "ctrl+z", ActAgentCopy: "ctrl+y",
+		ActAgentRerender: "ctrl+n",
 		ActAgentPaneLeft: "cmd+left", ActAgentPaneRight: "cmd+right",
 		ActAgentTaskPrev: "cmd+up", ActAgentTaskNext: "cmd+down",
 		ActAgentScrollUp: "shift+up", ActAgentScrollDown: "shift+down",
@@ -227,6 +232,7 @@ var actionLabels = map[Action]string{
 	ActAgentLinks: "link picker", ActAgentSession: "switch Claude session",
 	ActAgentArtifacts: "view task artifacts",
 	ActAgentOpenPR:    "open PR", ActAgentZoom: "toggle single-pane (zoom)", ActAgentCopy: "copy staged text",
+	ActAgentRerender: "re-render at this width",
 	ActAgentPaneLeft: "focus pane left", ActAgentPaneRight: "focus pane right",
 	ActAgentTaskPrev: "previous task", ActAgentTaskNext: "next task",
 	ActAgentScrollUp: "scroll up", ActAgentScrollDown: "scroll down",
@@ -315,7 +321,7 @@ var contextOrder = map[Context][]Action{
 		ActGlobalPalette, ActGlobalSwitcher, ActGlobalJumpNeedsInput, ActGlobalRestoreRail},
 	CtxTaskList: {ActTaskNew, ActTaskDown, ActTaskUp, ActTaskStatusAdv, ActTaskStatusRev, ActTaskArchive,
 		ActTaskPin, ActTaskRename, ActTaskCopy, ActTaskExpandAll, ActTaskFilter, ActTaskHera, ActTaskInbox, ActTaskArtifacts, ActTaskMoveAccount},
-	CtxAgent: {ActAgentLinks, ActAgentArtifacts, ActAgentSession, ActAgentOpenPR, ActAgentZoom, ActAgentCopy,
+	CtxAgent: {ActAgentLinks, ActAgentArtifacts, ActAgentSession, ActAgentOpenPR, ActAgentZoom, ActAgentCopy, ActAgentRerender,
 		ActAgentPaneLeft, ActAgentPaneRight, ActAgentTaskPrev, ActAgentTaskNext,
 		ActAgentScrollUp, ActAgentScrollDown, ActAgentScrollPgUp, ActAgentScrollPgDn, ActAgentScrollEnd},
 	CtxFilePnl: {ActFileDown, ActFileUp, ActFileFinder, ActFileOpen, ActFileEditor, ActFileTerminal},

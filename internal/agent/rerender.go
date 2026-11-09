@@ -84,6 +84,19 @@ func MarginExceedsRerenderThreshold(initCols, panelCols int) bool {
 	return delta >= RerenderMargin
 }
 
+// RerenderOwed reports whether a session's history is owed a re-render at
+// panelCols: the existing drift predicate (either the session's authored width
+// initCols or the caller-tracked committedCols anchor differs from panelCols by
+// at least RerenderMargin), without the idle/prompt/keep-place gates. With the
+// automatic kick off (resize-without-restart) it drives the pane's owed notice
+// instead of a kick; ShouldKickRerender shares the same anchors and margin.
+func RerenderOwed(initCols, committedCols, panelCols int) bool {
+	if MarginExceedsRerenderThreshold(initCols, panelCols) {
+		return true
+	}
+	return committedCols > 0 && MarginExceedsRerenderThreshold(committedCols, panelCols)
+}
+
 // ShouldKickRerender decides whether the live session should be stopped+resumed
 // to re-render its scrollback at a different PTY width. Pure function for
 // testability.

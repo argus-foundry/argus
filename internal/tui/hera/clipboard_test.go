@@ -4,8 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/db"
 	"github.com/drn/argus/internal/testutil"
+	"github.com/drn/argus/internal/tui/keymap"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -202,4 +204,63 @@ func TestCtrlY_HintRendersOnFocusedPane(t *testing.T) {
 	if strings.Contains(fullScreenText(t, p, 120, 30), "(ctrl+y copy)") {
 		t.Errorf("hint should be gone after SetClipboardHint(false)")
 	}
+}
+
+func ctrlN() *tcell.EventKey { return tcell.NewEventKey(tcell.KeyCtrlN, 0, tcell.ModNone) }
+
+// agent.rerender (resize-without-restart): with a terminal pane focused, the
+// default ctrl+n fires OnRerender with the FOCUSED pane's task and is consumed
+// (never forwarded to the PTY); from the rail it falls through untouched.
+func TestCtrlN_RerendersFocusedPane(t *testing.T) {
+	d := memDB(t)
+	orch := seedOrch(t, d, "o")
+	seedBoundRole(t, d, orch, "c", db.HeraKindCoordinator, "tc")
+	seedBoundRole(t, d, orch, "w", db.HeraKindWorker, "tw")
+	coordSess := &fakeSession{id: "tc", alive: true}
+	wkrSess := &fakeSession{id: "tw", alive: true}
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{"tc": coordSess, "tw": wkrSess}))
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "w"), true)
+	var got []string
+	p.OnRerender = func(id string) { got = append(got, id) }
+	h := p.InputHandler()
+
+	p.Machine().SetRegion(FocusAgent)
+	h(ctrlN(), noFocus)
+	p.Machine().SetRegion(FocusCoord)
+	h(ctrlN(), noFocus)
+	testutil.DeepEqual(t, got, []string{"tw", "tc"})
+	testutil.Equal(t, len(wkrSess.wrote), 0)
+	testutil.Equal(t, len(coordSess.wrote), 0)
+
+	got = nil
+	p.Machine().SetRegion(FocusRail)
+	h(ctrlN(), noFocus)
+	testutil.Equal(t, len(got), 0)
+}
+
+// The key resolves through the live keymap: a rebind moves the action and the
+// old ctrl+n then reaches the PTY like any other key.
+func TestCtrlN_FollowsRebind(t *testing.T) {
+	d := memDB(t)
+	orch := seedOrch(t, d, "o")
+	seedBoundRole(t, d, orch, "c", db.HeraKindCoordinator, "tc")
+	seedBoundRole(t, d, orch, "w", db.HeraKindWorker, "tw")
+	wkrSess := &fakeSession{id: "tw", alive: true}
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{"tc": {id: "tc", alive: true}, "tw": wkrSess}))
+	km, warns := keymap.Build(config.Keybindings{Agent: map[string]string{"rerender": "ctrl+s"}})
+	testutil.Equal(t, len(warns), 0)
+	p.Keys = func() *keymap.Keymap { return km }
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "w"), true)
+	var got []string
+	p.OnRerender = func(id string) { got = append(got, id) }
+	p.Machine().SetRegion(FocusAgent)
+	h := p.InputHandler()
+	h(tcell.NewEventKey(tcell.KeyCtrlS, 0, tcell.ModNone), noFocus)
+	testutil.DeepEqual(t, got, []string{"tw"})
+	h(ctrlN(), noFocus) // no longer bound → forwarded
+	testutil.DeepEqual(t, got, []string{"tw"})
 }

@@ -370,6 +370,12 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 	if p.kickRerender == nil || bound == "" || cols <= 0 {
 		return
 	}
+	// resize-without-restart: with ui.auto_rerender_on_resize off no automatic
+	// evaluation is scheduled at all (no dwell, no zoom re-arm, no RPCs); the
+	// pane's owed notice and the hotkey cover it. Nil means on (tests, remote).
+	if !p.AutoRerenderOn() {
+		return
+	}
 	now := p.kickClockNow()
 	// Zoom re-arm: a Ctrl+Z fullscreen toggle changes this pane's width without
 	// rebinding it, so the per-bind kickedFor gate below would swallow the
@@ -429,6 +435,39 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 		uxlog.Log("[rerender] retry armed task=%s delay=%s", deferredFor, retryDelay)
 	})
 }
+
+// SetOwedFunc wires the owed-re-render notice evaluator + live key hint onto
+// both terminal panes, and makes a click on either pane's notice fire
+// OnRerender for that pane's bound task (resize-without-restart).
+func (p *HeraPage) SetOwedFunc(fn terminal.OwedFunc, hint func() string) {
+	p.coordPane.SetOwedFunc(fn, hint)
+	p.agentPane.SetOwedFunc(fn, hint)
+	p.coordPane.OnOwedClick = func() {
+		if p.coordBound != "" && p.OnRerender != nil {
+			p.OnRerender(p.coordBound)
+		}
+	}
+	p.agentPane.OnOwedClick = func() {
+		if p.agentBound != "" && p.OnRerender != nil {
+			p.OnRerender(p.agentBound)
+		}
+	}
+}
+
+// InvalidateOwed marks both panes' owed-re-render state stale (re-evaluated once
+// at their next Draw). Safe from any goroutine.
+func (p *HeraPage) InvalidateOwed() {
+	p.coordPane.InvalidateOwed()
+	p.agentPane.InvalidateOwed()
+}
+
+// SetAutoRerender wires the live ui.auto_rerender_on_resize setting
+// (resize-without-restart). Left nil (tests, remote mode) the automatic kick is ON,
+// i.e. byte-identical to the behavior before the setting existed.
+func (p *HeraPage) SetAutoRerender(fn func() bool) { p.autoRerender = fn }
+
+// AutoRerenderOn reports whether the automatic size-drift kick is enabled.
+func (p *HeraPage) AutoRerenderOn() bool { return p.autoRerender == nil || p.autoRerender() }
 
 // SetKeepPlace wires the live ui.rerender_keep_place setting (kick-timing-keep-place).
 // Left nil (tests, remote mode), the keep-place hold is ON.

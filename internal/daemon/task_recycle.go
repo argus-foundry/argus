@@ -170,7 +170,7 @@ func (r *taskRecycleRunner) restart(taskID string, buildSeed func(*model.Task) s
 	if err := agent.StopStrayJobs(task, r.cfgFn(), task.SessionID); err != nil {
 		return fmt.Errorf("task_recycle restart: stop stray jobs for task %s: %w", taskID, err)
 	}
-	return restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, buildSeed(task))
+	return restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, buildSeed(task), "")
 }
 
 // buildTaskRecycleSeedPrompt composes the opening prompt for the fresh

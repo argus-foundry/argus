@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/drn/argus/internal/agent"
@@ -90,7 +91,30 @@ func (r *HeraRecycleRunner) Restart(taskID string, roleID int64) error {
 		return fmt.Errorf("recycle restart: build seed prompt for role %d: %w", binding.RoleID, err)
 	}
 
-	return restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, seedPrompt)
+	var kind db.HeraRoleKind
+	if role, rerr := r.database.HeraRole(binding.RoleID); rerr == nil && role != nil {
+		kind = role.Kind
+	}
+	return restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, seedPrompt, kind)
+}
+
+// resolveSpawnSize picks the PTY size a restarted session starts at: the fresh
+// viewer-reported pane size for the task's role (db.InitialPTYSize — the same
+// source agent.CreateAndStart uses at creation), else the outgoing session's
+// live PTY size when non-zero, else Start's 24x80 default. source names which
+// won ("report" | "pty" | "default") for the log. sess may be nil.
+func resolveSpawnSize(database *db.DB, role db.HeraRoleKind, sess interface{ PTYSize() (int, int) }, now time.Time) (rows, cols uint16, source string) {
+	if database != nil {
+		if size, err := database.InitialPTYSize(role, now); err == nil && size.Valid() {
+			return size.Rows, size.Cols, "report"
+		}
+	}
+	if sess != nil {
+		if c, r := sess.PTYSize(); c > 0 && r > 0 {
+			return uint16(r), uint16(c), "pty" //nolint:gosec // bounded by terminal cell count
+		}
+	}
+	return 24, 80, "default"
 }
 
 // restartSessionWithSeedPrompt clears task.SessionID and sets task.Prompt to
@@ -99,16 +123,19 @@ func (r *HeraRecycleRunner) Restart(taskID string, roleID int64) error {
 // session exists to kill. Shared by HeraRecycleRunner.Restart (hera
 // role/binding already resolved into seedPrompt above) and
 // taskRecycleRunner.restart (plain task, no hera role — see task_recycle.go).
-func restartSessionWithSeedPrompt(database *db.DB, runner agent.SessionRunner, cfgFn func() config.Config, task *model.Task, seedPrompt string) error {
-	// Capture the outgoing session's PTY size before Recycle stops it, so the
-	// fresh session opens at the same dimensions rather than falling back to
-	// Start's 80x24 default.
+func restartSessionWithSeedPrompt(database *db.DB, runner agent.SessionRunner, cfgFn func() config.Config, task *model.Task, seedPrompt string, role db.HeraRoleKind) error {
+	// The fresh session must open at the pane's reported size, not blindly at the
+	// outgoing PTY's: with no automatic size-drift kick
+	// (resize-without-restart) nothing repairs a wrong spawn size afterwards.
+	// Resolve BEFORE Recycle stops the outgoing session so its live size is
+	// still readable as the fallback.
 	sess := runner.Get(task.ID)
-	var rows, cols uint16
+	var sizer interface{ PTYSize() (int, int) }
 	if sess != nil {
-		c, rw := sess.PTYSize()
-		cols, rows = uint16(c), uint16(rw) //nolint:gosec // bounded by terminal cell count
+		sizer = sess
 	}
+	rows, cols, source := resolveSpawnSize(database, role, sizer, time.Now())
+	slog.Info("[spawn-size] restart", "task", task.ID, "role", role, "source", source, "rows", rows, "cols", cols)
 
 	// task.SessionID MUST be cleared before Recycle: BuildCmd's non-resume
 	// branch pins any non-empty SessionID via --session-id, and the OLD
@@ -126,7 +153,7 @@ func restartSessionWithSeedPrompt(database *db.DB, runner agent.SessionRunner, c
 		// ErrSessionNotFound here, which would leave a pending recycle intent
 		// stuck retrying forever. Start a fresh session directly instead;
 		// 80x24 mirrors Start's own new-session default.
-		_, startErr := runner.Start(task, cfgFn(), 24, 80, false)
+		_, startErr := runner.Start(task, cfgFn(), rows, cols, false)
 		return startErr
 	}
 

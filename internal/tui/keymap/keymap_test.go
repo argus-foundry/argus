@@ -356,3 +356,51 @@ func TestGlobalSwitcher_ReplacesAgentSwitcher(t *testing.T) {
 		testutil.True(t, found)
 	})
 }
+
+// resize-without-restart: the on-demand re-render chord is a plain ctrl+letter
+// so every terminal delivers it with no setup.
+func TestAgentRerender_DefaultCtrlN(t *testing.T) {
+	km := DefaultKeymap()
+	got, ok := km.Resolve(CtxAgent, ev(tcell.KeyCtrlN, 0, 0))
+	testutil.True(t, ok)
+	testutil.Equal(t, got, ActAgentRerender)
+	testutil.Equal(t, km.ActionLabel(ActAgentRerender), "re-render at this width")
+}
+
+func TestAgentRerender_NoDefaultCollision(t *testing.T) {
+	for _, ctx := range AllContexts {
+		for act, spec := range defaultSpecs[ctx] {
+			if spec == "ctrl+n" && act != ActAgentRerender {
+				t.Errorf("%s: %s also defaults to ctrl+n", ctx, act)
+			}
+		}
+	}
+}
+
+// The Claude Code composer owns these readline chords; the default keymap must
+// leave every one of them unbound in the agent context so they reach the PTY.
+func TestAgentCtx_ComposerChordsNotBound(t *testing.T) {
+	km := DefaultKeymap()
+	for _, k := range []tcell.Key{tcell.KeyCtrlA, tcell.KeyCtrlE, tcell.KeyCtrlU, tcell.KeyCtrlW, tcell.KeyCtrlK, tcell.KeyCtrlO, tcell.KeyCtrlB} {
+		if act, ok := km.Resolve(CtxAgent, ev(k, 0, 0)); ok {
+			t.Errorf("ctrl chord %v unexpectedly bound in CtxAgent to %s", k, act)
+		}
+	}
+}
+
+func TestAgentRerender_PlainKeyRejectedAndRebindHonored(t *testing.T) {
+	km, warns := Build(config.Keybindings{Agent: map[string]string{"rerender": "x"}})
+	testutil.Equal(t, len(warns), 1)
+	testutil.Contains(t, warns[0].Message, "modifier")
+	got, ok := km.Resolve(CtxAgent, ev(tcell.KeyCtrlN, 0, 0))
+	testutil.True(t, ok)
+	testutil.Equal(t, got, ActAgentRerender)
+
+	km, warns = Build(config.Keybindings{Agent: map[string]string{"rerender": "ctrl+s"}})
+	testutil.Equal(t, len(warns), 0)
+	got, ok = km.Resolve(CtxAgent, ev(tcell.KeyCtrlS, 0, 0))
+	testutil.True(t, ok)
+	testutil.Equal(t, got, ActAgentRerender)
+	_, ok = km.Resolve(CtxAgent, ev(tcell.KeyCtrlN, 0, 0))
+	testutil.False(t, ok)
+}

@@ -39,6 +39,9 @@ func newKeepPlaceRig(t *testing.T, id string) *keepPlaceRig {
 	testutil.NoError(t, uxlog.Init(logPath))
 	t.Cleanup(uxlog.Close)
 	app := New(testDB(t), agent.NewRunner(nil), false)
+	// These tests exercise the automatic kick path; resize-without-restart made
+	// it opt-in, so turn it on to prove the on-state is unchanged.
+	testutil.NoError(t, app.db.SetConfigValue("ui.auto_rerender_on_resize", "true"))
 	_, stop := wireApp(t, app)
 	t.Cleanup(stop)
 	task := &model.Task{Name: id, SessionID: "saved", Worktree: t.TempDir()}

@@ -682,7 +682,7 @@ Transcript-guarded width-repair stops SHALL give the agent three seconds after S
 
 ### Requirement: In-pane width repair status
 
-The TUI SHALL display a small border indicator while a pane's repair is deferred, stopping, or restarting. Deferred repair SHALL say “Re-render pending”; active stop or restart SHALL say “Re-rendering…”. Terminal content, including deferred user prompts, SHALL remain readable. The indicator SHALL clear when repair resolves, restart fails, the session exits cleanly, or the pane rebinds, including inactive Hera panes.
+The TUI SHALL display a small border indicator on the right side of a pane's top border. While a pane's repair is deferred, stopping, or restarting it SHALL say “Re-render pending” (deferred) or “Re-rendering…” (active stop or restart). When no repair is in flight but the pane's history is owed a re-render (setting `ui.auto_rerender_on_resize` off and drift at least `RerenderMargin`), it SHALL show the owed notice `width changed · <key> re-render`. Precedence SHALL be “Re-rendering…” over “Re-render pending” over the owed notice; at most one is drawn. Terminal content, including deferred user prompts, SHALL remain readable, and the indicator SHALL be truncated before it can overlap the left-side title. The indicator SHALL clear when repair resolves, restart fails, the session exits cleanly, or the pane rebinds, including inactive Hera panes; the owed notice SHALL additionally clear when the width returns inside the margin.
 
 #### Scenario: Busy agent defers repair
 
@@ -693,6 +693,16 @@ The TUI SHALL display a small border indicator while a pane's repair is deferred
 
 - **WHEN** a restarted session is attached successfully or evaluation finds no repair necessary
 - **THEN** the indicator SHALL disappear
+
+#### Scenario: Owed notice yields to in-flight status
+
+- **WHEN** a hotkey re-render is deferred while the owed notice is showing
+- **THEN** the border shows “Re-render pending” and not the owed notice
+
+#### Scenario: Owed notice draws on the top border's right side
+
+- **WHEN** a SimulationScreen frame is drawn for a drifted pane with the setting off
+- **THEN** the top border row contains the pane title on the left and `width changed · ctrl+n re-render` right-aligned
 
 ### Requirement: Unresolved width anchors survive intermediate no-drift binds
 
@@ -1103,7 +1113,6 @@ A dead session's replay SHALL be bounded to the log offset of its final alt-scre
 - **WHEN** the session's log grows (the session was restarted)
 - **THEN** the bound is recomputed rather than served from the cache
 
-
 ### Requirement: Live panes honor synchronized output
 
 While a live pane's output stream is inside an open DEC private mode 2026 block (`CSI ?2026h` without its `CSI ?2026l`), the pane SHALL NOT feed that block to its emulator and SHALL keep painting the last completed frame. The block SHALL be fed and painted as soon as it closes. Sequences split across read boundaries SHALL be recognized. A block still open after 150ms, or holding more than 128KiB, SHALL be flushed so a missing `?2026l` can never freeze a pane; the flush SHALL be logged at most once per 10 seconds per pane. The hold SHALL be dropped on every reset or rebind of the live emulator. Replay and preview paths are unaffected.
@@ -1154,7 +1163,6 @@ When a width index exists for the session log, the replay SHALL feed the log in 
 - **WHEN** a sliding window begins after a recorded size change
 - **THEN** the window is fed starting at the size in force at its first byte
 
-
 ### Requirement: Live bind replays each log segment at its authored size
 
 When the live emulator is built or rebuilt from the session log (fresh bind, rebind, or ring-wrap rebuild) and a width index exists for the log, the replay SHALL emulate each segment at the PTY size it was authored for, using the offset of the first replayed byte within the log, and return the emulator to its build size afterwards. When the history comes from the ring-only fallback, which has no log offsets, or no index exists, the replay SHALL be a single-size feed.
@@ -1166,3 +1174,4 @@ When the live emulator is built or rebuilt from the session log (fresh bind, reb
 #### Scenario: Ring-only history
 - **WHEN** no session log exists and the history comes from the ring buffer
 - **THEN** no width index is applied and the history is fed as one write
+

@@ -78,6 +78,8 @@ func TestPaletteApplicableActions_ClassicAgentViewIsCtxAgentOnly(t *testing.T) {
 
 	rows := app.paletteApplicableActions()
 	testutil.Equal(t, containsLabel(rows, "toggle single-pane (zoom)"), true)
+	// resize-without-restart: the on-demand re-render is a CtxAgent action.
+	testutil.Equal(t, containsLabel(rows, "re-render at this width"), true)
 	// The jump switcher moved to CtxGlobal (add-two-column-switcher) but still
 	// fires in the agent view, so it stays offered here — the one global row.
 	testutil.Equal(t, containsLabel(rows, "jump switcher (tasks + projects)"), true)
@@ -141,6 +143,7 @@ func TestPaletteApplicableActions_HeraRailIsGlobalPlusHeraRail(t *testing.T) {
 	testutil.Equal(t, containsLabel(rows, "new task"), false)
 	// Rail focus (not a pane) — no Hera literal actions (fullscreen/copy).
 	testutil.Equal(t, containsLabel(rows, "toggle fullscreen"), false)
+	testutil.Equal(t, containsLabel(rows, "re-render at this width"), false)
 }
 
 func TestPaletteApplicableActions_HeraPaneIncludesLiteralActionsAndHeraRail(t *testing.T) {
@@ -155,6 +158,14 @@ func TestPaletteApplicableActions_HeraPaneIncludesLiteralActionsAndHeraRail(t *t
 
 	rows := app.paletteApplicableActions()
 	testutil.Equal(t, containsLabel(rows, "toggle fullscreen"), true)
+	// resize-without-restart: a focused Hera terminal pane offers the re-render
+	// row with its live key (ctrl+n by default).
+	for _, r := range rows {
+		if r.Label == "re-render at this width" {
+			testutil.Equal(t, r.Key, "ctrl+n")
+		}
+	}
+	testutil.Equal(t, containsLabel(rows, "re-render at this width"), true)
 	testutil.Equal(t, containsLabel(rows, "quit"), true) // global still unioned in (deliberate pick, not accidental typing)
 	testutil.Equal(t, containsLabel(rows, "spawn worker under coordinator (new-task modal)"), true)
 	testutil.Equal(t, containsLabel(rows, "new task"), false) // still no cross-tab bleed
