@@ -56,7 +56,7 @@ func TestBuildCmd_ResidentWorkdirPrecondition(t *testing.T) {
 func TestResidentWorktreeNonEmptyKeepsResumeHelpersWorking(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	task := &model.Task{ID: "r", Kind: model.KindResident, Worktree: db.ResidentWorkDir(), SessionID: "s1"}
-	if got := reapBackgroundSessionForResume(task, testConfig()); got != nil && len(got) > 0 {
+	if got := reapBackgroundSessionForResume(task, testConfig()); len(got) > 0 {
 		t.Fatalf("unexpected reap result %v", got)
 	}
 }

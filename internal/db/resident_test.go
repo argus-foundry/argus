@@ -235,7 +235,7 @@ func TestResident_OpenMarksExistingResidentForEvents(t *testing.T) {
 
 	d2, err := Open(path)
 	testutil.NoError(t, err)
-	t.Cleanup(func() { d2.Close() })
+	t.Cleanup(func() { _ = d2.Close() })
 	events.Emit(model.EventTypeSessionIdle, r.ID, nil)
 	testutil.Equal(t, got[len(got)-1].Type, "resident.session.idle")
 }

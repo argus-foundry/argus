@@ -36,7 +36,7 @@ func (p *RailPage) Draw(screen tcell.Screen) {
 	rw := min(widget.RailWidth, w)
 	p.visible = w > rw && h > 0
 	listY, listH := y, h
-	if p.Resident != nil && !(p.visible && p.Bound) {
+	if p.Resident != nil && (!p.visible || !p.Bound) {
 		if rh := p.Resident.DesiredHeight(); rh > 0 && h-rh > 3 {
 			p.Resident.SetRect(x, y, rw, rh)
 			p.Resident.Draw(screen)

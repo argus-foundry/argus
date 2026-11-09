@@ -328,11 +328,6 @@ func TestResidentFallbackAndPersistence(t *testing.T) {
 	testutil.Equal(t, a.header.ActiveTab(), widget.TabTasks)
 }
 
-func residentFeed(a *App, resp daemon.ResidentStateResp) {
-	a.residentStateFn = func() (daemon.ResidentStateResp, error) { return resp, nil }
-	a.residentPolledAt = time.Time{}
-}
-
 func TestResidentLabelMarkerSurvivesTick(t *testing.T) {
 	a, _ := residentTestApp(t)
 	a.applyResidentState(daemon.ResidentStateResp{Unread: true, LastReply: "hi"})

@@ -9,7 +9,7 @@ import (
 func TestConfigReadsResidentKeys(t *testing.T) {
 	d, err := OpenInMemory()
 	testutil.NoError(t, err)
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 
 	got := d.Config().Resident
 	testutil.Equal(t, got.Enabled, false)

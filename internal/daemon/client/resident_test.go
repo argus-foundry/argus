@@ -23,7 +23,7 @@ func TestCliResident(t *testing.T) {
 	fd.mu.Unlock()
 	testutil.Error(t, c.ResidentMarkViewed())
 	testutil.Error(t, c.ResidentSend("Hello", ""))
-	c.Close()
+	_ = c.Close()
 	_, err = c.ResidentState()
 	testutil.Error(t, err)
 	testutil.Error(t, c.ResidentMarkViewed())

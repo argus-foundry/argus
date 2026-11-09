@@ -27,7 +27,7 @@ func newResidentEnv(t *testing.T) *residentEnv {
 	t.Setenv("HOME", home)
 	d, err := db.OpenInMemory()
 	testutil.NoError(t, err)
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 	plain := &model.Task{ID: "plain", Name: "plain", Status: model.StatusInProgress, Branch: "argus/plain"}
 	testutil.NoError(t, d.Add(plain))
 	res, _, err := d.EnsureResidentTask(db.ResidentWorkDir())

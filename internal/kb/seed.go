@@ -26,7 +26,7 @@ func SeedVaultFile(store KBStore, vault, rel, content string) (bool, error) {
 	}
 	doc := ParseDocument(filepath.ToSlash(clean), content)
 	// O_EXCL makes "absent" and "create" one atomic step.
-	f, err := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // vault notes are user-readable markdown, not secrets
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return false, nil

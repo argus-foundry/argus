@@ -86,7 +86,7 @@ func newResEnv(t *testing.T) *resEnv {
 	t.Cleanup(func() { config.ResidentPermissionsEnforced = oldEnforced })
 	d, err := db.OpenInMemory()
 	testutil.NoError(t, err)
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 	vault := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.Resident.Enabled = true
