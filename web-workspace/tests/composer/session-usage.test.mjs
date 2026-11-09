@@ -39,3 +39,14 @@ test('a later baseline can discover a replacement session after a missed event',
  usage.select({id:'a'});usage.event({task_id:'a',type:'task.usage_changed',payload:{session_id:'s'}});await usage.flight;
  await usage.refresh();assert.equal(usage.data.session_id,'replacement');assert.equal(usage.error,null);
 });
+
+test('unmeasured agent usage tolerates a context bridge session while real mismatch still fails',async()=>{
+ for(const session_id of ['', 'wrong']){
+  const usage=new SessionUsage({json:async()=>({task_id:'a',session_id,totals:null,turns:[],next_cursor:null})},()=>{});
+  usage.select({id:'a'});usage.event({task_id:'a',type:'task.context_changed',payload:{session_id:'bridge-session'}});await usage.flight;
+  if(!session_id){assert.equal(usage.error,null);assert.equal(usage.data.totals,null);}
+  else assert.match(usage.error,/session changed/);
+ }
+});
+
+test('empty older usage page cannot replace a pinned measured session',async()=>{const responses=[page('s'),{task_id:'a',session_id:'',totals:null,turns:[]}];const usage=new SessionUsage({json:async()=>responses.shift()},()=>{});usage.select({id:'a'});await usage.refresh();await usage.older();assert.equal(usage.data.session_id,'s');assert.match(usage.error,/session changed/);});

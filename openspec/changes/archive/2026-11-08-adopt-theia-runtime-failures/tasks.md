@@ -1,0 +1,4 @@
+- [x] Approve spec and verify runtime/failure contracts
+- [x] Add failing unit/browser coverage
+- [x] Implement runtime and failure presentation
+- [x] Run unit suite and archive delta

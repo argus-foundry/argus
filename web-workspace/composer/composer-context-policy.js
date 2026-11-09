@@ -43,7 +43,7 @@ export function measurementAge(at, now = Date.now()) {
   return `${Math.floor(seconds/86400)}d ago`;
 }
 
-function accountWindows(account, now) {
+export function accountWindows(account, now = Date.now()) {
   const windows = [];
   for (const [key, reset, label] of [['five_hour_pct','five_hour_resets_at','5h limit'],['weekly_pct','weekly_resets_at','7d limit']]) {
     const used = percent(account?.usage?.[key]), at = stamp(account?.usage?.[reset]);

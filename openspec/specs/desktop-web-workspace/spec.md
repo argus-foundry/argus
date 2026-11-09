@@ -31,8 +31,8 @@ Browser drawers, DOM tooltips and their pixel geometry do not require literal na
 
 The numbered references retain the original backend tally identifiers and record remaining scope.
 
-1. `task-runtime-state-all-statuses` exposes live/idle state for every task with a session. Until then, activity outside in_progress is incomplete.
-2. `task-failure-state` exposes task failure independently of workflow status. Until then, only failed Hera roles support a failure indicator.
+1. `task-runtime-state-all-statuses` is adopted through authoritative live/idle flags and runtime event reconciliation.
+2. `task-failure-state` is adopted through task.failure, failure events and Info reasons alongside Hera failure.
 3. `distinct-pr-terminal-states` separates merged PRs from unmerged closure. The current indicator accurately combines them.
 4. `preserve-project-diligence-profile` preserves profile assignment on REST project edits. The current editor warns about the inherited loss.
 5. `rest-account-management` defines authenticated account CRUD. Existing account selection does not imply account management.
@@ -50,7 +50,7 @@ The numbered references retain the original backend tally identifiers and record
 
 20. `codex-recapture-test-env-isolation` isolates CODEX_HOME and CODEX_SQLITE_HOME in the daemon recapture fixture. This is a pre-existing test issue on master, not a product defect.
 
-Named backend follow-up `reject-archived-task-input` makes daemon handleWriteInput reject archived tasks. The frontend does not fence input during a pure event-stream outage without an archive envelope.
+The workspace consumes authoritative archived-input rejection and deliberate Hera revival guards from the merged REST contract. Native follow-up `macos-authoritative-input-and-revival-guards` remains separate.
 
 The broader existing backend exclusions also have names. `conditional-pty-input` checks input against process identity at the PTY owner. `identified-git-outcomes` defines comparison identity and explicit missing-worktree, git-failure and stale-snapshot outcomes. `task-shell-and-source-browsing` defines independent task shells and bounded repository content reads. `provider-conversation-feeds` defines verified provider conversation rendering. `durable-review-feedback` ties feedback to comparison identity and external review synchronization. None is implemented here. Client request fencing, attachment readiness observation and settled terminal fitting do not strengthen these backend guarantees.
 ## Requirements
@@ -343,7 +343,7 @@ Task rows SHALL display a single compact line with a status icon, task name and 
 - **AND** failed bound Hera roles SHALL show red failure icons
 - **AND** reduced-motion preference SHALL stop all working indicator animation and retain the completed three lines and stationary nib as the static working frame
 - **AND** the combined REST `merged-closed` state SHALL use a purple terminal PR icon labeled PR merged or closed without claiming it can distinguish the two
-- **AND** task failures outside the Hera roster remain unavailable because the task REST payload has no failure field
+- **AND** explicit task.failure SHALL provide standalone failure icons and Info reasons independently of Hera role failure
 
 #### Scenario: Busy Hera worker already in review
 - **WHEN** a session is live and not idle, including a task in review or complete workflow status
@@ -706,7 +706,7 @@ The workspace SHALL subscribe to existing daemon events before reading its task 
 
 - **WHEN** a pure event-stream outage occurs without an archive envelope
 - **THEN** this frontend SHALL NOT claim an input fence
-- **AND** named backend follow-up `reject-archived-task-input` SHALL make daemon handleWriteInput reject archived tasks; no backend change is included here
+- **AND** authoritative 409 task_archived input rejection SHALL fence input and trigger reconciliation even during an event-stream outage
 
 ### Requirement: Surgical terminal Ctrl+Z guard
 
@@ -1314,3 +1314,56 @@ The web terminal SHALL report `scrolled_up` (the xterm viewport is above the bot
 - **WHEN** the user switches task or the page is hidden while a deferral is pending
 - **THEN** the retry timer is cancelled and no further resize is posted
 
+
+
+### Requirement: Authoritative input rejection
+The workspace SHALL recognize only sanitized coded task_archived 409 input responses, fence primary and split raw/composer input, retain drafts and attachments, reconcile through a fresh task snapshot, and show restore guidance. It SHALL never automatically replay rejected input.
+
+#### Scenario: Archive during stream outage
+- **WHEN** input receives task_archived while client state is stale
+- **THEN** subsequent input is fenced until a post-rejection task snapshot succeeds and the draft remains available for a deliberate send after restoration
+
+### Requirement: Deliberate closed-out task revival
+Resume and restart SHALL offer explicit confirmation only for 409 hera_closeout with can_force_revive true. Confirm SHALL resubmit once with force_revive true. Cancel or any failure SHALL preserve unsent content. Busy and pending-restart conflicts SHALL never force. Sending after resume SHALL await successful resume.
+
+#### Scenario: Revival rejected or canceled
+- **WHEN** a closed-out task rejects an ordinary resume
+- **THEN** Cancel sends no forced request, and Confirm sends at most one forced request
+
+
+### Requirement: Runtime independent of workflow
+The workspace SHALL use authoritative live/idle flags for busy indication and input readiness regardless of workflow status. Archive and pending-archive guards SHALL remain authoritative. session.runtime_changed SHALL apply runtime fields and request a fresh task snapshot. Absent sessions SHALL not be labeled idle.
+
+#### Scenario: Busy task after completion
+- **WHEN** an in_review or complete task still has a busy live session
+- **THEN** its busy icon remains visible and input follows live state and archive guards
+
+### Requirement: Explicit standalone failure
+The workspace SHALL combine task.failure with Hera role failure, render a plain reason in Info, and clear stale failure on task.failure_changed. It SHALL NOT parse opaque raw Result text or infer reported failure from process exit.
+
+#### Scenario: Failure clears
+- **WHEN** task.failure_changed carries failure null
+- **THEN** the old standalone failure icon and reason disappear while any remaining Hera failure is preserved
+
+
+### Requirement: Server-resolved team details
+Coordinator Info SHALL list each team's role archetype and model_resolution, including separate requested_model, effective_model, effort, profile and safe warning. current_config SHALL say resolved from current settings; planned_intent SHALL say planned. Null effective_model with cli_default SHALL say CLI default, unavailable SHALL say unavailable. Existing roster reconciliation and explicit Info refresh SHALL update only the selected team's details. Failed/auth reads SHALL visibly mark retained details stale or unavailable, never fresh.
+
+#### Scenario: Team resolution refresh
+- **WHEN** explicit Info refresh obtains changed roster fields
+- **THEN** selected team details update without using raw task model as effective model
+
+### Requirement: Measured roster pressure
+Worker/freelance rows SHALL display server-provided percent with thresholds 40, 65 and 90 and accessible token/window labels. Coordinator context SHALL say recycle-budget usage. Null context SHALL remain unavailable and null percent SHALL remain uncomputed. Null observed_at SHALL say timing unknown. Archived/dead rows SHALL suppress live-pressure cues. Failed roster reads SHALL mark retained pressure stale. Indicators SHALL require no per-row reads, animation, or color-only explanation.
+
+#### Scenario: Unknown denominator
+- **WHEN** context contains tokens with percent null
+- **THEN** the row shows tokens and unavailable percentage without inventing a window
+
+
+### Requirement: Claude account usage in settings
+Agents settings SHALL use the existing authenticated accounts array to display each account's valid five-hour and weekly Claude usage with reset time. Missing, malformed or expired readings SHALL remain unavailable, never inferred as zero used. Usage SHALL be labeled Claude and SHALL NOT describe Codex quota. Refresh SHALL remain read-only and leave account editing to its named future CRUD scope.
+
+#### Scenario: Mixed account readings
+- **WHEN** one account has valid usage and another has expired or absent usage
+- **THEN** only the matching account shows the valid usage windows and reset times, with unavailable readings labeled clearly

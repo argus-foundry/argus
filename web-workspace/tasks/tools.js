@@ -1,3 +1,4 @@
+import {teamModelRows} from './team-models.js';
 import {AgentMessages} from './messages/agent-messages.js';
 import {CoordinatorInbox,coordinatorRoles} from './messages/coordinator-inbox.js';
 import {captureFocus} from '../shared/focus-recovery.js';
@@ -28,6 +29,7 @@ export class TaskTools {
     for(const target of [document.body,$('workspace'),$('tools')])this.visibilityObserver.observe(target,{attributes:true,attributeFilter:['class','hidden','style']});
     this.selectTab = tabs(document.querySelector('.tool-tabs'), tab => {
       this.tool = tab.dataset.tool;
+      tab.scrollIntoView({block:'nearest',inline:'nearest'});
       $('tool-panel').setAttribute('aria-labelledby', tab.id);
       if (this.task) this.selectedTools.set(this.task.id, this.tool);
       this.load(false);
@@ -155,15 +157,16 @@ export class TaskTools {
     }
     if(this.identity!==identity||identity.abort.signal.aborted||this.generation!==generationAtRead||this.task?.id!==task.id||this.tool!=='status'||!this.visible())return;
     const current=this.task, raw=identity.raw;
-    const rows=[['State', taskState(current)], ['Project', current.project || 'Unassigned'], ['Agent', current.backend || 'Not specified'], ['Model', raw ? raw.model || 'Default' : 'Not available'], ['Account', raw ? raw.account || 'default' : 'Not available'], ['Base branch', raw?.base_branch || 'Not available'], ['Branch', current.branch || 'Not available'], ['Worktree', current.worktree_path || 'Not available'], ['Session', current.live ? 'Live' : 'Offline'], ['Elapsed', current.elapsed || 'Not available'], ['Review', current.pr_state || 'No review state available'], ['Created', current.created_at || 'Not available'], ['Task ID', current.id]];
-    rows.push(...taskCostRows(current,this.roster));
+    const rows=[['State', taskState(current)], ['Project', current.project || 'Unassigned'], ['Agent', current.backend || 'Not specified'], ['Model', raw ? raw.model || 'Default' : 'Not available'], ['Account', raw ? raw.account || 'default' : 'Not available'], ['Base branch', raw?.base_branch || 'Not available'], ['Branch', current.branch || 'Not available'], ['Worktree', current.worktree_path || 'Not available'], ['Session', current.live ? (current.idle ? 'Live, idle' : 'Live, busy') : 'Offline'], ['Elapsed', current.elapsed || 'Not available'], ['Review', current.pr_state || 'No review state available'], ['Created', current.created_at || 'Not available'], ['Task ID', current.id]];
+    if(current.failure)rows.push(['Failure',current.failure.reason || 'Task reported failure']);
+    rows.push(...taskCostRows(current,this.roster),...teamModelRows(current,this.roster));
     const fingerprint=JSON.stringify([rows,current.prompt,!!identity.error]);
     const panel=$('tool-panel');
     const mounted=this.statusView?.list.isConnected;
     if(mounted&&this.statusView.fingerprint===fingerprint)return;
     if(!mounted) {
       const header=this.heading('Task details'), error=node('div'), list=node('dl','status-list'), prompt=node('div'), links=node('div');
-      header.append(button('Refresh identity',()=>{this.invalidateIdentity();this.drawStatus();}));
+      header.append(button('Refresh identity',()=>{this.invalidateIdentity();this.drawStatus();this.callbacks.refreshRoster?.();}));
       panel.replaceChildren(header,error,list,prompt,node('p','section-label','Links'),links);
       this.statusView={error,list,prompt,links};
     }

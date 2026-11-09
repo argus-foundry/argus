@@ -37,9 +37,15 @@ export class TerminalInput {
       throw new Error('Task input is blocked until workspace reconciliation');
     }
     this.staleFocus(sequence);
-    await this.api.request(this.path + '/input', {
+    try { await this.api.request(this.path + '/input', {
       method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: sanitized, signal: requestSignal(this.signal),
-    });
+    }); } catch (error) {
+      if (error.status === 409 && error.code === 'task_archived') {
+        this.api.inputRejected?.(this.task.id);
+        log('terminal-input', 'archived input rejected', {status:409});
+      }
+      throw error;
+    }
   }
 
   async resolveBackend() {

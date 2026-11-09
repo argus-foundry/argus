@@ -46,7 +46,7 @@ Task rail snapshots are invalidated by task.updated and specific task events, co
 
 ## Compact task status
 
-`workspace/rail/task-status-icon.js` maps existing task, cached PR and Hera role signals to labeled inline SVGs. Attention takes precedence over failure, completion, active work and PR status. Failed Hera roles provide a failure signal; ordinary task REST payloads have no failure field. REST combines merged and closed PRs as `merged-closed`, so that purple icon is labeled PR merged or closed. Unknown PR cache states imply no review claim. Active non-idle sessions spin unless reduced motion is requested. Rows contain only the icon and one truncated task name; the existing sibling archive button remains centered.
+`workspace/rail/task-status-icon.js` maps existing task, cached PR and Hera role signals to labeled inline SVGs. Attention takes precedence over failure, completion, active work and PR status. Task failure and Hera failure are independent sources; task.failure_changed clears only the task source. Info shows the reported task reason. REST combines merged and closed PRs as `merged-closed`, so that purple icon is labeled PR merged or closed. Unknown PR cache states imply no review claim. Active non-idle sessions spin unless reduced motion is requested. Rows retain compact names and measured roster pressure; the existing sibling archive button remains centered.
 
 ## Composer layout
 
@@ -211,3 +211,20 @@ The daemon's successful input response resolves the send and clears the captured
 Action menus render through shared/row-menu.js. Each entry receives exactly one leading decorative SVG from shared/menu-icon.js, including links and disabled entries. Callers choose a semantic `icon`; entries without a choice retain the shared action icon. Set `danger: true` for a red label/icon and a preceding separator. Menu anchors and buttons share border, padding and icon geometry so labels align. Settings navigation uses the same stroke set, with repository letters retained as identity avatars. Native select options retain browser rendering and keyboard behavior.
 
 TaskSelection owns an explicit ID set independent of the viewer and search. Cascades use the full hierarchy restricted to current search matches, including collapsed tasks. Tri-state controls derive from current scope membership. TaskBatch freezes targets; confirmDialog owns the shared task-list body, tone, progress and Stop for archive, restore and delete, at N=1 or N>1. runTaskBatch caps requests at four and retains separate succeeded, failed and not-started IDs. Stop/auth/network failures stop dispatch while in-flight requests finish. Bulk observations use cached task/roster/PR data only. Single delete alone may enrich with changedFiles and safe PR resolution. Cached header PR links clear on disconnect.
+
+
+## Authoritative task guards and runtime
+
+TerminalInput routes a coded 409 task_archived through WorkspaceEvents.rejectInput, fencing all input synchronously and starting a revision-fenced snapshot. Failed or older snapshots preserve pending. A still-archived snapshot keeps input disabled and restore guidance visible. Restoration never replays bytes or submits the retained draft and attachments. Api exposes only operation-specific known guard codes, without server error text.
+
+Task settings uses task-revival.js for resume/restart. Only hera_closeout with can_force_revive true opens the shared revival confirmation. Confirm sends force_revive once; cancel, forced failure and busy/restarting conflicts never retry. Composer has no implicit resume path. Live/idle flags govern session readiness independently of workflow, while absent live retains legacy workflow fallback. session.runtime_changed updates runtime and requests a snapshot.
+
+## Hera details and account usage
+
+Coordinator Info consumes the shared roster's archetype and model_resolution through team-models.js, including hoisted freelance roles. Requested overrides remain distinct from server-resolved effective models. Explicit Refresh identity also refreshes the shared roster; failed/auth reads label retained team details stale. The roster is configuration resolution or planned intent, never confirmed provider execution telemetry.
+
+role-context.js uses server context.percent and the TUI 40/65/90 tiers. Denominator kinds are worker_window and coordinator_recycle_budget. Null percentages remain uncomputed; null observation time says timing unknown. Dead/archived tasks suppress pressure; stale rosters replace it with a stale marker. No per-row metadata/context fetch is issued.
+
+Agents settings shares accountWindows with composer validity rules. Returned five-hour and weekly Claude windows display percent used and reset time beside the matching account. Missing/expired readings stay unavailable. Codex-only accounts omit the Claude usage block. Read-only settings have no account edit draft to overwrite on refresh.
+
+Tool tabs stay on one row with hidden-scrollbar horizontal overflow and selected-tab visibility. Messages keeps the Agent messages accessible name. Empty first-page usage session with totals null is unmeasured, even after a bridge context event; nonempty session mismatches and pinned older-page mismatches remain errors.

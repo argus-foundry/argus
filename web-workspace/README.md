@@ -66,7 +66,7 @@ Bound Hera workers appear under their coordinator with recursive disclosure cont
 
 See `web-tests/tests/workspace/workspace/rail/nest.spec.ts` with the same isolated frontend/browser settings for nesting, keyboard focus, search, archive, history and roster-failure regressions. The rail archive checks run in `workspace.spec.ts`.
 
-Task rows use one line with a labeled status icon and a truncated name. Active sessions spin unless reduced motion is enabled. PRs are green, completed or terminal PRs purple, failed Hera roles red, and input attention retains its warning color. The API combines merged and closed PRs, so their icon says PR merged or closed; ordinary task failure is not available in the task payload. See `web-tests/tests/workspace/workspace/rail/task-row.spec.ts` for icon, compact layout, ellipsis and reduced-motion checks.
+Task rows use one line with a labeled status icon and a truncated name. Active sessions spin unless reduced motion is enabled. PRs are green, completed or terminal PRs purple, reported task or Hera failures red, and input attention retains its warning color. The API combines merged and closed PRs, so their icon says PR merged or closed; explicit standalone task failure also supplies a reason in Info. See `web-tests/tests/workspace/workspace/rail/task-row.spec.ts` for icon, compact layout, ellipsis and reduced-motion checks.
 
 The final red Delete entry in each task menu opens a task review with advisory session, Hera, changed-file and PR details. Cancel is initially focused. Deletion is permanent and requests forced worktree and local/remote branch cleanup in the background.
 

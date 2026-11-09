@@ -14,7 +14,7 @@ export async function readHierarchy(api, signal) {
 
 export function taskParents(tasks, roster = {}) {
   const known = new Set(tasks.map(task => task.id));
-  const parents = new Map(), attention = new Set(), failed = new Set();
+  const parents = new Map(), attention = new Set(), failed = new Set(tasks.filter(task=>task.failure).map(task=>task.id));
   const orchestrators = [...(roster.orchestrators || [])].sort((a, b) => a.id - b.id);
   const roles = new Map(orchestrators.flatMap(orch => (orch.roles || []).map(role => [`${orch.id}:${role.role_id}`, role])));
   function bind(child, parent) {

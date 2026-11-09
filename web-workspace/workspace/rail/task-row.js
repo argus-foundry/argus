@@ -1,3 +1,4 @@
+import {roleContextIndicator} from './role-context.js';
 import {node, button} from '../../shared/dom.js';
 import {taskStatusIcon} from './task-status-icon.js';
 import {roleStatus} from './task-grouping.js';
@@ -11,11 +12,12 @@ export function compactTaskRow({ task, role, selected, needsInput, ownInput, fai
   if (role) row.dataset.roleId=String(role.role_id);
   if (task?.id === selected) row.setAttribute('aria-current', 'page');
   const own=ownInput ?? (!task?.archived && (!!task?.needs_input || !role?.archived && (!!role?.needs_input || role?.status==='blocked')));
-  row.append(taskStatusIcon({ ...task, needs_input: !!own }, { needsInput, failed }), node('span', 'task-name', name));
+  row.append(taskStatusIcon({ ...task, needs_input: !!own }, { needsInput, failed: !!task?.failure || !!failed }), node('span', 'task-name', name));
   if (task?.archive_pending) {
     const pending = node('span','task-archive-pending','·');
     pending.setAttribute('aria-label','Archive pending');pending.dataset.tooltip='Archive pending. Checking current task state.';row.append(pending);
   }
+  const pressure=roleContextIndicator(role,task);if(pressure)row.append(pressure);
   const status = roleStatus(role, task);
   if (status) { const tag = node('span', 'task-role-tag', status==='unbound'?'Unavailable':status); tag.dataset.roleStatus = status; tag.dataset.tooltip = `Agent ${status==='unbound'?'unavailable':status}`; tag.setAttribute('aria-label', tag.dataset.tooltip); row.append(tag); }
   if (pinned) { const pin = node('span', 'task-pin', '⌖'); pin.setAttribute('aria-label', 'Pinned'); pin.dataset.tooltip = 'Pinned'; row.append(pin); }
