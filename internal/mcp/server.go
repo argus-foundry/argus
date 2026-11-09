@@ -1747,7 +1747,7 @@ func (s *Server) toolTaskList(id interface{}, args json.RawMessage) *Response {
 	var sb strings.Builder
 	count := 0
 	for _, t := range tasks {
-		if t.Archived {
+		if t.Archived || t.IsResident() {
 			continue
 		}
 		if p.Status != "" && t.Status.String() != p.Status {
@@ -1788,8 +1788,8 @@ func (s *Server) toolTaskGet(id interface{}, args json.RawMessage) *Response {
 	}
 
 	task, err := s.taskDB.Get(p.ID)
-	if err != nil || task == nil {
-		return toolError(id, "task not found")
+	if err != nil || task == nil || task.IsResident() {
+		return toolError(id, "task not found") // the resident is not a task
 	}
 
 	var sb strings.Builder
@@ -1859,6 +1859,9 @@ func (s *Server) toolTaskArchive(id interface{}, args json.RawMessage) *Response
 	task, err := s.resolveTask(p.ID, p.Cwd)
 	if err != nil {
 		return toolError(id, err.Error())
+	}
+	if task.IsResident() {
+		return toolError(id, residentLifecycleError("archive"))
 	}
 
 	// Read-then-write is not atomic — a concurrent /archive call or a
@@ -1931,6 +1934,9 @@ func (s *Server) toolTaskRename(id interface{}, args json.RawMessage) *Response 
 	if err != nil {
 		return toolError(id, err.Error())
 	}
+	if task.IsResident() {
+		return toolError(id, residentLifecycleError("rename"))
+	}
 
 	if name == task.Name {
 		return toolResult(id, fmt.Sprintf("Task %s (%s) already named %q.", task.ID, task.Name, name))
@@ -1960,6 +1966,9 @@ func (s *Server) toolTaskComplete(id interface{}, args json.RawMessage) *Respons
 	task, err := s.resolveTask(p.ID, p.Cwd)
 	if err != nil {
 		return toolError(id, err.Error())
+	}
+	if task.IsResident() {
+		return toolError(id, residentLifecycleError("complete"))
 	}
 
 	if task.Status == model.StatusComplete {
@@ -2336,7 +2345,44 @@ func (s *Server) resolveTask(taskID, cwd string) (*model.Task, error) {
 			candidates = append(candidates, t)
 		}
 	}
+	if len(candidates) == 0 {
+		// Task enumeration excludes the resident, but the resident still has to
+		// resolve itself for self-addressed tools (task_recycle, task_set_result).
+		if r := s.residentByCwd(cleanCwd); r != nil {
+			return r, nil
+		}
+	}
 	return disambiguateCwdMatches(cwd, candidates)
+}
+
+// residentLookup is the optional slice of *db.DB that surfaces the resident row.
+type residentLookup interface {
+	ResidentTask() (*model.Task, error)
+}
+
+// residentByCwd returns the resident row when cleanCwd is inside its working
+// directory, else nil. Fails closed (nil) when the store has no resident lookup.
+func (s *Server) residentByCwd(cleanCwd string) *model.Task {
+	rl, ok := s.taskDB.(residentLookup)
+	if !ok {
+		return nil
+	}
+	r, err := rl.ResidentTask()
+	if err != nil || r == nil || r.Worktree == "" {
+		return nil
+	}
+	wt := filepath.Clean(r.Worktree)
+	if cleanCwd == wt || strings.HasPrefix(cleanCwd, wt+string(filepath.Separator)) {
+		return r
+	}
+	return nil
+}
+
+// residentLifecycleError is the explicit rejection every lifecycle verb returns
+// for the resident agent (add-resident-agent): it is not a task and is never
+// completed, archived, renamed, deleted, forked or moved.
+func residentLifecycleError(verb string) string {
+	return fmt.Sprintf("cannot %s the resident agent: it is not a task and is not lifecycle-managed", verb)
 }
 
 // disambiguateCwdMatches picks the single task a cwd should resolve to among

@@ -553,6 +553,12 @@ func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
 	if err != nil || t == nil || t.Status != model.StatusInProgress {
 		return
 	}
+	if t.IsResident() {
+		// The resident stays in_progress permanently; the ensure-running loop
+		// (not a status flip) handles its exit.
+		uxlog.Log("[resident] session exit task=%s clean=%t (status unchanged)", taskID, cleanExit)
+		return
+	}
 	if cleanExit {
 		t.SetStatus(model.StatusComplete)
 	} else {

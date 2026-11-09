@@ -264,6 +264,9 @@ func (d *DB) renameLocked(id, name string) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if gerr := residentGuard(d.conn, id); gerr != nil {
+		return "", gerr
+	}
 	var oldName string
 	_ = d.conn.QueryRow(`SELECT name FROM tasks WHERE id=?`, id).Scan(&oldName)
 
@@ -305,6 +308,9 @@ func (d *DB) renameIfNameLocked(id, expected, newName string) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if gerr := residentGuard(d.conn, id); gerr != nil {
+		return false, gerr
+	}
 	res, err := d.conn.Exec(`UPDATE tasks SET name=? WHERE id=? AND name=?`, newName, id, expected)
 	if err != nil {
 		return false, err

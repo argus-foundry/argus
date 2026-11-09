@@ -632,6 +632,9 @@ func (s *Server) idleWatcherTick(state *idleWatcherState) {
 		if err != nil || task == nil {
 			continue
 		}
+		if task.IsResident() {
+			continue // resident replies are not task idle pushes (add-resident-agent)
+		}
 		name := task.Name
 		if name == "" {
 			name = id
@@ -771,7 +774,28 @@ func (s *Server) detectNeedsInputTick(state *idleWatcherState, running, idle []s
 		}
 	}
 	state.needsInputNow = needsSet
-	s.runner.SetNeedsInputIDs(needs)
+	// The resident is excluded from the generic task needs-input set that the
+	// Tasks list and rail read; its own waiting signal is exposed separately.
+	s.runner.SetNeedsInputIDs(s.withoutResident(needs))
+}
+
+// withoutResident returns ids minus the resident task's id (add-resident-agent).
+// A lookup error or a missing row leaves ids untouched.
+func (s *Server) withoutResident(ids []string) []string {
+	if s.db == nil || len(ids) == 0 {
+		return ids
+	}
+	r, err := s.db.ResidentTask()
+	if err != nil || r == nil {
+		return ids
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != r.ID {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // autoClearBlockedHeraRoles auto-clears a role's self-reported hera_status
