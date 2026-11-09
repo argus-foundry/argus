@@ -224,13 +224,14 @@ const (
 	//     allow), defaultMode, disableBypassPermissionsMode and its own Stop
 	//     coord-hook; the user's CLAUDE.md rides the appended system prompt and
 	//     user skills an --add-dir symlink root. It also carries the account's
-	//     sandbox block with its Bash auto-approve escapes forced off, strips
-	//     --allowedTools, reads user files from the account dir (never an
-	//     inherited $CLAUDE_CONFIG_DIR) and re-verifies its cached prompt file.
+	//     sandbox block with its Bash auto-approve escapes forced off,
+	//     reads user files from the account dir (never an inherited
+	//     $CLAUDE_CONFIG_DIR).
 	//     The sandbox carry is an allowlist of restrictive keys (no `enabled`
 	//     under Argus's own sandbox), the backend command must pass a flag
 	//     allowlist (else the resident refuses to start), and its prompt file
-	//     and skills root live in a private 0700 ~/.argus/resident-launch.
+	//     and skills root live in a private 0700 ~/.argus/resident-launch
+	//     (--allowedTools is refused by that allowlist, not stripped).
 	SupervisorSpawnSurface = 40
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -538,7 +539,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "5cb8380757116d4ddc91826e58d406fdb3288c17e3eb59526bc644809077616c"
+	SpawnSurfaceDigest  = "a589fa2a14fdf7e8a1170b47f13d1ee2a2e512270d3b3327950fd7ad753486bd"
 	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 

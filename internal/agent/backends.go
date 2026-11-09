@@ -871,11 +871,33 @@ var (
 	residentClaudeBoolFlags  = []string{"--verbose"}
 )
 
-// residentSafeWord is a command word that needs no shell quoting and contains
-// no shell metacharacter; the resident's command is accepted only when every
-// word's raw text matches it, so a value like `x;rm` or `$(...)` cannot ride
-// the allowlist into the sh -c line.
-var residentSafeWord = regexp.MustCompile(`^[A-Za-z0-9_./+@%:,=\[\]-]+$`)
+// residentSafeWord is a command word that needs no shell escaping: a run of
+// plain characters and/or simple single-quoted segments (no shell
+// metacharacter, space or quote inside). The resident's command is accepted
+// only when every word's raw text matches it, so a value like `x;rm`,
+// `"$(...)"` or `$HOME` cannot ride the allowlist into the sh -c line. `[` and
+// `]` are accepted only inside single quotes: unquoted they are a sh glob
+// pattern (`opus[1m]` could match a file in the cwd), so that form is refused
+// with a hint to single-quote it. The executable word alone may also lead with
+// `~/` (shell tilde expansion; `~user` and `$HOME` stay refused).
+var (
+	residentSafeWord = regexp.MustCompile(`^(?:[A-Za-z0-9_./+@%:,=-]|'[A-Za-z0-9_./+@%:,=\[\]-]+')+$`)
+	residentQuoted   = regexp.MustCompile(`'[^']*'`)
+)
+
+// onlyUnquotedBrackets reports whether text is refused solely because of
+// unquoted [ or ] (so the error can suggest single-quoting).
+func onlyUnquotedBrackets(text string) bool {
+	var out strings.Builder
+	last := 0
+	for _, m := range residentQuoted.FindAllStringIndex(text, -1) {
+		out.WriteString(strings.NewReplacer("[", "", "]", "").Replace(text[last:m[0]]))
+		out.WriteString(text[m[0]:m[1]])
+		last = m[1]
+	}
+	out.WriteString(strings.NewReplacer("[", "", "]", "").Replace(text[last:]))
+	return out.String() != text && residentSafeWord.MatchString(out.String())
+}
 
 // checkClaudeResidentCommand enforces the resident's flag allowlist on a
 // Claude backend command: word 0 must be a Claude binary (any path whose base
@@ -890,9 +912,17 @@ func checkClaudeResidentCommand(command string) error {
 		return fmt.Errorf("empty backend command")
 	}
 	raw := func(i int) string { return command[words[i].start:words[i].end] }
+	exe := words[0].value
 	safe := func(i int) error {
-		if !residentSafeWord.MatchString(raw(i)) {
-			return fmt.Errorf("backend command word %q is not allowed for the resident (quotes, spaces and shell operators are refused)", raw(i))
+		text := raw(i)
+		if i == 0 {
+			text = strings.TrimPrefix(text, "~/")
+		}
+		if !residentSafeWord.MatchString(text) {
+			if onlyUnquotedBrackets(text) {
+				return fmt.Errorf("word %q not allowed for the resident (unquoted [ ] is a shell glob; single-quote it, e.g. 'opus[1m]')", raw(i))
+			}
+			return fmt.Errorf("word %q not allowed for the resident (backend %q; quotes, spaces and shell operators are refused)", raw(i), exe)
 		}
 		return nil
 	}
@@ -900,7 +930,7 @@ func checkClaudeResidentCommand(command string) error {
 		return err
 	}
 	if backendkind.Of(words[0].value) != backendkind.Claude {
-		return fmt.Errorf("backend executable %q is not a Claude binary", words[0].value)
+		return fmt.Errorf("executable %q not allowed for the resident (not a Claude binary)", exe)
 	}
 	for i := 1; i < len(words); i++ {
 		v := words[i].value
@@ -918,14 +948,14 @@ func checkClaudeResidentCommand(command string) error {
 				continue
 			}
 			if i+1 >= len(words) || strings.HasPrefix(words[i+1].value, "-") {
-				return fmt.Errorf("flag %s needs a value", v)
+				return fmt.Errorf("flag %q needs a value for the resident (backend %q)", v, exe)
 			}
 			i++
 			if err := safe(i); err != nil {
-				return fmt.Errorf("flag %s: %w", v, err)
+				return fmt.Errorf("flag %q: %w", v, err)
 			}
 		default:
-			return fmt.Errorf("flag %q is not allowed in the resident backend command (allowed: --model, --effort, --fallback-model, --verbose)", v)
+			return fmt.Errorf("flag %q not allowed for the resident (backend %q; allowed: --model, --effort, --fallback-model, --verbose)", v, exe)
 		}
 	}
 	return nil

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -425,21 +426,34 @@ func ensurePrivateDir(path string) error {
 	fi, err := os.Lstat(path)
 	switch {
 	case err == nil && fi.IsDir():
-		if fi.Mode().Perm() != 0o700 {
-			return os.Chmod(path, 0o700) //nolint:gosec // a directory; 0700 is the private mode
-		}
-		return nil
+		return chmodPrivate(path, fi)
 	case err == nil:
-		if rerr := os.Remove(path); rerr != nil {
+		if rerr := os.Remove(path); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 			return rerr
 		}
 	case !errors.Is(err, fs.ErrNotExist):
 		return err
 	}
 	if err := os.Mkdir(path, 0o700); err != nil {
-		return err
+		if !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		// A concurrent first launch created it between our Lstat and Mkdir:
+		// accept a real directory, never a symlink or file raced into place.
+		fi, lerr := os.Lstat(path)
+		if lerr != nil || !fi.IsDir() {
+			return err
+		}
+		return chmodPrivate(path, fi)
 	}
 	return os.Chmod(path, 0o700) //nolint:gosec // a directory; 0700 is the private mode
+}
+
+func chmodPrivate(path string, fi fs.FileInfo) error {
+	if fi.Mode().Perm() != 0o700 {
+		return os.Chmod(path, 0o700) //nolint:gosec // a directory; 0700 is the private mode
+	}
+	return nil
 }
 
 // materializeResidentPrompt writes routingPath's content (when set) followed by
@@ -539,18 +553,46 @@ func ensureResidentUserSkillsDir(task *model.Task, cfg config.Config) string {
 	if cur, err := os.Readlink(link); err == nil && cur == src {
 		return root
 	}
-	// Whatever sits at link (stale symlink, file, directory) is replaced, never followed.
-	if err := os.RemoveAll(link); err != nil {
-		uxlog.Log("[resident] user skills link failed (skipping user skills): %v", err)
-		slog.Warn("[resident] user skills link failed", "err", err)
-		return ""
+	// Whatever sits at link is replaced, never followed. A real directory or
+	// file is removed first; a symlink is swapped by atomic rename of a fresh
+	// temp link, so concurrent first launches never observe the link missing.
+	if fi, err := os.Lstat(link); err == nil && fi.Mode()&os.ModeSymlink == 0 {
+		if err := os.RemoveAll(link); err != nil {
+			uxlog.Log("[resident] user skills link failed (skipping user skills): %v", err)
+			slog.Warn("[resident] user skills link failed", "err", err)
+			return ""
+		}
 	}
-	if err := os.Symlink(src, link); err != nil {
+	if err := replaceSymlink(src, link); err != nil {
+		if cur, rerr := os.Readlink(link); rerr == nil && cur == src {
+			return root // a concurrent launch linked the same source
+		}
 		uxlog.Log("[resident] user skills link failed (skipping user skills): %v", err)
 		slog.Warn("[resident] user skills link failed", "err", err)
 		return ""
 	}
 	return root
+}
+
+// replaceSymlink atomically points link at src: a uniquely named temp symlink
+// beside it is renamed over link (rename replaces a symlink, never follows it).
+func replaceSymlink(src, link string) error {
+	dir := filepath.Dir(link)
+	for range 8 {
+		tmp := filepath.Join(dir, fmt.Sprintf(".tmp-link-%d", rand.Int64())) //nolint:gosec // unique temp name, not security-sensitive
+		if err := os.Symlink(src, tmp); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				continue
+			}
+			return err
+		}
+		if err := os.Rename(tmp, link); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("no free temp link name in %s", dir)
 }
 
 // residentSandbox carries the user's Claude `sandbox` block for its

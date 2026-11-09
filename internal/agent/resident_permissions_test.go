@@ -1092,20 +1092,44 @@ func TestBuildCmd_ResidentSandboxedTaskDropsEnabled(t *testing.T) {
 	task, acct := residentFixture(t)
 	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"),
 		[]byte(`{"sandbox":{"enabled":true,"failIfUnavailable":true,"network":{"deniedDomains":["blocked.test"]}}}`), 0o644))
-	st, _ := settingsArg(t, buildResident(t, task, residentCfg()).Args)
-	sb, _ := st["sandbox"].(map[string]any)
-	testutil.Equal(t, sb["enabled"], any(true))
+	sandboxOf := func(cfg config.Config) map[string]any {
+		t.Helper()
+		st, _ := settingsArg(t, buildResident(t, task, cfg).Args)
+		sb, _ := st["sandbox"].(map[string]any)
+		return sb
+	}
 
+	// No Argus wrap: the user's own Claude sandbox stays on.
+	testutil.Equal(t, sandboxOf(residentCfg())["enabled"], any(true))
+
+	// A persisted task.Sandboxed alone must NOT drop it: the wrap decision is
+	// made from the live config, and dropping `enabled` without a real wrap
+	// would leave the resident with neither sandbox (fail-open).
 	task.Sandboxed = true
-	st, _ = settingsArg(t, buildResident(t, task, residentCfg()).Args)
-	sb, _ = st["sandbox"].(map[string]any)
+	testutil.Equal(t, sandboxOf(residentCfg())["enabled"], any(true))
+
+	// Argus really wraps the launch: `enabled` / failIfUnavailable drop (no
+	// nesting), the restrictive keys stay.
+	if !IsSandboxAvailable() {
+		t.Skip("sandbox-exec unavailable on this platform")
+	}
+	cfg := residentCfg()
+	cfg.Sandbox.Enabled = true
+	// The wrapped command nests the claude argv inside sandbox-exec, so check
+	// the carried block through the same decision BuildCmd makes.
+	testutil.True(t, argusWrapsSandbox(task, cfg))
+	var sb map[string]any
+	testutil.NoError(t, json.Unmarshal(readResidentUserSettings(task, cfg, argusWrapsSandbox(task, cfg)).Sandbox, &sb))
 	if _, has := sb["enabled"]; has {
-		t.Fatalf("enabled carried for a Sandboxed resident: %v", sb)
+		t.Fatalf("enabled carried while Argus wraps the resident: %v", sb)
 	}
 	if _, has := sb["failIfUnavailable"]; has {
-		t.Fatalf("failIfUnavailable carried for a Sandboxed resident: %v", sb)
+		t.Fatalf("failIfUnavailable carried while Argus wraps the resident: %v", sb)
 	}
 	testutil.Contains(t, fmt.Sprint(sb["network"]), "blocked.test")
+	testutil.False(t, argusWrapsSandbox(task, residentCfg()))
+	// And the wrapped resident still launches (the profile generated).
+	_ = buildResident(t, task, cfg)
 }
 
 func TestCheckClaudeResidentCommand(t *testing.T) {
@@ -1116,7 +1140,11 @@ func TestCheckClaudeResidentCommand(t *testing.T) {
 		"claude --effort high",
 		"claude --effort=low --verbose",
 		"claude --fallback-model sonnet --model opus",
-		"claude --model opus[1m]",
+		"~/.local/bin/claude --model sonnet",
+		"claude --model 'opus[1m]'",
+		"claude --model 'claude-opus-4-1'",
+		"claude --effort='high'",
+		"claude --model='opus[1m]' --verbose",
 	}
 	for _, c := range ok {
 		t.Run("ok "+c, func(t *testing.T) { testutil.NoError(t, checkClaudeResidentCommand(c)) })
@@ -1141,6 +1169,23 @@ func TestCheckClaudeResidentCommand(t *testing.T) {
 		{"claude --model $(id)", "$(id)"},
 		{"claude --model `id`", "`id`"},
 		{"claude | tee", "|"},
+		{"claude --model opus[1m]", "single-quote"},
+		{"claude --model=opus[1m]", "single-quote"},
+		{`claude --model "opus"`, "not allowed"},
+		{`claude --model="opus"`, "not allowed"},
+		{"claude --model 'opus", "unterminated"},
+		{"claude --model 'a b'", "'a b'"},
+		{"claude --model 'a$b'", "'a$b'"},
+		{"claude --model 'a;b'", "'a;b'"},
+		{"$HOME/.local/bin/claude --model x", "$HOME/.local/bin/claude"},
+		{"~root/bin/claude --model x", "~root/bin/claude"},
+		{"claude ~/x --model y", "~/x"},
+		{"claude --model ~/x", "~/x"},
+		{"~/bin/sh --model x", "sh"},
+		{"x;/claude --model y", "x;/claude"},
+		{"$(id)/claude --model y", "$(id)/claude"},
+		{"claude --model=$(id)", "--model=$(id)"},
+		{"claude --effort=x;rm", "--effort=x;rm"},
 		{`claude "--allowedTools" Read`, "--allowedTools"},
 		{"codex --model x", "codex"},
 		{"/bin/sh --model x", "sh"},
@@ -1170,7 +1215,8 @@ func TestBuildCmd_ResidentRefusesDisallowedFlagsAndSurfacesError(t *testing.T) {
 			}
 			name, _, _ := strings.Cut(flag, " ")
 			testutil.Contains(t, err.Error(), name)
-			testutil.Contains(t, err.Error(), "refused")
+			// The offending flag leads the message (Settings shows it truncated).
+			testutil.True(t, strings.HasPrefix(err.Error(), `flag "`+name+`" not allowed for the resident`))
 			// A plain task with the same command is unaffected.
 			plain := &model.Task{ID: "p", Name: "plain", Worktree: t.TempDir()}
 			if _, cleanup, perr := BuildCmd(plain, cfg, false); perr != nil {
@@ -1188,4 +1234,98 @@ func TestBuildCmd_ResidentRefusesDisallowedFlagsAndSurfacesError(t *testing.T) {
 		cleanup()
 	}
 	testutil.Contains(t, strings.Join(cmd.Args, " "), "--model=opus")
+}
+
+// Widening the resident's flag allowlist must be a deliberate test change.
+func TestResidentClaudeFlagAllowlist_Pinned(t *testing.T) {
+	testutil.DeepEqual(t, residentClaudeValueFlags, []string{"--model", "--effort", "--fallback-model"})
+	testutil.DeepEqual(t, residentClaudeBoolFlags, []string{"--verbose"})
+}
+
+func TestResidentLaunchDir_RepairsLooseMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".argus", residentLaunchDirName)
+	testutil.NoError(t, os.MkdirAll(dir, 0o755))
+	testutil.NoError(t, os.Chmod(dir, 0o755)) //nolint:gosec // deliberately loose mode under test
+	got, err := residentLaunchDir()
+	testutil.NoError(t, err)
+	testutil.Equal(t, got, dir)
+	fi, err := os.Lstat(dir)
+	testutil.NoError(t, err)
+	testutil.Equal(t, fi.Mode().Perm(), os.FileMode(0o700))
+}
+
+// A planted symlink whose target already holds the exact expected bytes is
+// still replaced by a regular file (content equality must not bless a link).
+func TestMaterializeResidentPrompt_SymlinkWithExactBytesReplaced(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	file, err := materializeResidentPrompt("", "RULES")
+	testutil.NoError(t, err)
+	want, err := os.ReadFile(file)
+	testutil.NoError(t, err)
+	target := filepath.Join(t.TempDir(), "same.md")
+	testutil.NoError(t, os.WriteFile(target, want, 0o644))
+	testutil.NoError(t, os.Remove(file))
+	testutil.NoError(t, os.Symlink(target, file))
+	got, err := materializeResidentPrompt("", "RULES")
+	testutil.NoError(t, err)
+	fi, err := os.Lstat(got)
+	testutil.NoError(t, err)
+	testutil.True(t, fi.Mode().IsRegular())
+	b, _ := os.ReadFile(target)
+	testutil.Equal(t, string(b), string(want))
+}
+
+func TestEnsureResidentUserSkillsDir_ReplacesNonEmptyDirectory(t *testing.T) {
+	task, acct := residentFixture(t)
+	testutil.NoError(t, os.MkdirAll(filepath.Join(acct, "skills"), 0o755))
+	root := ensureResidentUserSkillsDir(task, residentCfg())
+	testutil.True(t, root != "")
+	link := filepath.Join(root, ".claude", "skills")
+	testutil.NoError(t, os.Remove(link))
+	testutil.NoError(t, os.MkdirAll(filepath.Join(link, "evil"), 0o755))
+	testutil.NoError(t, os.WriteFile(filepath.Join(link, "evil", "SKILL.md"), []byte("x"), 0o644))
+	got := ensureResidentUserSkillsDir(task, residentCfg())
+	testutil.Equal(t, got, root)
+	cur, err := os.Readlink(link)
+	testutil.NoError(t, err)
+	testutil.Equal(t, cur, filepath.Join(acct, "skills"))
+}
+
+// Concurrent first launches on a fresh HOME must all succeed (the Lstat->Mkdir
+// and Remove->Symlink windows used to fail with "file exists", launching the
+// resident silently without CLAUDE.md / skills).
+func TestResidentLaunch_ConcurrentFirstLaunches(t *testing.T) {
+	task, acct := residentFixture(t)
+	testutil.NoError(t, os.MkdirAll(filepath.Join(acct, "skills"), 0o755))
+	const n = 32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	files := make([]string, n)
+	roots := make([]string, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			files[i], errs[i] = materializeResidentPrompt("", "RULES")
+			roots[i] = ensureResidentUserSkillsDir(task, residentCfg())
+		}()
+	}
+	close(start)
+	wg.Wait()
+	for i := 0; i < n; i++ {
+		testutil.NoError(t, errs[i])
+		testutil.Equal(t, files[i], files[0])
+		testutil.True(t, roots[i] != "")
+		testutil.Equal(t, roots[i], roots[0])
+	}
+	b, err := os.ReadFile(files[0])
+	testutil.NoError(t, err)
+	testutil.Contains(t, string(b), "RULES")
+	cur, err := os.Readlink(filepath.Join(roots[0], ".claude", "skills"))
+	testutil.NoError(t, err)
+	testutil.Equal(t, cur, filepath.Join(acct, "skills"))
 }

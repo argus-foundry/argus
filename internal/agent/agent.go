@@ -861,6 +861,9 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	cmdStr := backend.Command
 
 	fam := FamilyOf(backend.Command)
+	// residentArgusWrap records that the resident policy dropped the user's
+	// Claude sandbox `enabled` because Argus will wrap this launch itself.
+	residentArgusWrap := false
 	// Fail closed: a resident on a family that cannot enforce its tool policy
 	// and strip bypass flags must never launch with the policy silently dropped.
 	if task.IsResident() && (fam.PermissionRulesFlag == nil || fam.StripPermissionFlags == nil || fam.ResidentCommandCheck == nil) {
@@ -880,7 +883,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		// Flag allowlist: refuse anything but the executable and known-benign
 		// flags (--allowedTools, --plugin-dir, --mcp-config, --settings, ...).
 		if err := fam.ResidentCommandCheck(backend.Command); err != nil {
-			return nil, nil, fmt.Errorf("resident backend %q refused: %w", backend.Command, err)
+			return nil, nil, err
 		}
 	}
 	isCodex := fam.Kind == backendkind.Codex
@@ -982,8 +985,13 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	if task.IsResident() && fam.PermissionRulesFlag != nil {
 		// Claude's Bash sandbox cannot nest inside Argus's sandbox-exec, so the
 		// user's `enabled` is not carried when the resident is itself sandboxed.
-		argusSandboxed := task.Sandboxed || (ResolveSandboxConfig(task, cfg).Enabled && IsSandboxAvailable())
-		us := readResidentUserSettings(task, cfg, argusSandboxed)
+		// Must be the SAME predicate the sandbox-wrap block below uses (never
+		// the persisted task.Sandboxed): dropping the user's Claude sandbox
+		// `enabled` is only safe when Argus really wraps the resident. If the
+		// wrap then fails, the launch is refused below rather than falling
+		// through unsandboxed with neither sandbox applied.
+		residentArgusWrap = argusWrapsSandbox(task, cfg)
+		us := readResidentUserSettings(task, cfg, residentArgusWrap)
 		policy := ResidentPolicy{
 			Allow:       cfg.Resident.AllowTools,
 			Ask:         mergeRules(cfg.Resident.AskTools, us.Ask),
@@ -1191,8 +1199,12 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		if serr == nil {
 			cmdStr = WrapWithSandbox(cmdStr, profilePath, params)
 			sandboxCleanup = cleanup
+		} else if residentArgusWrap {
+			// The resident's own Claude sandbox `enabled` was dropped on the
+			// promise of this wrap: never fall through with neither applied.
+			return nil, nil, fmt.Errorf("resident sandbox profile: %w", serr)
 		}
-		// If sandbox config generation fails, fall through to unsandboxed
+		// Otherwise, if sandbox config generation fails, fall through to unsandboxed
 	}
 
 	// On any error return below, run sandboxCleanup so the temp profile file
@@ -1487,4 +1499,12 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 // replacement string below).
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// argusWrapsSandbox reports whether BuildCmd's sandbox-wrap block will wrap
+// this launch (sandbox enabled for the task, available on the platform, and a
+// worktree to scope it to). It is the single predicate for both the wrap and
+// the resident's decision to drop the user's own Claude sandbox `enabled`.
+func argusWrapsSandbox(task *model.Task, cfg config.Config) bool {
+	return ResolveSandboxConfig(task, cfg).Enabled && IsSandboxAvailable() && task.Worktree != ""
 }
