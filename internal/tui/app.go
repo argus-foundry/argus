@@ -358,6 +358,11 @@ type App struct {
 	residentReturn        *residentReturn
 	residentPane          *terminal.TerminalPane
 	residentAttachPending bool
+	residentBox           *widget.ResidentBox
+	residentSt            residentAttention
+	residentPollPending   bool
+	residentPolledAt      time.Time
+	residentStateFn       func() (daemon.ResidentStateResp, error) // test seam; default daemonClient.ResidentState
 	agentState            agentview.State
 	daemonConnected       bool
 	tasks                 []*model.Task
@@ -1009,12 +1014,19 @@ func (a *App) buildUI() {
 	// above the git status panel; it starts at zero height and grows as
 	// updateAttentionBar resizes it.
 	a.attentionBar = widget.NewAttentionBar()
+	a.residentBox = widget.NewResidentBox()
 	a.agentLeftCol = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.attentionBar, 0, 0, false).
+		AddItem(a.residentBox, 0, 0, false).
 		AddItem(a.gitPanel, 0, 1, false)
 	a.attentionBar.OnHeightChange = func() {
 		a.agentLeftCol.ResizeItem(a.attentionBar, a.attentionBar.DesiredHeight(), 0)
 		a.forceRedraw("attention bar height changed")
+	}
+	// Left-column-only resize: no PTY pane is resized or kicked (spec: rail box).
+	a.residentBox.OnHeightChange = func() {
+		a.agentLeftCol.ResizeItem(a.residentBox, a.residentBox.DesiredHeight(), 0)
+		a.forceRedraw("resident box height changed")
 	}
 	a.agentPanels = tview.NewFlex().SetDirection(tview.FlexColumn).
 		AddItem(a.agentLeftCol, 0, 1, false).
@@ -1033,6 +1045,7 @@ func (a *App) buildUI() {
 	// The rail identifies the selected task; only the classic page needs the
 	// task-name header. Rail content starts directly below the root tab bar.
 	a.tasksRailPage = taskview.NewRailPage(a.tasklist, a.agentPanels, a.agentPane)
+	a.tasksRailPage.Resident = a.residentBox
 	a.tasksRailPage.PaneFocused = func() bool { return a.mode == modeAgent }
 	a.tasksRailPage.OnRailFocus = a.focusTasksRail
 	a.tasklist.SetRailMode(a.tasksRailEnabled)
@@ -1047,6 +1060,7 @@ func (a *App) buildUI() {
 		heraReader = d
 	}
 	a.heraPage = hera.NewHeraPage(heraReader)
+	a.heraPage.SetResidentBox(a.residentBox)
 	a.heraPage.SetBoardAuto(a.db.Config().UI.CoordinatorBoard)
 	a.heraPage.Keys = a.activeKeymap
 	if d, ok := a.db.(*db.DB); ok {
@@ -1806,6 +1820,7 @@ func (a *App) onTick() {
 		// QueueUpdateDraw closure), matching the keymap cache's threading.
 		a.refreshKeymap()
 		a.refreshResidentTab()
+		a.pollResidentState()
 		a.reconcileTasksRail()
 
 		// Refresh task list side panels.
@@ -5330,6 +5345,8 @@ func (a *App) switchTab(t widget.Tab) {
 	a.header.SetTab(t)
 	a.statusbar.SetTab(t)
 	a.persistLastTab(t)
+	a.syncResidentBox()
+	a.refreshResidentLabelOnly()
 
 	switch t {
 	case widget.TabResident:

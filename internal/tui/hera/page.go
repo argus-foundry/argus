@@ -315,6 +315,9 @@ type HeraPage struct {
 	// transition is logged once, not every frame.
 	summary      *widget.AttentionSummary
 	summaryShown bool
+	// resident is the shared resident attention box, drawn under the summary.
+	// Pure Draw math like the summary: no flex, no PTY resize.
+	resident *widget.ResidentBox
 }
 
 // minRailHeight is the floor below which the attention summary box yields its
@@ -596,6 +599,9 @@ func (p *HeraPage) Machine() *FocusMachine { return p.focus }
 
 // IsRemote reports whether the page is in the remote-degraded mode.
 func (p *HeraPage) IsRemote() bool { return p.remote }
+
+// SetResidentBox wires the shared resident attention box into the rail column.
+func (p *HeraPage) SetResidentBox(b *widget.ResidentBox) { p.resident = b }
 
 // SetNeedsInput records the task IDs the App detected as blocked on a user
 // prompt this tick (App.needsInputIDs — the SAME authoritative, idle-gated
@@ -916,6 +922,13 @@ func (p *HeraPage) Draw(screen tcell.Screen) {
 		railY, railH = y+barH, h-barH
 	}
 	p.logSummaryTransition(barH > 0)
+	if p.resident != nil {
+		if rh := p.resident.DesiredHeight(); rh > 0 && railH-rh >= minRailHeight {
+			p.resident.SetRect(x, railY, railW, rh)
+			p.resident.Draw(screen)
+			railY, railH = railY+rh, railH-rh
+		}
+	}
 
 	p.rail.SetFocused(p.focus.State() == FocusRail)
 	p.rail.SetRect(x, railY, railW, railH)

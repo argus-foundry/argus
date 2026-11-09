@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"time"
+
 	"github.com/drn/argus/internal/app/agentview"
+	"github.com/drn/argus/internal/daemon"
 	"github.com/drn/argus/internal/db"
 	"github.com/drn/argus/internal/tui/hera"
 	"github.com/drn/argus/internal/tui/widget"
@@ -36,7 +39,9 @@ func (a *App) refreshResidentTab() {
 	if local && cfg.Enabled {
 		label = cfg.Name
 	}
-	a.header.SetTabLabel(widget.TabResident, label)
+	// The marker is folded into this single label write so the tick can never
+	// clobber it; the stored attention state is applied by applyResidentState.
+	a.header.SetTabLabel(widget.TabResident, a.residentLabelWithMarker(label))
 	if a.header.ActiveTab() != widget.TabResident {
 		return
 	}
@@ -206,4 +211,103 @@ func (a *App) markResidentViewed() {
 			}
 		}()
 	}
+}
+
+// residentPollInterval bounds how often the UI tick asks the daemon for the
+// resident's unread/waiting state.
+const residentPollInterval = 2 * time.Second
+
+// residentAttention is the UI-goroutine-owned copy of the daemon state that
+// drives the tab-label marker and the rail box.
+type residentAttention struct {
+	unread, waiting bool
+	preview         string
+}
+
+// residentLabelWithMarker appends the marker to the tab label. The marker is
+// withheld while the resident tab itself is showing (viewing clears it) and
+// when the label is empty (disabled hides everything).
+func (a *App) residentLabelWithMarker(label string) string {
+	if label == "" || a.header.ActiveTab() == widget.TabResident {
+		return label
+	}
+	if m := widget.ResidentMarker(a.residentSt.unread, a.residentSt.waiting); m != "" {
+		return label + " " + m
+	}
+	return label
+}
+
+// pollResidentState runs on the UI tick: it fetches the daemon state on a
+// background goroutine (single flight, never on the UI goroutine or in Draw)
+// and delivers via QueueUpdateDraw.
+func (a *App) pollResidentState() {
+	fn := a.residentStateFn
+	if fn == nil {
+		c := a.daemonClient
+		if c == nil {
+			return
+		}
+		fn = c.ResidentState
+	}
+	if a.residentPollPending || a.header.TabLabel(widget.TabResident) == "" ||
+		time.Since(a.residentPolledAt) < residentPollInterval {
+		return
+	}
+	a.residentPollPending = true
+	a.residentPolledAt = time.Now()
+	go func() {
+		resp, err := fn()
+		a.tapp.QueueUpdateDraw(func() {
+			a.residentPollPending = false
+			if err != nil {
+				uxlog.Log("[resident] state poll failed: %v", err)
+				return
+			}
+			a.applyResidentState(resp)
+		})
+	}()
+}
+
+// applyResidentState stores the daemon state and refreshes the box and label.
+// While the resident tab is focused an unread reply is acked immediately so a
+// reply arriving mid-watch never leaves a stale marker.
+func (a *App) applyResidentState(resp daemon.ResidentStateResp) {
+	viewing := a.header.ActiveTab() == widget.TabResident
+	unread := resp.Unread
+	if viewing && unread {
+		uxlog.Log("[resident] reply arrived while viewing; acking")
+		a.markResidentViewed()
+		unread = false
+	}
+	next := residentAttention{unread: unread, waiting: resp.Waiting, preview: resp.LastReply}
+	if next != a.residentSt {
+		uxlog.Log("[resident] attention state unread=%v waiting=%v", next.unread, next.waiting)
+	}
+	a.residentSt = next
+	a.refreshResidentTab()
+	a.syncResidentBox()
+}
+
+// syncResidentBox pushes the stored state into the rail box, suppressed while
+// the resident tab is showing or the resident is disabled.
+func (a *App) syncResidentBox() {
+	name := a.header.TabLabel(widget.TabResident)
+	suppressed := a.header.ActiveTab() == widget.TabResident
+	if name == "" {
+		suppressed = true
+	} else {
+		name = a.db.Config().Resident.Name
+	}
+	st := a.residentSt
+	a.residentBox.Set(name, st.unread, st.waiting, st.preview, suppressed)
+}
+
+// refreshResidentLabelOnly re-derives just the header label (marker) from the
+// current config after a tab change, without touching the pane attachment.
+func (a *App) refreshResidentLabelOnly() {
+	label := ""
+	if _, local := a.db.(*db.DB); local && a.db.Config().Resident.Enabled {
+		label = a.db.Config().Resident.Name
+	}
+	a.header.SetTabLabel(widget.TabResident, a.residentLabelWithMarker(label))
 }

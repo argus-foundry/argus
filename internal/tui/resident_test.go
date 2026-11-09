@@ -8,6 +8,7 @@ import (
 
 	"github.com/drn/argus/internal/agent"
 	"github.com/drn/argus/internal/config"
+	"github.com/drn/argus/internal/daemon"
 	dclient "github.com/drn/argus/internal/daemon/client"
 	"github.com/drn/argus/internal/db"
 	"github.com/drn/argus/internal/model"
@@ -325,4 +326,161 @@ func TestResidentFallbackAndPersistence(t *testing.T) {
 	a.switchTab(widget.TabResident)
 	a.toggleResident()
 	testutil.Equal(t, a.header.ActiveTab(), widget.TabTasks)
+}
+
+func residentFeed(a *App, resp daemon.ResidentStateResp) {
+	a.residentStateFn = func() (daemon.ResidentStateResp, error) { return resp, nil }
+	a.residentPolledAt = time.Time{}
+}
+
+func TestResidentLabelMarkerSurvivesTick(t *testing.T) {
+	a, _ := residentTestApp(t)
+	a.applyResidentState(daemon.ResidentStateResp{Unread: true, LastReply: "hi"})
+	testutil.Equal(t, a.header.TabLabel(widget.TabResident), "Solo ●")
+	a.refreshResidentTab() // the tick's writer must not clobber the marker
+	testutil.Equal(t, a.header.TabLabel(widget.TabResident), "Solo ●")
+	a.applyResidentState(daemon.ResidentStateResp{Unread: true, Waiting: true})
+	testutil.Equal(t, a.header.TabLabel(widget.TabResident), "Solo ?")
+	a.applyResidentState(daemon.ResidentStateResp{})
+	testutil.Equal(t, a.header.TabLabel(widget.TabResident), "Solo")
+	testutil.Equal(t, a.residentBox.DesiredHeight(), 0)
+}
+
+func TestResidentDisabledShowsNothing(t *testing.T) {
+	a, d := residentTestApp(t)
+	testutil.NoError(t, d.SetConfigValue("resident.enabled", "false"))
+	a.applyResidentState(daemon.ResidentStateResp{Unread: true, Waiting: true})
+	testutil.Equal(t, a.header.TabLabel(widget.TabResident), "")
+	testutil.Equal(t, a.residentBox.DesiredHeight(), 0)
+}
+
+func TestSmoke_ResidentBoxStacksWithAttentionBar(t *testing.T) {
+	a, d := residentTestApp(t)
+	a.header.SetTab(widget.TabTasks)
+	for _, n := range []string{"alpha", "beta", "cur"} {
+		testutil.NoError(t, d.Add(&model.Task{ID: n, Name: n, Status: model.StatusInProgress}))
+	}
+	a.refreshTasks()
+	a.needsInputIDs = []string{"alpha", "beta"}
+	sim, stop := wireApp(t, a)
+	defer stop()
+	sim.SetSize(160, 40)
+	readUI(t, a.tapp, func() {
+		enterAgentViewFor(a, &model.Task{ID: "cur", Name: "cur"}, nil)
+		a.pages.SwitchToPage("agent")
+		a.clearAgentZen() // zen hides the left column
+		a.updateAttentionBar()
+	})
+	redrawUI(t, a)
+	var before image
+	readUI(t, a.tapp, func() { before.x, before.y, before.w, before.h = a.agentPane.GetRect() })
+	// Unread reply: both boxes visible together.
+	readUI(t, a.tapp, func() {
+		a.applyResidentState(daemon.ResidentStateResp{Unread: true, LastReply: "all done"})
+	})
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		text := screenText(sim, 160, 40)
+		testutil.Contains(t, text, "Needs input")
+		testutil.Contains(t, text, "alpha")
+		testutil.Contains(t, text, "● Solo: all done")
+		testutil.Equal(t, a.residentBox.DesiredHeight(), 1)
+		var after image
+		after.x, after.y, after.w, after.h = a.agentPane.GetRect()
+		testutil.Equal(t, after, before) // no PTY pane resize
+		testutil.Equal(t, len(a.kickWait), 0)
+		testutil.Equal(t, len(a.pendingRerenderRestart), 0)
+	})
+	// Waiting outranks unread.
+	readUI(t, a.tapp, func() {
+		a.applyResidentState(daemon.ResidentStateResp{Unread: true, Waiting: true, LastReply: "ok?"})
+	})
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		testutil.Contains(t, screenText(sim, 160, 40), "? Solo: ok?")
+	})
+	// Quiet: zero height, nothing drawn.
+	readUI(t, a.tapp, func() { a.applyResidentState(daemon.ResidentStateResp{}) })
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		testutil.Equal(t, a.residentBox.DesiredHeight(), 0)
+		testutil.True(t, !strings.Contains(screenText(sim, 160, 40), "Solo:"))
+		var after image
+		after.x, after.y, after.w, after.h = a.agentPane.GetRect()
+		testutil.Equal(t, after, before)
+	})
+}
+
+func redrawUI(t *testing.T, a *App) {
+	t.Helper()
+	a.tapp.QueueUpdateDraw(func() {})
+	syncUI(t, a.tapp)
+}
+
+type image struct{ x, y, w, h int }
+
+func TestSmoke_ResidentBoxHiddenOnResidentTabAndAckedWhileViewing(t *testing.T) {
+	a, _ := residentTestApp(t)
+	_, stop := wireApp(t, a)
+	defer stop()
+	readUI(t, a.tapp, func() {
+		a.applyResidentState(daemon.ResidentStateResp{Unread: true, LastReply: "x"})
+		testutil.Equal(t, a.residentBox.DesiredHeight(), 1)
+		a.switchTab(widget.TabResident)
+		testutil.Equal(t, a.residentBox.DesiredHeight(), 0) // hidden on the resident tab
+		testutil.Equal(t, a.header.TabLabel(widget.TabResident), "Solo")
+		// A reply arriving while the tab is focused is acked, not left as ●.
+		a.applyResidentState(daemon.ResidentStateResp{Unread: true, LastReply: "y"})
+		testutil.Equal(t, a.residentSt.unread, false)
+		testutil.Equal(t, a.residentBox.DesiredHeight(), 0)
+		a.switchTab(widget.TabSettings)
+		testutil.Equal(t, a.header.TabLabel(widget.TabResident), "Solo")
+	})
+}
+
+func TestSmoke_ResidentPollOffUIThread(t *testing.T) {
+	a, _ := residentTestApp(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	a.residentStateFn = func() (daemon.ResidentStateResp, error) {
+		close(entered)
+		<-release
+		return daemon.ResidentStateResp{Waiting: true}, nil
+	}
+	_, stop := wireApp(t, a)
+	defer stop()
+	readUI(t, a.tapp, func() { a.pollResidentState() })
+	select {
+	case <-entered:
+	case <-time.After(uiTimeout):
+		t.Fatal("poll did not start")
+	}
+	readUI(t, a.tapp, func() { // UI stays responsive; single flight
+		testutil.True(t, a.residentPollPending)
+		a.residentPolledAt = time.Time{}
+		a.pollResidentState()
+	})
+	close(release)
+	waitForCond(t, a.tapp, "poll applied", func() bool { return a.residentSt.waiting })
+	readUI(t, a.tapp, func() { testutil.Equal(t, a.header.TabLabel(widget.TabResident), "Solo ?") })
+}
+
+func TestSmoke_ResidentHeraAndTasksRailBox(t *testing.T) {
+	a, _ := residentTestApp(t)
+	sim, stop := wireApp(t, a)
+	defer stop()
+	sim.SetSize(160, 40)
+	readUI(t, a.tapp, func() {
+		a.applyResidentState(daemon.ResidentStateResp{Waiting: true, LastReply: "confirm?"})
+		a.switchTab(widget.TabHera)
+	})
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		testutil.Contains(t, screenText(sim, 160, 40), "? Solo: confirm?")
+		a.switchTab(widget.TabTasks)
+		a.setTasksRail(true)
+	})
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		testutil.Contains(t, screenText(sim, 160, 40), "? Solo: confirm?")
+	})
 }
