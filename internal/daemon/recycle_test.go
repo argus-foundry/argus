@@ -178,7 +178,9 @@ func TestHeraRecycleRunner_Restart_EndToEnd(t *testing.T) {
 	// seed prompt (mission text) set before the restart landed.
 	updated, err := database.Get(task.ID)
 	testutil.NoError(t, err)
-	testutil.Equal(t, updated.SessionID, "")
+	// Recycle mints a fresh pinned ID (not "", not the stale one): an empty
+	// ID leaves the live session un-resumable (ctrl+n re-render refuses).
+	testutil.Equal(t, updated.SessionID != "" && updated.SessionID != "stale-sid-1", true)
 	testutil.Contains(t, updated.Prompt, "You are the coordinator.")
 
 	// Wait for the old session to die and the fresh one to land.

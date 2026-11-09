@@ -138,11 +138,16 @@ type BootInfoResp struct {
 //   - v11 (add-sandbox-session-signal): spawned agents receive the reserved
 //     ARGUS_SANDBOXED=1 signal only when actually wrapped in sandbox-exec.
 //     No wire fields change; spawn surface v20 identifies this new contract.
+//   - v12 (fix-recycle-session-id): + RecycleReq.SessionID, the fresh pinned
+//     --session-id a recycle mints daemon-side. Additive and zero-value-safe: a
+//     pre-v12 supervisor ignores it and the recycled session launches without
+//     --session-id (the old behavior), so the failure mode on a stale
+//     supervisor is exactly the pre-fix one, never worse.
 //
 // StartResp.SessionID is additive and zero-value-safe: newer clients preserve
 // their existing ID when an older server omits it. Supervisor surface v19
 // identifies the launch recovery behavior that makes this field necessary.
-const ProtocolVersion = 11
+const ProtocolVersion = 12
 
 // SupervisorProtocolMatch reports whether a supervisor's handshake version
 // equals the daemon's. A mismatch is NOT fatal and NEVER triggers an auto-
@@ -342,6 +347,7 @@ type KickReq struct {
 type RecycleReq struct {
 	MCPPort         int
 	TaskID          string
+	SessionID       string // fresh pinned --session-id minted by the recycle (pin-style families); "" for capture-style
 	Prompt          string
 	Project         string
 	Backend         string

@@ -59,6 +59,17 @@ func TestSessionCore_RebuildCarriesAccount(t *testing.T) {
 		testutil.Equal(t, r.recycled.Account, "work")
 		testutil.Equal(t, r.recycled.SandboxOverride, "enabled")
 	})
+	t.Run("recycle carries the minted session id", func(t *testing.T) {
+		var resp StatusResp
+		testutil.NoError(t, c.Recycle(&RecycleReq{TaskID: "a", SessionID: "fresh-sid"}, &resp))
+		testutil.Equal(t, r.recycled.SessionID, "fresh-sid")
+	})
+}
+
+func TestProtocolVersionCoversRecycleSessionID(t *testing.T) {
+	if ProtocolVersion < 12 {
+		t.Fatalf("RecycleReq carries SessionID, which landed in v12; ProtocolVersion is %d", ProtocolVersion)
+	}
 }
 
 func TestProtocolVersionCoversTaskAccount(t *testing.T) {

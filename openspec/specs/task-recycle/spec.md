@@ -12,10 +12,12 @@ The primitive SHALL defer the actual kill-and-restart until the task's live sess
 
 Before restarting, the primitive SHALL terminate any stray background job tied to the outgoing session, the same guard `recycle_coord` applies.
 
-#### Scenario: Restart clears the stale session and seeds the fresh prompt
+The restarted session SHALL be launched with a freshly minted `SessionID` when the task's backend family pins its ID at start (persisted on the task row and passed to the spawn as `--session-id`), so the live session is resumable without waiting for exit capture. Capture-style families SHALL have the ID cleared to empty.
 
-- **WHEN** the primitive restarts a task with an outgoing `SessionID` and a caller-supplied handoff note
-- **THEN** the persisted task row has an empty `SessionID` and a `Prompt` containing both the handoff note and the original prompt, with the handoff note appearing before the original prompt
+#### Scenario: Restart replaces the stale session ID and seeds the fresh prompt
+
+- **WHEN** the primitive restarts a task on a pin-style backend with an outgoing `SessionID` and a caller-supplied handoff note
+- **THEN** the persisted task row has a non-empty `SessionID` different from the outgoing one, the spawn command includes `--session-id` with that value, and a `Prompt` containing both the handoff note and the original prompt, with the handoff note appearing before the original prompt
 
 #### Scenario: No live session restarts immediately
 

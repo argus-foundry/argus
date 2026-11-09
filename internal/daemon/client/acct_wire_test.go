@@ -154,7 +154,7 @@ func newWireRecorderClient(t *testing.T) (*Client, *wireRecorder) {
 // account and sandbox override, which BuildCmd reads on the supervisor side.
 func TestAcctWireKickRecycle(t *testing.T) {
 	c, rec := newWireRecorderClient(t)
-	task := &model.Task{ID: "k", Account: "work", SandboxOverride: "disabled"}
+	task := &model.Task{ID: "k", Account: "work", SandboxOverride: "disabled", SessionID: "fresh-sid"}
 
 	t.Run("kick", func(t *testing.T) {
 		testutil.NoError(t, c.KickRerender(task, config.Config{}, 24, 80))
@@ -169,6 +169,7 @@ func TestAcctWireKickRecycle(t *testing.T) {
 		defer rec.mu.Unlock()
 		testutil.Equal(t, rec.recycle.Account, "work")
 		testutil.Equal(t, rec.recycle.SandboxOverride, "disabled")
+		testutil.Equal(t, rec.recycle.SessionID, "fresh-sid")
 	})
 }
 

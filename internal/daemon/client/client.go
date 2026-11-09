@@ -598,9 +598,10 @@ func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, 
 
 // Recycle drives a same-task restart with a fresh (empty) context through the
 // daemon/supervisor (add-coordinator-context-management D5). Mirrors
-// KickRerender's wire contract exactly except resume is always false and no
-// SessionID is shipped — the caller (internal/daemon's RecycleRunner adapter)
-// must already have persisted task.SessionID="" and task.Prompt=<seed prompt>
+// KickRerender's wire contract exactly except resume is always false and
+// the fresh task.SessionID (pinned families) rides along on RecycleReq — the
+// caller (internal/daemon's RecycleRunner adapter) must already have persisted
+// the fresh SessionID and task.Prompt=<seed prompt>
 // before calling. Against a supervisor that predates this RPC method the call
 // errors, which the caller (RecycleCoord) surfaces rather than silently
 // no-ops — unlike a kick-rerender, a failed recycle must not look like
@@ -613,6 +614,7 @@ func (c *Client) Recycle(task *model.Task, _ config.Config, rows, cols uint16) e
 	if err := c.call("Daemon.Recycle", &daemon.RecycleReq{
 		MCPPort:         c.currentMCPPort(),
 		TaskID:          task.ID,
+		SessionID:       task.SessionID,
 		Prompt:          task.Prompt,
 		Project:         task.Project,
 		Backend:         task.Backend,

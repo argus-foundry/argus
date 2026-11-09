@@ -117,7 +117,7 @@ func resolveSpawnSize(database *db.DB, role db.HeraRoleKind, sess interface{ PTY
 	return 24, 80, "default"
 }
 
-// restartSessionWithSeedPrompt clears task.SessionID and sets task.Prompt to
+// restartSessionWithSeedPrompt replaces task.SessionID with a fresh pinned ID (or clears it) and sets task.Prompt to
 // seedPrompt, then hands off to the runner's kill/restart-with-empty-context
 // primitive (Recycle) — or starts a fresh session directly when no live
 // session exists to kill. Shared by HeraRecycleRunner.Restart (hera
@@ -137,13 +137,16 @@ func restartSessionWithSeedPrompt(database *db.DB, runner agent.SessionRunner, c
 	rows, cols, source := resolveSpawnSize(database, role, sizer, time.Now())
 	slog.Info("[spawn-size] restart", "task", task.ID, "role", role, "source", source, "rows", rows, "cols", cols)
 
-	// task.SessionID MUST be cleared before Recycle: BuildCmd's non-resume
+	// task.SessionID MUST be replaced before Recycle: BuildCmd's non-resume
 	// branch pins any non-empty SessionID via --session-id, and the OLD
-	// (already-used) UUID would collide rather than mint a fresh session.
-	task.SessionID = ""
+	// (already-used) UUID would collide. BuildCmd never mints one itself, so
+	// pin-style families (Claude) get a fresh UUID here — clearing alone left
+	// the recycled session with no resumable ID until its next exit capture
+	// (ctrl+n re-render refused). Capture-style families get "".
+	task.SessionID = agent.FreshSessionID(task, cfgFn())
 	task.Prompt = seedPrompt
 	if err := database.Update(task); err != nil {
-		return fmt.Errorf("restart session: persist cleared session id for task %s: %w", task.ID, err)
+		return fmt.Errorf("restart session: persist fresh session id for task %s: %w", task.ID, err)
 	}
 
 	if sess == nil {
