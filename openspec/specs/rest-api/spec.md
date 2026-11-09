@@ -1136,7 +1136,7 @@ The system SHALL expose `POST /api/tasks/bulk-delete` accepting `task_ids` (1 to
 
 ### Requirement: Task PR link endpoints
 
-`GET /api/tasks/{id}/pr` SHALL return `{"source","url","state","lifecycle","checked_at"}` from stored state without invoking GitHub (`source` `manual|automatic`; `checked_at` RFC3339 or null). `PUT` with `{"url"}` SHALL accept only `https://github.com/<owner>/<repo>/pull/<n>`, canonicalize it, store it and return 200 with state and lifecycle `unknown` until verified; otherwise 400 with the association unchanged. `DELETE` SHALL clear the association and return 200 with `source` `automatic`. A missing task SHALL be 404 and a store failure 500. All three require authentication.
+`GET /api/tasks/{id}/pr` SHALL return `{"source","url","state","lifecycle","checked_at"}` from stored state without invoking GitHub (`source` `manual|automatic`; `checked_at` RFC3339 or null). `PUT` with `{"url"}` SHALL accept only `https://github.com/<owner>/<repo>/pull/<n>`, canonicalize it, store it and return 200 with state and lifecycle `unknown` until verified; otherwise 400 with the association unchanged. `DELETE` SHALL clear the association and return 200 with `source` `automatic`; an absent link SHALL be a no-op preserving automatic cache without events. A linked cache with a different stored URL SHALL project the linked URL with unknown state/lifecycle and null checked_at until verified. A missing task SHALL be 404 and a store failure 500. All three require authentication.
 
 #### Scenario: Invalid URL
 

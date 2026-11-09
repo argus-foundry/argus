@@ -870,9 +870,22 @@ func (d *DB) pruneTasksLocked(ids []string) (pruned []*model.Task, skippedHeraBo
 		return nil, skippedHeraBound, nil
 	}
 
-	//nolint:gosec // G202: inClause is a fixed list of `?` literals and notLiveHeraBound is a constant; ids are bound parameters.
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	//nolint:gosec // G202: predicates contain constants and placeholders; IDs are bound.
+	deleteLinksQ := `DELETE FROM task_pr_links WHERE task_id IN (SELECT id FROM tasks WHERE ` + inClause + ` AND ` + notLiveHeraBound + `)`
+	if _, err := tx.Exec(deleteLinksQ, args...); err != nil {
+		return nil, 0, err
+	}
+	//nolint:gosec // G202: predicates contain constants and placeholders; IDs are bound.
 	deleteQ := `DELETE FROM tasks WHERE ` + inClause + ` AND ` + notLiveHeraBound
-	if _, err := d.conn.Exec(deleteQ, args...); err != nil {
+	if _, err := tx.Exec(deleteQ, args...); err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, 0, err
 	}
 	return pruned, skippedHeraBound, nil

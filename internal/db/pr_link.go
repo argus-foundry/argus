@@ -11,6 +11,9 @@ import (
 	"github.com/argus-foundry/argus/internal/model"
 )
 
+// ErrPRLinkChanged rejects a poll result for a superseded PR association.
+var ErrPRLinkChanged = errors.New("PR association changed")
+
 // SetManualPR records url as the task's manual PR association and invalidates
 // the derived pr cache so nothing from a previous association survives.
 func (d *DB) SetManualPR(id, url string) error {
@@ -37,9 +40,10 @@ func (d *DB) SetManualPR(id, url string) error {
 	return err
 }
 
-// ClearManualPR drops the manual association and the pr cache derived from it,
-// returning automatic discovery to the branch poller.
-func (d *DB) ClearManualPR(id string) error {
+// ClearManualPR clears an existing association and its derived cache,
+// reporting whether it changed anything. An absent link preserves automatic cache.
+func (d *DB) ClearManualPR(id string) (bool, error) {
+	changed := false
 	err := d.WithTx(func(tx *sql.Tx) error {
 		var one int
 		if err := tx.QueryRow(`SELECT 1 FROM tasks WHERE id=?`, id).Scan(&one); err != nil {
@@ -48,16 +52,22 @@ func (d *DB) ClearManualPR(id string) error {
 			}
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM task_pr_links WHERE task_id=?`, id); err != nil {
+		res, err := tx.Exec(`DELETE FROM task_pr_links WHERE task_id=?`, id)
+		if err != nil {
 			return err
 		}
-		_, err := tx.Exec(`DELETE FROM task_meta WHERE task_id=? AND namespace=?`, id, prMetaNamespace)
+		n, err := res.RowsAffected()
+		if err != nil || n == 0 {
+			return err
+		}
+		changed = true
+		_, err = tx.Exec(`DELETE FROM task_meta WHERE task_id=? AND namespace=?`, id, prMetaNamespace)
 		return err
 	})
-	if err == nil {
+	if changed && err == nil {
 		events.EmitTaskUpdated(id, model.TaskFieldPR)
 	}
-	return err
+	return changed && err == nil, err
 }
 
 // ManualPR returns the task's manually linked PR url, or "" when none.
@@ -93,7 +103,7 @@ func (d *DB) ManualPRs() (map[string]string, error) {
 }
 
 // SetAutoPRMetaIfChanged is SetMetaBatchIfChanged for the pr namespace, but
-// refuses (false, nil) when the task has a manual association so branch
+// returns ErrPRLinkChanged when the task has a manual association so branch
 // polling can never replace manual intent, even for a poll already in flight.
 func (d *DB) SetAutoPRMetaIfChanged(id string, entries map[string]string) (bool, error) {
 	return d.setPRMetaIfChanged(id, "", entries)
@@ -121,7 +131,7 @@ func (d *DB) setPRMetaIfChanged(id, wantLink string, entries map[string]string) 
 			return err
 		}
 		if link != wantLink {
-			return nil
+			return ErrPRLinkChanged
 		}
 		changed := false
 		for _, k := range keys {

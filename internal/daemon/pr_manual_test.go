@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
+
+	"github.com/argus-foundry/argus/internal/db"
 
 	"github.com/argus-foundry/argus/internal/gitutil"
 	"github.com/argus-foundry/argus/internal/model"
@@ -61,19 +64,34 @@ func TestPollPR_ManualLinkSurvivesConflictingBranchResult(t *testing.T) {
 }
 
 func TestPollPR_ManualLinkSurvivesRestart(t *testing.T) {
-	d, _ := testDaemon(t)
-	seedTask(t, d.db, "r1", "argus/r1", false)
-	testutil.NoError(t, d.db.SetManualPR("r1", manualURL))
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "tasks.sql")
+	database, err := db.Open(path)
+	testutil.NoError(t, err)
+	seedTask(t, database, "r1", "argus/r1", false)
+	testutil.NoError(t, database.SetManualPR("r1", manualURL))
+	testutil.NoError(t, database.SetArchived("r1", true))
+	testutil.NoError(t, database.Close())
+	database, err = db.Open(path)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	link, err := database.ManualPR("r1")
+	testutil.NoError(t, err)
+	testutil.Equal(t, link, manualURL)
+	d := New(database)
+	d.prDisableFlagPath = filepath.Join(t.TempDir(), "disabled")
+	calls := 0
 	d.prURLFetch = func(context.Context, string) (gitutil.PRResult, error) {
+		calls++
 		return gitutil.PRResult{State: model.PRAwaitingReview, URL: manualURL}, nil
 	}
 	branchPollerReturning(d, gitutil.PRResult{State: model.PRNone})
 	d.pollManualPRsOnce(context.Background())
-
+	testutil.Equal(t, calls, 0)
+	testutil.NoError(t, database.SetArchived("r1", false))
+	d.pollManualPRsOnce(context.Background())
 	d.pollPRStatesOnce(context.Background())
-	link, err := d.db.ManualPR("r1")
-	testutil.NoError(t, err)
-	testutil.Equal(t, link, manualURL)
+	testutil.Equal(t, calls, 1)
 	testutil.Equal(t, storedPR(t, d, "r1")["url"], manualURL)
 }
 
@@ -125,7 +143,8 @@ func TestPollManualPR_ClearedLinkIsNotRewritten(t *testing.T) {
 	seedTask(t, d.db, "c1", "argus/c1", false)
 	testutil.NoError(t, d.db.SetManualPR("c1", manualURL))
 	d.prURLFetch = func(context.Context, string) (gitutil.PRResult, error) {
-		testutil.NoError(t, d.db.ClearManualPR("c1"))
+		_, err := d.db.ClearManualPR("c1")
+		testutil.NoError(t, err)
 		return gitutil.PRResult{State: model.PRApproved, URL: manualURL}, nil
 	}
 	d.pollManualPRsOnce(context.Background())
@@ -140,7 +159,8 @@ func TestPollPR_ClearedLinkRestoresAutomaticDiscovery(t *testing.T) {
 	d.pollPRStatesOnce(context.Background())
 	testutil.Equal(t, len(storedPR(t, d, "a1")), 0)
 
-	testutil.NoError(t, d.db.ClearManualPR("a1"))
+	_, err := d.db.ClearManualPR("a1")
+	testutil.NoError(t, err)
 	d.pollPRStatesOnce(context.Background())
 	testutil.Equal(t, storedPR(t, d, "a1")["url"], "https://github.com/o/r/pull/2")
 }

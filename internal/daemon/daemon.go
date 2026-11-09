@@ -764,21 +764,7 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 		}
 		terminalAtStart[t.ID] = state.IsTerminal()
 		lifecycle := model.ParsePRLifecycle(prMeta[t.ID]["lifecycle"])
-		if state.IsTerminal() && (lifecycle == model.PRLifecycleMerged || lifecycle == model.PRLifecycleClosed) {
-			skipped++
-			uxlog.Log("[pr] poll: skip terminal %s (state=%s)", t.ID, state)
-			continue
-		}
-		if state.IsTerminal() && !d.prTerminalVerificationAttempted[t.ID] {
-			if d.prTerminalVerificationAttempted == nil {
-				d.prTerminalVerificationAttempted = make(map[string]bool)
-			}
-			d.prTerminalVerificationAttempted[t.ID] = true
-			uxlog.Log("[pr] poll: first terminal verification %s (lifecycle=%s)", t.ID, lifecycle)
-		} else if stride := prPollCadenceStride(t, state, now); !prCadenceSelects(d.pollCycle, t.ID, stride) {
-			if state.IsTerminal() {
-				uxlog.Log("[pr] poll: defer terminal verification %s (stride=%d)", t.ID, stride)
-			}
+		if !d.shouldPollPR(t, state, lifecycle, now) {
 			skipped++
 			continue
 		}
@@ -896,6 +882,10 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 						"url":       res.URL,
 						"lifecycle": string(lifecycle),
 					})
+					if errors.Is(werr, db.ErrPRLinkChanged) {
+						uxlog.Log("[pr] poll: skip superseded association for %s", t.ID)
+						continue
+					}
 					if werr != nil {
 						uxlog.Log("[pr] poll: persist failed for %s: %v", t.ID, werr)
 						continue
@@ -1033,6 +1023,30 @@ func (d *Daemon) notifyRoleOfMergedPR(t *model.Task, prURL string) {
 	if _, sErr := d.heraNotifyService().Send(coord.ID, role.ID, body, tldr, nil); sErr != nil {
 		uxlog.Log("[pr] poll: role merge notice failed for %s: %v", t.ID, sErr)
 	}
+}
+
+// shouldPollPR shares terminal verification and dormancy eligibility across pollers.
+func (d *Daemon) shouldPollPR(t *model.Task, state model.PRState, lifecycle model.PRLifecycle, now time.Time) bool {
+	if state.IsTerminal() && (lifecycle == model.PRLifecycleMerged || lifecycle == model.PRLifecycleClosed) {
+		uxlog.Log("[pr] poll: skip terminal %s (state=%s)", t.ID, state)
+		return false
+	}
+	if state.IsTerminal() && !d.prTerminalVerificationAttempted[t.ID] {
+		if d.prTerminalVerificationAttempted == nil {
+			d.prTerminalVerificationAttempted = make(map[string]bool)
+		}
+		d.prTerminalVerificationAttempted[t.ID] = true
+		uxlog.Log("[pr] poll: first terminal verification %s (lifecycle=%s)", t.ID, lifecycle)
+		return true
+	}
+	stride := prPollCadenceStride(t, state, now)
+	if !prCadenceSelects(d.pollCycle, t.ID, stride) {
+		if state.IsTerminal() {
+			uxlog.Log("[pr] poll: defer terminal verification %s (stride=%d)", t.ID, stride)
+		}
+		return false
+	}
+	return true
 }
 
 // prPollCadenceStride returns how many poll cycles apart a task should be

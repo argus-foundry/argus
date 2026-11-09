@@ -55,8 +55,10 @@ func (s *Server) prLinkProjection(id string) (prLinkJSON, error) {
 	if link != "" {
 		out.Source = model.PRSourceManual
 		out.URL = link
-		if state == "" {
+		if state == "" || url != link {
 			out.State = model.PRUnknown.String()
+			out.Lifecycle = model.PRLifecycleUnknown
+			checked = time.Time{}
 		}
 	} else if state == "" {
 		out.State = model.PRNone.String()
@@ -79,8 +81,12 @@ func (s *Server) writePRLink(w http.ResponseWriter, id string) {
 
 func (s *Server) taskExists(w http.ResponseWriter, id string) bool {
 	task, err := s.db.Get(id)
-	if err != nil || task == nil {
+	if errors.Is(err, db.ErrTaskNotFound) || (err == nil && task == nil) {
 		writeErr(w, http.StatusNotFound, "task not found", nil)
+		return false
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "", err)
 		return false
 	}
 	return true
@@ -132,7 +138,8 @@ func (s *Server) handleDeleteTaskPR(w http.ResponseWriter, r *http.Request) {
 	if !s.taskExists(w, id) {
 		return
 	}
-	if err := s.db.ClearManualPR(id); err != nil {
+	changed, err := s.db.ClearManualPR(id)
+	if err != nil {
 		if errors.Is(err, db.ErrTaskNotFound) {
 			writeErr(w, http.StatusNotFound, "task not found", nil)
 			return
@@ -140,9 +147,11 @@ func (s *Server) handleDeleteTaskPR(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
-	events.Emit(model.EventTypeTaskPRChanged, id, model.PRChangedPayload{
-		State: model.PRNone.String(), Lifecycle: model.PRLifecycleUnknown, Source: model.PRSourceAutomatic,
-	})
-	uxlog.Log("[pr] api: task=%s manual link cleared", id)
+	if changed {
+		events.Emit(model.EventTypeTaskPRChanged, id, model.PRChangedPayload{
+			State: model.PRNone.String(), Lifecycle: model.PRLifecycleUnknown, Source: model.PRSourceAutomatic,
+		})
+		uxlog.Log("[pr] api: task=%s manual link cleared", id)
+	}
 	s.writePRLink(w, id)
 }

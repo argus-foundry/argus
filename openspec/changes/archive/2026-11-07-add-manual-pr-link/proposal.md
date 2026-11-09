@@ -19,5 +19,5 @@ A task's PR is found only from its branch, and polling rewrites the cache, so a 
 
 ## Non-Goals
 
-- No web, TUI or macOS change. Follow-ups: ENG-1083 (Web: Set or clear a task's PR link) and ENG-1094 (TUI: Set or clear the selected task's PR link).
+- No web, TUI or macOS change. Follow-ups: ENG-1083 (Web: Set or clear a task's PR link) and ENG-1094 (TUI: Set or clear the selected task's PR link). Named macOS follow-up: add manual PR link controls.
 - No GitHub mutation, and no outbound HTTP from the supplied URL: only `gh pr view` on the canonical URL.

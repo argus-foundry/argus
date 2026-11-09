@@ -13,7 +13,8 @@ func TestManualPR_Lifecycle(t *testing.T) {
 	url := "https://github.com/o/r/pull/1"
 
 	testutil.ErrorIs(t, d.SetManualPR("missing", url), ErrTaskNotFound)
-	testutil.ErrorIs(t, d.ClearManualPR("missing"), ErrTaskNotFound)
+	_, err := d.ClearManualPR("missing")
+	testutil.ErrorIs(t, err, ErrTaskNotFound)
 
 	testutil.NoError(t, d.SetMetaBatch("t1", "pr", map[string]string{"state": "approved"}))
 	testutil.NoError(t, d.SetManualPR("t1", url))
@@ -35,10 +36,10 @@ func TestManualPR_Lifecycle(t *testing.T) {
 
 	t.Run("auto write refused, manual write accepted", func(t *testing.T) {
 		wrote, err := d.SetAutoPRMetaIfChanged("t1", map[string]string{"state": "draft"})
-		testutil.NoError(t, err)
+		testutil.ErrorIs(t, err, ErrPRLinkChanged)
 		testutil.Equal(t, wrote, false)
 		wrote, err = d.SetManualPRMetaIfChanged("t1", "https://github.com/o/r/pull/2", map[string]string{"state": "draft"})
-		testutil.NoError(t, err)
+		testutil.ErrorIs(t, err, ErrPRLinkChanged)
 		testutil.Equal(t, wrote, false)
 		wrote, err = d.SetManualPRMetaIfChanged("t1", url, map[string]string{"state": "draft"})
 		testutil.NoError(t, err)
@@ -49,7 +50,9 @@ func TestManualPR_Lifecycle(t *testing.T) {
 	})
 
 	t.Run("clear then auto write accepted", func(t *testing.T) {
-		testutil.NoError(t, d.ClearManualPR("t1"))
+		changed, err := d.ClearManualPR("t1")
+		testutil.NoError(t, err)
+		testutil.Equal(t, changed, true)
 		got, _ := d.ManualPR("t1")
 		testutil.Equal(t, got, "")
 		wrote, err := d.SetAutoPRMetaIfChanged("t1", map[string]string{"state": "draft"})
