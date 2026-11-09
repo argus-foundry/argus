@@ -355,6 +355,23 @@ func TestResident_PrereqBlipDoesNotStop(t *testing.T) {
 	testutil.Equal(t, len(e.run.stopped), 0)
 }
 
+// The MCP-not-ready wait is a startup state, not a prerequisite: it must reset
+// the consecutive-failure count so two failures separated by it never debounce
+// into a stop.
+func TestResident_MCPWaitResetsPrereqFailureCount(t *testing.T) {
+	e := newResEnv(t)
+	e.m.tick() // ok: running
+	e.cfg.KB.Enabled = false
+	e.m.tick() // prereq failure 1
+	e.cfg.KB.Enabled = true
+	e.m.mcpReady = func() bool { return false }
+	e.m.tick() // MCP wait: resets the count
+	e.m.mcpReady = nil
+	e.cfg.KB.Enabled = false
+	e.m.tick() // failure 1 again, not 2
+	testutil.Equal(t, len(e.run.stopped), 0)
+}
+
 func TestResident_NoClaudeBackendStopsRunning(t *testing.T) {
 	e := newResEnv(t)
 	e.m.tick()

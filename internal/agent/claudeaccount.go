@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -271,11 +272,19 @@ var shellSafeWord = regexp.MustCompile(`^[A-Za-z0-9_./+@%:,=-]+$`)
 type residentUserSettings struct {
 	Ask, Deny     []string
 	Model, Effort string
+	// Sandbox is the user's Claude `sandbox` block with its permission-widening
+	// keys neutralized (see residentSandbox), carried inline.
+	Sandbox json.RawMessage
+	// SkippedHooks names the user hook events the restricted setting sources
+	// drop (hooks are never carried: one may auto-approve; see gotchas).
+	SkippedHooks []string
 }
 
 // residentAccountDir is the Claude config directory the resident's account
-// loads user-level files from: the task's account dir, or for the default
-// account $CLAUDE_CONFIG_DIR when set, else ~/.claude. Empty when unresolvable.
+// loads user-level files from: the task's account dir, else Claude's default
+// ~/.claude. An inherited $CLAUDE_CONFIG_DIR is deliberately ignored: spawnBaseEnv
+// strips it, so the default-account resident really runs on ~/.claude. Empty
+// when unresolvable.
 func residentAccountDir(task *model.Task, cfg config.Config) string {
 	dir, err := ClaudeConfigDirForTask(task, cfg)
 	if err != nil {
@@ -283,10 +292,9 @@ func residentAccountDir(task *model.Task, cfg config.Config) string {
 		slog.Warn("[resident] account config dir unresolved", "err", err)
 		return ""
 	}
-	if _, explicit, _ := cfg.ClaudeConfigDir(task.Account); !explicit && dir == config.DefaultClaudeDir() {
-		if env := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); env != "" {
-			dir = filepath.Clean(config.ExpandHome(env))
-		}
+	if dir == "" {
+		// A backend mapping that resolves to unset launches on Claude's default.
+		dir = config.DefaultClaudeDir()
 	}
 	return dir
 }
@@ -312,8 +320,10 @@ func readResidentUserSettings(task *model.Task, cfg config.Config) residentUserS
 			Ask  []any `json:"ask"`
 			Deny []any `json:"deny"`
 		} `json:"permissions"`
-		Model       any `json:"model"`
-		EffortLevel any `json:"effortLevel"`
+		Model       any                        `json:"model"`
+		EffortLevel any                        `json:"effortLevel"`
+		Sandbox     json.RawMessage            `json:"sandbox"`
+		Hooks       map[string]json.RawMessage `json:"hooks"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		uxlog.Log("[resident] user settings unparseable (using the resident's own rules only): %v", err)
@@ -333,10 +343,20 @@ func readResidentUserSettings(task *model.Task, cfg config.Config) residentUserS
 		s, _ := v.(string)
 		return strings.TrimSpace(s)
 	}
-	return residentUserSettings{
+	us := residentUserSettings{
 		Ask: strs(doc.Permissions.Ask), Deny: strs(doc.Permissions.Deny),
 		Model: str(doc.Model), Effort: str(doc.EffortLevel),
 	}
+	us.Sandbox = residentSandbox(doc.Sandbox)
+	for event := range doc.Hooks {
+		us.SkippedHooks = append(us.SkippedHooks, event)
+	}
+	sort.Strings(us.SkippedHooks)
+	if len(us.SkippedHooks) > 0 {
+		uxlog.Log("[resident] user hooks not applied to the resident (settings isolated): %s", strings.Join(us.SkippedHooks, ", "))
+		slog.Info("[resident] user hooks not applied to the resident (settings isolated)", "events", strings.Join(us.SkippedHooks, ","))
+	}
+	return us
 }
 
 // mergeRules returns own followed by extra, without duplicates.
@@ -395,7 +415,43 @@ func materializeResidentPrompt(routingPath, claudeMD string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "system-prompt.md"), nil
+	file := filepath.Join(dir, "system-prompt.md")
+	// ~/.argus/cache is writable by every sandboxed agent and a populated hash dir is
+	// reused on its marker alone, so a tampered file would become the resident's
+	// system prompt. Verify the bytes and atomically restore them when they differ.
+	if got, rerr := os.ReadFile(file); rerr != nil || !bytes.Equal(got, buf) {
+		uxlog.Log("[resident] system prompt file differed from expected; restoring %s", file)
+		slog.Warn("[resident] system prompt file tampered or missing; restoring", "path", file)
+		if err := atomicWriteFile(file, buf); err != nil {
+			return "", fmt.Errorf("restore resident prompt: %w", err)
+		}
+	}
+	return file, nil
+}
+
+// atomicWriteFile writes data to a temp file beside path and renames it over
+// path. A rename replaces a tampered symlink or file rather than writing
+// through it.
+func atomicWriteFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".restore-")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	_, werr := tmp.Write(data)
+	cerr := tmp.Close()
+	if werr != nil || cerr != nil {
+		_ = os.Remove(name)
+		if werr != nil {
+			return werr
+		}
+		return cerr
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return nil
 }
 
 // ensureResidentUserSkillsDir returns an --add-dir root whose .claude/skills
@@ -433,4 +489,26 @@ func ensureResidentUserSkillsDir(task *model.Task, cfg config.Config) string {
 		return ""
 	}
 	return root
+}
+
+// residentSandbox carries the user's Claude `sandbox` block for its
+// restrictions only. The block is NOT restrict-only as written: with sandboxing
+// enabled, autoAllowBashIfSandboxed (default true) auto-approves Bash, and
+// excludedCommands / allowUnsandboxedCommands loosen it. So the resident gets
+// the block with autoAllowBashIfSandboxed and allowUnsandboxedCommands forced
+// false and excludedCommands removed; every Bash call still prompts. A
+// missing or non-object block yields nil.
+func residentSandbox(raw json.RawMessage) json.RawMessage {
+	var block map[string]any
+	if s := bytes.TrimSpace(raw); len(s) == 0 || s[0] != '{' || json.Unmarshal(s, &block) != nil {
+		return nil
+	}
+	block["autoAllowBashIfSandboxed"] = false
+	block["allowUnsandboxedCommands"] = false
+	delete(block, "excludedCommands")
+	out, err := json.Marshal(block)
+	if err != nil {
+		return nil
+	}
+	return out
 }

@@ -4981,6 +4981,34 @@ func TestTerminalPane_Draw_ReplayReasonBanner(t *testing.T) {
 		tp.Draw(sim)
 		testutil.False(t, strings.Contains(readScreen(sim), note))
 	})
+	t.Run("banner row is blanked of replay cells", func(t *testing.T) {
+		const shortNote = "hi"
+		setupTaskLog(t, "banner-blank", strings.Repeat(strings.Repeat("Z", 55)+"\r\n", 40))
+		sim := newSim(t, 60, 12)
+		tp := NewTerminalPane()
+		tp.SetRect(0, 0, 60, 12)
+		tp.SetTaskID("banner-blank")
+		tp.SetPlaceholderNote(shortNote)
+		var lines []string
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			tp.Draw(sim)
+			lines = strings.Split(readScreen(sim), "\n")
+			// The replay builds asynchronously: wait until it has painted the
+			// row below the banner, so a blanked banner row is meaningful.
+			if strings.Contains(lines[2], "Z") {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("replay never painted inner row 2:\n%s", strings.Join(lines, "\n"))
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		testutil.Contains(t, lines[1], shortNote)
+		if strings.Contains(lines[1], "Z") {
+			t.Fatalf("replay cells leaked into the banner row: %q", lines[1])
+		}
+	})
 	t.Run("narrow pane truncates to width", func(t *testing.T) {
 		sim := newSim(t, 60, 12)
 		tp := newReplay(t)
@@ -4988,7 +5016,7 @@ func TestTerminalPane_Draw_ReplayReasonBanner(t *testing.T) {
 		tp.SetPlaceholderNote(note)
 		tp.Draw(sim)
 		for i, l := range strings.Split(readScreen(sim), "\n") {
-			if len(l) > 24 && strings.Contains(l[24:], "MCP") {
+			if r := []rune(l); len(r) > 24 && strings.TrimSpace(string(r[24:])) != "" {
 				t.Fatalf("row %d leaked past pane width: %q", i, l)
 			}
 		}

@@ -982,6 +982,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 			Deny:        mergeRules(cfg.Resident.DenyTools, us.Deny),
 			HookCommand: residentStopHookCommand(),
 			Effort:      us.Effort,
+			Sandbox:     us.Sandbox,
 		}
 		if resolvedModel == "" && !hasModelFlag(backend.Command) {
 			policy.Model = us.Model

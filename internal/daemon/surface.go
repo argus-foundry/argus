@@ -223,7 +223,10 @@ const (
 	//     --settings carrying its permissions (user deny/ask merged, never user
 	//     allow), defaultMode, disableBypassPermissionsMode and its own Stop
 	//     coord-hook; the user's CLAUDE.md rides the appended system prompt and
-	//     user skills an --add-dir symlink root.
+	//     user skills an --add-dir symlink root. It also carries the account's
+	//     sandbox block with its Bash auto-approve escapes forced off, strips
+	//     --allowedTools, reads user files from the account dir (never an
+	//     inherited $CLAUDE_CONFIG_DIR) and re-verifies its cached prompt file.
 	SupervisorSpawnSurface = 40
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -531,7 +534,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "2278471682dd4664462990aa460eeb790de5b895a66d62134cb1a8bdea83e0ae"
+	SpawnSurfaceDigest  = "c8862cc35928e7d022c5fb3223df8f7f95882f6d90fa72e20d9a32d4436cd773"
 	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 

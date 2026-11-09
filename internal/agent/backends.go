@@ -243,6 +243,9 @@ type ResidentPolicy struct {
 	// Model and Effort carry the account settings' model / effortLevel so the
 	// resident does not silently change model when user settings are dropped.
 	Model, Effort string
+	// Sandbox is the user's Claude `sandbox` settings block with its
+	// permission-widening keys neutralized (residentSandbox). Nil omits it.
+	Sandbox json.RawMessage
 }
 
 // claudePermissionRulesFlag makes the resident's Claude launch self-contained:
@@ -276,6 +279,9 @@ func claudePermissionRulesFlag(p ResidentPolicy) string {
 	}
 	if p.Effort != "" {
 		settings["effortLevel"] = p.Effort
+	}
+	if len(p.Sandbox) > 0 {
+		settings["sandbox"] = p.Sandbox
 	}
 	raw, _ := json.Marshal(settings)
 	return " --setting-sources project --settings " + shellQuote(string(raw))
@@ -374,8 +380,10 @@ func splitShellWords(command string) ([]shellWord, error) {
 }
 
 // stripClaudePermissionFlags drops --dangerously-skip-permissions,
-// --allow-dangerously-skip-permissions and --permission-mode (both "--permission-mode X"
-// and "--permission-mode=X" forms) from a command. Words are compared by their
+// --allow-dangerously-skip-permissions, --permission-mode (both "--permission-mode X"
+// and "--permission-mode=X" forms) and --allowedTools/--allowed-tools (variadic:
+// the following words up to the next option; `=` form one word) from a command.
+// --disallowedTools only restricts and is kept. Words are compared by their
 // quote-removed value (the command runs under sh -c, so `"--flag"` is a real
 // flag), but only top-level words are considered: a quoted argument that merely
 // mentions a flag is untouched. Splicing is by word range: every kept word and
@@ -400,6 +408,15 @@ func stripClaudePermissionFlags(command string) (string, error) {
 		case v == "--permission-mode":
 			if i+1 < len(words) {
 				last = i + 1 // its value word
+			}
+		case strings.HasPrefix(v, "--allowedTools="), strings.HasPrefix(v, "--allowed-tools="):
+			// A CLI allow list is not a setting source, so it would widen the
+			// resident's inline allow rules. The `=` form carries one value.
+		case v == "--allowedTools", v == "--allowed-tools":
+			// Variadic: the flag takes every following word up to the next
+			// option (claude --help: "<tools...>").
+			for last+1 < len(words) && !strings.HasPrefix(words[last+1].value, "-") {
+				last++
 			}
 		default:
 			continue

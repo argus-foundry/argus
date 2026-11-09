@@ -743,6 +743,7 @@ func TestNudgeLine_ResidentRecipientNamesSender(t *testing.T) {
 	if got := sanitizeNudgeName(strings.Repeat("a", 200)); len(got) != maxNudgeNameRunes {
 		t.Errorf("name not capped: %d", len(got))
 	}
+	testutil.Equal(t, sanitizeNudgeName("naïve-x"), "na_ve-x") // one rune, one underscore
 	testutil.Equal(t, sanitizeNudgeName("  "), "unnamed")
 	testutil.Equal(t, sanitizeNudgeName("fix-login.v2_a"), "fix-login.v2_a") // real slugs unchanged
 }

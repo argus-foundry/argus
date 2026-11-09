@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -231,6 +232,14 @@ func TestStripClaudePermissionFlags_ShellOracle(t *testing.T) {
 		{"quoted mention survives", `claude --append-system-prompt "use --permission-mode x" -p`, []string{"claude", "--append-system-prompt", "use --permission-mode x", "-p"}},
 		{"continuation inside kept words", "claude \\\n --model x \\\n --permission-mode plan \\\n -p", []string{"claude", "--model", "x", "-p"}},
 		{"untouched", "claude --model opus", []string{"claude", "--model", "opus"}},
+		{"allowedTools single value", `claude --allowedTools "Bash(git *)" -p`, []string{"claude", "-p"}},
+		{"allowedTools variadic list", `claude --allowedTools Read 'Bash(ls *)' Edit --model x`, []string{"claude", "--model", "x"}},
+		{"allowed-tools quoted flag", `claude "--allowed-tools" Read -p`, []string{"claude", "-p"}},
+		{"allowedTools equals form", `claude --allowedTools="Bash(*)" -p`, []string{"claude", "-p"}},
+		{"allowed-tools equals form", `claude --allowed-tools=Read,Edit -p`, []string{"claude", "-p"}},
+		{"allowedTools last word", `claude -p --allowedTools`, []string{"claude", "-p"}},
+		{"disallowedTools kept", `claude --disallowedTools "Bash(rm *)" -p`, []string{"claude", "--disallowedTools", "Bash(rm *)", "-p"}},
+		{"allowedTools quoted mention survives", `claude --append-system-prompt "--allowedTools x" -p`, []string{"claude", "--append-system-prompt", "--allowedTools x", "-p"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -435,7 +444,10 @@ func TestBuildCmd_ResidentIsSelfContainedUnderUserAllowAll(t *testing.T) {
 			"allow": ["mcp__claude_ai_Linear__*", "Bash(*)", "mcp__claude_ai_Slack__*"],
 			"ask": ["mcp__claude_ai_Notion__notion-fetch", "Bash(git push:*)"],
 			"deny": ["Bash(rm -rf:*)", "mcp__claude_ai_Slack__slack_send_message"]
-		}}`), 0o644))
+		},
+		"sandbox": {"enabled": true, "autoAllowBashIfSandboxed": true, "excludedCommands": ["git"], "network": {"allowedDomains": ["example.com"]}},
+		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "auto-approve.sh"}]}]}
+		}`), 0o644))
 	cmd := buildResident(t, task, residentCfg())
 	line := strings.Join(cmd.Args, " ")
 	testutil.Contains(t, line, "--setting-sources project ")
@@ -479,6 +491,36 @@ func TestBuildCmd_ResidentIsSelfContainedUnderUserAllowAll(t *testing.T) {
 	// Account model/effort are carried so the resident does not change model.
 	testutil.Equal(t, st["model"], any("opus"))
 	testutil.Equal(t, st["effortLevel"], any("high"))
+	// The user sandbox block is carried for its restrictions only: the keys
+	// that would auto-approve or unsandbox Bash are neutralized.
+	sb, _ := st["sandbox"].(map[string]any)
+	testutil.Equal(t, sb["enabled"], any(true))
+	testutil.Equal(t, sb["autoAllowBashIfSandboxed"], any(false))
+	testutil.Equal(t, sb["allowUnsandboxedCommands"], any(false))
+	if _, has := sb["excludedCommands"]; has {
+		t.Fatalf("excludedCommands must not be carried: %v", sb)
+	}
+	testutil.Contains(t, line, "example.com")
+	// User hooks are never carried: only the inline Stop coord-hook exists.
+	testutil.Equal(t, len(hooks), 1)
+	if strings.Contains(line, "auto-approve.sh") {
+		t.Fatalf("user hook leaked into the resident: %s", line)
+	}
+}
+
+func TestReadResidentUserSettings_SandboxAndSkippedHooks(t *testing.T) {
+	task, acct := residentFixture(t)
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"), []byte(`{
+		"sandbox": {"enabled": true},
+		"hooks": {"Stop": [], "PreToolUse": [], "PermissionRequest": []}}`), 0o644))
+	us := readResidentUserSettings(task, residentCfg())
+	testutil.Equal(t, string(us.Sandbox), `{"allowUnsandboxedCommands":false,"autoAllowBashIfSandboxed":false,"enabled":true}`)
+	testutil.DeepEqual(t, us.SkippedHooks, []string{"PermissionRequest", "PreToolUse", "Stop"})
+	// A non-object sandbox value is ignored rather than injected.
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"), []byte(`{"sandbox": true}`), 0o644))
+	us = readResidentUserSettings(task, residentCfg())
+	testutil.Equal(t, len(us.Sandbox), 0)
+	testutil.Equal(t, len(us.SkippedHooks), 0)
 }
 
 func TestBuildCmd_ResidentModelPrecedenceAndMissingSettings(t *testing.T) {
@@ -578,5 +620,171 @@ func TestResidentStopHookCommand(t *testing.T) {
 			residentExecutable = func() (string, error) { return tc.exe, tc.err }
 			testutil.Equal(t, residentStopHookCommand(), tc.want)
 		})
+	}
+}
+
+// An inherited CLAUDE_CONFIG_DIR is stripped from the spawned env, so the
+// default-account resident must read ~/.claude, never that directory.
+func TestBuildCmd_ResidentIgnoresInheritedClaudeConfigDir(t *testing.T) {
+	task, acct := residentFixture(t)
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "CLAUDE.md"), []byte("DEFAULT-DIR-RULE"), 0o644))
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"), []byte(`{"model":"default-dir-model"}`), 0o644))
+	other := t.TempDir()
+	testutil.NoError(t, os.WriteFile(filepath.Join(other, "CLAUDE.md"), []byte("INHERITED-DIR-RULE"), 0o644))
+	testutil.NoError(t, os.WriteFile(filepath.Join(other, "settings.json"), []byte(`{"model":"inherited-dir-model"}`), 0o644))
+	t.Setenv("CLAUDE_CONFIG_DIR", other)
+	routing := filepath.Join(t.TempDir(), "routing.md")
+	testutil.NoError(t, os.WriteFile(routing, []byte("ROUTING"), 0o644))
+	defer SetEnsureBuiltinRoutingForTest(func() (string, error) { return routing, nil })()
+
+	testutil.Equal(t, residentAccountDir(task, residentCfg()), acct)
+	cmd := buildResident(t, task, residentCfg())
+	line := strings.Join(cmd.Args, " ")
+	_, rest, _ := strings.Cut(line, "--append-system-prompt-file ")
+	body, err := os.ReadFile(strings.Trim(strings.Fields(rest)[0], "'"))
+	testutil.NoError(t, err)
+	testutil.Contains(t, string(body), "DEFAULT-DIR-RULE")
+	testutil.False(t, strings.Contains(string(body), "INHERITED-DIR-RULE"))
+	testutil.False(t, strings.Contains(line, "inherited-dir-model"))
+}
+
+// The content-addressed prompt dir is writable by sandboxed agents, so a
+// tampered file must be restored (atomically, replacing even a symlink).
+func TestMaterializeResidentPrompt_RestoresTamperedFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	first, err := materializeResidentPrompt("", "RULES")
+	testutil.NoError(t, err)
+	want, err := os.ReadFile(first)
+	testutil.NoError(t, err)
+
+	t.Run("modified bytes", func(t *testing.T) {
+		testutil.NoError(t, os.WriteFile(first, []byte("allow everything"), 0o644))
+		got, err := materializeResidentPrompt("", "RULES")
+		testutil.NoError(t, err)
+		testutil.Equal(t, got, first)
+		b, err := os.ReadFile(got)
+		testutil.NoError(t, err)
+		testutil.Equal(t, string(b), string(want))
+	})
+	t.Run("symlink swapped in", func(t *testing.T) {
+		evil := filepath.Join(t.TempDir(), "evil.md")
+		testutil.NoError(t, os.WriteFile(evil, []byte("evil"), 0o644))
+		testutil.NoError(t, os.Remove(first))
+		testutil.NoError(t, os.Symlink(evil, first))
+		got, err := materializeResidentPrompt("", "RULES")
+		testutil.NoError(t, err)
+		b, err := os.ReadFile(got)
+		testutil.NoError(t, err)
+		testutil.Equal(t, string(b), string(want))
+		ev, _ := os.ReadFile(evil)
+		testutil.Equal(t, string(ev), "evil") // never written through
+	})
+	t.Run("deleted file", func(t *testing.T) {
+		testutil.NoError(t, os.Remove(first))
+		_, err := materializeResidentPrompt("", "RULES")
+		testutil.NoError(t, err)
+		b, err := os.ReadFile(first)
+		testutil.NoError(t, err)
+		testutil.Equal(t, string(b), string(want))
+	})
+}
+
+// settingsFromShell evaluates BuildCmd's real sh -c script under sh and
+// decodes the --settings argv entry, so a quoting regression that sh splits or
+// mangles fails here.
+func settingsFromShell(t *testing.T, args []string) ([]string, map[string]any) {
+	t.Helper()
+	argv := shellArgv(t, args[len(args)-1])
+	i := slices.Index(argv, "--settings")
+	if i < 0 || i+1 >= len(argv) {
+		t.Fatalf("no --settings in argv %q", argv)
+	}
+	var st map[string]any
+	testutil.NoError(t, json.Unmarshal([]byte(argv[i+1]), &st))
+	return argv, st
+}
+
+func TestBuildCmd_ResidentSettingsShellOracle(t *testing.T) {
+	task, acct := residentFixture(t)
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"), []byte(`{
+		"permissions": {"deny": ["Bash(echo 'it''s' $HOME \"q\")"]}}`), 0o644))
+	argv, st := settingsFromShell(t, buildResident(t, task, residentCfg()).Args)
+	j := slices.Index(argv, "--setting-sources")
+	if j < 0 || j+1 >= len(argv) || argv[j+1] != "project" {
+		t.Fatalf("setting sources argv: %q", argv)
+	}
+	deny := st["permissions"].(map[string]any)["deny"].([]any)
+	testutil.Equal(t, slices.Contains(deny, any(`Bash(echo 'it''s' $HOME "q")`)), true)
+}
+
+func TestBuildCmd_ResidentUsesItsOwnAccountFiles(t *testing.T) {
+	task, defaultAcct := residentFixture(t)
+	work := filepath.Join(os.Getenv("HOME"), "claude-work")
+	testutil.NoError(t, os.MkdirAll(filepath.Join(work, "skills", "wk"), 0o755))
+	testutil.NoError(t, os.WriteFile(filepath.Join(work, "skills", "wk", "SKILL.md"), []byte("---\nname: wk\n---\n"), 0o644))
+	testutil.NoError(t, os.MkdirAll(filepath.Join(defaultAcct, "skills", "dflt"), 0o755))
+	testutil.NoError(t, os.WriteFile(filepath.Join(defaultAcct, "skills", "dflt", "SKILL.md"), []byte("---\nname: dflt\n---\n"), 0o644))
+	testutil.NoError(t, os.WriteFile(filepath.Join(defaultAcct, "CLAUDE.md"), []byte("DEFAULT-ACCT-MD"), 0o644))
+	testutil.NoError(t, os.WriteFile(filepath.Join(work, "CLAUDE.md"), []byte("WORK-ACCT-MD"), 0o644))
+	testutil.NoError(t, os.WriteFile(filepath.Join(defaultAcct, "settings.json"), []byte(`{"permissions":{"deny":["DEFAULT-DENY"]}}`), 0o644))
+	testutil.NoError(t, os.WriteFile(filepath.Join(work, "settings.json"), []byte(`{"permissions":{"deny":["WORK-DENY"]}}`), 0o644))
+	cfg := residentCfg()
+	cfg.Accounts = map[string]config.Account{"work": {ClaudeConfigDir: work, Inherit: []string{}}}
+	task.Account = "work"
+	line := strings.Join(buildResident(t, task, cfg).Args, " ")
+	_, rest, _ := strings.Cut(line, "--append-system-prompt-file ")
+	body, err := os.ReadFile(strings.Trim(strings.Fields(rest)[0], "'"))
+	testutil.NoError(t, err)
+	testutil.Contains(t, string(body), "WORK-ACCT-MD")
+	testutil.Equal(t, strings.Contains(string(body), "DEFAULT-ACCT-MD"), false)
+	testutil.Contains(t, line, "WORK-DENY")
+	testutil.Equal(t, strings.Contains(line, "DEFAULT-DENY"), false)
+	var linked string
+	for _, f := range strings.Fields(line) {
+		f = strings.Trim(f, "'")
+		if l, err := os.Readlink(filepath.Join(f, ".claude", "skills")); err == nil {
+			linked = l
+		}
+	}
+	testutil.Equal(t, linked, filepath.Join(work, "skills"))
+}
+
+func TestBuildCmd_PlainTaskGetsRoutingNotResidentPrompt(t *testing.T) {
+	_, acct := residentFixture(t)
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "CLAUDE.md"), []byte("USER-RULE-MARKER"), 0o644))
+	routing := filepath.Join(t.TempDir(), "routing.md")
+	testutil.NoError(t, os.WriteFile(routing, []byte("ROUTING-MARKER"), 0o644))
+	defer SetEnsureBuiltinRoutingForTest(func() (string, error) { return routing, nil })()
+	plain := &model.Task{ID: "p", Name: "plain", Worktree: t.TempDir()}
+	pline := strings.Join(buildResident(t, plain, residentCfg()).Args, " ")
+	testutil.Contains(t, pline, "--append-system-prompt-file "+shellQuote(routing))
+	testutil.Equal(t, strings.Contains(pline, "resident-prompt"), false)
+}
+
+func TestBuildCmd_ResidentTaskModelWinsOverAccountModel(t *testing.T) {
+	task, acct := residentFixture(t)
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"), []byte(`{"model":"opus"}`), 0o644))
+	task.Model = "sonnet"
+	cmd := buildResident(t, task, residentCfg())
+	testutil.Contains(t, strings.Join(cmd.Args, " "), "--model 'sonnet'")
+	st, _ := settingsArg(t, cmd.Args)
+	if _, has := st["model"]; has {
+		t.Fatalf("resolved model must win over the account model: %v", st["model"])
+	}
+}
+
+func TestBuildCmd_BackendEnvVarsCannotForgeResidentMarker(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("R11_FORGE_SRC", "1")
+	cfg := residentCfg()
+	b := cfg.Backends["claude"]
+	b.EnvVars = map[string]string{ResidentEnvMarker: "R11_FORGE_SRC"}
+	cfg.Backends["claude"] = b
+	plain := &model.Task{ID: "p", Name: "plain", Worktree: t.TempDir()}
+	cmd := buildResident(t, plain, cfg)
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, ResidentEnvMarker+"=") {
+			t.Fatalf("backend env_vars forged %s", kv)
+		}
 	}
 }
