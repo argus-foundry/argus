@@ -1156,6 +1156,12 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	if task.IsResident() && task.Worktree != db.ResidentWorkDir() {
 		return nil, nil, fmt.Errorf("resident task %q worktree %q is not the resident working directory %q", task.Name, task.Worktree, db.ResidentWorkDir())
 	}
+	// Inverse guard: a non-resident task rooted in the resident directory (e.g.
+	// an older TUI binary that does not send Task.Kind) would relaunch the
+	// resident without its permission policy, so fail closed.
+	if !task.IsResident() && filepath.Clean(task.Worktree) == filepath.Clean(db.ResidentWorkDir()) {
+		return nil, nil, fmt.Errorf("task %q runs in the resident working directory but is not the resident; refusing to spawn it without the resident permission policy (restart Argus onto the current binary)", task.Name)
+	}
 
 	// Pre-flight: confirm the worktree directory actually exists. Without this,
 	// a missing path surfaces post-fork as "fork/exec /bin/sh: no such file or

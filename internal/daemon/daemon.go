@@ -1617,7 +1617,9 @@ func (d *Daemon) Serve(sockPath string) error {
 		// (see task_recycle.go) only works across calls if the map itself
 		// persists between them.
 		taskRecycler := newTaskRecycleRunner(d.db, d.runner, d.cfgFn)
+		d.mu.Lock()
 		d.taskRecycler = taskRecycler
+		d.mu.Unlock()
 		mcpSrv.SetTaskRecycler(func(in mcp.TaskRecycleInput) error {
 			return taskRecycler.Recycle(in.TaskID, in.HandoffNote)
 		})
@@ -1695,7 +1697,9 @@ func (d *Daemon) Serve(sockPath string) error {
 			apiSrv.SetMCPRegistry(pluginRegistry)
 			apiSrv.SetNotifier(d.notifier)
 			apiSrv.SetFocusTracker(d.focusTracker)
+			d.mu.Lock()
 			d.apiServer = apiSrv
+			d.mu.Unlock()
 			d.restoreBridgeUsage = usagebudget.SetBridgeReader(apiSrv.BridgeUsage)
 			// argus_api_get: agents read daemon REST state in-process through the
 			// MCP server instead of curl + the master token. Only present when both

@@ -190,17 +190,44 @@ func TestDefaultResidentConfig_OutwardActionsNeverAllowed(t *testing.T) {
 			t.Errorf("DenyTools missing %s", want)
 		}
 	}
-	const draft = "mcp__claude_ai_Slack__slack_send_message_draft"
-	outward := []string{"send", "create_", "update", "delete", "respond", "reply", "forward", "schedule", "share"}
+	// Positive rule: every allow-tier entry is a single named MCP tool whose
+	// verb is read-only, except an explicit, reviewed exception list.
+	readVerbs := map[string]bool{"get": true, "list": true, "search": true, "read": true, "query": true, "fetch": true, "suggest": true}
+	exceptions := []string{"mcp__argus__kb_ingest", "mcp__argus__task_recycle", "mcp__claude_ai_Slack__slack_send_message_draft"}
+	for _, ex := range exceptions {
+		if !has(r.AllowTools, ex) {
+			t.Errorf("AllowTools missing reviewed exception %s", ex)
+		}
+	}
 	for _, tool := range r.AllowTools {
-		if tool == draft {
+		if !strings.HasPrefix(tool, "mcp__") || strings.Contains(tool, "*") {
+			t.Errorf("allow tier entry %q must be a concrete mcp__ tool", tool)
 			continue
 		}
-		name := tool[strings.LastIndex(tool, "__")+2:]
-		for _, verb := range outward {
-			if strings.Contains(name, verb) {
-				t.Errorf("allow tier holds outward-acting tool %s (matches %q)", tool, verb)
+		if has(exceptions, tool) {
+			continue
+		}
+		op := tool[strings.LastIndex(tool, "__")+2:]
+		for _, prefix := range []string{"slack_", "notion-", "kb_"} {
+			if strings.HasPrefix(op, prefix) {
+				op = strings.TrimPrefix(op, prefix)
+				break
 			}
+		}
+		verb := op
+		if i := strings.IndexAny(op, "_-"); i >= 0 {
+			verb = op[:i]
+		}
+		if !readVerbs[verb] {
+			t.Errorf("allow tier holds %s with non-read verb %q", tool, verb)
+		}
+		if has(r.AskTools, tool) || has(r.DenyTools, tool) {
+			t.Errorf("allow tier entry %s also in ask/deny", tool)
+		}
+	}
+	for _, ex := range exceptions {
+		if has(r.AskTools, ex) || has(r.DenyTools, ex) {
+			t.Errorf("exception %s also in ask/deny", ex)
 		}
 	}
 }

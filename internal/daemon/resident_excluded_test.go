@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/agent"
@@ -150,7 +151,13 @@ func TestResidentExcludedEverywhere(t *testing.T) {
 			if !known[e.resident.Worktree] {
 				return "resident dir not protected as a known path"
 			}
-			// Positive control: an unknown sibling under the same parent as the
+			// Structural guard: the resident dir must lie outside the managed
+			// worktree root, which is what keeps the real sweep off it.
+			root := filepath.Dir(filepath.Dir(agent.WorktreeDir("p", "t"))) + string(filepath.Separator)
+			if strings.HasPrefix(filepath.Clean(e.resident.Worktree)+string(filepath.Separator), root) {
+				return fmt.Sprintf("resident dir %s is inside the managed worktree root %s", e.resident.Worktree, root)
+			}
+			// Walk-runs sanity (not the exclusion proof): an unknown sibling under the same parent as the
 			// resident dir is counted, proving the walk really runs there, while
 			// the resident dir itself (protected via known paths) adds nothing.
 			parent := filepath.Dir(e.resident.Worktree)

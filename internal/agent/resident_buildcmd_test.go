@@ -42,6 +42,16 @@ func TestBuildCmd_ResidentWorkdirPrecondition(t *testing.T) {
 		}
 	})
 
+	t.Run("non-resident in the resident dir refuses", func(t *testing.T) {
+		for _, wt := range []string{resDir, resDir + "/", resDir + "/."} {
+			task := &model.Task{ID: "x", Name: "x", Worktree: wt}
+			_, _, err := BuildCmd(task, testConfig(), false)
+			if err == nil || !strings.Contains(err.Error(), "is not the resident") {
+				t.Fatalf("worktree %q: want not-the-resident refusal, got %v", wt, err)
+			}
+		}
+	})
+
 	t.Run("non-resident with empty worktree still refuses", func(t *testing.T) {
 		task := &model.Task{ID: "p", Name: "plain"}
 		_, _, err := BuildCmd(task, testConfig(), false)

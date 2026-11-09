@@ -490,12 +490,17 @@ func TestResident_DaemonManagerClosures(t *testing.T) {
 	testutil.Equal(t, m.mcpReady(), true)
 
 	testutil.Equal(t, m.recycling("r1"), false)
-	d.taskRecycler = newTaskRecycleRunner(d.db, d.runner, func() config.Config { return config.DefaultConfig() })
-	d.taskRecycler.inFlight.Store("r1", struct{}{})
+	rc := newTaskRecycleRunner(d.db, d.runner, func() config.Config { return config.DefaultConfig() })
+	d.mu.Lock()
+	d.taskRecycler = rc
+	d.mu.Unlock()
+	rc.inFlight.Store("r1", struct{}{})
 	testutil.Equal(t, m.recycling("r1"), true)
 	testutil.Equal(t, m.recycling("other"), false)
 
 	testutil.Equal(t, m.waiting("r1"), false)
+	d.mu.Lock()
 	d.apiServer = api.New(d.db, d.runner, "tok", nil, nil)
+	d.mu.Unlock()
 	testutil.Equal(t, m.waiting("r1"), false)
 }

@@ -214,10 +214,14 @@ func TestSmoke_ResidentRoundTrip(t *testing.T) {
 }
 
 func TestSmoke_ResidentIgnoredInModalAndFilter(t *testing.T) {
-	for _, mode := range []string{"modal", "filter", "settings edit"} {
+	for _, mode := range []string{"modal", "filter", "settings edit", "hera rail filter"} {
 		t.Run(mode, func(t *testing.T) {
 			a, _ := residentTestApp(t)
 			switch mode {
+			case "hera rail filter":
+				a.switchTab(widget.TabHera)
+				a.heraPage.InputHandler()(tcell.NewEventKey(tcell.KeyRune, '/', 0), func(tview.Primitive) {})
+				testutil.True(t, a.heraPage.RailFiltering())
 			case "modal":
 				a.openHelp()
 			case "filter":
@@ -235,19 +239,27 @@ func TestSmoke_ResidentIgnoredInModalAndFilter(t *testing.T) {
 				if mode == "modal" {
 					testutil.Equal(t, a.mode, modeHelp)
 				}
+				if mode == "hera rail filter" {
+					testutil.Equal(t, a.header.ActiveTab(), widget.TabHera)
+					testutil.True(t, a.heraPage.RailFiltering())
+				}
 			})
 		})
 	}
 }
 
 func TestSmoke_ResidentRuneBindingTypeableInTextInput(t *testing.T) {
-	for _, mode := range []string{"filter", "settings edit", "modal"} {
+	for _, mode := range []string{"filter", "settings edit", "modal", "hera rail filter"} {
 		t.Run(mode, func(t *testing.T) {
 			a, _ := residentTestApp(t)
 			km, warnings := keymap.Build(config.Keybindings{Global: map[string]string{"resident": "~"}})
 			testutil.Equal(t, len(warnings), 0)
 			a.keymap = km
 			switch mode {
+			case "hera rail filter":
+				a.switchTab(widget.TabHera)
+				a.heraPage.InputHandler()(tcell.NewEventKey(tcell.KeyRune, '/', 0), func(tview.Primitive) {})
+				testutil.True(t, a.heraPage.RailFiltering())
 			case "modal":
 				a.openHelp()
 			case "filter":
@@ -273,6 +285,10 @@ func TestSmoke_ResidentRuneBindingTypeableInTextInput(t *testing.T) {
 					testutil.True(t, strings.HasSuffix(a.tasklist.Filter(), "~"))
 				case "settings edit":
 					testutil.True(t, strings.HasSuffix(a.settings.resEdit.buf, "~"))
+				case "hera rail filter":
+					testutil.Equal(t, a.header.ActiveTab(), widget.TabHera)
+					testutil.True(t, a.heraPage.RailFiltering())
+					testutil.True(t, strings.HasSuffix(a.heraPage.Rail().Filter(), "~"))
 				}
 			})
 		})
@@ -391,6 +407,8 @@ func TestSmoke_ResidentRoundTripKeepsCursors(t *testing.T) {
 		want := a.tasklist.SelectedTask().ID
 		a.toggleResident()
 		testutil.Equal(t, a.header.ActiveTab(), widget.TabResident)
+		a.tasklist.SelectByID("one") // move the cursor while away
+		testutil.Equal(t, a.tasklist.SelectedTask().ID, "one")
 		a.toggleResident()
 		testutil.Equal(t, a.tasklist.SelectedTask().ID, want)
 	})

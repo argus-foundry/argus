@@ -76,11 +76,47 @@ func TestCheckResidentSupported(t *testing.T) {
 	}
 }
 
-func TestStart_RefusesResidentOnOldSupervisor(t *testing.T) {
-	c := &Client{peerProtocol: 12}
+func TestResOldSup(t *testing.T) {
+	c, rec := newWireRecorderClient(t)
+	setPeer := func(v int) {
+		c.mu.Lock()
+		c.peerProtocol = v
+		c.mu.Unlock()
+	}
 	res := &model.Task{ID: "t", Kind: model.KindResident}
+
+	setPeer(12)
 	_, err := c.Start(res, configZero(), 24, 80, false)
 	testutil.Error(t, err)
-	testutil.Error(t, c.KickRerender(res, configZero(), 24, 80))
-	testutil.Error(t, c.Recycle(res, configZero(), 24, 80))
+	testutil.Contains(t, err.Error(), "restart the supervisor")
+	for name, call := range map[string]func() error{
+		"kick":    func() error { return c.KickRerender(res, configZero(), 24, 80) },
+		"revive":  func() error { return c.Revive(res, configZero(), 24, 80) },
+		"width":   func() error { return c.KickWidthRerender(res, configZero(), 24, 80) },
+		"recycle": func() error { return c.Recycle(res, configZero(), 24, 80) },
+	} {
+		err := call()
+		testutil.Error(t, err)
+		if err != nil {
+			testutil.Contains(t, err.Error(), "restart the supervisor")
+		} else {
+			t.Errorf("%s did not refuse", name)
+		}
+	}
+	rec.mu.Lock()
+	testutil.Equal(t, rec.start.TaskID, "")
+	testutil.Equal(t, rec.kick.TaskID, "")
+	testutil.Equal(t, rec.ordinaryKicks, 0)
+	testutil.Equal(t, rec.boundedKicks, 0)
+	testutil.Equal(t, rec.recycle.TaskID, "")
+	rec.mu.Unlock()
+
+	// Control: a supervisor at the resident protocol accepts the same task.
+	setPeer(residentProtocolVersion)
+	_, err = c.Start(res, configZero(), 24, 80, false)
+	testutil.NoError(t, err)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	testutil.Equal(t, rec.start.TaskID, "t")
+	testutil.Equal(t, rec.start.Kind, model.KindResident)
 }

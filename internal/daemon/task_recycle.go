@@ -119,7 +119,7 @@ func (r *taskRecycleRunner) Recycle(taskID, handoffNote string) error {
 			if resident {
 				// The resident re-reads its orientation and memory instead of a
 				// task prompt (add-resident-agent).
-				seed := buildResidentRecycleSeedPrompt(residentOrientationPrompt(cfg), handoffNote, cfg.Resident.MemoryDir)
+				seed := buildResidentRecycleSeedPrompt(residentOrientationPrompt(cfg), handoffNote, cfg.Resident.MemoryDir, recycleExchangeSection(t, cfg))
 				residentLog("[resident] recycle seed composed task=%s bytes=%d", taskID, len(seed))
 				return seed
 			}
@@ -209,13 +209,17 @@ func buildTaskRecycleSeedPrompt(originalPrompt, handoffNote, lastExchange string
 	return b.String()
 }
 
-func buildResidentRecycleSeedPrompt(orientation, handoffNote, memoryDir string) string {
+// buildResidentRecycleSeedPrompt orders the resident seed: handoff, last
+// exchange, relay directive, working-memory recovery, then the persistent
+// orientation as background. lastExchange may be "" (fail-open).
+func buildResidentRecycleSeedPrompt(orientation, handoffNote, memoryDir, lastExchange string) string {
 	if memoryDir == "" {
 		memoryDir = "resident"
 	}
 	return "You are a fresh resident session recycled to reset context. Follow this handoff first.\n\n" +
-		"## Handoff note from your prior session\n\n" + handoffNote +
-		"\n\n## Recover working memory\n\nRead `" + path.Join(memoryDir, "open-loops.md") +
+		"## Handoff note from your prior session\n\n" + handoffNote + "\n" +
+		lastExchange + lastexchange.RelayDirective +
+		"\n## Recover working memory\n\nRead `" + path.Join(memoryDir, "open-loops.md") +
 		"` first, then `" + path.Join(memoryDir, "profile.md") +
 		"`, then continue from the handoff and open loops. No other recovery tool calls are needed.\n\n" +
 		"## Persistent orientation (background only)\n\n" + orientation + "\n"

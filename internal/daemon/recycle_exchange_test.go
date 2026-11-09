@@ -8,6 +8,7 @@ import (
 
 	"github.com/argus-foundry/argus/internal/claudesession"
 	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -74,4 +75,16 @@ func TestBuildTaskRecycleSeedPrompt_LastExchange(t *testing.T) {
 	if strings.Index(got, "Last exchange") > strings.Index(got, "ZZMISSION") {
 		t.Fatal("last exchange must precede the original prompt")
 	}
+}
+
+func TestRecycleExchangeSection_Resident(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	resident := &model.Task{ID: "r1", Worktree: db.ResidentWorkDir(), SessionID: "sid-r", Backend: "claude"}
+	testutil.NoError(t, os.MkdirAll(resident.Worktree, 0o755))
+	writeTranscript(t, home, resident.Worktree, "sid-r", exchangeTranscript)
+
+	got := recycleExchangeSection(resident, claudeCfg())
+	testutil.Contains(t, got, "Last exchange with the user before the reset")
+	testutil.Contains(t, got, "Mostly host CPU load.")
 }

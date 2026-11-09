@@ -85,6 +85,10 @@ type residentManager struct {
 	aliveSince   time.Time
 	lastReason   string // last prerequisite/start failure reason (logged on change)
 	loggedReason string
+	// startFailure is the last start/persist failure, kept across backoff ticks
+	// so the reason (and the log-on-change dedup) is not wiped while waiting
+	// for the next attempt. Cleared on a live session, success, or disable.
+	startFailure string
 }
 
 func newResidentManager(database *db.DB, runner residentRunner, cfgFn func() config.Config) *residentManager {
@@ -174,7 +178,10 @@ func (m *residentManager) tick() {
 		m.reason(err.Error())
 		return
 	}
-	m.reason("")
+	m.mu.Lock()
+	pending := m.startFailure
+	m.mu.Unlock()
+	m.reason(pending)
 
 	workDir := db.ResidentWorkDir()
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -197,7 +204,9 @@ func (m *residentManager) tick() {
 			residentLog("[resident] stable for %s, backoff reset", residentStableAfter)
 			m.failures = 0
 		}
+		m.startFailure = ""
 		m.mu.Unlock()
+		m.reason("")
 		return
 	}
 	if m.runner.HasPendingRestart(task.ID) || m.recycling(task.ID) {
@@ -242,23 +251,37 @@ func (m *residentManager) start(task *model.Task, cfg config.Config, backend str
 	}
 	if err := m.db.Update(task); err != nil {
 		residentLog("[resident] persist row before start failed: %v", err)
-		m.reason(fmt.Sprintf("persist resident row: %v", err))
+		m.failStart(fmt.Sprintf("persist resident row: %v", err))
 		return
 	}
 	_, reattached, err := m.runner.StartOrReattach(task, cfg, 24, 80, resume)
 	if err != nil {
 		residentLog("[resident] start failed attempt=%d resume=%t backend=%s: %v", attempt, resume, backend, err)
-		m.reason(fmt.Sprintf("start failed: %v", err))
+		m.failStart(fmt.Sprintf("start failed: %v", err))
 		return
 	}
 	if reattached {
 		residentLog("[resident] re-attached to running session task=%s", task.ID)
 		m.mu.Lock()
 		m.failures = 0
+		m.startFailure = ""
 		m.mu.Unlock()
+		m.reason("")
 		return
 	}
+	m.mu.Lock()
+	m.startFailure = ""
+	m.mu.Unlock()
+	m.reason("")
 	residentLog("[resident] started task=%s attempt=%d resume=%t backend=%s", task.ID, attempt, resume, backend)
+}
+
+// failStart records a start failure so later backoff ticks keep reporting it.
+func (m *residentManager) failStart(msg string) {
+	m.mu.Lock()
+	m.startFailure = msg
+	m.mu.Unlock()
+	m.reason(msg)
 }
 
 func (m *residentManager) stopIfRunning(why string) {
@@ -268,6 +291,7 @@ func (m *residentManager) stopIfRunning(why string) {
 	}
 	m.mu.Lock()
 	m.failures, m.nextAttempt, m.aliveSince = 0, time.Time{}, time.Time{}
+	m.startFailure = ""
 	m.mu.Unlock()
 	if m.runner.Get(task.ID) == nil && !m.runner.HasPendingRestart(task.ID) {
 		return
@@ -408,10 +432,13 @@ func (d *Daemon) residentMgr() *residentManager {
 			return d.notifier
 		}
 		m.recycling = func(id string) bool {
-			if d.taskRecycler == nil {
+			d.mu.Lock()
+			rc := d.taskRecycler
+			d.mu.Unlock()
+			if rc == nil {
 				return false
 			}
-			_, in := d.taskRecycler.inFlight.Load(id)
+			_, in := rc.inFlight.Load(id)
 			return in
 		}
 		m.mcpReady = func() bool {
@@ -420,7 +447,10 @@ func (d *Daemon) residentMgr() *residentManager {
 			return d.mcpPort != 0
 		}
 		m.waiting = func(id string) bool {
-			return d.apiServer != nil && d.apiServer.ResidentWaiting()
+			d.mu.Lock()
+			srv := d.apiServer
+			d.mu.Unlock()
+			return srv != nil && srv.ResidentWaiting()
 		}
 		d.resident = m
 	})

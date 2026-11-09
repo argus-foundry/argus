@@ -52,8 +52,9 @@ func TestResidentRecycleSeedOrder(t *testing.T) {
 		{"configured", "custom/memory", "custom/memory"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildResidentRecycleSeedPrompt("persistent orientation", "handoff first", tc.memoryDir)
-			parts := []string{"handoff first", tc.prefix + "/open-loops.md", tc.prefix + "/profile.md", "then continue", "persistent orientation"}
+			exchange := "\n## Last exchange with the user before the reset\nQ\n"
+			got := buildResidentRecycleSeedPrompt("persistent orientation", "handoff first", tc.memoryDir, exchange)
+			parts := []string{"handoff first", "## Last exchange with the user before the reset", "Open with the user — relay first", tc.prefix + "/open-loops.md", tc.prefix + "/profile.md", "then continue", "persistent orientation"}
 			previous := -1
 			for _, part := range parts {
 				idx := strings.Index(got, part)
@@ -61,6 +62,11 @@ func TestResidentRecycleSeedOrder(t *testing.T) {
 				previous = idx
 			}
 			testutil.Contains(t, got, "background only")
+
+			// The relay directive is unconditional, even with no exchange.
+			empty := buildResidentRecycleSeedPrompt("persistent orientation", "handoff first", tc.memoryDir, "")
+			testutil.Contains(t, empty, "Open with the user — relay first")
+			testutil.False(t, strings.Contains(empty, "## Last exchange with the user before the reset"))
 		})
 	}
 }
@@ -148,7 +154,8 @@ func TestResidentRecycleUsesPersistentOrientation(t *testing.T) {
 			handoff := strings.Index(p, "current handoff")
 			loops := strings.Index(p, "custom/memory/open-loops.md")
 			orient := strings.Index(p, "persistent orientation")
-			testutil.True(t, handoff >= 0 && loops > handoff && orient > loops)
+			relay := strings.Index(p, "Open with the user — relay first")
+			testutil.True(t, handoff >= 0 && relay > handoff && loops > relay && orient > loops)
 			testutil.False(t, strings.Contains(p, "obsolete prior recycle seed"))
 
 			// The persisted row matches what was launched, so a later crash
