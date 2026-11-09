@@ -1,0 +1,8 @@
+- [x] Prepare proposal and REST API delta before implementation.
+- [x] Obtain coordinator approval (Hera message 2354).
+- [x] Add handler tests and record failing baseline (`.context/pinned-red.log`, exit 1, missing pinned fields).
+- [x] Emit pinned from the shared task DTO builder.
+- [x] Verify additive response compatibility and document the invariant.
+- [x] Archive the delta into the base spec on this branch.
+- [x] Run focused API race tests and one detached full pre-pr gate (both exit 0).
+- [x] Prepare one local commit and completion evidence for em.

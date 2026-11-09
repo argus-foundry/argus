@@ -111,6 +111,7 @@ type taskJSON struct {
 	Elapsed      string `json:"elapsed,omitempty"`
 	CreatedAt    string `json:"created_at"`
 	Archived     bool   `json:"archived,omitempty"`
+	Pinned       bool   `json:"pinned"`
 	WorktreePath string `json:"worktree_path,omitempty"`
 	Prompt       string `json:"prompt,omitempty"`
 	// PRState is the cached GitHub PR review state for the task's branch,
@@ -155,6 +156,7 @@ func taskToJSON(t *model.Task, rt taskRuntimeState) taskJSON {
 		Elapsed:      t.ElapsedString(),
 		CreatedAt:    t.CreatedAt.Format(time.RFC3339),
 		Archived:     t.Archived,
+		Pinned:       t.Pinned,
 		WorktreePath: t.Worktree,
 		Prompt:       t.Prompt,
 		PRState:      prDTOValue(rt.PRState),
