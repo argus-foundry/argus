@@ -8,7 +8,7 @@ If `ARGUS_ARTIFACT_ACCOUNT` is unset, ignore this section.
 
 When it is set, this project's claude.ai artifacts live on that account, and this session is not signed into it. Publish and update artifacts with the Argus `artifact_publish` MCP tool instead of the built-in artifact tool or the `claude-artifacts` MCP tools:
 
-- New artifact: call `artifact_publish` with `path` (a self-contained .html file), `title`, `account` set to `$ARGUS_ARTIFACT_ACCOUNT`, and your task `id` (`$ARGUS_TASK_ID`) or `cwd`.
+- New artifact: call `artifact_publish` with `path` (a self-contained .html file in your worktree or a temp directory), `title`, `account` set to `$ARGUS_ARTIFACT_ACCOUNT`, and your task `id` (`$ARGUS_TASK_ID`) or `cwd`.
 - Existing artifact: the same call, plus `update` set to the artifact's link.
 
 On `status: "published"`, give the user the `url`.

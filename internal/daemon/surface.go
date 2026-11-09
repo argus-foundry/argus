@@ -221,9 +221,9 @@ const (
 	// 41: the injected argus-artifacts routing snippet tells agents to publish
 	//     through the daemon's artifact_publish MCP tool and, on an unavailable
 	//     home account, to ask the user (publish elsewhere / open / reveal /
-	//     park) instead of using the never-built artpush CLI
+	//     park) instead of an external publishing CLI that was never built
 	//     (add-argus-artifact-publish). A stale supervisor injects the old
-	//     artpush guidance until restarted.
+	//     CLI guidance until restarted.
 	SupervisorSpawnSurface = 41
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -529,7 +529,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "15e3b22826752d0d8aef594dab17ec6d2350e322c93cee69d3ed3e0d6de59fbb"
+	SpawnSurfaceDigest  = "a8724863e8bf6731cd28b53a01e95d9af808aa3b20684c839308359eb94471e9"
 	StreamSurfaceDigest = "3119cb7016724a7989d50ec738bdaa9551ac6f16f8d50a48f04c908b2237405f"
 )
 

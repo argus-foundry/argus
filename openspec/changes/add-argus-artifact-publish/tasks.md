@@ -22,8 +22,8 @@
   - `artifact_open` refuses unregistered names and builds `open` / `open -R` through an injectable opener seam
 - [x] 1.5 `internal/api`: `POST /api/artifacts/publish` success, unavailable and auth tests
 - [x] 1.6 `cmd/argus`: `artifact publish` subcommand exit codes (0 success, 3 unavailable, non-zero otherwise) against a stub server, if the cmd package's test conventions allow it; otherwise cover the arg parsing and exit-code mapping in a testable helper
-- [ ] 1.7 `internal/routing`: snippet names `artifact_publish`, `ARGUS_ARTIFACT_ACCOUNT`, the update form, all four unavailable options, `artifact_open`, `argus artifact publish`, the no-fallback rule and the self-gate; no `artpush` anywhere
-- [ ] 1.8 Confirm every new test fails for the expected reason (Prove-It)
+- [x] 1.7 `internal/routing`: snippet names `artifact_publish`, `ARGUS_ARTIFACT_ACCOUNT`, the update form, all four unavailable options, `artifact_open`, `argus artifact publish`, the no-fallback rule and the self-gate; no `artpush` anywhere
+- [x] 1.8 Confirm every new test fails for the expected reason (Prove-It)
 
 ## 2. Publisher client and config
 
@@ -60,16 +60,16 @@
 
 **Depends on:** Stage 1
 
-- [ ] 5.1 Rewrite `internal/routing/builtin/argus-artifacts.md` per design D6
-- [ ] 5.2 Replace every `artpush` mention: code comments in `internal/agent` and `internal/daemon/surface.go`, `context/knowledge/backends.md`, `gotchas/misc.md`, `index.md` and `README.md`. Confirm whether the spawn surface digest changes (comments only, so it should not).
-- [ ] 5.3 Test 1.7 passes
+- [x] 5.1 Rewrite `internal/routing/builtin/argus-artifacts.md` per design D6
+- [x] 5.2 Replace every `artpush` mention: code comments in `internal/agent` and `internal/daemon/surface.go`, `context/knowledge/backends.md`, `gotchas/misc.md`, `index.md` and `README.md`. Confirm whether the spawn surface digest changes (comments only, so it should not).
+- [x] 5.3 Test 1.7 passes
 
 ## 6. Docs and gate
 
 **Depends on:** Stages 3, 4, 5
 
-- [ ] 6.1 README Reference: `artifact_publish` and `artifact_open` in the MCP tools table, `POST /api/artifacts/publish` in REST endpoints, `[artifact_tokens]` in config, the `argus artifact publish` subcommand, and the setup-token setup steps
-- [ ] 6.2 `gotchas/misc.md` bullets:
+- [x] 6.1 README Reference: `artifact_publish` and `artifact_open` in the MCP tools table, `POST /api/artifacts/publish` in REST endpoints, `[artifact_tokens]` in config, the `argus artifact publish` subcommand, and the setup-token setup steps
+- [x] 6.2 `gotchas/misc.md` bullets:
   - stateless endpoint (no `initialize`)
   - the cut-down tool list still contains `publish_version`, so probe with a real call
   - the "not available" 404 means unavailable
