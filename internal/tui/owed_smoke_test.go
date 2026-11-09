@@ -113,3 +113,23 @@ func TestSmoke_OwedNoticeClearsWhenSettingOn(t *testing.T) {
 	}
 	t.Fatalf("notice still showing after the setting turned on:\n%s", screenText(sim, 80, 24))
 }
+
+// A window resize and a Ctrl+Z zoom toggle pair with the setting off resize the
+// PTY and nothing else: the session is never stopped and no kick is logged.
+func TestSmoke_ResizeDoesNotRestart(t *testing.T) {
+	app, sim, sess, task := owedAgentView(t, 80)
+	topBorderWith(t, app, sim, "Agent")
+	sim.SetSize(140, 30)
+	sim.InjectKey(tcell.KeyCtrlZ, 0, 0)
+	syncUI(t, app.tapp)
+	sim.InjectKey(tcell.KeyCtrlZ, 0, 0)
+	syncUI(t, app.tapp)
+	app.tapp.QueueUpdateDraw(func() {})
+	syncUI(t, app.tapp)
+	time.Sleep(200 * time.Millisecond) // let any (wrongly) spawned decision goroutine act
+	testutil.False(t, sess.stopCalled.Load())
+	readUI(t, app.tapp, func() {
+		testutil.False(t, app.pendingRerenderRestart[task.ID])
+		testutil.Equal(t, sess.PID(), 55)
+	})
+}

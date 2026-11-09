@@ -13,6 +13,7 @@ import (
 	"github.com/drn/argus/internal/testutil"
 	"github.com/drn/argus/internal/tui/planview"
 	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 )
 
 func TestSplitLaunchPaneSizes(t *testing.T) {
@@ -1736,4 +1737,57 @@ func TestPanes_SettingOn_KickDebounceUnchanged(t *testing.T) {
 	advance(KickDebounce)
 	p.Draw(sim)
 	testutil.Equal(t, len(kicksFor(*kicks, "t-wkr")), 1)
+}
+
+// resize-without-restart: each Hera pane carries its OWN owed notice on its own
+// top border (title left, notice right), evaluated per bound task.
+func TestPanes_OwedNotice_PerPaneTopBorder(t *testing.T) {
+	d := memDB(t)
+	orch := seedOrch(t, d, "orch")
+	seedBoundRole(t, d, orch, "coord", db.HeraKindCoordinator, "t-coord")
+	seedBoundRole(t, d, orch, "wkr", db.HeraKindWorker, "t-wkr")
+	p := NewHeraPage(d)
+	p.SetSessionResolver(resolverFor(map[string]*fakeSession{
+		"t-coord": {id: "t-coord", alive: true},
+		"t-wkr":   {id: "t-wkr", alive: true},
+	}))
+	// Only the worker's history is owed a re-render.
+	p.SetOwedFunc(func(taskID string, _ agentview.TerminalAdapter, cols int) (bool, string) {
+		return taskID == "t-wkr", "width-returned"
+	}, func() string { return "ctrl+n" })
+	var rerendered []string
+	p.OnRerender = func(id string) { rerendered = append(rerendered, id) }
+	p.Refresh()
+	testutil.Equal(t, selectRoleByName(p, "wkr"), true)
+
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	defer sim.Fini()
+	sim.SetSize(200, 30)
+	p.SetRect(0, 0, 200, 30)
+	p.Draw(sim)
+
+	var noticeRow string
+	var noticeX, noticeY int
+	count := 0
+	for y := 0; y < 30; y++ {
+		var b strings.Builder
+		for x := 0; x < 200; x++ {
+			c, _, _ := sim.Get(x, y)
+			b.WriteString(c)
+		}
+		row := b.String()
+		if i := strings.Index(row, "width changed · ctrl+n re-render"); i >= 0 {
+			count++
+			noticeRow, noticeY = row, y
+			noticeX = len([]rune(row[:i])) + 2
+		}
+	}
+	testutil.Equal(t, count, 1) // the coordinator pane has none
+	testutil.Contains(t, noticeRow, "Agent")
+
+	// Clicking the notice asks for a re-render of THAT pane's task.
+	h := p.MouseHandler()
+	h(tview.MouseLeftDown, tcell.NewEventMouse(noticeX, noticeY, tcell.Button1, 0), func(tview.Primitive) {})
+	testutil.DeepEqual(t, rerendered, []string{"t-wkr"})
 }
