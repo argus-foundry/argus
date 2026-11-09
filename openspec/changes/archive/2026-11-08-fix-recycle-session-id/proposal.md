@@ -21,4 +21,4 @@ A recycled session has no session ID. `restartSessionWithSeedPrompt` clears `tas
 
 ## Impact
 
-`internal/agent/create.go`, `internal/daemon/{recycle.go,types.go,sessioncore.go,surface.go}`, `internal/daemon/client/client.go`. A stale supervisor ignores the new field and behaves as before; deploy needs a supervisor restart for the fix to take effect on supervisor-spawned sessions.
+`internal/agent/create.go`, `internal/daemon/{recycle.go,types.go,sessioncore.go,surface.go}`, `internal/daemon/client/client.go`. A stale supervisor ignores the new field. To avoid persisting a phantom ID it never launches with, the recycle checks the supervisor client's cached handshake version (`agent.RecycleIDCapable`, no round trip) and keeps the legacy empty ID for a pre-v12 peer. A supervisor restart is needed for the fix to take effect on supervisor-spawned sessions.

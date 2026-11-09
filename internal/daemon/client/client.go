@@ -131,6 +131,20 @@ type Client struct {
 // Task.Account on Start/Kick/Recycle.
 const accountProtocolVersion = 8
 
+// recycleSessionIDProtocolVersion is the first supervisor protocol that carries
+// the fresh pinned SessionID on RecycleReq.
+const recycleSessionIDProtocolVersion = 12
+
+// RecycleCarriesSessionID implements agent.RecycleIDCapable from the cached
+// handshake version (no round trip). An unhandshaken peer (0) is assumed
+// capable, mirroring checkAccountSupported.
+func (c *Client) RecycleCarriesSessionID() bool {
+	c.mu.Lock()
+	peer := c.peerProtocol
+	c.mu.Unlock()
+	return peer == 0 || peer >= recycleSessionIDProtocolVersion
+}
+
 // checkAccountSupported refuses to hand an explicit-account task to a
 // handshaken supervisor too old to carry the account: it would silently spawn
 // the session under the default login instead.

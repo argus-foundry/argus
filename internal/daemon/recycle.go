@@ -144,6 +144,13 @@ func restartSessionWithSeedPrompt(database *db.DB, runner agent.SessionRunner, c
 	// the recycled session with no resumable ID until its next exit capture
 	// (ctrl+n re-render refused). Capture-style families get "".
 	task.SessionID = agent.FreshSessionID(task, cfgFn())
+	if cap, ok := runner.(agent.RecycleIDCapable); ok && !cap.RecycleCarriesSessionID() {
+		// A pre-v12 supervisor ignores RecycleReq.SessionID and would launch
+		// with no --session-id; persisting the minted ID would leave a phantom
+		// ID no transcript matches. Keep the legacy empty ID instead.
+		slog.Warn("[recycle] supervisor too old to carry session id; leaving it empty", "task", task.ID)
+		task.SessionID = ""
+	}
 	task.Prompt = seedPrompt
 	if err := database.Update(task); err != nil {
 		return fmt.Errorf("restart session: persist fresh session id for task %s: %w", task.ID, err)

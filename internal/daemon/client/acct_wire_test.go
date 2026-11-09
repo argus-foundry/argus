@@ -225,3 +225,10 @@ func TestSupAcctEnv(t *testing.T) {
 	}
 	testutil.Equal(t, got, "dir="+acctDir)
 }
+
+func TestRecycleCarriesSessionID(t *testing.T) {
+	for peer, want := range map[int]bool{0: true, 11: false, 12: true, 13: true} {
+		c := &Client{peerProtocol: peer}
+		testutil.Equal(t, c.RecycleCarriesSessionID(), want)
+	}
+}

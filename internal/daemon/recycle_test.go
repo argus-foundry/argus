@@ -297,3 +297,28 @@ func TestHeraRecycleRunner_Restart_UnknownTaskErrors(t *testing.T) {
 		t.Fatal("expected an error for an unknown task")
 	}
 }
+
+type legacyIDRunner struct{ agent.SessionRunner }
+
+func (legacyIDRunner) RecycleCarriesSessionID() bool  { return false }
+func (legacyIDRunner) Get(string) agent.SessionHandle { return nil }
+func (legacyIDRunner) Start(*model.Task, config.Config, uint16, uint16, bool) (agent.SessionHandle, error) {
+	return nil, nil
+}
+func (legacyIDRunner) Recycle(*model.Task, config.Config, uint16, uint16) error { return nil }
+
+// A runner whose peer cannot carry the ID must not get one persisted.
+func TestRestartSessionWithSeedPrompt_LegacyPeerKeepsEmptyID(t *testing.T) {
+	database, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	task, _ := seedHeraRecycleCoordinator(t, database, t.TempDir(), "mission")
+	task.SessionID = "stale-sid-1"
+	testutil.NoError(t, database.Update(task))
+
+	cfg := recycleTestConfig()
+	testutil.NoError(t, restartSessionWithSeedPrompt(database, legacyIDRunner{}, func() config.Config { return cfg }, task, "seed", db.HeraRoleKind("")))
+	got, err := database.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.SessionID, "")
+}
