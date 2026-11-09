@@ -199,6 +199,8 @@ func (a *App) closeJumpSwitcher() {
 		a.tapp.SetFocus(a.heraPage)
 	case a.header.ActiveTab() == widget.TabSettings:
 		a.tapp.SetFocus(a.settingsPage)
+	case a.header.ActiveTab() == widget.TabResident:
+		a.tapp.SetFocus(a.residentPane)
 	default:
 		a.tapp.SetFocus(a.tasklist)
 	}

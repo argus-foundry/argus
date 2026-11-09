@@ -208,6 +208,7 @@ below. The `?` overlay always shows your active bindings.
 | `ctrl+b`  | Restore the rail to its pre-interruption fold/selection snapshot, at any time — even with roles still needing input (unlike `ctrl+g` above, which only restores once they're all clear). No-op if nothing is snapshotted. Works from every tab and pane |
 | `ctrl+\`  | Toggle the **resident agent** tab and return to exactly where you were (tab, agent view, zoom, Projects focus, Settings pane). Global — works from every tab and pane, never reaching a PTY; ignored while a modal or text input is open. Rebind with `[keybindings.global] resident`. See [Resident hotkey recipe](#resident-hotkey-recipe) |
 | `0`       | Switch to the Resident tab (`[keybindings.global] tab_resident`) |
+| `ctrl+q` (Resident tab) | Return to the previous screen, like the resident toggle |
 | `q`       | Quit                                                            |
 
 #### Resident hotkey recipe

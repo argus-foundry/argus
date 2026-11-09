@@ -1,5 +1,7 @@
 ## Key Bindings & Navigation
 
+- **Resident excursions record `residentReturn` only AFTER `switchTab`, which clears both resident and agent cross-tab hops.** The agent cross-tab hop now uses the same snapshot type; resident round trips also retain any earlier agent hop. Hera return captures a separate copy of the existing rail excursion snapshot, preserving an outstanding ctrl+g excursion, then restores pane focus/fullscreen after tab entry resets it. Resident modal/toggle dispatch must precede modal dismissal, and palette/switcher/help close paths must restore the resident terminal as focus owner so bracketed paste reaches its PTY.
+
 ### Customizable keymap (`internal/tui/keymap`)
 
 - **`internal/tui/keymap` is the single source of truth for argus's own rebindable keys.** `DefaultKeymap()` holds the built-in bindings (mirroring the old literals); `config.Keybindings` (context-scoped `[keybindings.<context>]` tables in config.toml) carries OVERRIDES ONLY. `keymap.Build(cfg.Keybindings)` overlays + validates; every dispatch site calls `Resolve(ctx, event) → Action`. Defaults do NOT live in `internal/config` (which returns an empty `Keybindings{}`).

@@ -317,6 +317,8 @@ func (sb *StatusBar) Draw(screen tcell.Screen) {
 	type hint struct{ key, label string }
 	var hints []hint
 	switch sb.activeTab {
+	case TabResident:
+		hints = []hint{{"ctrl+q", "return"}}
 	case TabSettings:
 		hints = []hint{
 			{"n", "new project"}, {"d", "del"},

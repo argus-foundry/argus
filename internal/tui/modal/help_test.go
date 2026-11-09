@@ -66,6 +66,8 @@ func TestHelpModal_Draw(t *testing.T) {
 	testutil.Contains(t, body, "select tasks; skip headers and focus-fold projects")
 	testutil.Equal(t, strings.Contains(body, "Space / Enter (Tasks rail header)"), false)
 	testutil.Contains(t, body, "return focus to rail; keep terminal visible")
+	testutil.Contains(t, body, "ctrl+q (resident)")
+	testutil.Contains(t, body, "return to previous screen")
 	testutil.Contains(t, body, "Projects View (rail)")
 	testutil.Contains(t, body, "Agent View")
 	// Plan-DAG view keys (Stage 7): the plan diagram nav + fan-out + drill must

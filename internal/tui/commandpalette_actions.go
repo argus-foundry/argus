@@ -49,6 +49,12 @@ func rowsForContext(km *keymap.Keymap, ctx keymap.Context, registry map[keymap.A
 // palette doesn't list "open the command palette" as one of its own rows.
 func (a *App) globalActionRegistry() map[keymap.Action]func() {
 	return map[keymap.Action]func(){
+		keymap.ActGlobalResident: a.toggleResident,
+		keymap.ActGlobalTabResident: func() {
+			if a.mode != modeAgent && !a.residentInputBlocked() {
+				a.switchTab(widget.TabResident)
+			}
+		},
 		keymap.ActGlobalQuit: func() {
 			if a.mode == modeTaskList {
 				a.stopTUI()
@@ -297,9 +303,21 @@ func (a *App) paletteApplicableActions() []paletteRow {
 		// that nonetheless fires from the agent view, so it is the one global
 		// row offered here; the rest of the global set stays gated off.
 		rows := rowsForContext(km, keymap.CtxAgent, a.agentActionRegistry())
-		return append(rows, rowsForContext(km, keymap.CtxGlobal, map[keymap.Action]func(){
+		globals := map[keymap.Action]func(){
 			keymap.ActGlobalSwitcher: a.openJumpSwitcher,
-		})...)
+		}
+		if a.header.TabLabel(widget.TabResident) != "" {
+			globals[keymap.ActGlobalResident] = a.toggleResident
+		}
+		return append(rows, rowsForContext(km, keymap.CtxGlobal, globals)...)
+	case a.header.ActiveTab() == widget.TabResident:
+		return rowsForContext(km, keymap.CtxGlobal, map[keymap.Action]func(){
+			keymap.ActGlobalResident:    a.toggleResident,
+			keymap.ActGlobalSwitcher:    a.openJumpSwitcher,
+			keymap.ActGlobalTabTasks:    func() { a.switchTab(widget.TabTasks) },
+			keymap.ActGlobalTabHera:     func() { a.switchTab(widget.TabHera) },
+			keymap.ActGlobalTabSettings: func() { a.switchTab(widget.TabSettings) },
+		})
 	case a.mode == modeTaskList && a.header.ActiveTab() == widget.TabHera && a.heraPage != nil && !a.heraPage.IsRemote():
 		rows := a.heraLiteralRows()
 		rows = append(rows, rowsForContext(km, keymap.CtxHeraRail, a.heraRailActionRegistry())...)
@@ -360,6 +378,8 @@ func (a *App) closeCommandPaletteModal() {
 		a.tapp.SetFocus(a.heraPage)
 	case a.header.ActiveTab() == widget.TabSettings:
 		a.tapp.SetFocus(a.settingsPage)
+	case a.header.ActiveTab() == widget.TabResident:
+		a.tapp.SetFocus(a.residentPane)
 	default:
 		a.tapp.SetFocus(a.tasklist)
 	}

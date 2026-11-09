@@ -256,7 +256,7 @@ func (p *repaintPump) close() {
 func (a *App) startOutputRepaint() {
 	a.repaint = newRepaintPump(a.tickDone, func() { a.tapp.QueueUpdateDraw(func() {}) }, a.typing != nil)
 	// Bracketed paste bypasses InputCapture, so the panes report it themselves.
-	for _, pane := range []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane()} {
+	for _, pane := range []*terminal.TerminalPane{a.agentPane, a.residentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane()} {
 		pane.OnUserInput = a.repaint.noteKey
 	}
 	go a.repaint.run()

@@ -58,10 +58,10 @@ Every stage follows TDD (write the failing test first), adds `[resident]`-prefix
 
 **Depends on:** Stages 3, 4
 
-- [ ] 7.1 Add the resident tab, header label from `resident.name`, `0` selection, and the single full-width resident pane
-- [ ] 7.2 Generalize `agentCrossReturn` into `residentReturn` (tab, mode, agent-view task and zoom, Hera focus via the existing excursion snapshot, Settings category/focus); record after `switchTab`
-- [ ] 7.3 Dispatch `global.resident` unconditionally in `CtxGlobal`, ignored in modal/text-input modes; `ctrl+q` on the resident tab returns; vanished-target fallback to Tasks; do not persist the tab
-- [ ] 7.4 SimulationScreen smoke tests for round trips from Tasks list, zoomed agent view, Hera pane and Settings, plus the modal-ignored case
+- [x] 7.1 Add the resident tab, header label from `resident.name`, `0` selection, and the single full-width resident pane
+- [x] 7.2 Generalize `agentCrossReturn` into `residentReturn` (tab, mode, agent-view task and zoom, Hera focus via the existing excursion snapshot, Settings category/focus); record after `switchTab`
+- [x] 7.3 Dispatch `global.resident` unconditionally in `CtxGlobal`, ignored in modal/text-input modes; `ctrl+q` on the resident tab returns; vanished-target fallback to Tasks; do not persist the tab
+- [x] 7.4 SimulationScreen smoke tests for round trips from Tasks list, zoomed agent view, Hera pane and Settings, plus the modal-ignored case
 
 ## 8. Rail box and tab marker
 

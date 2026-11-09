@@ -5,8 +5,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drn/argus/internal/testutil"
 	"github.com/gdamore/tcell/v2"
 )
+
+func TestHeaderResidentOrderAndVisibility(t *testing.T) {
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	t.Cleanup(sim.Fini)
+	sim.SetSize(120, 1)
+	h := NewHeader()
+	h.SetRect(0, 0, 120, 1)
+	for _, name := range []string{"Solo", "New name", ""} {
+		t.Run(name, func(t *testing.T) {
+			h.SetTabLabel(TabResident, name)
+			h.SetTab(TabResident)
+			h.Draw(sim)
+			sim.Show()
+			line := readAllScreenText(sim, 120, 1)
+			testutil.Equal(t, h.TabLabel(TabResident), name)
+			if name != "" {
+				testutil.Contains(t, line, name)
+				testutil.True(t, strings.Index(line, name) < strings.Index(line, "Tasks"))
+			} else {
+				testutil.False(t, strings.Contains(line, "New name"))
+			}
+			testutil.True(t, strings.Index(line, "Tasks") < strings.Index(line, "Projects"))
+		})
+	}
+}
 
 func TestHeader_SetTab(t *testing.T) {
 	h := NewHeader()

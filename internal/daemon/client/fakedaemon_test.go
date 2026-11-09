@@ -36,9 +36,38 @@ type fakeDaemon struct {
 
 	stopScopes []agent.StopScope
 
-	usage        map[string]usagebudget.Reading // AccountUsage reply
-	usageMissing bool                           // simulate an older daemon
-	routing      backendtier.Usage              // RoutingUsage reply
+	usage          map[string]usagebudget.Reading // AccountUsage reply
+	usageMissing   bool                           // simulate an older daemon
+	routing        backendtier.Usage              // RoutingUsage reply
+	resident       daemon.ResidentStateResp
+	residentViewed bool
+	residentSent   daemon.ResidentSendReq
+	residentError  string
+}
+
+func (s *FakeRPCService) ResidentState(_ *daemon.Empty, resp *daemon.ResidentStateResp) error {
+	s.fd.mu.Lock()
+	defer s.fd.mu.Unlock()
+	*resp = s.fd.resident
+	return nil
+}
+
+func (s *FakeRPCService) ResidentMarkViewed(_ *daemon.Empty, resp *daemon.StatusResp) error {
+	s.fd.mu.Lock()
+	defer s.fd.mu.Unlock()
+	s.fd.residentViewed = true
+	resp.OK = s.fd.residentError == ""
+	resp.Error = s.fd.residentError
+	return nil
+}
+
+func (s *FakeRPCService) ResidentSend(req *daemon.ResidentSendReq, resp *daemon.StatusResp) error {
+	s.fd.mu.Lock()
+	defer s.fd.mu.Unlock()
+	s.fd.residentSent = *req
+	resp.OK = s.fd.residentError == ""
+	resp.Error = s.fd.residentError
+	return nil
 }
 
 func newFakeDaemon(t *testing.T) *fakeDaemon {
