@@ -95,6 +95,4 @@ The REST surface is not touched, so the parity trigger (new/changed endpoint/fie
 
 ## Open Questions
 
-- Confirm `ctrl+n` as the default.
-- Notice wording: `width changed · ctrl+n re-render`.
-- Should the hotkey on a pane with no drift be a no-op (as specced) or force a re-render anyway (useful to repair other garbling)?
+None outstanding. Decided by Aaron: the default re-render key is `ctrl+n`, and the hotkey is a no-op (with a status-bar notice) when there is no drift. Notice wording stays `width changed · ctrl+n re-render` unless review says otherwise.
