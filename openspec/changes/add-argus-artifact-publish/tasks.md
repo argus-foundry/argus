@@ -13,7 +13,7 @@
   - the token is never present in returned errors
 - [x] 1.2 `internal/claudeartifacts`: input validation table (non-HTML extension, missing doctype/`<html`, >16 MiB) rejected with no request made
 - [x] 1.3 `internal/config`: `[artifact_tokens]` decodes and merges; a non-reference value is rejected
-- [ ] 1.4 `internal/mcp`: `artifact_publish` and `artifact_open` tests:
+- [x] 1.4 `internal/mcp`: `artifact_publish` and `artifact_open` tests:
   - success result
   - no-token error
   - unavailable path registers the file as a task artifact and lists only accounts whose probe succeeds
@@ -41,10 +41,10 @@
 
 **Depends on:** Stage 2
 
-- [ ] 3.1 `artifact_publish` in `internal/mcp/artifacts.go`, registered alongside `artifact_register`, resolving the calling task the same way. The unavailable path reuses the `artifact_register` copy+manifest code and runs concurrent 15 s probes.
-- [ ] 3.2 `artifact_open` with a manifest + path-escape check and an injectable opener (`open` / `open -R`, macOS-only gate)
-- [ ] 3.3 `[artifacts]`-prefixed log lines for every publish outcome, with no token
-- [ ] 3.4 Test 1.4 passes
+- [x] 3.1 `artifact_publish` in `internal/mcp/artifacts.go`, registered alongside `artifact_register`, resolving the calling task the same way. The unavailable path reuses the `artifact_register` copy+manifest code and runs concurrent 15 s probes.
+- [x] 3.2 `artifact_open` with a manifest + path-escape check and an injectable opener (`open` / `open -R`, macOS-only gate)
+- [x] 3.3 `[artifacts]`-prefixed log lines for every publish outcome, with no token
+- [x] 3.4 Test 1.4 passes
 
 ## 4. REST and CLI
 

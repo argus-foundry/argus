@@ -1,18 +1,25 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/artifacts"
+	"github.com/argus-foundry/argus/internal/claudeartifacts"
 	"github.com/argus-foundry/argus/internal/model"
 )
 
@@ -21,6 +28,7 @@ import (
 // mirroring ClipboardSetter / MessageStore.
 type ArtifactStore interface {
 	UpsertArtifact(a *model.Artifact) (*model.Artifact, error)
+	GetArtifact(taskID, filename string) (*model.Artifact, error)
 	PruneFolderArtifacts(taskID, folder string, keep []string) ([]string, error)
 }
 
@@ -92,33 +100,47 @@ func (s *Server) toolArtifactRegister(id interface{}, args json.RawMessage) *Res
 		return s.registerArtifactFolder(id, task, p.Path)
 	}
 
+	stored, err := s.registerArtifactFile(task, p.Path, p.Title, p.Type)
+	if err != nil {
+		return toolError(id, err.Error())
+	}
+	filename, size := stored.Filename, stored.Size
+
+	log.Printf("[mcp] artifact_register ok: id=%s file=%s type=%s bytes=%d", task.ID, filename, stored.Type, size)
+	return toolResult(id, fmt.Sprintf("Registered artifact %q (%s, %d bytes) for task %s (%s). View it in Argus TUI → task Artifacts or Argus Web → task → Artifacts.", filename, stored.Type, size, task.ID, task.Name))
+}
+
+// registerArtifactFile copies one file into task's durable artifact dir and
+// records its manifest row: the single-file half of artifact_register, shared
+// with artifact_publish's unavailable-account path. Returned errors are
+// user-facing tool-error text.
+func (s *Server) registerArtifactFile(task *model.Task, path, title, typ string) (*model.Artifact, error) {
 	// Sanitize the destination basename from the source path. This strips any
 	// directory components and rejects degenerate names — the stored filename
 	// can never contain a path separator or "..".
-	filename, err := model.SanitizeArtifactFilename(p.Path)
+	filename, err := model.SanitizeArtifactFilename(path)
 	if err != nil {
-		return toolError(id, fmt.Sprintf("invalid artifact path %q: %v", p.Path, err))
+		return nil, fmt.Errorf("invalid artifact path %q: %v", path, err)
 	}
 
 	if _, err := model.ValidateArtifactRelPath(filename); err != nil {
-		return toolError(id, fmt.Sprintf("invalid artifact path %q: reserved or unsafe name", p.Path))
+		return nil, fmt.Errorf("invalid artifact path %q: reserved or unsafe name", path)
 	}
 
 	// Resolve the artifact type: explicit (validated) or inferred from the ext.
-	atype := model.ArtifactType(p.Type)
-	if p.Type == "" {
+	atype := model.ArtifactType(typ)
+	if typ == "" {
 		atype = model.InferArtifactType(filename)
 	} else if !model.ValidArtifactType(atype) {
-		return toolError(id, fmt.Sprintf("invalid type %q: must be html, markdown, pdf, image, text, audio, or video", p.Type))
+		return nil, fmt.Errorf("invalid type %q: must be html, markdown, pdf, image, text, audio, or video", typ)
 	}
 
-	size, err := s.copyArtifact(task.ID, p.Path, filename, atype)
+	size, err := s.copyArtifact(task.ID, path, filename, atype)
 	if err != nil {
-		log.Printf("[mcp] artifact_register copy failed: id=%s path=%s err=%v", task.ID, p.Path, err)
-		return toolError(id, fmt.Sprintf("Failed to register artifact: %v", err))
+		log.Printf("[mcp] artifact_register copy failed: id=%s path=%s err=%v", task.ID, path, err)
+		return nil, fmt.Errorf("Failed to register artifact: %w", err)
 	}
 
-	title := p.Title
 	if title == "" {
 		title = filename
 	}
@@ -135,11 +157,10 @@ func (s *Server) toolArtifactRegister(id interface{}, args json.RawMessage) *Res
 		// unreferenced (and therefore unservable) file on disk.
 		os.Remove(filepath.Join(agent.ArtifactsDir(task.ID), filename)) //nolint:errcheck
 		log.Printf("[mcp] artifact_register manifest failed: id=%s err=%v", task.ID, err)
-		return toolError(id, fmt.Sprintf("Failed to record artifact: %v", err))
+		return nil, fmt.Errorf("Failed to record artifact: %w", err)
 	}
 
-	log.Printf("[mcp] artifact_register ok: id=%s file=%s type=%s bytes=%d", task.ID, filename, stored.Type, size)
-	return toolResult(id, fmt.Sprintf("Registered artifact %q (%s, %d bytes) for task %s (%s). View it in Argus TUI → task Artifacts or Argus Web → task → Artifacts.", filename, stored.Type, size, task.ID, task.Name))
+	return stored, nil
 }
 
 // copyArtifact copies the source file at srcPath into the task's durable
@@ -352,4 +373,261 @@ func (s *Server) registerArtifactFolder(id interface{}, task *model.Task, srcDir
 		note = fmt.Sprintf(" Replaced %d previously registered file(s) in folder %q that are no longer in the source directory.", pruned, folder)
 	}
 	return toolResult(id, fmt.Sprintf("Registered folder %q (%d files, %d bytes; %d skipped, %d failed) for task %s (%s). View it in Argus Web → task → Artifacts as a gallery.%s", folder, len(keep), bytesCopied, skipped, failed, task.ID, task.Name, note))
+}
+
+// ArtifactPublisher publishes a page to claude.ai as a named account and,
+// when that account is unavailable, says which other accounts can publish.
+// *claudeartifacts.Publisher satisfies it; the daemon resolves account tokens
+// behind it, so no token ever reaches this package's results or logs.
+type ArtifactPublisher interface {
+	Publish(ctx context.Context, account string, in claudeartifacts.PublishInput) (claudeartifacts.Result, error)
+	AvailableAccounts(ctx context.Context, exclude string) []string
+}
+
+// SetArtifactPublisher wires claude.ai publishing. When set, the server exposes
+// artifact_publish. Must be called before ListenAndServe.
+func (s *Server) SetArtifactPublisher(p ArtifactPublisher) {
+	s.publisher = p
+}
+
+// artifactPublishTimeout bounds one artifact_publish call, including the
+// concurrent probes on the unavailable path.
+const artifactPublishTimeout = 2 * time.Minute
+
+// artifactOpenGOOS is the platform artifact_open gates on; a variable so tests
+// can exercise the not-supported branch.
+var artifactOpenGOOS = runtime.GOOS
+
+// openArgs builds the macOS `open` arguments: -R reveals in Finder.
+func openArgs(path string, reveal bool) []string {
+	if reveal {
+		return []string{"-R", path}
+	}
+	return []string{path}
+}
+
+// defaultArtifactOpener runs macOS `open` on a verified artifact path.
+func defaultArtifactOpener(path string, reveal bool) error {
+	out, err := exec.Command("open", openArgs(path, reveal)...).CombinedOutput() //nolint:gosec // G204: fixed binary; path is a manifest-registered file resolved inside the task's artifact dir.
+	if err != nil {
+		return fmt.Errorf("open: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// artifactPublishToolDefs are exposed only when SetArtifactPublisher has been
+// called.
+var artifactPublishToolDefs = []Tool{
+	{
+		Name: "artifact_publish",
+		Description: `Publish a single self-contained HTML page to claude.ai as an artifact on a named account, and get its claude.ai link back. Argus publishes it from the daemon with that account's configured token, so it works whichever account this session runs on.
+
+Use it when ` + "`ARGUS_ARTIFACT_ACCOUNT`" + ` is set: pass ` + "`account`" + ` = its value. To publish a new version of an existing artifact, also pass its link as ` + "`update`" + `.
+
+The file must be .html or .htm, at most 16 MiB, and start with <!DOCTYPE html> or <html>. Inline all CSS, JS and images.
+
+The result is JSON. ` + "`status`" + ` is "published" (with ` + "`url`" + `) or "unavailable": the account cannot publish right now. An unavailable result names the page's saved copy as ` + "`artifact`" + ` (a registered task artifact, when the calling task is known) and lists ` + "`available_accounts`" + ` that can publish instead. On an unavailable result ask the user what to do; do not publish elsewhere on your own.
+
+Identify your task with ` + "`id`" + ` (the ` + "`ARGUS_TASK_ID`" + ` env var) or ` + "`cwd`" + `, so an unavailable page can be saved to it.`,
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"path":    map[string]interface{}{"type": "string", "description": "Path to the .html/.htm file to publish."},
+				"account": map[string]interface{}{"type": "string", "description": "Account to publish as, e.g. the value of ARGUS_ARTIFACT_ACCOUNT."},
+				"title":   map[string]interface{}{"type": "string", "description": "Artifact title. Defaults to the file name for a new artifact; an update keeps the current title unless one is given."},
+				"update":  map[string]interface{}{"type": "string", "description": "Link of an existing artifact (https://claude.ai/artifact/<slug>) to publish a new version of."},
+				"id":      map[string]interface{}{"type": "string", "description": "Task ID. If omitted, cwd is used to resolve the task."},
+				"cwd":     map[string]interface{}{"type": "string", "description": "Working directory inside the task's worktree. Used when id is omitted."},
+			},
+			"required": []string{"path", "account"},
+		},
+	},
+}
+
+// artifactOpenToolDefs are exposed with artifact_register.
+var artifactOpenToolDefs = []Tool{
+	{
+		Name:        "artifact_open",
+		Description: `Open one of your task's registered artifacts on the user's Mac: in its default application (an HTML page opens in the browser), or, with ` + "`reveal: true`" + `, selected in a Finder window. Only files registered to the calling task (artifact_register, or the saved copy an unavailable artifact_publish reports) can be opened. macOS only. Identify your task with ` + "`id`" + ` or ` + "`cwd`" + `.`,
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"filename": map[string]interface{}{"type": "string", "description": "The registered artifact's file name (e.g. report.html)."},
+				"reveal":   map[string]interface{}{"type": "boolean", "description": "Reveal the file in Finder instead of opening it."},
+				"id":       map[string]interface{}{"type": "string", "description": "Task ID. If omitted, cwd is used to resolve the task."},
+				"cwd":      map[string]interface{}{"type": "string", "description": "Working directory inside the task's worktree. Used when id is omitted."},
+			},
+			"required": []string{"filename"},
+		},
+	},
+}
+
+// artifactPublished is artifact_publish's success result.
+type artifactPublished struct {
+	Status  string `json:"status"`
+	Account string `json:"account"`
+	URL     string `json:"url"`
+	Slug    string `json:"slug"`
+	Version string `json:"version,omitempty"`
+	Title   string `json:"title,omitempty"`
+}
+
+// artifactUnavailable is artifact_publish's result when the account cannot
+// publish. It is a result, not a tool error: the agent is meant to act on it.
+type artifactUnavailable struct {
+	Status            string   `json:"status"`
+	Account           string   `json:"account"`
+	Artifact          string   `json:"artifact,omitempty"`
+	AvailableAccounts []string `json:"available_accounts"`
+	Message           string   `json:"message"`
+}
+
+func jsonToolResult(id interface{}, v any) *Response {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return toolError(id, fmt.Sprintf("encode result: %v", err))
+	}
+	return toolResult(id, string(b))
+}
+
+func (s *Server) toolArtifactPublish(id interface{}, args json.RawMessage) *Response {
+	if s.publisher == nil {
+		return toolError(id, "artifact publishing not configured")
+	}
+	var p struct {
+		Path    string `json:"path"`
+		Account string `json:"account"`
+		Title   string `json:"title"`
+		Update  string `json:"update"`
+		ID      string `json:"id"`
+		Cwd     string `json:"cwd"`
+	}
+	json.Unmarshal(args, &p) //nolint:errcheck
+	if p.Path == "" {
+		return toolError(id, "path is required")
+	}
+	if p.Account == "" {
+		return toolError(id, "account is required")
+	}
+
+	content, err := claudeartifacts.ReadHTMLFile(p.Path)
+	if err != nil {
+		log.Printf("[artifacts] publish rejected: account=%s path=%s err=%v", p.Account, p.Path, err)
+		return toolError(id, err.Error())
+	}
+
+	ctx, cancel := context.WithTimeout(s.shutdownCtx, artifactPublishTimeout)
+	defer cancel()
+	res, err := s.publisher.Publish(ctx, p.Account, claudeartifacts.PublishInput{
+		Name: p.Path, Content: content, Title: p.Title, UpdateURL: p.Update,
+	})
+	switch {
+	case err == nil:
+		log.Printf("[artifacts] publish ok: account=%s slug=%s version=%s update=%t", p.Account, res.Slug, res.Version, p.Update != "")
+		return jsonToolResult(id, artifactPublished{
+			Status: "published", Account: p.Account, URL: res.URL, Slug: res.Slug, Version: res.Version, Title: res.Title,
+		})
+	case errors.Is(err, claudeartifacts.ErrAccountUnavailable):
+		return s.artifactPublishUnavailable(ctx, id, p.Account, p.Path, p.Title, p.ID, p.Cwd)
+	default:
+		log.Printf("[artifacts] publish failed: account=%s err=%v", p.Account, err)
+		return toolError(id, err.Error())
+	}
+}
+
+// artifactPublishUnavailable handles an unavailable account: it saves the
+// page as an artifact of the calling task (when one resolves), probes the
+// other configured accounts, and reports both.
+func (s *Server) artifactPublishUnavailable(ctx context.Context, id interface{}, account, path, title, taskID, cwd string) *Response {
+	result := artifactUnavailable{Status: "unavailable", Account: account}
+	saved := ""
+	if task := s.publishCallerTask(taskID, cwd); task != nil && s.artifacts != nil {
+		stored, err := s.registerArtifactFile(task, path, title, string(model.ArtifactHTML))
+		if err != nil {
+			log.Printf("[artifacts] publish unavailable: save failed: id=%s err=%v", task.ID, err)
+			saved = fmt.Sprintf(" Saving it as a task artifact failed (%v).", err)
+		} else {
+			result.Artifact = stored.Filename
+			saved = fmt.Sprintf(" The page is saved as task artifact %q.", stored.Filename)
+		}
+	}
+	result.AvailableAccounts = s.publisher.AvailableAccounts(ctx, account)
+	if result.AvailableAccounts == nil {
+		result.AvailableAccounts = []string{}
+	}
+	others := "No other configured account can publish right now."
+	if len(result.AvailableAccounts) > 0 {
+		others = "Accounts that can publish: " + strings.Join(result.AvailableAccounts, ", ") + "."
+	}
+	result.Message = fmt.Sprintf("Account %q cannot publish artifacts right now (its artifact tools are unavailable, usually because its usage is exhausted).%s %s Ask the user how to proceed.", account, saved, others)
+	log.Printf("[artifacts] publish unavailable: account=%s artifact=%q available=%v", account, result.Artifact, result.AvailableAccounts)
+	return jsonToolResult(id, result)
+}
+
+// publishCallerTask resolves artifact_publish's calling task, or nil when task
+// management is not wired, no id/cwd was given, or resolution fails: publishing
+// never needs a task, only the unavailable-path save does (design D7).
+func (s *Server) publishCallerTask(taskID, cwd string) *model.Task {
+	if !s.taskMgmtEnabled() || (taskID == "" && cwd == "") {
+		return nil
+	}
+	task, err := s.resolveTask(taskID, cwd)
+	if err != nil {
+		log.Printf("[artifacts] publish: calling task not resolved: %v", err)
+		return nil
+	}
+	return task
+}
+
+func (s *Server) toolArtifactOpen(id interface{}, args json.RawMessage) *Response {
+	if !s.artifactsEnabled() {
+		return toolError(id, "artifact registration not configured")
+	}
+	var p struct {
+		Filename string `json:"filename"`
+		Reveal   bool   `json:"reveal"`
+		ID       string `json:"id"`
+		Cwd      string `json:"cwd"`
+	}
+	json.Unmarshal(args, &p) //nolint:errcheck
+	if p.Filename == "" {
+		return toolError(id, "filename is required")
+	}
+	if artifactOpenGOOS != "darwin" {
+		return toolError(id, fmt.Sprintf("artifact_open is not supported on %s: it needs macOS", artifactOpenGOOS))
+	}
+	task, err := s.resolveTask(p.ID, p.Cwd)
+	if err != nil {
+		return toolError(id, err.Error())
+	}
+	art, err := s.artifacts.GetArtifact(task.ID, p.Filename)
+	if err != nil {
+		log.Printf("[artifacts] open lookup failed: id=%s file=%q err=%v", task.ID, p.Filename, err)
+		return toolError(id, fmt.Sprintf("look up artifact: %v", err))
+	}
+	if art == nil {
+		log.Printf("[artifacts] open refused (not registered): id=%s file=%q", task.ID, p.Filename)
+		return toolError(id, fmt.Sprintf("%q is not a registered artifact of task %s", p.Filename, task.ID))
+	}
+	full, ok := artifacts.ResolvePath(task.ID, art.Filename)
+	if !ok {
+		log.Printf("[artifacts] open refused (path escapes): id=%s file=%q", task.ID, art.Filename)
+		return toolError(id, fmt.Sprintf("invalid artifact path %q", art.Filename))
+	}
+	if _, err := os.Stat(full); err != nil {
+		return toolError(id, fmt.Sprintf("artifact %q has no bytes on disk", art.Filename))
+	}
+	opener := s.openArtifact
+	if opener == nil {
+		opener = defaultArtifactOpener
+	}
+	if err := opener(full, p.Reveal); err != nil {
+		log.Printf("[artifacts] open failed: id=%s file=%q reveal=%t err=%v", task.ID, art.Filename, p.Reveal, err)
+		return toolError(id, fmt.Sprintf("Failed to open %q: %v", art.Filename, err))
+	}
+	log.Printf("[artifacts] open ok: id=%s file=%q reveal=%t", task.ID, art.Filename, p.Reveal)
+	if p.Reveal {
+		return toolResult(id, fmt.Sprintf("Revealed %q in Finder.", art.Filename))
+	}
+	return toolResult(id, fmt.Sprintf("Opened %q in its default application.", art.Filename))
 }

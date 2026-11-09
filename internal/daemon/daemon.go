@@ -1637,6 +1637,10 @@ func (d *Daemon) Serve(sockPath string) error {
 	}
 
 	// Start MCP HTTP server and KB indexer (only when KB is enabled in settings).
+	// One claude.ai artifact publisher, shared by the MCP artifact_publish
+	// tool and POST /api/artifacts/publish (add-argus-artifact-publish).
+	artifactPublisher := newArtifactPublisher(d.cfgFn)
+
 	if cfg.KB.Enabled {
 		mcpSrv := mcp.New(d.db, cfg.KB.HTTPPort, cfg.KB.MetisVaultPath)
 		mcpSrv.SetTaskManager(
@@ -1667,6 +1671,7 @@ func (d *Daemon) Serve(sockPath string) error {
 			mcpSrv.SetHeraReviver(d.heraReviveRole)
 		}
 		mcpSrv.SetArtifactManager(d.db)
+		mcpSrv.SetArtifactPublisher(artifactPublisher)
 		mcpSrv.SetProfileResolver(d.db)
 		// d.db.Config() is read live on every tools/list/tools/call (see
 		// TodoConfigStore) — a backend selected in Settings takes effect

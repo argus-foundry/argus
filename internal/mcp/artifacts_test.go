@@ -28,6 +28,17 @@ func (m *mockArtifactStore) PruneFolderArtifacts(taskID, folder string, keep []s
 	return m.stale, nil
 }
 
+// GetArtifact answers from the rows UpsertArtifact recorded (newest wins),
+// mirroring db.GetArtifact's (nil, nil) for an unregistered name.
+func (m *mockArtifactStore) GetArtifact(taskID, filename string) (*model.Artifact, error) {
+	for i := len(m.saved) - 1; i >= 0; i-- {
+		if a := m.saved[i]; a.TaskID == taskID && a.Filename == filename {
+			return a, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockArtifactStore) UpsertArtifact(a *model.Artifact) (*model.Artifact, error) {
 	if m.err != nil {
 		return nil, m.err
