@@ -155,48 +155,63 @@ A worker spawned by the resident SHALL be marked as a resident worker in task me
 - **WHEN** a resident worker is flagged needs-input and the flag stays raised across several ticks
 - **THEN** the resident receives exactly one message for that episode, and a new one only after the flag clears and raises again
 
-### Requirement: Resident workers route only to enabled families that close the stuck points
+### Requirement: Resident workers spawn only on enabled accounts whose family closes the stuck points
 
-Each backend family SHALL declare in the family registry whether and how it closes the unattended stuck points; a family that declares a mechanism is eligible. Claude SHALL be eligible. Codex SHALL be eligible once its unattended mechanism is implemented from the outcome of an early verification spike, with the Argus sandbox gate applying unchanged (its default command disables Codex's own sandbox and approvals); if the spike cannot close Codex's user-input path, Codex SHALL stay ineligible. Families without a verified mechanism SHALL be ineligible. Config `[resident] worker_backends` SHALL list the enabled families, defaulting to every eligible family (Claude and Codex), and Settings SHALL expose it as a Resident row that lists ONLY eligible families; an ineligible family SHALL never appear there, and an ineligible name in `config.toml` SHALL be ignored with a log line. Resident-worker routing SHALL filter `[backend_routing]` tiers and project preferences to the enabled set, and an explicit `backend` outside it SHALL be rejected with an actionable error naming the enabled families.
+Each backend family SHALL declare in the family registry whether and how it closes the unattended stuck points; a family that declares a mechanism is eligible. Claude SHALL be eligible. Codex SHALL be eligible once its unattended mechanism is implemented from the outcome of an early verification spike, with the Argus sandbox gate applying unchanged (its default command disables Codex's own sandbox and approvals); if the spike cannot close Codex's user-input path, Codex SHALL stay ineligible. Families without a verified mechanism SHALL be ineligible. Config `[resident] worker_accounts` SHALL map an agent account name to an enabled flag; an account absent from the map SHALL be enabled. Settings SHALL expose it as a Resident list of per-account toggles that lists ONLY accounts supporting at least one eligible family; an account that supports only ineligible families SHALL never appear, and an unknown or ineligible name in `config.toml` SHALL be ignored with a log line. Resident-worker spawning SHALL choose among (family, account) pairs whose family is eligible, whose account is enabled and supports the family, ranking them with the `[backend_routing]` tiers and per-account usage headroom so work spreads across accounts. An explicit `backend` or `account` outside that set SHALL be rejected naming what is enabled, and an empty set SHALL fail the spawn with a reason. Disabling or removing an account SHALL affect only new spawns and SHALL NOT alter, stop or re-account any running worker or the account its resume uses. The Settings row SHALL be a local-only edit, and keys defined in `config.toml` SHALL be shown read-only with the config.toml override marker.
 
-#### Scenario: Settings lists eligible families only
+#### Scenario: Settings lists eligible accounts only
 
-- **WHEN** the user opens the Resident worker-backends setting
-- **THEN** Claude and Codex are listed as toggles and no ineligible family appears
+- **WHEN** the user opens the Resident worker-accounts setting with accounts `work` (Claude), `personal` (Codex) and `legacy` (only an ineligible family)
+- **THEN** `work` and `personal` are listed as toggles and `legacy` does not appear
 
-#### Scenario: Default enables both
+#### Scenario: Default enables every eligible account
 
-- **WHEN** `worker_backends` is unset
-- **THEN** Claude and Codex are both enabled
+- **WHEN** `worker_accounts` is unset, or a new account is added later
+- **THEN** every eligible account, including the new one, is enabled
 
-#### Scenario: Routing skips disabled and ineligible tiers
+#### Scenario: Spawn spreads across enabled accounts
 
-- **WHEN** `[backend_routing]` ranks a disabled or ineligible backend first
-- **THEN** a resident worker spawn routes to the best enabled family instead
+- **WHEN** two enabled accounts both support an eligible family and one has much less headroom
+- **THEN** the spawn picks the one with more headroom within the `[backend_routing]` ordering
 
-#### Scenario: Explicit backend outside the enabled set
+#### Scenario: Disabled account is never used
 
-- **WHEN** the resident names a backend that is disabled or ineligible
-- **THEN** the spawn is rejected naming the enabled families
+- **WHEN** an account is disabled
+- **THEN** no new resident worker is routed to it and an explicit request for it is rejected naming the enabled accounts
 
-#### Scenario: Ineligible name in config.toml
+#### Scenario: Running workers are unaffected
 
-- **WHEN** `config.toml` lists an ineligible family in `worker_backends`
-- **THEN** it is ignored, a log line says so, and it is never routed to
+- **WHEN** an account is disabled or removed from config while a worker spawned on it is running
+- **THEN** the worker keeps running and a later resume or restart of it still uses its own recorded account
 
-#### Scenario: Nothing enabled
+#### Scenario: Nothing eligible
 
-- **WHEN** the enabled set is empty
-- **THEN** the spawn is rejected with that reason and no task is created
+- **WHEN** every eligible account is disabled, or no account supports an eligible family
+- **THEN** the spawn is rejected with a reason saying which, and no task is created
+
+#### Scenario: Ineligible or unknown name in config.toml
+
+- **WHEN** `config.toml` toggles an account that is unknown or supports no eligible family
+- **THEN** it is ignored with a log line and never routed to
+
+#### Scenario: config.toml override marker
+
+- **WHEN** `config.toml` defines `worker_accounts.work = false`
+- **THEN** the Settings toggle for `work` is read-only with the override marker and other accounts stay editable
+
+#### Scenario: Remote mode is inert
+
+- **WHEN** the TUI runs with `--remote`
+- **THEN** the worker-accounts toggles cannot be edited
 
 #### Scenario: Codex gated on the spike
 
 - **WHEN** the verification spike cannot close Codex's user-input path
-- **THEN** Codex is not eligible, is not listed in Settings and is never routed to
+- **THEN** an account carrying only Codex is not listed, and no Codex pair is routed to
 
 #### Scenario: Codex worker is unattended-safe
 
-- **WHEN** Codex is eligible, enabled and the sandbox wraps the launch
+- **WHEN** Codex is eligible, its account is enabled and the sandbox wraps the launch
 - **THEN** a Codex resident worker launches with its family's unattended launch switches, and without the sandbox the launch is refused
 
 ### Requirement: The resident's hera tools are tiered

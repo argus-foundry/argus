@@ -22,11 +22,11 @@
 
 - [ ] 4.1 Add `Family.UnattendedWorker` to `internal/agent/backends.go` (Claude: bypass-active flags plus `--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode`); `BuildCmd` applies it for marked tasks only when `argusWrapsSandbox`, else refuses; pre-flight the same check in the spawn path so no half-started task is created.
 - [ ] 4.2 Add the eligibility filter to resident-worker backend routing (mirror the Claude-only coordinator filter in `hera_spawn.go`); reject explicit ineligible backends; reject when none is eligible.
-- [ ] 4.0 **Spike FIRST (gates 4.3 and the Codex row of the worker-backends setting):** on a real Codex session, determine whether the default `--dangerously-bypass-approvals-and-sandbox` command can still raise a user-input prompt (structured user-input tool, plan/collaboration choice, approval escalation), which launch switch closes each, and whether it survives `resume`; record transcripts in a gotcha and `backends.md`. If it cannot be closed, Codex stays ineligible and 4.3/4.6 are dropped.
+- [ ] 4.0 **Spike FIRST (gates 4.3 and the Codex row of the worker-accounts setting):** on a real Codex session, determine whether the default `--dangerously-bypass-approvals-and-sandbox` command can still raise a user-input prompt (structured user-input tool, plan/collaboration choice, approval escalation), which launch switch closes each, and whether it survives `resume`; record transcripts in a gotcha and `backends.md`. If it cannot be closed, Codex stays ineligible and 4.3/4.6 are dropped.
 - [ ] 4.3 Implement Codex `UnattendedWorker` from the spike result (family registry only, sandbox gate unchanged, same orientation and needs-input backstop); tests for flags present only when wrapped, refusal when not, survives resume.
 - [ ] 4.4 Needs-input backstop: on a resident worker's flag raise (detector or self-reported blocked) send the resident one Hera message per episode (edge-triggered, exactly-once notifier); log under `[resident]`.
 - [ ] 4.5 Tests: sandbox-off refusal on spawn and restart, flags applied only when wrapped, ordinary workers unaffected, once-per-episode notify, eligibility filter cases.
-- [ ] 4.6 Add `[resident] worker_backends` (default: all eligible) and the Settings Resident → Worker backends row listing only eligible families (config.toml-shadows-Settings marker, ineligible names ignored with a log line); routing and explicit-backend checks use the enabled set; tests for default, ineligible-never-listed, disabled-never-routed, empty set refuses.
+- [ ] 4.6 Add `[resident] worker_accounts` (map account to bool; absent = enabled) and the Settings Resident → Worker accounts list of toggles: list only accounts where `AccountSupports` holds for at least one eligible family; local-only edit (inert with `--remote`); config.toml-defined keys read-only with the override marker and per-key precedence via a Settings-UI-only sources type outside `internal/config/accounts.go`; unknown/ineligible names ignored with a log line. Routing considers (family, account) pairs over enabled accounts, ranked by `[backend_routing]` and `usagebudget.CachedReadingForAccount`; explicit backend/account must be in the set; empty set fails with a specific reason. Tests: default all-on, new account auto-enabled, ineligible-only account never listed, disabled account never routed or accepted, disabling or removing an account leaves a running worker's resume on its own account, spawns spread across accounts by headroom, config.toml marker and per-key override, remote mode inert.
 
 ## 5. Recycle and lifecycle
 
@@ -52,6 +52,6 @@
 
 ## 7. Docs and parity
 
-- [ ] 7.1 README Reference: `hera_delete_worker`, `hera_graduate_worker`, `[resident] worker_backends`, `[resident]` hera tiers; `gotchas/resident.md`, `gotchas/hera-view.md`, `backends.md` (unattended-worker row); knowledge index rows.
+- [ ] 7.1 README Reference: `hera_delete_worker`, `hera_graduate_worker`, `[resident] worker_accounts`, `[resident]` hera tiers; `gotchas/resident.md`, `gotchas/hera-view.md`, `backends.md` (unattended-worker row); knowledge index rows.
 - [ ] 7.2 Record the named web and macOS follow-ups; if the roster exclusion changes any REST field, bump `SW_VERSION` only if static assets change.
 - [ ] 7.3 `make pre-pr` clean; archive the change into base specs in the same PR before merge.
