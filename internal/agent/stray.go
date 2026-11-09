@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/argus-foundry/argus/internal/config"
@@ -70,7 +72,15 @@ func claudeBinaryFromCommand(command string) string {
 	if len(fields) == 0 {
 		return "claude"
 	}
-	return fields[0]
+	bin := fields[0]
+	// exec.Command does not run a shell, so a leading `~/` (allowed for the
+	// resident's executable word) must be expanded here.
+	if rest, ok := strings.CutPrefix(bin, "~/"); ok {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, rest)
+		}
+	}
+	return bin
 }
 
 // strayJobIDsForSession parses `claude agents --json` output and returns the

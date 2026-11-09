@@ -1108,18 +1108,28 @@ func TestBuildCmd_ResidentSandboxedTaskDropsEnabled(t *testing.T) {
 	task.Sandboxed = true
 	testutil.Equal(t, sandboxOf(residentCfg())["enabled"], any(true))
 
-	// Argus really wraps the launch: `enabled` / failIfUnavailable drop (no
-	// nesting), the restrictive keys stay.
-	if !IsSandboxAvailable() {
-		t.Skip("sandbox-exec unavailable on this platform")
-	}
+	// Sandbox enabled in config but unavailable on the platform: no wrap, so
+	// the user's own Claude sandbox must stay on (never neither).
 	cfg := residentCfg()
 	cfg.Sandbox.Enabled = true
-	// The wrapped command nests the claude argv inside sandbox-exec, so check
-	// the carried block through the same decision BuildCmd makes.
-	testutil.True(t, argusWrapsSandbox(task, cfg))
-	var sb map[string]any
-	testutil.NoError(t, json.Unmarshal(readResidentUserSettings(task, cfg, argusWrapsSandbox(task, cfg)).Sandbox, &sb))
+	sandboxAvailabilityForSignalTest(t, false)
+	testutil.Equal(t, sandboxOf(cfg)["enabled"], any(true))
+
+	// Argus really wraps the launch: `enabled` / failIfUnavailable drop (no
+	// nesting), the restrictive keys stay. The seam fakes availability, so no
+	// sandbox-exec binary is needed to build the command.
+	sandboxAvailabilityForSignalTest(t, true)
+	wrapped := buildResident(t, task, cfg)
+	testutil.Equal(t, wrapped.Args[0], "sh")
+	words, err := splitShellWords(wrapped.Args[2])
+	testutil.NoError(t, err)
+	testutil.True(t, len(words) > 2)
+	testutil.Equal(t, words[0].value, sandboxExecPath)
+	inner := words[len(words)-1].value
+	testutil.Equal(t, words[len(words)-2].value, "-c")
+	st, ok := settingsArg(t, []string{inner})
+	testutil.True(t, ok)
+	sb, _ := st["sandbox"].(map[string]any)
 	if _, has := sb["enabled"]; has {
 		t.Fatalf("enabled carried while Argus wraps the resident: %v", sb)
 	}
@@ -1127,9 +1137,25 @@ func TestBuildCmd_ResidentSandboxedTaskDropsEnabled(t *testing.T) {
 		t.Fatalf("failIfUnavailable carried while Argus wraps the resident: %v", sb)
 	}
 	testutil.Contains(t, fmt.Sprint(sb["network"]), "blocked.test")
-	testutil.False(t, argusWrapsSandbox(task, residentCfg()))
-	// And the wrapped resident still launches (the profile generated).
-	_ = buildResident(t, task, cfg)
+
+	// Profile generation fails (temp dir unusable): the resident refuses to
+	// start rather than launch with neither sandbox; a plain task falls through.
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	_, cleanup, err := BuildCmd(task, cfg, false)
+	if cleanup != nil {
+		cleanup()
+	}
+	if err == nil {
+		t.Fatal("resident must fail closed when its sandbox profile cannot be generated")
+	}
+	testutil.Contains(t, err.Error(), "resident sandbox profile")
+	plain := &model.Task{ID: "p", Name: "plain", Worktree: t.TempDir(), Prompt: "hi"}
+	pcmd, pcleanup, perr := BuildCmd(plain, cfg, false)
+	testutil.NoError(t, perr)
+	if pcleanup != nil {
+		pcleanup()
+	}
+	testutil.False(t, strings.Contains(pcmd.Args[2], sandboxExecPath))
 }
 
 func TestCheckClaudeResidentCommand(t *testing.T) {
@@ -1197,6 +1223,16 @@ func TestCheckClaudeResidentCommand(t *testing.T) {
 				t.Fatalf("expected refusal")
 			}
 			testutil.Contains(t, err.Error(), tt.names)
+			if strings.Contains(tt.cmd, "[1m]") {
+				testutil.Contains(t, err.Error(), "single-quote")
+			} else {
+				testutil.False(t, strings.Contains(err.Error(), "single-quote"))
+				// A refused word (not a flag/executable/parse error) gets the
+				// generic wording, not the bracket hint.
+				if strings.HasPrefix(err.Error(), "word ") || strings.Contains(err.Error(), "): word ") {
+					testutil.Contains(t, err.Error(), "quotes, spaces and shell operators")
+				}
+			}
 		})
 	}
 }
