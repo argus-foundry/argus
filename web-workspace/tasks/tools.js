@@ -28,6 +28,7 @@ export class TaskTools {
     for(const target of [document.body,$('workspace'),$('tools')])this.visibilityObserver.observe(target,{attributes:true,attributeFilter:['class','hidden','style']});
     this.selectTab = tabs(document.querySelector('.tool-tabs'), tab => {
       this.tool = tab.dataset.tool;
+      tab.scrollIntoView({block:'nearest',inline:'nearest'});
       $('tool-panel').setAttribute('aria-labelledby', tab.id);
       if (this.task) this.selectedTools.set(this.task.id, this.tool);
       this.load(false);

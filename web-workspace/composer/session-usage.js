@@ -54,9 +54,11 @@ export class SessionUsage {
     result=await response.json();
    }else result=await this.api.json(path,options);
    if(generation!==this.generation||abort.signal.aborted||this.task!==task)return;
-   if(result?.task_id!==task.id||(session||this.expectedSession)&&result.session_id!==(session||this.expectedSession))throw new Error('Usage session changed. Refresh usage.');
+   const unmeasured = !older && result?.session_id === '' && result.totals === null;
+   if(result?.task_id!==task.id||!unmeasured&&(session||this.expectedSession)&&result.session_id!==(session||this.expectedSession))throw new Error('Usage session changed. Refresh usage.');
    const turns=older?[...this.data.turns,...(result.turns||[])]:result.turns||[];
    this.data={...result,turns:[...new Map(turns.map(turn=>[turn.turn_id,turn])).values()].slice(0,500)};
+   if(unmeasured)log('session-usage','agent usage unmeasured');
    this.session=result.session_id;this.expectedSession=undefined;this.error=null;log('session-usage','loaded',{count:this.data.turns.length});
   }catch(error){
    if(generation!==this.generation||abort.signal.aborted)return;

@@ -182,3 +182,6 @@
 - **Force revival belongs only to a confirmed hera_closeout conflict with can_force_revive true.** Busy/restarting errors never force, and a forced failure never loops.
 
 - **Stop success acknowledges a signal, not process exit.** Runtime remains live until the owned process exits; browser checks must await the measured flag rather than assuming a workflow transition stopped the PTY.
+
+- **An empty usage session with totals null means unmeasured, even when context supplied a bridge session.** Preserve mismatch rejection for nonempty session identities; show one calm unmeasured line without a refresh nudge.
+- **Tool tabs must retain a single horizontally scrollable row.** Keep Messages short with the Agent messages accessible name and scroll selection into view without wrapping Inbox.
