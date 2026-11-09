@@ -75,8 +75,8 @@ Every stage follows TDD (write the failing test first), adds `[resident]`-prefix
 
 **Depends on:** Stage 4
 
-- [ ] 9.1 Add the Resident Settings category (enabled, name, budget, memory dir, model, account, read-only tool-list pointer), local-only, with a required-name gate on enabling and prerequisite messaging
-- [ ] 9.2 Settings smoke tests including live rename
+- [x] 9.1 Add the Resident Settings category (enabled, name, budget, memory dir, model, account, read-only tool-list pointer), local-only, with a required-name gate on enabling and prerequisite messaging
+- [x] 9.2 Settings smoke tests including live rename
 
 ## 10. Docs, gotchas, parity and archive
 
