@@ -1242,10 +1242,10 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// Artifact home account export (add-artifact-home-account). Recomputed on
 	// every build (spawn, resume, kick, account-move restart), so it follows
 	// the task across moves. Exported only when the agent must publish
-	// claude.ai artifacts through artpush: the project has a home account and
-	// either the family lacks the built-in artifact tool or the session runs
-	// on a different account. Never exported empty; an inherited value is
-	// stripped in spawnBaseEnv.
+	// claude.ai artifacts through Argus's artifact_publish tool: the project
+	// has a home account and either the family lacks the built-in artifact
+	// tool or the session runs on a different account. Never exported empty;
+	// an inherited value is stripped in spawnBaseEnv.
 	if home := cfg.ArtifactAccount(task.Project); home != "" {
 		effectiveAccount := task.Account
 		if effectiveAccount == "" {

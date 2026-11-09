@@ -3,6 +3,7 @@ package routing
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/testutil"
@@ -121,14 +122,31 @@ func TestBuiltinContent_ContainsArtifactsSection(t *testing.T) {
 	s := string(content)
 	for _, want := range []string{
 		"## Claude.ai artifact publishing (argus sandboxes)",
+		// Self-gate.
 		"If `ARGUS_ARTIFACT_ACCOUNT` is unset, ignore this section.",
-		"artpush publish <path> --account \"$ARGUS_ARTIFACT_ACCOUNT\"",
-		"--update <url>",
-		"artpush login <account>",
-		"Do not fall back to the built-in artifact tool",
+		// The tool, with the home account and the update-by-link form.
+		"`artifact_publish`",
+		"`account` set to `$ARGUS_ARTIFACT_ACCOUNT`",
+		"`update` set to the artifact's link",
+		// The unavailable result and the four-option question.
+		"`status: \"unavailable\"`",
+		"question tool",
+		"Publish to an available account",
+		"Open in the browser",
+		"`artifact_open`",
+		"Reveal in Finder",
+		"`reveal: true`",
+		"Park it for later",
+		"argus artifact publish <file> --account $ARGUS_ARTIFACT_ACCOUNT",
+		"leave out the first option",
+		// No silent fallback.
+		"Never fall back to the built-in artifact tool on your own",
 	} {
 		t.Run(want, func(t *testing.T) {
 			testutil.Contains(t, s, want)
 		})
 	}
+	t.Run("no artpush", func(t *testing.T) {
+		testutil.False(t, strings.Contains(s, "artpush"))
+	})
 }
