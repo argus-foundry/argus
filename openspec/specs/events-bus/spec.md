@@ -159,3 +159,21 @@ The system SHALL publish a `task.updated` event after a task mutation commits, t
 
 - **WHEN** a mutation fails because the task does not exist
 - **THEN** no `task.updated` event is emitted
+
+### Requirement: session.runtime_changed event
+
+The system SHALL publish `session.runtime_changed` with payload `{"live":bool,"idle":bool,"needs_input":bool}` and the task id whenever the task's REST runtime flags change, including changes caused only by a workflow-status transition. A task without a previous value SHALL be treated as all-false, and unchanged flags SHALL emit nothing.
+
+#### Scenario: Pending restart clears live
+
+- **WHEN** a live task enters a pending restart
+- **THEN** one event with all flags false is published
+
+### Requirement: task.failure_changed event
+
+The system SHALL publish `task.failure_changed` with payload `{"failure":null}` or the complete failure object after a Result write changes the failure projection. Clearing or replacing a failed Result SHALL publish it; a write that neither starts from nor ends at a failure, and a no-op write, SHALL NOT.
+
+#### Scenario: Failure cleared
+
+- **WHEN** a failed Result is replaced by a non-failure Result
+- **THEN** one event with `{"failure":null}` is published
