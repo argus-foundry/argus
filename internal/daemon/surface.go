@@ -242,7 +242,8 @@ const (
 	//     (--allowedTools is refused by that allowlist, not stripped). The
 	//     backend command must also be a single line (an unescaped newline
 	//     would split off every appended flag in sh).
-	SupervisorSpawnSurface = 41
+	// 42: Pi launches register the native Argus MCP server.
+	SupervisorSpawnSurface = 42
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -549,7 +550,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "7d324c5a9a2995a33eb6f0ced0733eed6530af7bd69adb56119f5ded6165c736"
+	SpawnSurfaceDigest  = "f76aefd3c415f856b61c8e3a53315ad448f47915cae136b1505254a2348cdeae"
 	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 
