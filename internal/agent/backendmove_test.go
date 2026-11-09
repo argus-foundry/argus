@@ -180,7 +180,7 @@ func TestMoveTaskBackend_Rejections(t *testing.T) {
 
 func TestMoveTaskBackend_LiveSessionNeedsRecycle(t *testing.T) {
 	f := bmFixture(t)
-	r := &moveRunner{sess: &moveSession{idle: true, alive: true}} // no Recycle
+	r := &noRecycleMoveRunner{runner: &moveRunner{sess: &moveSession{idle: true, alive: true}}}
 	_, _, err := MoveTaskAccount(f.d, r, AccountMoveInput{TaskID: "mv", Backend: "codex"})
 	testutil.Error(t, err)
 	got, _ := f.d.Get("mv")

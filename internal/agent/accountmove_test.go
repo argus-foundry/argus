@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,7 @@ type moveRunner struct {
 	sess       *moveSession
 	kicked     *model.Task
 	revived    *model.Task
+	recycled   *model.Task
 	kickErr    error
 	dieOnKick  bool
 	pending    bool
@@ -177,33 +179,28 @@ func TestMoveTaskAccount_NoLiveSessionLeavesStartToCaller(t *testing.T) {
 	testutil.Nil(t, r.kicked)
 }
 
-func TestMoveTaskAccount_KickRaceFallsBackToCaller(t *testing.T) {
+func TestMoveTaskAccount_KickRaceKeepsUnknownOutcome(t *testing.T) {
 	f := newMoveFixture(t, true)
-	// The daemon client flattens ErrSessionNotFound to a plain string.
 	r := &moveRunner{sess: &moveSession{idle: true, alive: true}, kickErr: errors.New("session not found"), dieOnKick: true}
-
 	task, res, err := MoveTaskAccount(f.d, r, AccountMoveInput{TaskID: "mv", Account: "work"})
-	testutil.NoError(t, err)
+	testutil.ErrorIs(t, err, ErrAccountMoveRestartUnknown)
 	testutil.False(t, res.Started)
 	testutil.Equal(t, task.Account, "work")
 	got, _ := f.d.Get("mv")
 	testutil.Equal(t, got.Account, "work")
 }
 
-func TestMoveTaskAccount_KickFailureRollsBack(t *testing.T) {
+func TestMoveTaskAccount_KickFailureKeepsAccount(t *testing.T) {
 	f := newMoveFixture(t, true)
 	f.task.AccountRouted = true
 	testutil.NoError(t, f.d.Update(f.task))
 	r := &moveRunner{sess: &moveSession{idle: true, alive: true}, kickErr: errors.New("kick already pending")}
-
 	_, _, err := MoveTaskAccount(f.d, r, AccountMoveInput{TaskID: "mv", Account: "work"})
-	testutil.Error(t, err)
+	testutil.ErrorIs(t, err, ErrAccountMoveRestartUnknown)
 	testutil.Contains(t, err.Error(), "kick already pending")
-	testutil.Contains(t, err.Error(), `left on "default"`)
-	// The old session is still running on default, so the row says default.
 	got, _ := f.d.Get("mv")
-	testutil.Equal(t, got.Account, "")
-	testutil.True(t, got.AccountRouted)
+	testutil.Equal(t, got.Account, "work")
+	testutil.False(t, got.AccountRouted)
 }
 
 func TestMoveTaskAccount_PendingRestartRefused(t *testing.T) {
@@ -339,10 +336,10 @@ func TestMoveTaskAccount_Rejections(t *testing.T) {
 		{"empty target", nil, AccountMoveInput{TaskID: "mv"}, ErrAccount, "account is required"},
 		{"unknown target", nil, AccountMoveInput{TaskID: "mv", Account: "ghost"}, ErrAccount, "unknown account"},
 		{"target lacks the backend's tool", nil, AccountMoveInput{TaskID: "mv", Account: "cx"}, ErrAccount, "does not support"},
-		{"non-Claude task", func(f *moveFixture) {
-			f.task.Backend = "codex"
+		{"family without account moves", func(f *moveFixture) {
+			f.task.Backend = "pi"
 			testutil.NoError(t, f.d.Update(f.task))
-		}, AccountMoveInput{TaskID: "mv", Account: "cx"}, ErrAccount, "only Claude tasks"},
+		}, AccountMoveInput{TaskID: "mv", Account: "cx"}, ErrAccount, "cannot move accounts"},
 		{"auto with no other account", func(f *moveFixture) {
 			f.task.Account = "work"
 			testutil.NoError(t, f.d.Update(f.task))
@@ -487,4 +484,38 @@ func TestMoveTaskAccount_ResidentRejectedBeforeCopy(t *testing.T) {
 	testutil.True(t, os.IsNotExist(statErr))
 	after, _ := f.d.Get(res.ID)
 	testutil.Equal(t, after.Account, res.Account)
+}
+
+func TestMoveTaskAccount_KickOutcomeUnknown(t *testing.T) {
+	for _, gone := range []bool{false, true} {
+		t.Run(fmt.Sprintf("source_gone=%t", gone), func(t *testing.T) {
+			f := newMoveFixture(t, true)
+			failure := errors.New("supervisor RPC timeout")
+			r := &moveRunner{sess: &moveSession{idle: true, alive: true}, kickErr: failure, dieOnKick: gone}
+			task, res, err := MoveTaskAccount(f.d, r, AccountMoveInput{TaskID: "mv", Account: "work"})
+			testutil.ErrorIs(t, err, failure)
+			testutil.NotNil(t, task)
+			testutil.Equal(t, res.To, "work")
+			testutil.False(t, res.Started)
+			got, getErr := f.d.Get("mv")
+			testutil.NoError(t, getErr)
+			testutil.Equal(t, got.Account, "work")
+		})
+	}
+}
+
+func (r *moveRunner) Recycle(task *model.Task, cfg config.Config, rows, cols uint16) error {
+	cp := *task
+	r.recycled = &cp
+	return r.Revive(task, cfg, rows, cols)
+}
+
+type noRecycleMoveRunner struct{ runner *moveRunner }
+
+func (r *noRecycleMoveRunner) Get(id string) SessionHandle { return r.runner.Get(id) }
+func (r *noRecycleMoveRunner) HasPendingRestart(id string) bool {
+	return r.runner.HasPendingRestart(id)
+}
+func (r *noRecycleMoveRunner) KickRerender(task *model.Task, cfg config.Config, rows, cols uint16) error {
+	return r.runner.KickRerender(task, cfg, rows, cols)
 }

@@ -356,11 +356,11 @@ func (s *Server) writeRuntimeOK(w http.ResponseWriter, t *model.Task, apply stri
 // settings_applied is true when the new settings are stored (the caller must
 // reconcile); false with rolled_back=true when the old session kept running
 // and the stored settings were restored. Callers pass what actually happened.
-func (s *Server) writeRestartFailed(w http.ResponseWriter, id string, settingsApplied, rolledBack bool, cause error) {
-	s.writeRestartFailure(w, id, "restart_failed", settingsApplied, rolledBack, cause)
+func (s *Server) writeRestartFailed(w http.ResponseWriter, id string, settingsApplied, rolledBack bool, cause error, extra ...map[string]any) {
+	s.writeRestartFailure(w, id, "restart_failed", settingsApplied, rolledBack, cause, extra...)
 }
 
-func (s *Server) writeRestartFailure(w http.ResponseWriter, id, code string, settingsApplied, rolledBack bool, cause error) {
+func (s *Server) writeRestartFailure(w http.ResponseWriter, id, code string, settingsApplied, rolledBack bool, cause error, extra ...map[string]any) {
 	body := map[string]any{
 		"error":            "restart failed",
 		"code":             code,
@@ -374,6 +374,11 @@ func (s *Server) writeRestartFailure(w http.ResponseWriter, id, code string, set
 	}
 	if cause != nil {
 		body["detail"] = cause.Error()
+	}
+	for _, e := range extra {
+		for k, v := range e {
+			body[k] = v
+		}
 	}
 	writeJSON(w, http.StatusInternalServerError, body)
 }

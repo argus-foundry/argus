@@ -1,0 +1,7 @@
+- [x] Amend the account-move and rest-api specs
+- [x] `Family.TransferSession`; Claude transfer extracted; Codex transfer (rollout + thread row)
+- [x] Handler: per-task lock, closeout gate, partial-outcome response, `task.account_changed`
+- [x] `/api/backends` `account_move`
+- [x] Tests: agent fixtures with account-scoped Codex homes, handler status/shape/auth/events
+- [x] README reference, gotchas, spawn-surface digest re-record
+- [x] Archive this change

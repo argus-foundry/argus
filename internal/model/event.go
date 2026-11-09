@@ -44,6 +44,11 @@ const (
 	// settles. Payload: {"apply":"next_resume"|"restart","changed_fields":[...],
 	// "started":bool}. Never carries prompt text.
 	EventTypeTaskRuntimeChanged = "task.runtime_changed"
+
+	// EventTypeTaskAccountChanged fires after POST /api/tasks/{id}/account
+	// persisted a new account. Payload: {"from","to","resumed","started"};
+	// started:false after a persisted-but-failed restart lets callers reconcile.
+	EventTypeTaskAccountChanged = "task.account_changed"
 	EventTypeMessageSent        = "message.sent"
 	EventTypeMessageAcked       = "message.acked"
 	EventTypeSessionStarted     = "session.started"
