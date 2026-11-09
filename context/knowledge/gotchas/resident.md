@@ -30,3 +30,18 @@ Memory, orientation and tool permissions are in [resident-memory.md](resident-me
 - **Concurrent first launches must not race on the private dirs or the skills link.** `ensurePrivateDir` accepts `EEXIST` only when the existing path is a real directory (not a symlink or file); the skills link is swapped by creating a temp link and renaming it over the target, with a `Readlink` fallback that treats an already-correct link as success when a peer won the race (`internal/agent/claudeaccount.go`).
 - **Named follow-up `resident-source-integrity` (not fixed in this PR):** the sources the resident loads at each launch (`~/.claude/CLAUDE.md`, `~/.claude/skills`, and the account dir generally) are writable by every sandboxed Claude agent through the existing `/.claude` sandbox grant, so a sandboxed agent could alter what the resident loads at its next launch. The launch dir copies are protected (`resident-memory.md`); the sources are not. The same follow-up covers the EXECUTABLES the resident runs: its Stop hook uses `~/.local/bin/argus`, which links to `~/go/bin/argus`, and both dirs are writable by every sandboxed agent; a native-install `~/.local/bin/claude` has the same problem.
 - **The resident's backend command must be one line.** sh ends a command at an unescaped newline exactly like `;`, so a trailing newline (easy with a TOML `"""` string) used to pass the allowlist while every flag Argus appends — forced `--permission-mode default`, `--setting-sources project`, the inline policy — ran as a separate failing command, launching Claude with none of it. `\`+newline continuations stay allowed; bare CR is refused too. `TestCheckClaudeResidentCommand_EveryUnsafeCharacterRefused` pins every refused ASCII character in both positions.
+
+## Codex unattended-worker spike
+
+- **Codex 0.167.0 bypass closes command approvals, not question tools: keep resident-worker eligibility nil.** A real resumed session still displayed an async question with both candidate feature overrides false, and `/plan` still enabled a blocking question (`collaboration_modes` is a removed flag); no verified launch/resume closure was found. — `add-resident-coordinator` task 4.0, 2026-11-09; [commands, sanitized rollout excerpts and limits](../../spikes/2026-11-09-codex-unattended-worker.md).
+
+Observed excerpts (same session, bypass active):
+
+```text
+fresh:   approval_policy=never, collaboration_mode=default
+         request_user_input_async -> {"accepted":true}; UI: Choose red or blue.
+resume:  -c features.collaboration_modes=false -c features.default_mode_request_user_input=false
+         request_user_input_async -> {"accepted":true}; UI: Choose red or blue.
+/plan:   approval_policy=never, collaboration_mode=plan
+         request_user_input -> no output while unanswered; interrupted after >60s
+```
