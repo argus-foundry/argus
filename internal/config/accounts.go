@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -211,6 +212,49 @@ func (c Config) ResolveAccount(explicit, project string) string {
 		return g
 	}
 	return DefaultAccountName
+}
+
+// ArtifactAccount resolves a project's artifact home account: the claude.ai
+// account its artifacts are published to, independent of which account the
+// task is routed to. The project's [project_artifact_accounts] entry wins,
+// else its [project_accounts] entry, else "" (no home account). An entry
+// naming an unknown or non-Claude (codex_home-only) account is skipped with a
+// log line. default_account is
+// deliberately NOT a fallback: an unmapped project keeps today's behavior.
+func (c Config) ArtifactAccount(project string) string {
+	if project == "" {
+		return ""
+	}
+	for _, src := range []struct {
+		table string
+		name  string
+	}{
+		{"project_artifact_accounts", c.ProjectArtifactAccounts[project]},
+		{"project_accounts", c.ProjectAccounts[project]},
+	} {
+		if src.name == "" {
+			continue
+		}
+		if err := c.claudeHomeAccount(src.name); err != nil {
+			slog.Warn("[artifacts] skipping artifact account", "project", project, "table", src.table, "account", src.name, "err", err)
+			continue
+		}
+		return src.name
+	}
+	return ""
+}
+
+// claudeHomeAccount reports why name cannot be an artifact home account, or
+// nil. Artifacts live on a claude.ai login, so the account must be valid and
+// Claude-capable: the default account, or one with a claude_config_dir.
+func (c Config) claudeHomeAccount(name string) error {
+	if err := c.ValidateAccount(name); err != nil {
+		return err
+	}
+	if !c.AccountSupports(name, string(backendkind.Claude)) {
+		return fmt.Errorf("account %q has no claude_config_dir", name)
+	}
+	return nil
 }
 
 // AccountNames returns "default" followed by configured account names

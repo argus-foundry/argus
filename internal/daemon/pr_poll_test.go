@@ -85,8 +85,9 @@ func TestPollPR_SkipsTerminalCachedState(t *testing.T) {
 	// simulates a daemon restart: the value is in task_meta with no prior poll
 	// this run). A terminal state must exclude the task from the eligible set.
 	testutil.NoError(t, d.db.SetMetaBatch("merged", "pr", map[string]string{
-		"state": model.PRMergedClosed.String(),
-		"url":   "https://example/pr/merged",
+		"state":     model.PRMergedClosed.String(),
+		"url":       "https://example/pr/merged",
+		"lifecycle": "merged",
 	}))
 
 	var mu sync.Mutex
@@ -655,6 +656,8 @@ func TestPollPR_MergeNotificationsNeverFireTwice(t *testing.T) {
 	seedTask(t, d.db, "worker-task", "argus/worker", false)
 	workerRole, coordRole := seedHeraWorkerWithCoordinator(t, d.db, "O", "worker-task")
 
+	testutil.NoError(t, d.db.SetMetaBatch("worker-task", "pr", map[string]string{"state": "approved", "lifecycle": "open", "url": "https://example/pr/1"}))
+
 	var calls int
 	d.prBatchFetch = func(_ context.Context, _ string, branches map[string]string) (map[string]gitutil.PRResult, int, error) {
 		calls++
@@ -810,13 +813,13 @@ func TestPollPR_UnchangedResultIsNotRewritten(t *testing.T) {
 	d.pollPRStatesOnce(context.Background())
 	first, err := d.db.ListMeta("quiet", "pr")
 	testutil.NoError(t, err)
-	testutil.Equal(t, len(first), 2)
+	testutil.Equal(t, len(first), 3)
 
 	time.Sleep(3 * time.Millisecond)
 	d.pollPRStatesOnce(context.Background())
 	second, err := d.db.ListMeta("quiet", "pr")
 	testutil.NoError(t, err)
-	testutil.Equal(t, len(second), 2)
+	testutil.Equal(t, len(second), 3)
 	for i := range first {
 		testutil.Equal(t, second[i].Value, first[i].Value)
 		testutil.Equal(t, second[i].UpdatedAt, first[i].UpdatedAt)
