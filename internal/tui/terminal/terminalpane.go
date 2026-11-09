@@ -254,6 +254,18 @@ type TerminalPane struct {
 	// handling — see MouseHandler).
 	forwardingClick bool
 
+	// Owed-re-render notice (resize-without-restart). owedFn is evaluated on
+	// the UI goroutine each Draw; owedShown / owedX,Y,W are the last drawn
+	// state, used for transition logging and the click hit-test. OnOwedClick
+	// runs the on-demand re-render when the notice is clicked.
+	owedFn      OwedFunc
+	owedHintFn  func() string
+	owedShown   bool
+	owedX       int
+	owedY       int
+	owedW       int
+	OnOwedClick func()
+
 	// Persistent x/vt emulator for live incremental rendering. Created once
 	// per pane (lazily, on first use) and kept alive for the pane's whole
 	// lifetime — see resetLiveEmulatorInPlace for why it is RIS-reset in
@@ -650,6 +662,7 @@ func (tp *TerminalPane) SetTaskID(id string) {
 		tp.mu.Lock()
 		tp.rerendering = false
 		tp.rerenderPending = false
+		tp.clearOwedLocked("rebind")
 		tp.replayGen++ // any in-flight replay rebuild is for the previous task
 		tp.mu.Unlock()
 	}
@@ -864,6 +877,7 @@ func (tp *TerminalPane) ResetVT() {
 	tp.mu.Lock()
 	tp.rerendering = false
 	tp.rerenderPending = false
+	tp.clearOwedLocked("rebind")
 	tp.resetLiveEmulatorInPlace()
 	tp.emuFedTotal = 0
 	tp.scrollOffset = 0
@@ -1676,6 +1690,14 @@ func (tp *TerminalPane) MouseHandler() func(action tview.MouseAction, event *tce
 	return tp.WrapMouseHandler(func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (bool, tview.Primitive) {
 		switch action {
 		case tview.MouseLeftDown:
+			// A click on the owed-re-render notice (top border, right side) runs
+			// the on-demand re-render. Checked first: it is on the border row, never
+			// inside the PTY area, so it must not be forwarded to the agent.
+			if mx, my := event.Position(); tp.hitOwed(mx, my) && tp.OnOwedClick != nil {
+				setFocus(tp)
+				tp.OnOwedClick()
+				return true, nil
+			}
 			if tp.focused && tp.forwardClickPress(event) {
 				return true, nil
 			}
@@ -1993,12 +2015,24 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 	if width <= 0 || height <= 0 {
 		return
 	}
+	owedNow := tp.evalOwed(max(width, 20))
 	if tp.Rerendering() {
 		// Paint on the border after terminal content. Even a prompt on the
 		// first content row must remain fully readable during deferral.
 		indicator := " " + tp.RerenderStatus() + " "
 		indicatorWidth := min(width, tview.TaggedStringWidth(indicator))
 		defer widget.DrawText(screen, x+width-indicatorWidth, y-1, indicatorWidth, indicator, theme.StyleClipboardHint)
+		tp.setOwedRect(0, 0, 0)
+	} else if owedNow {
+		// Lowest precedence: only when no repair is deferred or in flight.
+		if text, startX, w := tp.owedNoticeLayout(x, width, title); w > 0 {
+			defer widget.DrawText(screen, startX, y-1, w, text, theme.StyleClipboardHint)
+			tp.setOwedRect(startX, y-1, w)
+		} else {
+			tp.setOwedRect(0, 0, 0)
+		}
+	} else {
+		tp.setOwedRect(0, 0, 0)
 	}
 
 	if tp.diffMode {
