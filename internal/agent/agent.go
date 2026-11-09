@@ -1239,6 +1239,26 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		cmd.Env = append(cmd.Env, "ARGUS_TASK_ID="+task.ID)
 	}
 
+	// Artifact home account export (add-artifact-home-account). Recomputed on
+	// every build (spawn, resume, kick, account-move restart), so it follows
+	// the task across moves. Exported only when the agent must publish
+	// claude.ai artifacts through artpush: the project has a home account and
+	// either the family lacks the built-in artifact tool or the session runs
+	// on a different account. Never exported empty; an inherited value is
+	// stripped in spawnBaseEnv.
+	if home := cfg.ArtifactAccount(task.Project); home != "" {
+		effectiveAccount := task.Account
+		if effectiveAccount == "" {
+			effectiveAccount = config.DefaultAccountName
+		}
+		export := !fam.NativeArtifacts || effectiveAccount != home
+		if export {
+			cmd.Env = append(cmd.Env, artifactAccountEnv+"="+home)
+		}
+		uxlog.Log("[artifacts] task %q: home=%s account=%s native=%t exported=%t",
+			task.ID, home, effectiveAccount, fam.NativeArtifacts, export)
+	}
+
 	// Diligence-profile env export (add-diligence-profiles). When a bound
 	// profile actively contributed a backend-valid model, surface the resolution
 	// to the agent so the in-repo hera/DAG skill is profile-aware. All three are

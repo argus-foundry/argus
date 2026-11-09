@@ -53,6 +53,11 @@ type Config struct {
 	DefaultAccount string `toml:"default_account"`
 	// ProjectAccounts maps a project name to its default account.
 	ProjectAccounts map[string]string `toml:"project_accounts"`
+	// ProjectArtifactAccounts maps a project name to its artifact home account:
+	// the claude.ai account its artifacts are published to, whichever account
+	// the task is routed to. Unset falls back to ProjectAccounts. config.toml
+	// only. See ArtifactAccount.
+	ProjectArtifactAccounts map[string]string `toml:"project_artifact_accounts"`
 	// BackendRouting chooses backend/account pairs at task creation. Explicit
 	// or project backends restrict backend selection but still allow account
 	// routing. Coordinator creation filters tiers to Claude-capable backends.
