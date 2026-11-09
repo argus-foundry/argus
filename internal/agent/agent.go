@@ -828,6 +828,14 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	cmdStr := backend.Command
 
 	fam := FamilyOf(backend.Command)
+	// The resident's ask rules only prompt outside bypass modes: drop any
+	// bypass/permission-mode flag from its command and force default mode
+	// below, regardless of defaults.permission_mode.
+	forceDefaultPerm := task.IsResident() && fam.StripPermissionFlags != nil
+	if forceDefaultPerm {
+		backend.Command = fam.StripPermissionFlags(backend.Command)
+		cmdStr = backend.Command
+	}
 	isCodex := fam.Kind == backendkind.Codex
 	isClaude := fam.Kind == backendkind.Claude
 	isOpencode := fam.Kind == backendkind.Opencode
@@ -846,7 +854,13 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	}
 	mcpFlag := ""
 	if cfg.MCPPort > 0 && fam.MCPFlag != nil {
-		mcpFlag = fam.MCPFlag(fmt.Sprintf("http://localhost:%d/mcp", cfg.MCPPort))
+		mcpURL := fmt.Sprintf("http://localhost:%d/mcp", cfg.MCPPort)
+		if task.IsResident() {
+			// Bind this connection to the resident so task_recycle can refuse to
+			// target any other task; the agent cannot alter its own spawn flags.
+			mcpURL += "?caller=" + url.QueryEscape(task.ID)
+		}
+		mcpFlag = fam.MCPFlag(mcpURL)
 		uxlog.Log("[mcp] configured task=%s family=%s client_timeout=%ds", task.ID, fam.Kind, mcplimits.ClientTimeoutSeconds)
 	}
 	cmdStr += mcpFlag
@@ -869,8 +883,22 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// (command wins) so we never double-inject. Injected before
 	// resume/session-id/prompt suffixes so the flags precede the "--" separator.
 	if fam.PermissionFlags != nil && !fam.HasPermissionFlag(backend.Command) {
-		if flags := fam.PermissionFlags(cfg.Defaults.PermissionMode); flags != "" {
+		mode := cfg.Defaults.PermissionMode
+		if forceDefaultPerm {
+			mode = config.PermissionModeDefault
+		}
+		if flags := fam.PermissionFlags(mode); flags != "" {
 			cmdStr += " " + flags
+		}
+	}
+
+	// The resident's three-tier tool policy (ask / deny lists from [resident])
+	// rides the family's own rules flag. Families without one (non-Claude)
+	// cannot be a resident backend, so nothing is silently dropped there.
+	if task.IsResident() && fam.PermissionRulesFlag != nil {
+		if flag := fam.PermissionRulesFlag(cfg.Resident.AllowTools, cfg.Resident.AskTools, cfg.Resident.DenyTools); flag != "" {
+			cmdStr += flag
+			uxlog.Log("[resident] permission rules delivered allow=%d ask=%d deny=%d", len(cfg.Resident.AllowTools), len(cfg.Resident.AskTools), len(cfg.Resident.DenyTools))
 		}
 	}
 

@@ -206,7 +206,11 @@ const (
 	//     handed-back draft into a resumed session's box (kick-timing-keep-place).
 	//     A stale supervisor's sessions never report drafts, so the TUI falls
 	//     back to its typed-since-submit signal and a kick restores nothing.
-	SupervisorSpawnSurface = 38
+	// 39: the resident agent's launch carries its ask/deny tool rules as an
+	//     inline --settings flag and a non-bypass permission mode is forced
+	//     (add-resident-agent D6), and its Argus MCP URL is bound to its own task
+	//     (?caller=). A stale supervisor spawns the resident without them, so outward actions would not prompt.
+	SupervisorSpawnSurface = 39
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -505,7 +509,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "d39bb38dee175943fb7125bc94607e37224764067ad0725579ac5ca6c542c274"
+	SpawnSurfaceDigest  = "60c324990452815d9a6b3163cfdb4123936eca9f8c863ba8924795f51e57408c"
 	StreamSurfaceDigest = "11024ea57e1c40147b4c52d778af95da81fd73b07eccf004cf014df871efd1be"
 )
 

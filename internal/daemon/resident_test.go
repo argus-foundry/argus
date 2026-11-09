@@ -81,6 +81,9 @@ type resEnv struct {
 func newResEnv(t *testing.T) *resEnv {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	oldEnforced := config.ResidentPermissionsEnforced
+	config.ResidentPermissionsEnforced = true
+	t.Cleanup(func() { config.ResidentPermissionsEnforced = oldEnforced })
 	d, err := db.OpenInMemory()
 	testutil.NoError(t, err)
 	t.Cleanup(func() { d.Close() })

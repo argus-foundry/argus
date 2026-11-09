@@ -106,7 +106,7 @@ The resident SHALL record durable facts (people, customers, projects, decisions)
 
 ### Requirement: Outward actions need one-key confirmation and Slack is drafts only
 
-The resident's permission policy SHALL have three tiers, configurable by `resident.ask_tools` and `resident.deny_tools` with shipped defaults: read-only connector tools and `kb_*` SHALL run without a prompt; outward tools (creating, updating or deleting calendar events, responding to events, sending mail or drafts, creating Slack canvases or lists) SHALL require an explicit user confirmation through the Claude permission prompt; Slack message sending (including scheduled sends) SHALL be denied, with only `slack_send_message_draft` allowed. A pending confirmation SHALL raise the resident's waiting (`?`) signal.
+The resident's permission policy SHALL have three tiers, configurable by `resident.allow_tools`, `resident.ask_tools` and `resident.deny_tools` with shipped defaults, and SHALL run under a non-bypass permission mode so the ask and deny tiers are enforced: read-only connector tools and `kb_*` SHALL run without a prompt; outward tools (creating, updating or deleting calendar events, responding to events, sending mail or drafts, creating Slack canvases or lists) SHALL require an explicit user confirmation through the Claude permission prompt; Slack message sending (including scheduled sends) SHALL be denied, with only `slack_send_message_draft` allowed. A pending confirmation SHALL raise the resident's waiting (`?`) signal.
 
 #### Scenario: Calendar invite asks first
 
@@ -144,7 +144,7 @@ On every resident Stop the coord-hook SHALL record `task_meta(resident, last_rep
 
 ### Requirement: Resident configuration
 
-The system SHALL read a `[resident]` config block with `enabled` (default false), `name` (no default; required to enable; 1 to 12 printable runes, validated), `context_budget` (default the coordinator default), `memory_dir` (default `resident`), `model`, `account`, `ask_tools` and `deny_tools`. All resident behavior SHALL log under the `[resident]` uxlog prefix, including start, stop, restarts, memory-prerequisite failures and signal changes.
+The system SHALL read a `[resident]` config block with `enabled` (default false), `name` (no default; required to enable; 1 to 12 printable runes, validated), `context_budget` (default the coordinator default), `memory_dir` (default `resident`), `model`, `account`, `allow_tools`, `ask_tools` and `deny_tools`. All resident behavior SHALL log under the `[resident]` uxlog prefix, including start, stop, restarts, memory-prerequisite failures and signal changes.
 
 #### Scenario: Defaults
 

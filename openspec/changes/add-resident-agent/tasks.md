@@ -43,9 +43,9 @@ Stage 6's slice of 1.1/1.3 is covered by `coord_hook_resident_test.go` and `Test
 
 **Depends on:** Stage 4
 
-- [ ] 5.1 Write the resident orientation prompt: open-loops first, vault layout and `dream: skip` frontmatter, KB schema rules (search before write), outward-action confirmation rule, recycle-with-no-pending-work rule
-- [ ] 5.2 Seed `resident/` working files (`open-loops.md`, `profile.md`, `preferences.md`) through the KB path on first start if absent, never overwriting
-- [ ] 5.3 Deliver the three-tier permission policy through the backend family's permission mechanism (see `context/knowledge/backends.md`), with `ask_tools`/`deny_tools` defaults; confirm a pending confirmation raises the needs-input signal
+- [x] 5.1 Write the resident orientation prompt: open-loops first, vault layout and `dream: skip` frontmatter, KB schema rules (search before write), outward-action confirmation rule, recycle-with-no-pending-work rule
+- [x] 5.2 Seed `resident/` working files (`open-loops.md`, `profile.md`, `preferences.md`) through the KB path on first start if absent, never overwriting
+- [x] 5.3 Deliver the three-tier permission policy through the backend family's permission mechanism (see `context/knowledge/backends.md`), with `ask_tools`/`deny_tools` defaults; confirm a pending confirmation raises the needs-input signal
 
 ## 6. Context self-management
 

@@ -46,7 +46,26 @@ func TestResidentValidName(t *testing.T) {
 	}
 }
 
+func TestResidentPermissionsEnforcedShipsTrue(t *testing.T) {
+	testutil.Equal(t, ResidentPermissionsEnforced, true)
+}
+
+func TestResidentPrereq_RefusesWhilePermissionsUnenforced(t *testing.T) {
+	c := DefaultConfig()
+	c.Resident.Enabled = true
+	c.Resident.Name = "Solo"
+	c.KB.Enabled = true
+	c.KB.MetisVaultPath = t.TempDir()
+	old := ResidentPermissionsEnforced
+	ResidentPermissionsEnforced = false // the gate itself, now shipped true
+	t.Cleanup(func() { ResidentPermissionsEnforced = old })
+	if err := c.ResidentPrereq(); err == nil || !strings.Contains(err.Error(), "not enforced") {
+		t.Fatalf("ResidentPrereq() = %v, want not-enforced refusal", err)
+	}
+}
+
 func TestResidentPrereq(t *testing.T) {
+	enforceResidentPermissions(t)
 	vault := t.TempDir()
 	good := func() Config {
 		c := DefaultConfig()
@@ -113,4 +132,30 @@ deny_tools = ["b"]
 	testutil.Equal(t, r.Account, "work")
 	testutil.DeepEqual(t, r.AskTools, []string{"a"})
 	testutil.DeepEqual(t, r.DenyTools, []string{"b"})
+}
+
+func enforceResidentPermissions(t *testing.T) {
+	t.Helper()
+	old := ResidentPermissionsEnforced
+	ResidentPermissionsEnforced = true
+	t.Cleanup(func() { ResidentPermissionsEnforced = old })
+}
+
+// The tiers must be disjoint: an allow entry that also appears in ask or deny
+// would make the intended policy ambiguous, and Slack send must never be allowed.
+func TestDefaultResidentConfig_TiersAreDisjoint(t *testing.T) {
+	r := DefaultResidentConfig(1)
+	seen := map[string]string{}
+	for tier, list := range map[string][]string{"allow": r.AllowTools, "ask": r.AskTools, "deny": r.DenyTools} {
+		for _, tool := range list {
+			if prev, dup := seen[tool]; dup {
+				t.Errorf("%s is in both %s and %s", tool, prev, tier)
+			}
+			seen[tool] = tier
+		}
+	}
+	for _, send := range []string{"mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_schedule_message"} {
+		testutil.Equal(t, seen[send], "deny")
+	}
+	testutil.Equal(t, seen["mcp__claude_ai_Slack__slack_send_message_draft"], "allow")
 }

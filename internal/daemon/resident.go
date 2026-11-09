@@ -34,9 +34,8 @@ var (
 const residentMaxSendBytes = 64 << 10
 
 // residentOrientationPrompt builds the opening prompt of a fresh resident
-// session. Stage 5 (memory/orientation) replaces it; an empty prompt starts the
-// session with the backend's own default.
-var residentOrientationPrompt = func(config.Config) string { return "" }
+// session (see resident_memory.go). A var so tests can stub it.
+var residentOrientationPrompt = buildResidentOrientation
 
 // residentRunner is the slice of agent.SessionRunner the manager uses.
 type residentRunner interface {
@@ -210,6 +209,8 @@ func (m *residentManager) start(task *model.Task, cfg config.Config, backend str
 	task.Model = cfg.Resident.Model
 	task.Account = cfg.Resident.Account
 	task.Sandboxed = agent.IsTaskSandboxed(task, cfg)
+
+	m.seedResidentMemory(cfg)
 
 	resume := task.SessionID != ""
 	if resume {
