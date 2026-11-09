@@ -100,7 +100,7 @@ The resident's permission policy is expressed through the backend family's exist
 - *Outward* tools (create/update/delete calendar events, respond to events, send mail or drafts, create Slack canvases or lists): ask. Claude's permission prompt is the one-key confirmation, and it is detected by the existing needs-input detector, which raises the `?` marker.
 - *Slack sending*: `slack_send_message` and scheduled sends are denied outright; only `slack_send_message_draft` is allowed. This matches the existing drafts-only rule.
 
-The tier lists are defaults in config (`resident.ask_tools`, `resident.deny_tools`) so new connectors can be added without code.
+The tier lists are defaults in config (`resident.allow_tools`, `resident.ask_tools`, `resident.deny_tools`) so new connectors can be added without code. The resident always launches in `--permission-mode default` (bypass flags stripped from its command) because that mode is the version-independent one for ask enforcement; in it anything unlisted prompts, so the read-only tier is an explicit allow list. A headless check on claude 2.1.317 showed ask and deny held under bypass too, so this is a conservative choice, not a workaround.
 
 ### D7. Reply and unread signal
 

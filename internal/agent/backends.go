@@ -161,7 +161,7 @@ type Family struct {
 	// PermissionRulesFlag delivers per-tool ask/deny rules (the resident's
 	// three-tier policy, add-resident-agent D6) as a per-launch flag; nil means
 	// the family cannot enforce them. Returns "" when both lists are empty.
-	PermissionRulesFlag func(ask, deny []string) string
+	PermissionRulesFlag func(allow, ask, deny []string) string
 	// StripPermissionFlags removes permission-mode flags from a backend command
 	// so the resident can be forced out of bypass modes (ask rules do not
 	// prompt under bypass).
@@ -225,13 +225,16 @@ func claudeMCPFlag(url string) string {
 }
 
 // claudePermissionRulesFlag delivers ask/deny tool rules as an inline
-// --settings JSON (permissions.ask / permissions.deny). Settings rules are
+// --settings JSON (permissions.allow / ask / deny). Settings rules are
 // additive with the user's own settings files, and deny always wins.
-func claudePermissionRulesFlag(ask, deny []string) string {
-	if len(ask) == 0 && len(deny) == 0 {
+func claudePermissionRulesFlag(allow, ask, deny []string) string {
+	if len(allow) == 0 && len(ask) == 0 && len(deny) == 0 {
 		return ""
 	}
 	perms := map[string]any{}
+	if len(allow) > 0 {
+		perms["allow"] = allow
+	}
 	if len(ask) > 0 {
 		perms["ask"] = ask
 	}

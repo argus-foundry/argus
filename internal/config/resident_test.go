@@ -140,3 +140,22 @@ func enforceResidentPermissions(t *testing.T) {
 	ResidentPermissionsEnforced = true
 	t.Cleanup(func() { ResidentPermissionsEnforced = old })
 }
+
+// The tiers must be disjoint: an allow entry that also appears in ask or deny
+// would make the intended policy ambiguous, and Slack send must never be allowed.
+func TestDefaultResidentConfig_TiersAreDisjoint(t *testing.T) {
+	r := DefaultResidentConfig(1)
+	seen := map[string]string{}
+	for tier, list := range map[string][]string{"allow": r.AllowTools, "ask": r.AskTools, "deny": r.DenyTools} {
+		for _, tool := range list {
+			if prev, dup := seen[tool]; dup {
+				t.Errorf("%s is in both %s and %s", tool, prev, tier)
+			}
+			seen[tool] = tier
+		}
+	}
+	for _, send := range []string{"mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_schedule_message"} {
+		testutil.Equal(t, seen[send], "deny")
+	}
+	testutil.Equal(t, seen["mcp__claude_ai_Slack__slack_send_message_draft"], "allow")
+}

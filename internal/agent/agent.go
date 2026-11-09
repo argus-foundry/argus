@@ -890,9 +890,9 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// rides the family's own rules flag. Families without one (non-Claude)
 	// cannot be a resident backend, so nothing is silently dropped there.
 	if task.IsResident() && fam.PermissionRulesFlag != nil {
-		if flag := fam.PermissionRulesFlag(cfg.Resident.AskTools, cfg.Resident.DenyTools); flag != "" {
+		if flag := fam.PermissionRulesFlag(cfg.Resident.AllowTools, cfg.Resident.AskTools, cfg.Resident.DenyTools); flag != "" {
 			cmdStr += flag
-			uxlog.Log("[resident] permission rules delivered ask=%d deny=%d", len(cfg.Resident.AskTools), len(cfg.Resident.DenyTools))
+			uxlog.Log("[resident] permission rules delivered allow=%d ask=%d deny=%d", len(cfg.Resident.AllowTools), len(cfg.Resident.AskTools), len(cfg.Resident.DenyTools))
 		}
 	}
 

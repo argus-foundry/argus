@@ -51,7 +51,11 @@ func TestBuildCmd_ResidentGetsAskAndDenyRules(t *testing.T) {
 		}
 		return out
 	}
-	ask, deny := toStrings(perms["ask"]), toStrings(perms["deny"])
+	allow, ask, deny := toStrings(perms["allow"]), toStrings(perms["ask"]), toStrings(perms["deny"])
+	// Read-only tier runs unprompted; KB and recycle must never prompt.
+	for _, want := range []string{"mcp__argus__kb_search", "mcp__argus__kb_ingest", "mcp__argus__task_recycle", "mcp__claude_ai_Slack__slack_send_message_draft"} {
+		testutil.Contains(t, strings.Join(allow, ","), want)
+	}
 	testutil.Contains(t, strings.Join(ask, ","), "mcp__claude_ai_Google_Calendar__create_event")
 	testutil.Contains(t, strings.Join(deny, ","), "mcp__claude_ai_Slack__slack_send_message")
 	for _, d := range deny {
@@ -65,6 +69,7 @@ func TestBuildCmd_ResidentRulesHonorConfigLists(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
 	cfg := residentCfg()
+	cfg.Resident.AllowTools = []string{"mcp__x__allow"}
 	cfg.Resident.AskTools = []string{"mcp__x__ask"}
 	cfg.Resident.DenyTools = []string{"mcp__x__deny"}
 	task := &model.Task{ID: "r", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir()}
@@ -75,6 +80,7 @@ func TestBuildCmd_ResidentRulesHonorConfigLists(t *testing.T) {
 	}
 	st, _ := settingsArg(t, cmd.Args)
 	perms := st["permissions"].(map[string]any)
+	testutil.DeepEqual(t, perms["allow"], any([]any{"mcp__x__allow"}))
 	testutil.DeepEqual(t, perms["ask"], any([]any{"mcp__x__ask"}))
 	testutil.DeepEqual(t, perms["deny"], any([]any{"mcp__x__deny"}))
 }
@@ -96,7 +102,7 @@ func TestBuildCmd_ResidentEmptyListsInjectNothing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
 	cfg := residentCfg()
-	cfg.Resident.AskTools, cfg.Resident.DenyTools = nil, nil
+	cfg.Resident.AllowTools, cfg.Resident.AskTools, cfg.Resident.DenyTools = nil, nil, nil
 	task := &model.Task{ID: "r", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir()}
 	cmd, cleanup, err := BuildCmd(task, cfg, false)
 	testutil.NoError(t, err)
