@@ -1312,6 +1312,24 @@ Full enable/verify walkthrough: **[docs/knowledge-base.md](docs/knowledge-base.m
 | `coordinator_nudge_increment` | int | `50000` | Context-size growth past the last-fired size (see [Context-budget Stop hook](#context-budget-stop-hook)) before `argus coord-hook`'s over-budget nudge is allowed to re-fire. |
 | `worker_context_window` | int | `1000000` | Reference context window a worker/freelance role's `context_size` is divided by for the [Projects Tab](#projects-tab) rail's context-pressure indicator percentage. Deliberately separate from `coordinator_context_budget`, which is a coordinator recycle-nudge policy threshold, not a context window size. |
 
+#### `[resident]`
+
+The always-on [resident agent](#resident-hotkey-recipe): one persistent Claude session in its own tab, toggled with `ctrl+\`. Off by default; choosing a `name` is the act of opting in. Needs `kb.enabled` and an existing `kb.metis_vault_path` (its memory lives in the vault). Claude backend only.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Run the resident. Refused (and nothing persisted from Settings) until `name` is valid and the KB prerequisite holds. Read live by the daemon's ensure-running loop; a manually stopped resident is restarted while this is true. |
+| `name` | string | `""` | Display name, 1–12 printable characters. Shown on the tab and rail box. No default. |
+| `context_budget` | int | coordinator budget | `context_size` at which the resident is nudged to recycle itself. The Stop hook never forces a recycle. |
+| `memory_dir` | string | `"resident"` | Vault-relative working-memory folder. Independent of `name`, so renaming never moves memory. |
+| `model` | string | `""` | Optional model override; empty uses the resolved default. |
+| `account` | string | `""` | Optional [account](#accounts) override; empty uses the default account. |
+| `allow_tools` | list | read-only tier | Tools that run without a prompt: `kb_*`, `task_recycle` (caller-bound), calendar/mail/Slack/Notion/Linear/Granola reads and `slack_send_message_draft`. |
+| `ask_tools` | list | outward actions | Tools that require a confirmation: calendar create/update/delete/respond, Gmail send/reply/forward, Superhuman send, Slack canvas/list creation. |
+| `deny_tools` | list | Slack sends | Tools refused outright: `slack_send_message`, `slack_schedule_message`. Deny always wins. |
+
+The resident always runs in `--permission-mode default` (any bypass flag is stripped), with the three tool lists delivered as inline `--settings` rules, so any tool in none of them prompts. Restart the supervisor after installing a build that changes this (spawn surface 39). The Settings screen edits `enabled`, `name`, `context_budget`, `memory_dir`, `model` and `account`; the three tool lists are `config.toml` only. **A `[resident]` value in `config.toml` overrides the same value edited in Settings, with no warning** (standard precedence: defaults < Settings < `config.toml`).
+
 #### `[todo]`
 
 Selects the single active [to-do-list backend](#reference) (`todo_*` MCP tools). Also configurable live from Settings → To-Do List — no restart needed either way. **Requires `[kb] enabled = true`** — the MCP server itself only starts when KB is enabled (see `[kb]` above), so a `todo.backend` selection with KB off persists but produces no visible `todo_*` tools until KB is turned on too.

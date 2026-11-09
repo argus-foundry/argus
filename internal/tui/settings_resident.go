@@ -24,7 +24,7 @@ const (
 	resKeyMemory  = "resident.memory_dir"
 	resKeyModel   = "resident.model"
 	resKeyAccount = "resident.account"
-	// resKeyTools is the read-only pointer row (ask_tools/deny_tools live in
+	// resKeyTools is the read-only pointer row (allow_tools/ask_tools/deny_tools live in
 	// config.toml only).
 	resKeyTools = "resident.tools"
 )
@@ -206,7 +206,7 @@ func (sv *SettingsView) renderResidentDetail(screen tcell.Screen, x, y, w, h int
 	case resKeyAccount:
 		text = "Optional account override. Empty uses the default account."
 	case resKeyTools:
-		text = "ask_tools and deny_tools are edited in config.toml under [resident]."
+		text = "allow_tools, ask_tools and deny_tools are edited in config.toml under [resident]."
 	}
 	widget.DrawText(screen, x, y+2, w, text, theme.StyleDimmed)
 	if sv.residentMsg != "" && h > 4 {

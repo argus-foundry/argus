@@ -1,0 +1,15 @@
+# Resident agent (add-resident-agent)
+
+Memory, orientation and tool permissions are in [resident-memory.md](resident-memory.md). Other resident invariants sit with their areas: ensure-loop and RPCs in `daemon-rpc.md`, Stop hook and recycle seed in `orchestration.md`, `ctrl+\` and return snapshots in `keybindings.md`, rail box and tab marker in `tasklist-ui.md`, Settings category in `misc.md`.
+
+- **The resident is a task row with a `kind` marker, hidden at one choke-point predicate.** Task lists, the PR poller, reapers, merge-safety, `/api/tasks` and the cleanup sweeps all go through it; a new task-enumerating path that skips the predicate leaks the resident into Hera, the web UI or a completion sweep.
+- **Worktree precondition:** the resident runs in its own directory, not a git worktree, so any code assuming "every task has a worktree/branch" must check `IsResident()` first (no merge-safety, no branch cleanup).
+- **The Stop hook is gated on the resident's own task id** (`ARGUS_TASK_ID`), needs the global hook registration like coordinators, and always allows Stop. See `orchestration.md`.
+- **Signals:** unread reply and `Waiting` (a pending confirmation) are two separate flags exposed together by `Daemon.ResidentState`; `Waiting` comes from the generic needs-input detector with the resident stripped from the generic set.
+- **Rail-box no-resize invariant:** the rail ResidentBox changes height with unread/waiting state, so it must never resize the PTY pane (a resize triggers the size-drift kick). It is drawn only when no task is bound on the Tasks rail, stacks under the needs-input bar in the agent view, and has smoke tests asserting the agent pane rect is unchanged.
+- **Hotkey recipe:** `ctrl+\` is the 0x1c byte; map Cmd+\` to "send hex 0x1c" in iTerm2/Ghostty and free the macOS "Move focus to next window" shortcut. See the README.
+- **`config.toml` `[resident]` silently wins over Settings edits.** Settings writes DB keys; a key present in config.toml masks it with no warning. `allow_tools`/`ask_tools`/`deny_tools` are config.toml-only.
+- **Settings' enable gate calls `ResidentPrereq()`**, which also refuses while `config.ResidentPermissionsEnforced` is false. It ships true; a branch built before the permissions stage landed would refuse every enable.
+- **`residentOrientationPrompt(cfg)` is the single seam** for both the fresh-start prompt and the recycle seed; never build orientation text elsewhere.
+- **Spawn surface 39:** the resident's spawn flags (`--settings` rules, forced permission mode, `?caller=` MCP URL) live in supervisor-resident `BuildCmd`, so the supervisor must be restarted after installing for them to apply.
+- **Not yet fenced:** the ai-ron `airon-dream` skip rule for `resident/**` and `dream: skip` is a separate-repo follow-up; the memory folder is unprotected from the nightly pass until it lands.

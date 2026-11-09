@@ -39,6 +39,8 @@ Verified current state (from code and specs):
 - **Cross-repo:** `airon-dream` in ai-ron must skip `resident/**` and `dream: skip` notes. Until it does, the folder is unfenced, and this change says so rather than claiming protection.
 - Multiple residents, non-Claude backends, and a REST read surface for the resident.
 
+**Named follow-ups recorded at ship time (Stage 10):** `add-resident-macos` (global hotkey, floating panel), `add-resident-web` (resident tab for the PWA and a REST read surface), routines (scheduled notifications such as the Thursday trash reminder), push/system notifications for resident replies (arrive with routines) and `add-resident-hard-stop` (daemon-forced recycle). The macOS and web clients stay blind to the resident until those land; this is an intentional parity gap, not an oversight. The ai-ron `airon-dream` skip rule (skip `resident/**` and `dream: skip` notes) is a cross-repo item this change cannot ship: until it lands, the memory folder is unfenced from the nightly dream pass. Also by design, a `config.toml` `[resident]` value overrides Settings edits without a warning.
+
 ## Decisions
 
 ### D1. The resident is a task row with a `kind` marker

@@ -484,3 +484,33 @@ func TestSmoke_ResidentHeraAndTasksRailBox(t *testing.T) {
 		testutil.Contains(t, screenText(sim, 160, 40), "? Solo: confirm?")
 	})
 }
+
+// The Tasks-rail ResidentBox is drawn only when no task is bound (the task list
+// is showing); with a bound task the agent view's own stacking covers it.
+func TestSmoke_ResidentBoxOnTasksRailWhenUnbound(t *testing.T) {
+	a, _ := residentTestApp(t)
+	sim, stop := wireApp(t, a)
+	defer stop()
+	sim.SetSize(160, 40)
+	readUI(t, a.tapp, func() {
+		a.switchTab(widget.TabTasks)
+		a.setTasksRail(true)
+		a.applyResidentState(daemon.ResidentStateResp{Unread: true, LastReply: "rail reply"})
+	})
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		testutil.Contains(t, screenText(sim, 160, 40), "● Solo: rail reply")
+		a.tasksRailPage.Bound = true // a bound task: agent view stacking owns the box
+	})
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		testutil.True(t, !strings.Contains(screenText(sim, 160, 40), "rail reply"))
+		a.tasksRailPage.Bound = false
+	})
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() { a.applyResidentState(daemon.ResidentStateResp{}) })
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		testutil.True(t, !strings.Contains(screenText(sim, 160, 40), "Solo:"))
+	})
+}
