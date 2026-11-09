@@ -223,6 +223,8 @@ type Daemon struct {
 	// swap it for a fake so the poller never spawns a real gh process. A non-nil
 	// error means keep-stale for the whole group (Decision 4).
 	prBatchFetch func(ctx context.Context, repo string, branches map[string]string) (map[string]gitutil.PRResult, int, error)
+	// prURLFetch resolves one manually linked PR by url; tests swap it.
+	prURLFetch func(ctx context.Context, url string) (gitutil.PRResult, error)
 
 	// prResolveRepo resolves a worktree's default GitHub repo ("owner/name") the
 	// way gh would target it — the fallback when a task has no cached pr/url to
@@ -340,6 +342,7 @@ func New(database *db.DB) *Daemon {
 		prFetch:   gitutil.FetchPRState,
 
 		prBatchFetch:      gitutil.FetchPRStatesBatch,
+		prURLFetch:        gitutil.FetchPRByURL,
 		prResolveRepo:     gitutil.ResolveDefaultRepo,
 		prAliasCap:        prDefaultAliasCap,
 		prDisableFlagPath: filepath.Join(db.DataDir(), prPollDisableFlag),
@@ -736,11 +739,18 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 	//      stride instead (prPollCadenceStride). An open PR overrides the stride
 	//      and is always polled.
 	now := time.Now()
+	manualPRs, merr := d.db.ManualPRs()
+	if merr != nil {
+		uxlog.Log("[pr] poll: read manual links failed: %v", merr)
+	}
 	eligible := make([]*model.Task, 0, len(tasks))
 	terminalAtStart := make(map[string]bool, len(tasks))
 	var skipped int
 	for _, t := range tasks {
 		if t == nil || t.Archived || t.Branch == "" {
+			continue
+		}
+		if _, manual := manualPRs[t.ID]; manual {
 			continue
 		}
 		// Parse the cached PR state once: it drives both the terminal skip and the
@@ -754,21 +764,7 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 		}
 		terminalAtStart[t.ID] = state.IsTerminal()
 		lifecycle := model.ParsePRLifecycle(prMeta[t.ID]["lifecycle"])
-		if state.IsTerminal() && (lifecycle == model.PRLifecycleMerged || lifecycle == model.PRLifecycleClosed) {
-			skipped++
-			uxlog.Log("[pr] poll: skip terminal %s (state=%s)", t.ID, state)
-			continue
-		}
-		if state.IsTerminal() && !d.prTerminalVerificationAttempted[t.ID] {
-			if d.prTerminalVerificationAttempted == nil {
-				d.prTerminalVerificationAttempted = make(map[string]bool)
-			}
-			d.prTerminalVerificationAttempted[t.ID] = true
-			uxlog.Log("[pr] poll: first terminal verification %s (lifecycle=%s)", t.ID, lifecycle)
-		} else if stride := prPollCadenceStride(t, state, now); !prCadenceSelects(d.pollCycle, t.ID, stride) {
-			if state.IsTerminal() {
-				uxlog.Log("[pr] poll: defer terminal verification %s (stride=%d)", t.ID, stride)
-			}
+		if !d.shouldPollPR(t, state, lifecycle, now) {
 			skipped++
 			continue
 		}
@@ -881,11 +877,15 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 					// minute before this). The merge notifications below key off
 					// the fetched result, not off whether a write happened.
 					lifecycle := res.Lifecycle()
-					wrote, werr := d.db.SetMetaBatchIfChanged(t.ID, "pr", map[string]string{
+					wrote, werr := d.db.SetAutoPRMetaIfChanged(t.ID, map[string]string{
 						"state":     res.State.String(),
 						"url":       res.URL,
 						"lifecycle": string(lifecycle),
 					})
+					if errors.Is(werr, db.ErrPRLinkChanged) {
+						uxlog.Log("[pr] poll: skip superseded association for %s", t.ID)
+						continue
+					}
 					if werr != nil {
 						uxlog.Log("[pr] poll: persist failed for %s: %v", t.ID, werr)
 						continue
@@ -894,6 +894,7 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 					if wrote {
 						events.Emit(model.EventTypeTaskPRChanged, t.ID, model.PRChangedPayload{
 							URL: res.URL, State: res.State.String(), Lifecycle: lifecycle,
+							Source: model.PRSourceAutomatic,
 						})
 						uxlog.Log("[pr] poll: %s changed state=%s lifecycle=%s", t.ID, res.State, lifecycle)
 					}
@@ -1024,6 +1025,30 @@ func (d *Daemon) notifyRoleOfMergedPR(t *model.Task, prURL string) {
 	}
 }
 
+// shouldPollPR shares terminal verification and dormancy eligibility across pollers.
+func (d *Daemon) shouldPollPR(t *model.Task, state model.PRState, lifecycle model.PRLifecycle, now time.Time) bool {
+	if state.IsTerminal() && (lifecycle == model.PRLifecycleMerged || lifecycle == model.PRLifecycleClosed) {
+		uxlog.Log("[pr] poll: skip terminal %s (state=%s)", t.ID, state)
+		return false
+	}
+	if state.IsTerminal() && !d.prTerminalVerificationAttempted[t.ID] {
+		if d.prTerminalVerificationAttempted == nil {
+			d.prTerminalVerificationAttempted = make(map[string]bool)
+		}
+		d.prTerminalVerificationAttempted[t.ID] = true
+		uxlog.Log("[pr] poll: first terminal verification %s (lifecycle=%s)", t.ID, lifecycle)
+		return true
+	}
+	stride := prPollCadenceStride(t, state, now)
+	if !prCadenceSelects(d.pollCycle, t.ID, stride) {
+		if state.IsTerminal() {
+			uxlog.Log("[pr] poll: defer terminal verification %s (stride=%d)", t.ID, stride)
+		}
+		return false
+	}
+	return true
+}
+
 // prPollCadenceStride returns how many poll cycles apart a task should be
 // queried, tiered by dormancy to bound the GitHub GraphQL budget (cost-based —
 // ~1 unit per branch resolved — so per-repo batching alone does not cap it). An
@@ -1116,6 +1141,7 @@ func (d *Daemon) runPRPoller() {
 		case <-ticker.C:
 			d.pollCycle++
 			d.pollPRStatesOnce(ctx)
+			d.pollManualPRsOnce(ctx)
 		}
 	}
 }
