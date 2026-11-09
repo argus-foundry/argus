@@ -45,6 +45,8 @@
 - [x] 3.2 `artifact_open` with a manifest + path-escape check and an injectable opener (`open` / `open -R`, macOS-only gate)
 - [x] 3.3 `[artifacts]`-prefixed log lines for every publish outcome, with no token
 - [x] 3.4 Test 1.4 passes
+- [x] 3.5 Security review: `artifact_open` opens only allowlisted types with matching extensions (others reveal-only); directories and bundles are refused even for reveal
+- [x] 3.6 Security review: `artifact_publish` requires a calling task; for a sandboxed task, `artifact_publish` and `artifact_register` confine the path's real location to the task's writable roots (`agent.SandboxWriteRoots`) before reading
 
 ## 4. REST and CLI
 

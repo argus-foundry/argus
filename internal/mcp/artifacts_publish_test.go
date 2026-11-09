@@ -187,10 +187,10 @@ func TestArtifactPublish_Errors(t *testing.T) {
 		{"missing path", func(string) map[string]any { return map[string]any{"account": "personal"} }, "path is required"},
 		{"missing account", func(src string) map[string]any { return map[string]any{"path": src} }, "account is required"},
 		{"non-html file", func(string) map[string]any {
-			return map[string]any{"path": writeTempFile(t, "notes.md", publishPage), "account": "personal"}
+			return map[string]any{"path": writeTempFile(t, "notes.md", publishPage), "account": "personal", "id": "abc123"}
 		}, ".html or .htm"},
 		{"missing file", func(string) map[string]any {
-			return map[string]any{"path": "/nonexistent/x.html", "account": "personal"}
+			return map[string]any{"path": "/nonexistent/x.html", "account": "personal", "id": "abc123"}
 		}, "x.html"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -234,39 +234,153 @@ func TestArtifactPublish_UnavailableRegistersAndListsAccounts(t *testing.T) {
 	assertNoToken(t, cr.Content[0].Text, logs.String())
 }
 
-func TestArtifactPublish_UnavailableWithoutTask(t *testing.T) {
+// TestArtifactPublish_RequiresCallingTask: the daemon only reads a file on
+// behalf of a known task, so it can confine the read to that task's sandbox.
+func TestArtifactPublish_RequiresCallingTask(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		withTasks bool
 		args      map[string]any
+		want      string
 	}{
-		{"no task management wired", false, map[string]any{"account": "default", "id": "abc123"}},
-		{"no id or cwd", true, map[string]any{"account": "default"}},
-		{"unknown task id", true, map[string]any{"account": "default", "id": "nope"}},
+		{"no task management wired", false, map[string]any{"account": "personal", "id": "abc123"}, "calling task"},
+		{"no id or cwd", true, map[string]any{"account": "personal"}, "calling task"},
+		{"unknown task id", true, map[string]any{"account": "personal", "id": "nope"}, "task not found"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, store, _ := testPublishServer(t, tc.withTasks)
-			logs := captureLog(t)
+			s, store, n := testPublishServer(t, tc.withTasks)
 			tc.args["path"] = writeTempFile(t, "report.html", publishPage)
 			cr := callTool(t, s, "artifact_publish", tc.args)
-			testutil.False(t, cr.IsError)
-			r := decodePublishResult(t, cr)
-			testutil.Equal(t, r.Status, "unavailable")
-			testutil.Equal(t, r.Artifact, "")
-			testutil.DeepEqual(t, r.AvailableAccounts, []string{"personal"})
+			testutil.True(t, cr.IsError)
+			testutil.Contains(t, cr.Content[0].Text, tc.want)
+			testutil.Equal(t, n.Load(), int32(0))
 			testutil.Equal(t, len(store.saved), 0)
-			assertNoToken(t, cr.Content[0].Text, logs.String())
 		})
 	}
 }
 
-func TestArtifactPublish_NoTaskStillPublishes(t *testing.T) {
-	s, _, n := testPublishServer(t, false)
-	src := writeTempFile(t, "report.html", publishPage)
-	cr := callTool(t, s, "artifact_publish", map[string]any{"path": src, "account": "personal"})
+// sandboxFixture makes the calling task (abc123) sandboxed, with a worktree
+// and a temp-style root as its only writable roots, and an "outside" dir the
+// sandbox cannot write.
+type sandboxFixture struct {
+	worktree, tmpRoot, outside string
+}
+
+func sandboxTask(t *testing.T, s *Server) sandboxFixture {
+	t.Helper()
+	base := t.TempDir()
+	f := sandboxFixture{
+		worktree: filepath.Join(base, "wt"),
+		tmpRoot:  filepath.Join(base, "tmp"),
+		outside:  filepath.Join(base, "outside"),
+	}
+	for _, d := range []string{f.worktree, f.tmpRoot, f.outside} {
+		testutil.NoError(t, os.MkdirAll(d, 0o700))
+	}
+	task := s.taskDB.(*mockTaskDB).tasks[0]
+	task.Sandboxed = true
+	task.Worktree = f.worktree
+	s.sandboxRoots = func(got *model.Task) []string {
+		testutil.Equal(t, got.ID, "abc123")
+		return []string{f.worktree, f.tmpRoot}
+	}
+	return f
+}
+
+func writeAt(t *testing.T, path, content string) string {
+	t.Helper()
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	testutil.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
+}
+
+func TestArtifactPublish_SandboxedTaskConfinesPath(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		path    func(f sandboxFixture) string
+		allowed bool
+		want    string
+	}{
+		{"inside worktree", func(f sandboxFixture) string {
+			return writeAt(t, filepath.Join(f.worktree, "out", "report.html"), publishPage)
+		}, true, ""},
+		{"temp root", func(f sandboxFixture) string { return writeAt(t, filepath.Join(f.tmpRoot, "report.html"), publishPage) }, true, ""},
+		{"outside the roots", func(f sandboxFixture) string { return writeAt(t, filepath.Join(f.outside, "report.html"), publishPage) }, false, "outside"},
+		{"symlink in worktree pointing outside", func(f sandboxFixture) string {
+			target := writeAt(t, filepath.Join(f.outside, "id_ed25519.html"), publishPage)
+			link := filepath.Join(f.worktree, "report.html")
+			testutil.NoError(t, os.Symlink(target, link))
+			return link
+		}, false, "outside"},
+		{"dot-dot escape", func(f sandboxFixture) string {
+			writeAt(t, filepath.Join(f.outside, "report.html"), publishPage)
+			return filepath.Join(f.worktree, "..", "outside", "report.html")
+		}, false, "outside"},
+		{"missing file", func(f sandboxFixture) string { return filepath.Join(f.worktree, "nope.html") }, false, "nope.html"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, store, n := testPublishServer(t, true)
+			f := sandboxTask(t, s)
+			cr := callTool(t, s, "artifact_publish", map[string]any{"path": tc.path(f), "account": "personal", "id": "abc123"})
+			if tc.allowed {
+				testutil.False(t, cr.IsError)
+				testutil.Equal(t, decodePublishResult(t, cr).Status, "published")
+				testutil.Equal(t, n.Load(), int32(1))
+				return
+			}
+			testutil.True(t, cr.IsError)
+			testutil.Contains(t, cr.Content[0].Text, tc.want)
+			testutil.Equal(t, n.Load(), int32(0))
+			testutil.Equal(t, len(store.saved), 0)
+		})
+	}
+}
+
+func TestArtifactPublish_UnsandboxedTaskReadsAnywhere(t *testing.T) {
+	s, _, n := testPublishServer(t, true)
+	s.sandboxRoots = func(*model.Task) []string { t.Error("roots consulted for an unsandboxed task"); return nil }
+	cr := callTool(t, s, "artifact_publish", map[string]any{"path": writeTempFile(t, "report.html", publishPage), "account": "personal", "id": "abc123"})
 	testutil.False(t, cr.IsError)
-	testutil.Equal(t, decodePublishResult(t, cr).Status, "published")
 	testutil.Equal(t, n.Load(), int32(1))
+}
+
+func TestArtifactRegister_SandboxedTaskConfinesPath(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		path    func(f sandboxFixture) string
+		allowed bool
+	}{
+		{"file inside worktree", func(f sandboxFixture) string { return writeAt(t, filepath.Join(f.worktree, "r.html"), publishPage) }, true},
+		{"folder in temp root", func(f sandboxFixture) string {
+			writeAt(t, filepath.Join(f.tmpRoot, "shots", "a.png"), "png")
+			return filepath.Join(f.tmpRoot, "shots")
+		}, true},
+		{"file outside", func(f sandboxFixture) string { return writeAt(t, filepath.Join(f.outside, "r.html"), publishPage) }, false},
+		{"folder outside", func(f sandboxFixture) string {
+			writeAt(t, filepath.Join(f.outside, "shots", "a.png"), "png")
+			return filepath.Join(f.outside, "shots")
+		}, false},
+		{"symlink pointing outside", func(f sandboxFixture) string {
+			target := writeAt(t, filepath.Join(f.outside, "secret.txt"), "secret")
+			link := filepath.Join(f.worktree, "notes.txt")
+			testutil.NoError(t, os.Symlink(target, link))
+			return link
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, store, _ := testPublishServer(t, true)
+			f := sandboxTask(t, s)
+			cr := callArtifactRegister(t, s, map[string]any{"path": tc.path(f), "id": "abc123"})
+			if tc.allowed {
+				testutil.False(t, cr.IsError)
+				testutil.True(t, len(store.saved) > 0)
+				return
+			}
+			testutil.True(t, cr.IsError)
+			testutil.Contains(t, cr.Content[0].Text, "outside")
+			testutil.Equal(t, len(store.saved), 0)
+		})
+	}
 }
 
 func TestArtifactPublish_NotConfigured(t *testing.T) {
@@ -295,10 +409,10 @@ func TestArtifactTools_Listed(t *testing.T) {
 		testutil.True(t, got["artifact_open"])
 		testutil.True(t, got["artifact_register"])
 	})
-	t.Run("publisher only", func(t *testing.T) {
+	t.Run("publisher without task management", func(t *testing.T) {
 		s, _, _ := testPublishServer(t, false)
 		got := names(s)
-		testutil.True(t, got["artifact_publish"])
+		testutil.False(t, got["artifact_publish"])
 		testutil.False(t, got["artifact_open"])
 	})
 	t.Run("store only", func(t *testing.T) {
@@ -415,6 +529,86 @@ func TestArtifactOpen_NotSupportedOffMacOS(t *testing.T) {
 	testutil.True(t, cr.IsError)
 	testutil.Contains(t, cr.Content[0].Text, "not supported on linux")
 	testutil.Equal(t, len(op.calls), 0)
+}
+
+func TestArtifactOpen_ExecutableAndTypeChecks(t *testing.T) {
+	prev := artifactOpenGOOS
+	artifactOpenGOOS = "darwin"
+	t.Cleanup(func() { artifactOpenGOOS = prev })
+
+	for _, tc := range []struct {
+		name, file, typ  string
+		openOK, revealOK bool
+	}{
+		{"html opens", "report.html", "", true, true},
+		{"pdf opens", "doc.pdf", "", true, true},
+		{"png opens", "shot.png", "", true, true},
+		{"markdown opens", "notes.md", "", true, true},
+		{"txt opens", "log.txt", "", true, true},
+		{"mp3 opens", "clip.mp3", "", true, true},
+		{"mp4 opens", "clip.mp4", "", true, true},
+		{".command refused, reveal allowed", "run.command", "", false, true},
+		{".sh refused, reveal allowed", "run.sh", "", false, true},
+		{".scpt refused, reveal allowed", "x.scpt", "", false, true},
+		{".webloc refused, reveal allowed", "x.webloc", "", false, true},
+		{"declared text with exec extension refused", "run.sh", "text", false, true},
+		{"type/extension mismatch refused", "report.html", "pdf", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, reveal := range []bool{false, true} {
+				s, _ := testServerWithArtifacts(t)
+				op := &stubOpener{}
+				s.openArtifact = op.open
+				args := map[string]any{"path": writeTempFile(t, tc.file, publishPage), "id": "abc123"}
+				if tc.typ != "" {
+					args["type"] = tc.typ
+				}
+				testutil.False(t, callArtifactRegister(t, s, args).IsError)
+				cr := callTool(t, s, "artifact_open", map[string]any{"filename": tc.file, "reveal": reveal, "id": "abc123"})
+				want := tc.openOK
+				if reveal {
+					want = tc.revealOK
+				}
+				testutil.Equal(t, cr.IsError, !want)
+				testutil.Equal(t, len(op.calls), map[bool]int{true: 1, false: 0}[want])
+				if !want {
+					testutil.Contains(t, cr.Content[0].Text, "reveal: true")
+				}
+			}
+		})
+	}
+}
+
+func TestArtifactOpen_DirectoriesAndBundlesRefused(t *testing.T) {
+	prev := artifactOpenGOOS
+	artifactOpenGOOS = "darwin"
+	t.Cleanup(func() { artifactOpenGOOS = prev })
+	for _, tc := range []struct {
+		name, file string
+		dir        bool
+	}{
+		{"app bundle directory", "Evil.app", true},
+		{"plain directory", "folder.html", true},
+		{"app-named file", "Evil.app", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, reveal := range []bool{false, true} {
+				s, store := testServerWithArtifacts(t)
+				op := &stubOpener{}
+				s.openArtifact = op.open
+				full := filepath.Join(agent.ArtifactsDir("abc123"), tc.file)
+				if tc.dir {
+					testutil.NoError(t, os.MkdirAll(filepath.Join(full, "Contents"), 0o700))
+				} else {
+					writeAt(t, full, "x")
+				}
+				store.saved = append(store.saved, &model.Artifact{TaskID: "abc123", Filename: tc.file, Type: model.ArtifactHTML})
+				cr := callTool(t, s, "artifact_open", map[string]any{"filename": tc.file, "reveal": reveal, "id": "abc123"})
+				testutil.True(t, cr.IsError)
+				testutil.Equal(t, len(op.calls), 0)
+			}
+		})
+	}
 }
 
 func TestOpenArgs(t *testing.T) {

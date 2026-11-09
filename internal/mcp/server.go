@@ -231,6 +231,9 @@ type Server struct {
 	// openArtifact opens (or, with reveal, reveals) a verified artifact path;
 	// nil means defaultArtifactOpener. A seam so tests never launch Finder.
 	openArtifact func(path string, reveal bool) error
+	// sandboxRoots lists a sandboxed task's writable roots for
+	// confineAgentPath; set via SetSandboxRoots (nil = config-free default).
+	sandboxRoots func(task *model.Task) []string
 	heraSvc      *hera.Service // optional; set via SetHeraService
 	heraStore    HeraStore     // optional; set via SetHeraService
 	heraSpawn    HeraSpawner   // optional; set via SetHeraService (born-bound spawn)
@@ -1131,7 +1134,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools, artifactToolDefs...)
 		tools = append(tools, artifactOpenToolDefs...)
 	}
-	if s.publisher != nil {
+	if s.publisher != nil && s.taskMgmtEnabled() {
 		tools = append(tools, artifactPublishToolDefs...)
 	}
 	if s.heraEnabled() {

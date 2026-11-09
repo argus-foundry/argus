@@ -45,7 +45,7 @@ The system SHALL publish a single HTML file to the claude.ai artifacts endpoint 
 
 ### Requirement: Unavailable account handling
 
-The system SHALL treat an HTTP 404 response to a tool call whose body says the artifact tools "aren't available to this session" as the account being unavailable. When the account is unavailable and a calling task is known, the system SHALL register the HTML file as an artifact of that task. It SHALL probe every other account in `[artifact_tokens]` with a real tool call, and SHALL return a non-error result containing `status: "unavailable"`, the requested account, the registered artifact filename, and the accounts whose probe succeeded.
+The system SHALL treat an HTTP 404 response to a tool call whose body says the artifact tools "aren't available to this session" as the account being unavailable. When the account is unavailable, the system SHALL register the HTML file as an artifact of the calling task. It SHALL probe every other account in `[artifact_tokens]` with a real tool call, and SHALL return a non-error result containing `status: "unavailable"`, the requested account, the registered artifact filename, and the accounts whose probe succeeded.
 
 #### Scenario: Exhausted home account
 
@@ -57,14 +57,38 @@ The system SHALL treat an HTTP 404 response to a tool call whose body says the a
 - **WHEN** the home account is unavailable and the probe of another configured account is also refused
 - **THEN** that other account is not listed as available
 
+### Requirement: Confine agent-supplied paths
+
+The daemon runs outside the agent sandbox, so it SHALL NOT read a file on an agent's behalf that the agent's own sandbox could not have written. `artifact_publish` SHALL require a resolvable calling task and SHALL fail, before reading any file or making any request, when none resolves. When the calling task is sandboxed, `artifact_publish` and `artifact_register` SHALL resolve the given path's real location (symlinks followed) and SHALL refuse it, before reading it, unless it lies inside the task's worktree, the sandbox profile's writable temp directories, or the task's configured `extra_write` paths. The file SHALL then be read from that resolved location. An unsandboxed task's paths SHALL NOT be restricted. The REST endpoint and CLI carry the page's content in the request body, never a server-side path.
+
 #### Scenario: No calling task
 
-- **WHEN** the account is unavailable and no calling task can be resolved
-- **THEN** nothing is registered and the result still reports the unavailable status and the available accounts
+- **WHEN** `artifact_publish` is called with neither a resolvable task `id` nor a `cwd` inside a task's worktree
+- **THEN** the call fails, nothing is read or registered, and no network request is made
+
+#### Scenario: Sandboxed task publishes from its worktree
+
+- **WHEN** a sandboxed task calls `artifact_publish` with a file inside its worktree or a temp directory its sandbox can write
+- **THEN** the file is published
+
+#### Scenario: Path outside the sandbox roots refused
+
+- **WHEN** a sandboxed task calls `artifact_publish` or `artifact_register` with a path that resolves outside its writable directories
+- **THEN** the call fails with an error saying the path is outside the task's writable directories, and the file is not read
+
+#### Scenario: Symlink escaping the worktree refused
+
+- **WHEN** a sandboxed task passes a path inside its worktree that is a symlink to a file outside its writable directories
+- **THEN** the call fails and the target file is not read
+
+#### Scenario: Unsandboxed task not restricted
+
+- **WHEN** an unsandboxed task calls `artifact_publish` with a readable HTML file anywhere on disk
+- **THEN** the file is published
 
 ### Requirement: Open or reveal a registered artifact
 
-The system SHALL provide an `artifact_open` MCP tool that opens a registered artifact of the calling task in the default application, or reveals it in Finder when `reveal` is true. It SHALL refuse any filename that is not in the calling task's artifact manifest or that fails the artifact path-escape defense. On a platform other than macOS it SHALL return a not-supported error.
+The system SHALL provide an `artifact_open` MCP tool that opens a registered artifact of the calling task in the default application, or reveals it in Finder when `reveal` is true. It SHALL refuse any filename that is not in the calling task's artifact manifest or that fails the artifact path-escape defense. Because the daemon's `open` runs outside the agent sandbox, opening in the default application SHALL be allowed only when the artifact's stored type is HTML, PDF, image, Markdown, text, audio or video AND its extension is one of that type's known extensions (for example `.html`/`.htm`, `.pdf`, `.png`/`.jpg`/`.jpeg`/`.gif`/`.webp`/`.svg`, `.md`, `.txt`, `.mp3`/`.m4a`/`.wav`, `.mp4`/`.mov`); anything else SHALL be refused with an error suggesting `reveal`. Revealing SHALL be allowed for any registered file, but a path that is a directory or an app bundle (such as `.app`) SHALL be refused even for reveal. On a platform other than macOS it SHALL return a not-supported error.
 
 #### Scenario: Open in default app
 
@@ -75,6 +99,21 @@ The system SHALL provide an `artifact_open` MCP tool that opens a registered art
 
 - **WHEN** `artifact_open` is called with a registered filename and `reveal` true
 - **THEN** the daemon reveals that file in Finder
+
+#### Scenario: Executable artifact can only be revealed
+
+- **WHEN** `artifact_open` is called for a registered `.command` or `.sh` artifact with `reveal` false
+- **THEN** the call fails with an error suggesting `reveal: true`, and nothing is opened; with `reveal` true the file is revealed in Finder
+
+#### Scenario: Type and extension mismatch refused
+
+- **WHEN** `artifact_open` is called with `reveal` false for an artifact whose extension does not match its stored type (for example an `.html` file registered as `pdf`)
+- **THEN** the call fails and nothing is opened
+
+#### Scenario: Directory or bundle refused
+
+- **WHEN** `artifact_open` is called for a registered path that is a directory or an app bundle, with or without `reveal`
+- **THEN** the call fails and nothing is opened or revealed
 
 #### Scenario: Unregistered file refused
 

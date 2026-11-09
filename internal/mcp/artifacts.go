@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,6 +21,7 @@ import (
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/artifacts"
 	"github.com/argus-foundry/argus/internal/claudeartifacts"
+	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/model"
 )
 
@@ -96,11 +98,19 @@ func (s *Server) toolArtifactRegister(id interface{}, args json.RawMessage) *Res
 		return toolError(id, err.Error())
 	}
 
-	if info, statErr := os.Stat(p.Path); statErr == nil && info.IsDir() {
-		return s.registerArtifactFolder(id, task, p.Path)
+	// The daemon is unsandboxed: confine the read to what the task's own
+	// sandbox could have written before copying it into servable storage.
+	src, err := s.confineAgentPath(task, p.Path)
+	if err != nil {
+		log.Printf("[mcp] artifact_register refused: id=%s err=%v", task.ID, err)
+		return toolError(id, err.Error())
 	}
 
-	stored, err := s.registerArtifactFile(task, p.Path, p.Title, p.Type)
+	if info, statErr := os.Stat(src); statErr == nil && info.IsDir() {
+		return s.registerArtifactFolder(id, task, src)
+	}
+
+	stored, err := s.registerArtifactFile(task, src, p.Title, p.Type)
 	if err != nil {
 		return toolError(id, err.Error())
 	}
@@ -510,9 +520,23 @@ func (s *Server) toolArtifactPublish(id interface{}, args json.RawMessage) *Resp
 		return toolError(id, "account is required")
 	}
 
-	content, err := claudeartifacts.ReadHTMLFile(p.Path)
+	// The daemon reads the file for the agent, so it must know whose sandbox
+	// to confine that read to (design D7).
+	if !s.taskMgmtEnabled() || (p.ID == "" && p.Cwd == "") {
+		return toolError(id, "artifact_publish needs the calling task: pass id (ARGUS_TASK_ID) or cwd")
+	}
+	task, err := s.resolveTask(p.ID, p.Cwd)
 	if err != nil {
-		log.Printf("[artifacts] publish rejected: account=%s path=%s err=%v", p.Account, p.Path, err)
+		return toolError(id, err.Error())
+	}
+	src, err := s.confineAgentPath(task, p.Path)
+	if err != nil {
+		log.Printf("[artifacts] publish refused: id=%s account=%s err=%v", task.ID, p.Account, err)
+		return toolError(id, err.Error())
+	}
+	content, err := claudeartifacts.ReadHTMLFile(src)
+	if err != nil {
+		log.Printf("[artifacts] publish rejected: id=%s account=%s path=%s err=%v", task.ID, p.Account, src, err)
 		return toolError(id, err.Error())
 	}
 
@@ -528,7 +552,7 @@ func (s *Server) toolArtifactPublish(id interface{}, args json.RawMessage) *Resp
 			Status: "published", Account: p.Account, URL: res.URL, Slug: res.Slug, Version: res.Version, Title: res.Title,
 		})
 	case errors.Is(err, claudeartifacts.ErrAccountUnavailable):
-		return s.artifactPublishUnavailable(ctx, id, p.Account, p.Path, p.Title, p.ID, p.Cwd)
+		return s.artifactPublishUnavailable(ctx, id, task, p.Account, src, p.Title)
 	default:
 		log.Printf("[artifacts] publish failed: account=%s err=%v", p.Account, err)
 		return toolError(id, err.Error())
@@ -538,10 +562,10 @@ func (s *Server) toolArtifactPublish(id interface{}, args json.RawMessage) *Resp
 // artifactPublishUnavailable handles an unavailable account: it saves the
 // page as an artifact of the calling task (when one resolves), probes the
 // other configured accounts, and reports both.
-func (s *Server) artifactPublishUnavailable(ctx context.Context, id interface{}, account, path, title, taskID, cwd string) *Response {
+func (s *Server) artifactPublishUnavailable(ctx context.Context, id interface{}, task *model.Task, account, path, title string) *Response {
 	result := artifactUnavailable{Status: "unavailable", Account: account}
 	saved := ""
-	if task := s.publishCallerTask(taskID, cwd); task != nil && s.artifacts != nil {
+	if s.artifacts != nil {
 		stored, err := s.registerArtifactFile(task, path, title, string(model.ArtifactHTML))
 		if err != nil {
 			log.Printf("[artifacts] publish unavailable: save failed: id=%s err=%v", task.ID, err)
@@ -564,19 +588,78 @@ func (s *Server) artifactPublishUnavailable(ctx context.Context, id interface{},
 	return jsonToolResult(id, result)
 }
 
-// publishCallerTask resolves artifact_publish's calling task, or nil when task
-// management is not wired, no id/cwd was given, or resolution fails: publishing
-// never needs a task, only the unavailable-path save does (design D7).
-func (s *Server) publishCallerTask(taskID, cwd string) *model.Task {
-	if !s.taskMgmtEnabled() || (taskID == "" && cwd == "") {
-		return nil
+// SetSandboxRoots wires how the server finds a sandboxed task's writable
+// roots (agent.SandboxWriteRoots over the live config, in the daemon). Unset,
+// roots are computed without config, so configured extra_write paths are not
+// trusted.
+func (s *Server) SetSandboxRoots(fn func(task *model.Task) []string) {
+	s.sandboxRoots = fn
+}
+
+// confineAgentPath returns the path the daemon should read for an
+// agent-supplied path. The daemon runs unsandboxed, so for a sandboxed task
+// the path's real location (symlinks resolved) must lie inside one of the
+// directories that task's sandbox can write; otherwise a sandboxed agent
+// could have the daemon read, store or upload a file its sandbox can't reach.
+// The returned path is the resolved one, so the read hits what was checked.
+// An unsandboxed task can read anything itself and is not restricted.
+func (s *Server) confineAgentPath(task *model.Task, path string) (string, error) {
+	if !task.Sandboxed {
+		return path, nil
 	}
-	task, err := s.resolveTask(taskID, cwd)
+	abs, err := filepath.Abs(path)
 	if err != nil {
-		log.Printf("[artifacts] publish: calling task not resolved: %v", err)
-		return nil
+		return "", fmt.Errorf("resolve %s: %w", path, err)
 	}
-	return task
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", path, err)
+	}
+	if real, err = filepath.Abs(real); err != nil {
+		return "", fmt.Errorf("resolve %s: %w", path, err)
+	}
+	var roots []string
+	if s.sandboxRoots != nil {
+		roots = s.sandboxRoots(task)
+	} else {
+		roots = agent.SandboxWriteRoots(task, config.Config{})
+	}
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		if r, err := filepath.EvalSymlinks(root); err == nil {
+			root = r
+		}
+		root = filepath.Clean(root)
+		if real == root || strings.HasPrefix(real, root+string(filepath.Separator)) {
+			return real, nil
+		}
+	}
+	return "", fmt.Errorf("%s resolves to %s, outside this sandboxed task's writable directories (its worktree, temp dirs and extra_write paths); write the file there first", path, real)
+}
+
+// openableExtensions is artifact_open's allowlist for a non-reveal open: a
+// registered artifact opens in its default app only when its stored type is
+// listed AND its extension is one of that type's. Everything else (scripts,
+// .command, .terminal, .webloc, .scpt, …, which `open` would run outside the
+// agent's sandbox) can only be revealed.
+var openableExtensions = map[model.ArtifactType][]string{
+	model.ArtifactHTML:     {".html", ".htm"},
+	model.ArtifactPDF:      {".pdf"},
+	model.ArtifactImage:    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"},
+	model.ArtifactMarkdown: {".md", ".markdown"},
+	model.ArtifactText:     {".txt", ".log"},
+	model.ArtifactAudio:    {".mp3", ".m4a", ".wav"},
+	model.ArtifactVideo:    {".mp4", ".mov"},
+}
+
+// bundleExtensions are macOS bundle/package suffixes artifact_open never
+// touches, even to reveal.
+var bundleExtensions = []string{".app", ".appex", ".bundle", ".framework", ".kext", ".mpkg", ".pkg", ".plugin", ".prefpane", ".saver"}
+
+func openableArtifact(a *model.Artifact) bool {
+	return slices.Contains(openableExtensions[a.Type], strings.ToLower(filepath.Ext(a.Filename)))
 }
 
 func (s *Server) toolArtifactOpen(id interface{}, args json.RawMessage) *Response {
@@ -614,8 +697,17 @@ func (s *Server) toolArtifactOpen(id interface{}, args json.RawMessage) *Respons
 		log.Printf("[artifacts] open refused (path escapes): id=%s file=%q", task.ID, art.Filename)
 		return toolError(id, fmt.Sprintf("invalid artifact path %q", art.Filename))
 	}
-	if _, err := os.Stat(full); err != nil {
+	info, err := os.Stat(full)
+	if err != nil {
 		return toolError(id, fmt.Sprintf("artifact %q has no bytes on disk", art.Filename))
+	}
+	if info.IsDir() || slices.Contains(bundleExtensions, strings.ToLower(filepath.Ext(full))) {
+		log.Printf("[artifacts] open refused (directory or bundle): id=%s file=%q", task.ID, art.Filename)
+		return toolError(id, fmt.Sprintf("%q is a directory or app bundle; Argus will not open or reveal it", art.Filename))
+	}
+	if !p.Reveal && !openableArtifact(art) {
+		log.Printf("[artifacts] open refused (type %s not openable): id=%s file=%q", art.Type, task.ID, art.Filename)
+		return toolError(id, fmt.Sprintf("%q (type %s) is not a file type Argus opens directly; pass reveal: true to show it in Finder instead", art.Filename, art.Type))
 	}
 	opener := s.openArtifact
 	if opener == nil {

@@ -74,6 +74,7 @@ Alternatives considered:
 - Parameters: `filename` (a registered artifact of the calling task) and `reveal` (bool).
 - The daemon runs `open <path>`, or `open -R <path>` to reveal, on macOS only. Elsewhere it returns a clear "not supported on this platform" error, following the os-integration platform gating.
 - Only manifest-registered files can be opened, with the same path-escape defense as serving.
+- The daemon's `open` runs outside the agent sandbox, so a registered `.command`, `.sh` or `.app` would execute unsandboxed (security review). A non-reveal open is allowed only for an allowlisted type (HTML, PDF, image, Markdown, text, audio, video) whose extension matches that type; anything else must use `reveal`. A directory or bundle is refused even for reveal.
 
 ### D6. Routing guidance: tool name and the four-option question
 
@@ -88,9 +89,11 @@ The snippet tells the agent:
 - If there are no available accounts, option 1 is left out.
 - Never fall back to the built-in tool on its own initiative.
 
-### D7. Identifying the calling task
+### D7. Identifying the calling task, and confining its paths
 
-`artifact_publish` and `artifact_open` resolve the calling task the same way `artifact_register` does. When no task can be resolved, `artifact_publish` still publishes, but skips local registration on an unavailable account, and `artifact_open` errors.
+`artifact_publish` and `artifact_open` resolve the calling task the same way `artifact_register` does, and both fail when none resolves. (An earlier draft let `artifact_publish` publish without a task; the security review below removed that.)
+
+The daemon reads the file an agent names, outside the agent's sandbox, so a sandboxed agent could have it read and upload (or register and serve) a file its sandbox can't read, such as `~/.ssh/id_ed25519` behind a `.html` symlink (security review). For a sandboxed task, `artifact_publish` and `artifact_register` resolve the path's real location with `EvalSymlinks` before reading and require it to lie inside the task's writable roots: its worktree, the profile's temp roots and its `extra_write` paths (`agent.SandboxWriteRoots`, kept in step with the SBPL profile by a test). The file is then read from the resolved path. Unsandboxed tasks can read anything themselves and are not restricted. The REST endpoint and CLI send content, not a path, so they are unaffected.
 
 ## Risks / Trade-offs
 
@@ -137,6 +140,12 @@ The routing snippet change reaches new agent sessions. No data migration is need
 
 - It should open a registered artifact in the default app, or reveal it in Finder.
 - It should refuse a filename that is not a registered artifact of the calling task.
+- It should open only allowlisted types with matching extensions; anything else can only be revealed, and directories and bundles are refused outright.
+
+**Path confinement**
+
+- It should refuse `artifact_publish` without a resolvable calling task.
+- It should refuse a sandboxed task's path that resolves outside its worktree, temp roots and `extra_write` paths, for both `artifact_publish` and `artifact_register`, before reading it.
 
 **CLI and REST**
 
