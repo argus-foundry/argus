@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/backendkind"
-	"github.com/drn/argus/internal/claudesession"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/backendkind"
+	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // testConfig deliberately keeps permission flags BAKED into the claude command

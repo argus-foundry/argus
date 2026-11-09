@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/bridge"
 )
 
 const (

@@ -12,8 +12,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/pricing"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/pricing"
 )
 
 // Call is one billable Codex API call, read from a rollout token_count event.

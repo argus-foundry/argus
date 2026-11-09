@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
 )
 
 // bogusKeychainSource is a deliberately nonexistent Keychain item — it proves

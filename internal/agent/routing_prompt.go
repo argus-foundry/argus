@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/drn/argus/internal/routing"
+import "github.com/argus-foundry/argus/internal/routing"
 
 // ensureBuiltinRoutingFn materializes argus's builtin hera/argus-task routing
 // content and returns the path to the concatenated system-prompt file, for

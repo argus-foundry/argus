@@ -3,8 +3,8 @@ package review
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // cfgWithCodex returns a config carrying a "codex" backend entry, mirroring

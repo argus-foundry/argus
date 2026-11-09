@@ -8,11 +8,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/hera"
-	"github.com/drn/argus/internal/heraadopt"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hera"
+	"github.com/argus-foundry/argus/internal/heraadopt"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // liveTasksAtShutdownFilename is the file written at daemon shutdown to record

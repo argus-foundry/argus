@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/notify"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/notify"
 )
 
 // Store is the narrow DB surface the Service needs. Satisfied by *db.DB.

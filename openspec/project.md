@@ -8,7 +8,7 @@ A persistent daemon keeps PTY sessions alive across TUI restarts and reboots. An
 
 ## Tech stack
 
-- **Language:** Go (module `github.com/drn/argus`, Go `1.26.0`).
+- **Language:** Go (module `github.com/argus-foundry/argus`, Go `1.26.0`).
 - **UI:** tcell/tview, with direct cell painting for the agent terminal pane via the `charmbracelet/x/vt` emulator.
 - **Persistence:** SQLite via `modernc.org/sqlite` (pure Go, no CGO) at `~/.argus/data.sql`.
 - **PTY:** `creack/pty`.

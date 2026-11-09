@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/drn/argus/internal/tui/views"
+	"github.com/argus-foundry/argus/internal/tui/views"
 )
 
 // pluginViewJSON is the wire shape for /api/plugins/views responses and the

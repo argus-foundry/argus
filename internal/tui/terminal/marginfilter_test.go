@@ -7,7 +7,7 @@ import (
 	xvt "github.com/charmbracelet/x/vt"
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestClampScrollRegion_StaleDECSTBMPanicsWithoutClamping is the direct,

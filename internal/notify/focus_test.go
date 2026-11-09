@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestFocusTracker_InitiallyUnfocused(t *testing.T) {

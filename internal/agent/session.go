@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/creack/pty"
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/uxlog"
 )
 
 const defaultBufSize = 256 * 1024 // 256KB ring buffer; session log file handles full scrollback

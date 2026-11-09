@@ -3,7 +3,7 @@ package config
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestProject_ProfileParsesFromTOML pins the config-management delta: a project

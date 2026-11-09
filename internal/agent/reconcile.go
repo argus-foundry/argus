@@ -3,8 +3,8 @@ package agent
 import (
 	"log/slog"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // ReconcileStaleSessions flips DB tasks stuck at InProgress to InReview.

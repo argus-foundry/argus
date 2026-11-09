@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/terminal"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/terminal"
 	"github.com/gdamore/tcell/v2"
 )
 

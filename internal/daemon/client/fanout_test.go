@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // syncWriter is a concurrency-safe io.Writer for asserting fan-out delivery.

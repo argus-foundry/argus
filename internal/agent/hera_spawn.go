@@ -11,11 +11,11 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // HeraWorkerSpawnInput is the resolved payload for a born-bound hera worker

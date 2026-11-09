@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Choice carries the identity scored by routing through to task creation.

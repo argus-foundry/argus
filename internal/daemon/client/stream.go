@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/drn/argus/internal/daemon"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/daemon"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // maxStreamRetries is the maximum number of times to retry the stream

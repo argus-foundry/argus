@@ -31,9 +31,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // defaultInterval matches the retired depswatcher / cron tick — the workflow is

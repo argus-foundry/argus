@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/events"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/events"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // ErrTaskNotFound is the sentinel returned (wrapped) by every db.* task

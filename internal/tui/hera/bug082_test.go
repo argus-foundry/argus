@@ -11,9 +11,9 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/terminal"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/terminal"
 )
 
 // BUG-082 end to end through the Hera split view.

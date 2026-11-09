@@ -23,8 +23,8 @@ import (
 	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // ThumbSize is the longest edge, in pixels, of a generated gallery thumbnail.

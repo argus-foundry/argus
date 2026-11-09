@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/claudeaccount"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/usagebudget"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/claudeaccount"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/usagebudget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // claudeAuthStatus is the sign-in lookup seam; tests replace it.

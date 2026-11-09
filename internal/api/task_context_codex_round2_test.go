@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/skills"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/skills"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestTaskContext_CodexCaptureMainThread(t *testing.T) {

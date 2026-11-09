@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // errGhAbsent is a sentinel used by prRunner to signal that gh is not

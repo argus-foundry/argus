@@ -761,7 +761,7 @@ PR URL detection was lost during the Bubble Tea → tcell/tview migration. The d
 - Dependency: `github.com/google/go-cmp` for `DeepEqual` struct diffs
 
 ### Flow
-- Import `"github.com/drn/argus/internal/testutil"` → call `testutil.Equal(t, got, want)` etc.
+- Import `"github.com/argus-foundry/argus/internal/testutil"` → call `testutil.Equal(t, got, want)` etc.
 - All assertions use `t.Errorf` (not `t.Fatalf`) so multiple failures surface per run
 - `Nil`/`NotNil` use `reflect.ValueOf(got).IsNil()` to handle the nil-interface trap (nil `*T` assigned to `any` is non-nil at interface level)
 

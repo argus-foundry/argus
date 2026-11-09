@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // MaxEventsRetained caps the events table. InsertEvent trims the oldest rows

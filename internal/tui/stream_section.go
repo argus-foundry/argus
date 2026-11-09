@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // openStreamSection dials a WebSocket to callbackURL and pumps bytes into

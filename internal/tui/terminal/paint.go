@@ -1,6 +1,6 @@
 package terminal
 
-import "github.com/drn/argus/internal/app/agentview"
+import "github.com/argus-foundry/argus/internal/app/agentview"
 
 // TakePaint consumes this frame's observation. Call only on the UI goroutine.
 // A pane hidden since the last frame returns drawn=false even if still bound.

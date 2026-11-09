@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // acceptDefaultBody is the check-in sent to an accepted role, per Aaron's

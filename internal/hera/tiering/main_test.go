@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/drn/argus/internal/testenv"
+	"github.com/argus-foundry/argus/internal/testenv"
 )
 
 func TestMain(m *testing.M) { os.Exit(testenv.Main(m)) }

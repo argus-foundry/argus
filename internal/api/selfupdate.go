@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drn/argus/internal/selfupdate"
+	"github.com/argus-foundry/argus/internal/selfupdate"
 )
 
 // spawnDelay is the gap between flushing the /api/update success response

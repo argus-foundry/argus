@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // These tests pin resolveTask's BUG-059 disambiguation: a cwd whose

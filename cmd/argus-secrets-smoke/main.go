@@ -76,7 +76,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/db"
 )
 
 // smoke holds everything a phase needs: connection details, both tokens, and

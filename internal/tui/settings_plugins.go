@@ -8,10 +8,10 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	pluginsettings "github.com/drn/argus/internal/tui/settings"
-	"github.com/drn/argus/internal/tui/theme"
-	"github.com/drn/argus/internal/tui/widget"
-	"github.com/drn/argus/internal/uxlog"
+	pluginsettings "github.com/argus-foundry/argus/internal/tui/settings"
+	"github.com/argus-foundry/argus/internal/tui/theme"
+	"github.com/argus-foundry/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // pluginFieldRowLabel formats one field row: "Label: value". value is the

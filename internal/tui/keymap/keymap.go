@@ -26,7 +26,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 )
 
 // Binding is a parsed key chord. Key is KeyRune for a printable rune (with Rune

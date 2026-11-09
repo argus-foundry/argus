@@ -3,9 +3,9 @@ package daemon
 import (
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/buildid"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/buildid"
 )
 
 // BootInfoResp describes the daemon's boot-time identity. Used by the TUI to

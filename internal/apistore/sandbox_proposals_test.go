@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestStore_SandboxProposals(t *testing.T) {

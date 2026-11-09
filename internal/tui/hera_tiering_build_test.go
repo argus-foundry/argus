@@ -5,15 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/profiles"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/hera"
-	"github.com/drn/argus/internal/tui/store"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/profiles"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/hera"
+	"github.com/argus-foundry/argus/internal/tui/store"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // configCountingStore counts Config() calls so tests can prove the per-build

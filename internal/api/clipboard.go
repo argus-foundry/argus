@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/drn/argus/internal/clipboard"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/clipboard"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // SetClipboard wires the agent-staged clipboard store into the API server

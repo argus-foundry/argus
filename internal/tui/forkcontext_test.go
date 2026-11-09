@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/sanitize"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/sanitize"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestStripANSI(t *testing.T) {

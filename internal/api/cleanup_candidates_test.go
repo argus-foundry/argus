@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/mergesafety"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/mergesafety"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // --- cleanupComputeState: the in-flight guard, tested in isolation so the

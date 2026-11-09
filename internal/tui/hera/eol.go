@@ -1,8 +1,8 @@
 package hera
 
 import (
-	"github.com/drn/argus/internal/db"
-	heramodel "github.com/drn/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/db"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 )
 
 // eol.go holds the PURE, testable selection helper behind the rail's `C`

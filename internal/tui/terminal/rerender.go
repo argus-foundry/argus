@@ -3,8 +3,8 @@ package terminal
 import (
 	"unicode/utf8"
 
-	"github.com/drn/argus/internal/app/agentview"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // SetRerenderingForTask ignores late outcomes for a pane that has rebound.

@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func TestSelectTailscaleIP(t *testing.T) {

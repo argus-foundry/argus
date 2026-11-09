@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/drn/argus/internal/claudeaccount"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/claudeaccount"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func stubCodexLogin(t *testing.T, fn func(ctx context.Context, source string) (bool, error)) {

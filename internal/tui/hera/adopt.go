@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // adopt.go is the `J` adopt/reparent mutation layer — the native port of the

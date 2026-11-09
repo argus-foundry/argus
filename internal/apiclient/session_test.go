@@ -9,9 +9,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/drn/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/agent"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 type sessionWriterFunc func([]byte) (int, error)

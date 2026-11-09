@@ -17,17 +17,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/backendtier"
-	"github.com/drn/argus/internal/daemon"
-	dclient "github.com/drn/argus/internal/daemon/client"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/hera"
-	"github.com/drn/argus/internal/launchagent"
-	"github.com/drn/argus/internal/notify"
-	"github.com/drn/argus/internal/skew"
-	"github.com/drn/argus/internal/tui"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/backendtier"
+	"github.com/argus-foundry/argus/internal/daemon"
+	dclient "github.com/argus-foundry/argus/internal/daemon/client"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hera"
+	"github.com/argus-foundry/argus/internal/launchagent"
+	"github.com/argus-foundry/argus/internal/notify"
+	"github.com/argus-foundry/argus/internal/skew"
+	"github.com/argus-foundry/argus/internal/tui"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 func main() {

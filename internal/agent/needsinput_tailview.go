@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/drn/argus/internal/sanitize"
+import "github.com/argus-foundry/argus/internal/sanitize"
 
 // TailView shares lazy detector inputs for one immutable tail and PTY size.
 // It is scan-local and must not be reused after the tail or dimensions change.

@@ -14,9 +14,9 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	xvt "github.com/charmbracelet/x/vt"
 
-	"github.com/drn/argus/internal/oscfilter"
-	"github.com/drn/argus/internal/sanitize"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/oscfilter"
+	"github.com/argus-foundry/argus/internal/sanitize"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // needsInputChooserFooterRe matches the footer line of Claude Code's

@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 
-	"github.com/drn/argus/internal/claudeagents"
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/claudeagents"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // listBackgroundSessionsFn / stopBackgroundSessionFn are test seams mirroring

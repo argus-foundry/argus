@@ -5,8 +5,8 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/drn/argus/internal/testenv"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testenv"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // Set once before any test or t.Parallel: fixture commits must never read the

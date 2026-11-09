@@ -3,7 +3,7 @@ package terminal
 import (
 	xvt "github.com/charmbracelet/x/vt"
 
-	"github.com/drn/argus/internal/oscfilter"
+	"github.com/argus-foundry/argus/internal/oscfilter"
 )
 
 // PreviewVT maintains a persistent x/vt emulator for the task-list Preview

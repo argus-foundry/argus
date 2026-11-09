@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // isRealDataDir returns true if path is under the real ~/.argus/ directory

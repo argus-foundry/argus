@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"time"
 
-	heramodel "github.com/drn/argus/internal/hera/model"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Off-thread rail rebuild (reduce-hera-rail-rebuild-stalls).

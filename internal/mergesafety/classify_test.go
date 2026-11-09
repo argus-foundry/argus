@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/gitutil"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // --- local git fixtures (mirrors internal/gitutil's test helpers) ---
@@ -105,7 +105,7 @@ func TestClassify_TierB_ConfirmedMerged(t *testing.T) {
 		testutil.Equal(t, repo, "drn/argus")
 		return map[string][]gitutil.MergeCandidate{
 			"argus/gone": {
-				{State: "MERGED", BaseRefName: "master", MergedAt: "2026-06-16T07:42:20Z", CreatedAt: "2026-06-16T07:00:00Z", URL: "https://github.com/drn/argus/pull/743"},
+				{State: "MERGED", BaseRefName: "master", MergedAt: "2026-06-16T07:42:20Z", CreatedAt: "2026-06-16T07:00:00Z", URL: "https://github.com/argus-foundry/argus/pull/743"},
 			},
 		}, 1, nil
 	})
@@ -129,7 +129,7 @@ func TestClassify_TierB_RejectsCandidatePredatingTask(t *testing.T) {
 	restore := installFetchSeam(t, func(_ context.Context, _ string, _ map[string]string) (map[string][]gitutil.MergeCandidate, int, error) {
 		return map[string][]gitutil.MergeCandidate{
 			"argus/reused": {
-				{State: "MERGED", BaseRefName: "master", MergedAt: "2026-01-01T00:00:00Z", CreatedAt: "2026-01-01T00:00:00Z", URL: "https://github.com/drn/argus/pull/1"},
+				{State: "MERGED", BaseRefName: "master", MergedAt: "2026-01-01T00:00:00Z", CreatedAt: "2026-01-01T00:00:00Z", URL: "https://github.com/argus-foundry/argus/pull/1"},
 			},
 		}, 1, nil
 	})
@@ -151,7 +151,7 @@ func TestClassify_TierB_RejectsWrongBaseRef(t *testing.T) {
 	restore := installFetchSeam(t, func(_ context.Context, _ string, _ map[string]string) (map[string][]gitutil.MergeCandidate, int, error) {
 		return map[string][]gitutil.MergeCandidate{
 			"argus/x": {
-				{State: "MERGED", BaseRefName: "some-other-branch", MergedAt: "2026-06-20T00:00:00Z", CreatedAt: "2026-06-20T00:00:00Z", URL: "https://github.com/drn/argus/pull/5"},
+				{State: "MERGED", BaseRefName: "some-other-branch", MergedAt: "2026-06-20T00:00:00Z", CreatedAt: "2026-06-20T00:00:00Z", URL: "https://github.com/argus-foundry/argus/pull/5"},
 			},
 		}, 1, nil
 	})
@@ -173,8 +173,8 @@ func TestClassify_TierB_AmbiguousMultipleMatches(t *testing.T) {
 	restore := installFetchSeam(t, func(_ context.Context, _ string, _ map[string]string) (map[string][]gitutil.MergeCandidate, int, error) {
 		return map[string][]gitutil.MergeCandidate{
 			"argus/dup": {
-				{State: "MERGED", BaseRefName: "master", MergedAt: "2026-06-20T00:00:00Z", CreatedAt: "2026-06-20T00:00:00Z", URL: "https://github.com/drn/argus/pull/5"},
-				{State: "MERGED", BaseRefName: "master", MergedAt: "2026-07-20T00:00:00Z", CreatedAt: "2026-07-20T00:00:00Z", URL: "https://github.com/drn/argus/pull/9"},
+				{State: "MERGED", BaseRefName: "master", MergedAt: "2026-06-20T00:00:00Z", CreatedAt: "2026-06-20T00:00:00Z", URL: "https://github.com/argus-foundry/argus/pull/5"},
+				{State: "MERGED", BaseRefName: "master", MergedAt: "2026-07-20T00:00:00Z", CreatedAt: "2026-07-20T00:00:00Z", URL: "https://github.com/argus-foundry/argus/pull/9"},
 			},
 		}, 1, nil
 	})

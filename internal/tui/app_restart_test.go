@@ -8,10 +8,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/daemon"
-	dclient "github.com/drn/argus/internal/daemon/client"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/daemon"
+	dclient "github.com/argus-foundry/argus/internal/daemon/client"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // fakeShutdownDaemon is a minimal unix-socket RPC server exposing just enough

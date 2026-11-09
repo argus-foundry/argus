@@ -3,8 +3,8 @@ package doctor
 import (
 	"testing"
 
-	"github.com/drn/argus/internal/buildid"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/buildid"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // healthyActors builds a fully-coherent set: PATH argus, argusd target,

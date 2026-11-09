@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/lastexchange"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/lastexchange"
 )
 
 // RecycleTrigger distinguishes recycle_coord's two trigger paths (design.md

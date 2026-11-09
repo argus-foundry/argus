@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // clipboardAccessor is satisfied by `*dclient.Client` (local daemon mode) and

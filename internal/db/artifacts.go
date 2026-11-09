@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/drn/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/model"
 )
 
 // UpsertArtifact inserts or replaces the manifest row for (task_id, filename).

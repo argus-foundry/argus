@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // stubScheduler satisfies ScheduleRunner without spinning up a real scheduler

@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/drn/argus/internal/hostsleep"
-	"github.com/drn/argus/internal/sysmetrics"
+	"github.com/argus-foundry/argus/internal/hostsleep"
+	"github.com/argus-foundry/argus/internal/sysmetrics"
 )
 
 // systemMetricsResponse is the wire shape of GET /api/system-metrics: the cached

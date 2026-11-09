@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestStaticIndex_AccountSelector guards the SPA's account semantics, which

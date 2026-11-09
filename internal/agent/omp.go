@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/drn/argus/internal/config"
-	"github.com/drn/argus/internal/mcplimits"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/mcplimits"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 const (

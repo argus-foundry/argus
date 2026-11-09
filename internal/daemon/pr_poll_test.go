@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/gitutil"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // seedTask inserts a task with the given id/branch/archived shape into db.

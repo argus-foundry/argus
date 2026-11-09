@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 func tokenLine(ts string, in, out, reasoning, window int64) string {

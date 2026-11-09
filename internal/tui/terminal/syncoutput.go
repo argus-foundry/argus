@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // SyncOutputTimeout bounds how long a pane defers painting inside an open DEC

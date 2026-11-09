@@ -9,9 +9,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/settings"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/settings"
 )
 
 // readAll reads the request body in one shot for table-driven tests.

@@ -1,6 +1,6 @@
 package events
 
-import "github.com/drn/argus/internal/model"
+import "github.com/argus-foundry/argus/internal/model"
 
 // EmitTaskUpdated publishes the shared task.updated invalidation event. Every
 // mutation path (REST, MCP, TUI, daemon watchers) reaches it through the

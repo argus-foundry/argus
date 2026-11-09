@@ -6,7 +6,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/drn/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/gitutil"
 )
 
 func TestApplyWordHighlight(t *testing.T) {

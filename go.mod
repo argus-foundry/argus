@@ -1,4 +1,4 @@
-module github.com/drn/argus
+module github.com/argus-foundry/argus
 
 go 1.26.0
 

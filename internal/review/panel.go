@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 )
 
 // knownInSessionModels mirrors the Agent tool's in-session model enum

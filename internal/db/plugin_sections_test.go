@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/tui/settings"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/settings"
 )
 
 func testPluginSection(scope, title string) PluginSection {

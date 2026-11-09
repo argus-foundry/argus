@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/app/agentview"
+	"github.com/argus-foundry/argus/internal/app/agentview"
 )
 
 func TestTerminalColorQueriesAcrossReadChunks(t *testing.T) {

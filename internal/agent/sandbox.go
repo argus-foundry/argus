@@ -10,7 +10,7 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/drn/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/config"
 )
 
 // bundleIDRe matches CFBundleIdentifier values — letters, digits, dot, hyphen.

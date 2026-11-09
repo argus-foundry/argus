@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/drn/argus/internal/notify"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/notify"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // reDeliveryID is the allowed character set for delivery IDs: alphanumeric + hyphen + underscore.

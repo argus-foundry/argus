@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drn/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/testutil"
 )
 
 // TestRemoveWorktreeAndBranch_ConcurrentSameRepo reproduces the exact scenario

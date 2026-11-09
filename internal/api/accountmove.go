@@ -7,9 +7,9 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/drn/argus/internal/agent"
-	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // moveAccountRequest is the POST /api/tasks/{id}/account body.

@@ -8,10 +8,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/drn/argus/internal/gitutil"
-	"github.com/drn/argus/internal/model"
-	"github.com/drn/argus/internal/testutil"
-	"github.com/drn/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // initTestUxlog redirects uxlog to a temp file and returns a reader for the log
@@ -58,9 +58,9 @@ func TestPollPRBatch_OneCallPerRepoGroup(t *testing.T) {
 	seedTask(t, d.db, "a", "argus/a", false)
 	seedTask(t, d.db, "b", "argus/b", false)
 	seedTask(t, d.db, "c", "feat/c", false)
-	// a,b cached on drn/argus; c cached on anutron/gmail-mcp.
-	seedURL(t, d, "a", "https://github.com/drn/argus/pull/1")
-	seedURL(t, d, "b", "https://github.com/drn/argus/pull/2")
+	// a,b cached on argus-foundry/argus; c cached on anutron/gmail-mcp.
+	seedURL(t, d, "a", "https://github.com/argus-foundry/argus/pull/1")
+	seedURL(t, d, "b", "https://github.com/argus-foundry/argus/pull/2")
 	seedURL(t, d, "c", "https://github.com/anutron/gmail-mcp/pull/3")
 
 	var mu sync.Mutex
@@ -81,8 +81,8 @@ func TestPollPRBatch_OneCallPerRepoGroup(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	// Two tasks share drn/argus → ONE call, not two. One call for the other repo.
-	testutil.Equal(t, callsPerRepo["drn/argus"], 1)
+	// Two tasks share argus-foundry/argus → ONE call, not two. One call for the other repo.
+	testutil.Equal(t, callsPerRepo["argus-foundry/argus"], 1)
 	testutil.Equal(t, callsPerRepo["anutron/gmail-mcp"], 1)
 	testutil.Equal(t, len(callsPerRepo), 2)
 }
@@ -102,11 +102,11 @@ func TestPollPRBatch_FallsBackToWorktreeDefaultRepo(t *testing.T) {
 		return out, 1, nil
 	}
 	d.prResolveRepo = func(_ context.Context, worktree string) (string, bool) {
-		return "drn/argus", true
+		return "argus-foundry/argus", true
 	}
 
 	d.pollPRStatesOnce(context.Background())
-	testutil.Equal(t, seenRepo, "drn/argus")
+	testutil.Equal(t, seenRepo, "argus-foundry/argus")
 }
 
 // Scenario: Skips tasks with a terminal cached PR state — excluded BEFORE grouping.
@@ -116,9 +116,9 @@ func TestPollPRBatch_TerminalExcludedBeforeGrouping(t *testing.T) {
 	seedTask(t, d.db, "merged", "argus/merged", false)
 	testutil.NoError(t, d.db.SetMetaBatch("merged", "pr", map[string]string{
 		"state": model.PRMergedClosed.String(),
-		"url":   "https://github.com/drn/argus/pull/9",
+		"url":   "https://github.com/argus-foundry/argus/pull/9",
 	}))
-	seedURL(t, d, "open", "https://github.com/drn/argus/pull/8")
+	seedURL(t, d, "open", "https://github.com/argus-foundry/argus/pull/8")
 
 	var mu sync.Mutex
 	queried := map[string]bool{}
@@ -161,10 +161,10 @@ func TestPollPRBatch_KeepStaleOnGroupError(t *testing.T) {
 	seedTask(t, d.db, "b", "argus/b", false)
 	// Prior good values on both.
 	testutil.NoError(t, d.db.SetMetaBatch("a", "pr", map[string]string{
-		"state": "approved", "url": "https://github.com/drn/argus/pull/1",
+		"state": "approved", "url": "https://github.com/argus-foundry/argus/pull/1",
 	}))
 	testutil.NoError(t, d.db.SetMetaBatch("b", "pr", map[string]string{
-		"state": "changes-requested", "url": "https://github.com/drn/argus/pull/2",
+		"state": "changes-requested", "url": "https://github.com/argus-foundry/argus/pull/2",
 	}))
 
 	d.prBatchFetch = func(_ context.Context, _ string, _ map[string]string) (map[string]gitutil.PRResult, int, error) {
@@ -190,15 +190,15 @@ func TestPollPRBatch_WritesResultsInclNone(t *testing.T) {
 	d, _ := testDaemon(t)
 	seedTask(t, d.db, "a", "argus/a", false)
 	seedTask(t, d.db, "b", "argus/b", false)
-	seedURL(t, d, "a", "https://github.com/drn/argus/pull/1")
-	seedURL(t, d, "b", "https://github.com/drn/argus/pull/2")
+	seedURL(t, d, "a", "https://github.com/argus-foundry/argus/pull/1")
+	seedURL(t, d, "b", "https://github.com/argus-foundry/argus/pull/2")
 
 	d.prBatchFetch = func(_ context.Context, _ string, branches map[string]string) (map[string]gitutil.PRResult, int, error) {
 		out := map[string]gitutil.PRResult{}
 		for branch := range branches {
 			switch branch {
 			case "argus/a":
-				out[branch] = gitutil.PRResult{State: model.PRChangesRequested, URL: "https://github.com/drn/argus/pull/1"}
+				out[branch] = gitutil.PRResult{State: model.PRChangesRequested, URL: "https://github.com/argus-foundry/argus/pull/1"}
 			case "argus/b":
 				out[branch] = gitutil.PRResult{State: model.PRNone} // authoritative none
 			}
@@ -216,7 +216,7 @@ func TestPollPRBatch_WritesResultsInclNone(t *testing.T) {
 		gotA[e.Key] = e.Value
 	}
 	testutil.Equal(t, gotA["state"], "changes-requested")
-	testutil.Equal(t, gotA["url"], "https://github.com/drn/argus/pull/1")
+	testutil.Equal(t, gotA["url"], "https://github.com/argus-foundry/argus/pull/1")
 
 	metaB, err := d.db.ListMeta("b", "pr")
 	testutil.NoError(t, err)
@@ -235,7 +235,7 @@ func TestPollPRBatch_ChunksOversizedGroup(t *testing.T) {
 	for i := 0; i < n; i++ {
 		id := "t" + string(rune('a'+i))
 		seedTask(t, d.db, id, "argus/"+id, false)
-		seedURL(t, d, id, "https://github.com/drn/argus/pull/"+string(rune('1'+i)))
+		seedURL(t, d, id, "https://github.com/argus-foundry/argus/pull/"+string(rune('1'+i)))
 	}
 	d.prAliasCap = 2 // 5 branches / cap 2 → 3 chunks
 
@@ -287,14 +287,14 @@ func TestPollPRBatch_LogsPerCycleSummary(t *testing.T) {
 	seedTask(t, d.db, "merged", "argus/merged", false)
 	testutil.NoError(t, d.db.SetMetaBatch("merged", "pr", map[string]string{
 		"state": model.PRMergedClosed.String(),
-		"url":   "https://github.com/drn/argus/pull/9",
+		"url":   "https://github.com/argus-foundry/argus/pull/9",
 	}))
 
-	// Two eligible tasks on drn/argus → group resolves cleanly → both written.
+	// Two eligible tasks on argus-foundry/argus → group resolves cleanly → both written.
 	seedTask(t, d.db, "a", "argus/a", false)
 	seedTask(t, d.db, "b", "argus/b", false)
-	seedURL(t, d, "a", "https://github.com/drn/argus/pull/1")
-	seedURL(t, d, "b", "https://github.com/drn/argus/pull/2")
+	seedURL(t, d, "a", "https://github.com/argus-foundry/argus/pull/1")
+	seedURL(t, d, "b", "https://github.com/argus-foundry/argus/pull/2")
 
 	// One eligible task on a repo whose group fetch errors → counted as errored.
 	seedTask(t, d.db, "c", "feat/c", false)
@@ -328,8 +328,8 @@ func TestPollPRBatch_LogsRealGraphQLCost(t *testing.T) {
 
 	seedTask(t, d.db, "a", "argus/a", false)
 	seedTask(t, d.db, "b", "argus/b", false)
-	seedURL(t, d, "a", "https://github.com/drn/argus/pull/1")
-	seedURL(t, d, "b", "https://github.com/drn/argus/pull/2")
+	seedURL(t, d, "a", "https://github.com/argus-foundry/argus/pull/1")
+	seedURL(t, d, "b", "https://github.com/argus-foundry/argus/pull/2")
 
 	d.prBatchFetch = func(_ context.Context, _ string, branches map[string]string) (map[string]gitutil.PRResult, int, error) {
 		out := map[string]gitutil.PRResult{}
@@ -342,7 +342,7 @@ func TestPollPRBatch_LogsRealGraphQLCost(t *testing.T) {
 
 	d.pollPRStatesOnce(context.Background())
 
-	testutil.Contains(t, readLog(), "[pr] poll: repo=drn/argus branches=2 cost=7")
+	testutil.Contains(t, readLog(), "[pr] poll: repo=argus-foundry/argus branches=2 cost=7")
 }
 
 // Scenario: The per-repo cost line sums the cost across chunks when a repo group
@@ -355,7 +355,7 @@ func TestPollPRBatch_LogsSummedCostAcrossChunks(t *testing.T) {
 	for i := 0; i < n; i++ {
 		id := "t" + string(rune('a'+i))
 		seedTask(t, d.db, id, "argus/"+id, false)
-		seedURL(t, d, id, "https://github.com/drn/argus/pull/"+string(rune('1'+i)))
+		seedURL(t, d, id, "https://github.com/argus-foundry/argus/pull/"+string(rune('1'+i)))
 	}
 	d.prAliasCap = 2 // 4 branches / cap 2 → 2 chunks
 
@@ -370,7 +370,7 @@ func TestPollPRBatch_LogsSummedCostAcrossChunks(t *testing.T) {
 
 	d.pollPRStatesOnce(context.Background())
 
-	testutil.Contains(t, readLog(), "[pr] poll: repo=drn/argus branches=4 cost=6")
+	testutil.Contains(t, readLog(), "[pr] poll: repo=argus-foundry/argus branches=4 cost=6")
 }
 
 // Scenario: Two eligible tasks in the same repo sharing a branch (same head ref
@@ -389,8 +389,8 @@ func TestPollPRBatch_SharedBranchWritesBothTasks(t *testing.T) {
 	// head ref). Same cached url → same repo + same branch → one PR.
 	seedTask(t, d.db, "first", "argus/shared", false)
 	seedTask(t, d.db, "second", "argus/shared", false)
-	seedURL(t, d, "first", "https://github.com/drn/argus/pull/1")
-	seedURL(t, d, "second", "https://github.com/drn/argus/pull/1")
+	seedURL(t, d, "first", "https://github.com/argus-foundry/argus/pull/1")
+	seedURL(t, d, "second", "https://github.com/argus-foundry/argus/pull/1")
 
 	var mu sync.Mutex
 	var branchQueries int
@@ -400,7 +400,7 @@ func TestPollPRBatch_SharedBranchWritesBothTasks(t *testing.T) {
 		mu.Unlock()
 		out := map[string]gitutil.PRResult{}
 		for branch := range branches {
-			out[branch] = gitutil.PRResult{State: model.PRApproved, URL: "https://github.com/drn/argus/pull/1"}
+			out[branch] = gitutil.PRResult{State: model.PRApproved, URL: "https://github.com/argus-foundry/argus/pull/1"}
 		}
 		return out, 1, nil
 	}
@@ -422,7 +422,7 @@ func TestPollPRBatch_SharedBranchWritesBothTasks(t *testing.T) {
 			got[e.Key] = e.Value
 		}
 		testutil.Equal(t, got["state"], "approved")
-		testutil.Equal(t, got["url"], "https://github.com/drn/argus/pull/1")
+		testutil.Equal(t, got["url"], "https://github.com/argus-foundry/argus/pull/1")
 	}
 
 	// Accounting: 2 eligible, both written, no silent loss
