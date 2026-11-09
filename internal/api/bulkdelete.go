@@ -154,6 +154,16 @@ func (s *Server) handleBulkDeleteTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seen[id] = true
+		// The resident is not a task and is not lifecycle-managed; refuse the
+		// whole batch like the single-task DELETE does (residentGate cannot see
+		// ids carried in the body).
+		if s.db != nil {
+			if t, err := s.db.Get(id); err == nil && t.IsResident() {
+				uxlog.Log("[resident] rejected REST bulk-delete: batch includes the resident")
+				writeErr(w, http.StatusConflict, "cannot delete the resident agent: it is not a task and is not lifecycle-managed", nil)
+				return
+			}
+		}
 	}
 
 	doc := storedDeleteJob{Preconditions: req.Preconditions}

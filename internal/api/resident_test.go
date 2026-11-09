@@ -164,3 +164,12 @@ func TestResident_PendingConfirmationRaisesWaiting(t *testing.T) {
 	testutil.Equal(t, srv.containsResident(needs), true)
 	testutil.Equal(t, len(srv.withoutResident(needs)), 0)
 }
+
+func TestResident_BulkDeleteRefusesBatchWithResident(t *testing.T) {
+	mux, resID := residentFixture(t)
+	w := serve(mux, "POST", "/api/tasks/bulk-delete", `{"task_ids":["plain","`+resID+`"]}`)
+	testutil.Equal(t, w.Code, http.StatusConflict)
+	if !strings.Contains(w.Body.String(), "resident") {
+		t.Fatalf("expected a resident refusal, got %s", w.Body.String())
+	}
+}
