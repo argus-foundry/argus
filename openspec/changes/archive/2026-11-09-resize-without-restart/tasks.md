@@ -44,4 +44,4 @@
 - [x] 6.1 Gotchas: `gotchas/pty-terminal.md` + `gotchas/hera-view.md` (no-restart default, duplicated-rows limitation, drift predicate now drives a notice, notice shares the RerenderStatus slot), `gotchas/web-remote.md`/`macos-app.md` one-line pointer to the named follow-up `resize-without-restart-clients`
 - [x] 6.2 README Reference: setting row; no top-half edit
 - [ ] 6.3 `make pre-pr` clean before pushing the implementation PR
-- [ ] 6.4 Archive within the same PR: `openspec archive resize-without-restart` (or manual merge-and-move)
+- [x] 6.4 Archive within the same PR: `openspec archive resize-without-restart` (or manual merge-and-move)
