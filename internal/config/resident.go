@@ -43,7 +43,6 @@ func DefaultResidentConfig(budget int) ResidentConfig {
 		MemoryDir:     "resident",
 		AllowTools: []string{
 			"mcp__argus__kb_search", "mcp__argus__kb_read", "mcp__argus__kb_list", "mcp__argus__kb_ingest",
-			"mcp__argus__task_recycle",
 			"mcp__claude_ai_Google_Calendar__list_calendars", "mcp__claude_ai_Google_Calendar__list_events",
 			"mcp__claude_ai_Google_Calendar__get_event", "mcp__claude_ai_Google_Calendar__search_events",
 			"mcp__claude_ai_Google_Calendar__suggest_time",
@@ -69,6 +68,10 @@ func DefaultResidentConfig(budget int) ResidentConfig {
 			"mcp__claude_ai_Linear__get_user", "mcp__claude_ai_Linear__list_teams",
 		},
 		AskTools: []string{
+			// task_recycle resolves its target from a caller-supplied id/cwd, so an
+			// injected resident could recycle ANOTHER task; one confirmation per
+			// recycle is the cheap guard until the tool binds to the caller.
+			"mcp__argus__task_recycle",
 			"mcp__claude_ai_Google_Calendar__create_event",
 			"mcp__claude_ai_Google_Calendar__update_event",
 			"mcp__claude_ai_Google_Calendar__delete_event",

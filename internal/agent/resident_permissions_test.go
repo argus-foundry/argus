@@ -53,10 +53,11 @@ func TestBuildCmd_ResidentGetsAskAndDenyRules(t *testing.T) {
 	}
 	allow, ask, deny := toStrings(perms["allow"]), toStrings(perms["ask"]), toStrings(perms["deny"])
 	// Read-only tier runs unprompted; KB and recycle must never prompt.
-	for _, want := range []string{"mcp__argus__kb_search", "mcp__argus__kb_ingest", "mcp__argus__task_recycle", "mcp__claude_ai_Slack__slack_send_message_draft"} {
+	for _, want := range []string{"mcp__argus__kb_search", "mcp__argus__kb_ingest", "mcp__claude_ai_Slack__slack_send_message_draft"} {
 		testutil.Contains(t, strings.Join(allow, ","), want)
 	}
 	testutil.Contains(t, strings.Join(ask, ","), "mcp__claude_ai_Google_Calendar__create_event")
+	testutil.Contains(t, strings.Join(ask, ","), "mcp__argus__task_recycle")
 	testutil.Contains(t, strings.Join(deny, ","), "mcp__claude_ai_Slack__slack_send_message")
 	for _, d := range deny {
 		if strings.HasSuffix(d, "slack_send_message_draft") {
