@@ -288,6 +288,10 @@ type HeraPage struct {
 	// runner is not daemon-backed, in which case ctrl+y is an inert no-op.
 	OnCopyClipboard func(taskID string)
 
+	// OnRerender fires for the agent.rerender hotkey or a click on a pane's owed
+	// re-render notice, with the pane's bound task (resize-without-restart).
+	OnRerender func(taskID string)
+
 	// clipReady is set by the App each tick (SetClipboardHint): true when the
 	// focused terminal pane's task has an agent-staged clipboard payload. It no
 	// longer gates the `ctrl+y` interception (ctrl+y always fires
@@ -1073,6 +1077,19 @@ func (p *HeraPage) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 		// which of Ctrl/Alt they report for this chord, and the loose check is the
 		// proven pattern already wired for the agent view's pane navigation.
 		ctrlAlt := event.Modifiers()&(tcell.ModCtrl|tcell.ModAlt) != 0
+		// agent.rerender (resize-without-restart) is a CtxAgent keymap action that
+		// Hera panes route here (they never go through handleAgentKey). Resolved
+		// through the live keymap, so a rebind is honored; intercepted only when a
+		// terminal pane with a bound task is focused — otherwise the key falls
+		// through to the PTY like any other.
+		if p.terminalPaneFocused() && p.OnRerender != nil {
+			if act, ok := p.keys().Resolve(keymap.CtxAgent, event); ok && act == keymap.ActAgentRerender {
+				if id := p.FocusedTerminalTaskID(); id != "" {
+					p.OnRerender(id)
+					return
+				}
+			}
+		}
 		switch event.Key() {
 		case tcell.KeyCtrlZ:
 			// Fullscreen the focused content pane (plugin parity). ALWAYS consume

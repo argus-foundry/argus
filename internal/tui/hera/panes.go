@@ -436,6 +436,24 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 	})
 }
 
+// SetOwedFunc wires the owed-re-render notice evaluator + live key hint onto
+// both terminal panes, and makes a click on either pane's notice fire
+// OnRerender for that pane's bound task (resize-without-restart).
+func (p *HeraPage) SetOwedFunc(fn terminal.OwedFunc, hint func() string) {
+	p.coordPane.SetOwedFunc(fn, hint)
+	p.agentPane.SetOwedFunc(fn, hint)
+	p.coordPane.OnOwedClick = func() {
+		if p.coordBound != "" && p.OnRerender != nil {
+			p.OnRerender(p.coordBound)
+		}
+	}
+	p.agentPane.OnOwedClick = func() {
+		if p.agentBound != "" && p.OnRerender != nil {
+			p.OnRerender(p.agentBound)
+		}
+	}
+}
+
 // SetAutoRerender wires the live ui.auto_rerender_on_resize setting
 // (resize-without-restart). Left nil (tests, remote mode) the automatic kick is ON,
 // i.e. byte-identical to the behavior before the setting existed.

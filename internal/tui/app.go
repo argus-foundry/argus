@@ -549,9 +549,21 @@ type App struct {
 	// retry through their own onDeferred path instead.
 	kickWait map[string]time.Time
 
+	// kickForced marks Tasks-view deferrals that came from the on-demand
+	// re-render (value = first deferral time, for forcedRetryCap) so
+	// retryDeferredKick re-runs them forced even with the automatic kick off.
+	kickForced map[string]time.Time
+
 	// autoRerenderLast/Logged dedupe the [rerender] auto_rerender_on_resize log
 	// line (resize-without-restart); UI goroutine only.
-	autoRerenderLast   bool
+	autoRerenderLast bool
+
+	// owedAnchors caches each live process's authored width for the owed notice
+	// (resize-without-restart); guarded by owedMu because loads run off the UI
+	// goroutine.
+	owedMu             sync.Mutex
+	owedAnchors        map[string]owedAnchor
+	owedFetching       map[string]bool
 	autoRerenderLogged bool
 	// kickDeferSince / kickRetryAfter bound the keep-place deferral per task:
 	// the first deferral at the current width (agent.KickDeferCap) and the
@@ -778,6 +790,9 @@ func New(database store.Store, runner agent.SessionProvider, daemonConnected boo
 		lastAttachCols:         make(map[string]uint16),
 		committedCols:          make(map[string]uint16),
 		committedColsPID:       make(map[string]int),
+		owedAnchors:            make(map[string]owedAnchor),
+		kickForced:             make(map[string]time.Time),
+		owedFetching:           make(map[string]bool),
 		ptySyncLoopGen:         make(map[string]uint64),
 		wtRoot:                 filepath.Join(db.DataDir(), "worktrees"),
 		clipboardWriter:        pbcopyWriter,
@@ -975,6 +990,8 @@ func (a *App) buildUI() {
 	a.gitPanel.OnBranchChange = func() { a.forceRedraw("agent git panel branch changed") }
 	a.filePanel = gitpanel.NewFilePanel()
 	a.agentPane = terminal.NewTerminalPane()
+	a.agentPane.SetOwedFunc(a.paneRerenderOwed, a.rerenderKeyHint)
+	a.agentPane.OnOwedClick = a.rerenderHotkeyClassic
 	a.agentHeader = widget.NewAgentHeader()
 
 	// Wire mouse click callbacks so clicking a panel switches agentFocus.
@@ -1090,6 +1107,8 @@ func (a *App) buildUI() {
 		a.heraPage.SetRerenderKicker(a.heraKickRerender)
 		a.heraPage.SetKeepPlace(func() bool { return a.db.Config().UI.RerenderKeepPlace })
 		a.heraPage.SetAutoRerender(a.autoRerenderOn)
+		a.heraPage.SetOwedFunc(a.paneRerenderOwed, a.rerenderKeyHint)
+		a.heraPage.OnRerender = a.rerenderHotkeyHera
 	}
 	// Focus-aware status bar: update heraFocus whenever the Hera focus machine
 	// changes state (keyboard or mouse). The statusbar renders different hint
@@ -4826,6 +4845,11 @@ func (a *App) handleAgentKey(event *tcell.EventKey) *tcell.EventKey {
 			// Code would background the foreground task on Ctrl+Z (0x1a / SIGTSTP).
 			a.toggleAgentZen()
 			return nil
+		case keymap.ActAgentRerender:
+			// resize-without-restart: on-demand kill+resume at the pane width.
+			// Always intercepted (never reaches the PTY); gates still apply.
+			a.rerenderHotkeyClassic()
+			return nil
 		case keymap.ActAgentCopy:
 			// Always intercepted: never falls through to the PTY. Copies the
 			// staged clipboard payload if present; otherwise flashes "Nothing
@@ -5804,6 +5828,77 @@ func (a *App) autoRerenderOn() bool {
 	return on
 }
 
+// owedAnchor is the per-process authored width the owed notice compares the
+// pane width against. InitialPTYSize can be an RPC on a daemon-backed handle, so
+// it is read once per (task, pid) off the UI goroutine and cached; Draw only
+// ever does map lookups.
+type owedAnchor struct {
+	pid        int
+	initCols   int
+	hasSession bool // false for backends that cannot --resume: nothing to re-render
+}
+
+// paneRerenderOwed is the TerminalPane OwedFunc: whether taskID's history is
+// owed a re-render at the pane's width (resize-without-restart). Called from
+// Draw on the UI goroutine; never blocks. clearReason explains a false result
+// for the shown/cleared transition log.
+func (a *App) paneRerenderOwed(taskID string, sess agentview.TerminalAdapter, cols int) (bool, string) {
+	if a.autoRerenderOn() {
+		return false, "setting-on"
+	}
+	if sess == nil || !sess.Alive() {
+		return false, "no-session"
+	}
+	p, ok := sess.(interface {
+		PID() int
+		InitialPTYSize() (int, int)
+	})
+	if !ok {
+		return false, "no-session"
+	}
+	pid := p.PID()
+	a.owedMu.Lock()
+	anchor, have := a.owedAnchors[taskID]
+	if !have || anchor.pid != pid {
+		if !a.owedFetching[taskID] {
+			a.owedFetching[taskID] = true
+			go a.loadOwedAnchor(taskID, p)
+		}
+		a.owedMu.Unlock()
+		return false, "rerendered"
+	}
+	a.owedMu.Unlock()
+	committed := 0
+	if a.committedColsPID[taskID] == pid {
+		committed = int(a.committedCols[taskID])
+	}
+	if anchor.hasSession && agent.RerenderOwed(anchor.initCols, committed, cols) {
+		return true, ""
+	}
+	return false, "width-returned"
+}
+
+// loadOwedAnchor reads the process's authored width and the task's
+// resumability, caches them, and asks for a redraw so the notice can appear.
+// Runs off the UI goroutine.
+func (a *App) loadOwedAnchor(taskID string, p interface {
+	PID() int
+	InitialPTYSize() (int, int)
+}) {
+	initCols, _ := p.InitialPTYSize()
+	hasSession := false
+	if t, err := a.db.Get(taskID); err == nil && t != nil {
+		hasSession = t.SessionID != ""
+	}
+	a.owedMu.Lock()
+	a.owedAnchors[taskID] = owedAnchor{pid: p.PID(), initCols: initCols, hasSession: hasSession}
+	delete(a.owedFetching, taskID)
+	a.owedMu.Unlock()
+	if a.tapp != nil {
+		a.tapp.QueueUpdateDraw(func() {})
+	}
+}
+
 // kickDefer records when kicks at one width were first deferred.
 type kickDefer struct {
 	cols uint16
@@ -5888,6 +5983,7 @@ func (a *App) keepPlaceHold(taskID string) bool {
 
 // dropKickWait forgets every piece of Tasks-view deferral state for taskID.
 func (a *App) dropKickWait(taskID string) {
+	delete(a.kickForced, taskID)
 	delete(a.kickWait, taskID)
 	delete(a.kickDeferSince, taskID)
 	delete(a.kickRetryAfter, taskID)
@@ -5930,8 +6026,107 @@ func (a *App) retryDeferredKick(taskID string) {
 	if err != nil || task == nil {
 		return
 	}
+	if forcedAt, forced := a.kickForced[taskID]; forced {
+		// A deferred hotkey re-render keeps retrying even with the automatic kick
+		// off, but only for forcedRetryCap so a perpetually busy agent isn't polled
+		// forever; the safety gates still apply on every attempt.
+		if time.Since(forcedAt) > forcedRetryCap {
+			uxlog.Log("[rerender] hotkey retry gave up task=%s after %s", taskID, forcedRetryCap)
+			delete(a.kickForced, taskID)
+			return
+		}
+		uxlog.Log("[rerender] retrying deferred hotkey re-render task=%s", taskID)
+		_, panelCols := a.computePTYSize()
+		a.kickRerenderCore(task, sess, panelCols, nil, func() bool { return a.agentPane.ScrollOffset() > 0 }, true)
+		return
+	}
 	uxlog.Log("[rerender] retrying deferred kick task=%s: pane at the bottom and composer clear", taskID)
 	a.maybeKickRerender(task, sess)
+}
+
+// forcedRetryCap bounds how long a deferred hotkey re-render keeps retrying.
+const forcedRetryCap = 10 * time.Minute
+
+// hotkeyOutcome logs the result of an on-demand re-render and tells the user
+// (status-bar notice). outcome is one of kicked|noop-no-drift|deferred-*|error|...
+func (a *App) hotkeyOutcome(taskID string, cols uint16, outcome, notice string) {
+	uxlog.Log("[rerender] hotkey task=%s cols=%d outcome=%s", taskID, cols, outcome)
+	if notice != "" {
+		a.flashNotice(notice)
+	}
+}
+
+// forcedDefer records a deferred on-demand re-render: log + notice, the
+// "Re-render pending" border status, and — for the Tasks view only
+// (classic, no caller retry of its own) — arm the kickWait retry so it fires
+// once the blocker clears. retryLater spaces busy/prompt/draft retries by
+// hera.KickRetryInterval so they don't poll every tick.
+func (a *App) forcedDefer(taskID string, cols uint16, classic bool, outcome, notice string, retryLater bool) {
+	a.hotkeyOutcome(taskID, cols, outcome, notice)
+	a.setRerenderPending(taskID)
+	if !classic {
+		return
+	}
+	if _, ok := a.kickForced[taskID]; !ok {
+		a.kickForced[taskID] = time.Now()
+	}
+	if _, waiting := a.kickWait[taskID]; !waiting {
+		a.kickWait[taskID] = time.Time{}
+	}
+	if retryLater {
+		a.kickRetryAfter[taskID] = time.Now().Add(hera.KickRetryInterval)
+	}
+}
+
+// rerenderNow runs the on-demand re-render for taskID at the pane's current
+// width (the agent.rerender hotkey, the palette row and a click on the owed
+// notice all land here). UI goroutine only. onDeferred nil = Tasks-view caller
+// (kickWait retry); non-nil (a no-op for Hera panes) = no automatic retry.
+func (a *App) rerenderNow(taskID string, cols uint16, scrolled func() bool, onDeferred func()) {
+	task, err := a.db.Get(taskID)
+	var sess agent.SessionHandle
+	if err == nil && task != nil {
+		sess = a.runner.Get(taskID)
+	}
+	if task == nil || sess == nil || !sess.Alive() {
+		a.hotkeyOutcome(taskID, cols, "no-session", "No live session to re-render")
+		return
+	}
+	a.kickRerenderCore(task, sess, cols, onDeferred, scrolled, true)
+}
+
+// rerenderHotkeyClassic is agent.rerender in the Tasks-tab agent view.
+func (a *App) rerenderHotkeyClassic() {
+	a.mu.Lock()
+	taskID := a.agentState.TaskID
+	a.mu.Unlock()
+	if taskID == "" {
+		return
+	}
+	_, cols := a.computePTYSize()
+	a.rerenderNow(taskID, cols, func() bool { return a.agentPane.ScrollOffset() > 0 }, nil)
+}
+
+// rerenderHotkeyHera is agent.rerender for the Hera pane bound to taskID.
+func (a *App) rerenderHotkeyHera(taskID string) {
+	if a.heraPage == nil {
+		return
+	}
+	_, cols, ok := a.heraPage.PaneSizeForTask(taskID)
+	if !ok {
+		a.hotkeyOutcome(taskID, 0, "no-pane", "")
+		return
+	}
+	a.rerenderNow(taskID, cols, func() bool { return a.heraPage.TaskScrolledUp(taskID) }, func() {})
+}
+
+// rerenderKeyHint is the live agent.rerender binding for the owed notice
+// ("" when unbound; the notice then points at the palette).
+func (a *App) rerenderKeyHint() string {
+	if b, ok := a.activeKeymap().BindingFor(keymap.CtxAgent, keymap.ActAgentRerender); ok {
+		return b.String()
+	}
+	return ""
 }
 
 // heraKickRerender is the Hera-view entry point for the same decision.
@@ -6006,6 +6201,18 @@ func (a *App) maybeKickRerenderAtWidth(task *model.Task, sess agent.SessionHandl
 // maybeKickRerenderGated is maybeKickRerenderAtWidth plus the pane's scrolled-up
 // probe; the composer-draft gate needs no caller input (see keepPlaceState).
 func (a *App) maybeKickRerenderGated(task *model.Task, sess agent.SessionHandle, panelCols uint16, onDeferred func(), scrolled func() bool) {
+	a.kickRerenderCore(task, sess, panelCols, onDeferred, scrolled, false)
+}
+
+// kickRerenderCore is the shared size-drift decision. forced is the on-demand
+// path (the agent.rerender hotkey / a click on the owed notice): it bypasses
+// ONLY the same-width attach cache — the debounce never applies to it — and
+// reports every outcome to the user, but it NEVER bypasses the safety gates
+// (idle, not blocked on a prompt, pane at the bottom, no unsent draft), so a
+// forced re-render can never kill an agent mid-tool-call or dismiss a question.
+// A forced call with no drift is a no-op with a status-bar notice. Everything
+// below is byte-identical to the automatic path when forced is false.
+func (a *App) kickRerenderCore(task *model.Task, sess agent.SessionHandle, panelCols uint16, onDeferred func(), scrolled func() bool, forced bool) {
 	if task == nil || sess == nil || !sess.Alive() {
 		return
 	}
@@ -6030,6 +6237,9 @@ func (a *App) maybeKickRerenderGated(task *model.Task, sess agent.SessionHandle,
 		// re-armed by a zoom toggle) must re-evaluate once the restart lands, or
 		// the width it just moved to is never reconciled for this bind.
 		uxlog.Log("[rerender] kick in flight task=%s panel=%d: evaluation deferred", taskID, panelCols)
+		if forced {
+			a.hotkeyOutcome(taskID, panelCols, "in-flight", "Re-render already in progress")
+		}
 		if onDeferred != nil {
 			onDeferred()
 		}
@@ -6040,12 +6250,15 @@ func (a *App) maybeKickRerenderGated(task *model.Task, sess agent.SessionHandle,
 	// have SessionID=="" and can never be kicked) still benefit from the
 	// short-circuit — matches the web side's ordering and avoids spawning
 	// an RPC goroutine on every Codex agent-view reopen.
-	if a.isRedundantAttach(taskID, panelCols) {
+	if !forced && a.isRedundantAttach(taskID, panelCols) {
 		a.setRerendering(taskID, false)
 		uxlog.Log("[tui] rerender: skipping kick task=%s — panel cols unchanged since last attach (%d)", taskID, panelCols)
 		return
 	}
 	if task.SessionID == "" {
+		if forced {
+			a.hotkeyOutcome(taskID, panelCols, "unsupported", "This backend can't re-render (no resumable session)")
+		}
 		return // backend doesn't support --session-id resume; nothing to do
 	}
 	cfg := a.db.Config()
@@ -6105,6 +6318,9 @@ func (a *App) maybeKickRerenderGated(task *model.Task, sess agent.SessionHandle,
 			switch decision {
 			case agent.RerenderSkip:
 				a.setRerendering(taskID, false)
+				if forced {
+					a.hotkeyOutcome(taskID, panelCols, "noop-no-drift", "History already matches this width")
+				}
 				return
 			case agent.RerenderDeferScrolled, agent.RerenderDeferDraft:
 				a.setRerenderPending(taskID)
@@ -6119,6 +6335,13 @@ func (a *App) maybeKickRerenderGated(task *model.Task, sess agent.SessionHandle,
 					a.kickRetryAfter[taskID] = time.Now().Add(hera.KickRetryInterval)
 				}
 				uxlog.Log("[rerender] deferred task=%s: %s (init=%d committed=%d panel=%d)", taskID, reason, initCols, committed, panelCols)
+				if forced {
+					outcome, msg := "deferred-scrolled", "Scrolled up — re-render waits until you're back at the bottom"
+					if decision == agent.RerenderDeferDraft {
+						outcome, msg = "deferred-draft", "Unsent text in the composer — re-render waits until it clears"
+					}
+					a.forcedDefer(taskID, panelCols, onDeferred == nil, outcome, msg, decision == agent.RerenderDeferDraft)
+				}
 				if onDeferred != nil {
 					onDeferred()
 				} else if _, waiting := a.kickWait[taskID]; !waiting {
@@ -6137,6 +6360,9 @@ func (a *App) maybeKickRerenderGated(task *model.Task, sess agent.SessionHandle,
 				// (fix-committed-width-drift / BUG-078).
 				a.recordUnreconciledCommittedCols(taskID, panelCols, pid)
 				uxlog.Log("[tui] rerender deferred: task=%s busy (init=%d committed=%d panel=%d)", taskID, initCols, committed, panelCols)
+				if forced {
+					a.forcedDefer(taskID, panelCols, onDeferred == nil, "deferred-busy", "Agent is busy — re-render pending", true)
+				}
 				if onDeferred != nil {
 					onDeferred()
 				}
@@ -6149,6 +6375,9 @@ func (a *App) maybeKickRerenderGated(task *model.Task, sess agent.SessionHandle,
 				a.invalidateAttachCache(taskID)
 				a.recordUnreconciledCommittedCols(taskID, panelCols, pid)
 				uxlog.Log("[tui] rerender deferred: task=%s blocked on user prompt — preserving question (init=%d committed=%d panel=%d)", taskID, initCols, committed, panelCols)
+				if forced {
+					a.forcedDefer(taskID, panelCols, onDeferred == nil, "deferred-prompt", "Agent is waiting on a question — re-render pending", true)
+				}
 				if onDeferred != nil {
 					onDeferred()
 				}
@@ -6160,6 +6389,9 @@ func (a *App) maybeKickRerenderGated(task *model.Task, sess agent.SessionHandle,
 					a.invalidateAttachCache(taskID)
 					a.recordUnreconciledCommittedCols(taskID, panelCols, pid)
 					uxlog.Log("[rerender] deferred task=%s session=%s: transcript unavailable err=%v", taskID, kickTask.SessionID, transcriptErr)
+					if forced {
+						a.hotkeyOutcome(taskID, panelCols, "error", "Can't re-render yet — transcript unavailable")
+					}
 					if onDeferred != nil {
 						onDeferred()
 					}
@@ -6167,12 +6399,19 @@ func (a *App) maybeKickRerenderGated(task *model.Task, sess agent.SessionHandle,
 				}
 				uxlog.Log("[tui] rerender: stopping task=%s session=%s (init=%dx committed=%dx panel=%dx)", taskID, task.SessionID, initCols, committed, panelCols)
 				a.statusbar.SetInfo("Re-rendering at full width…")
+				if forced {
+					uxlog.Log("[rerender] hotkey task=%s cols=%d outcome=kicked", taskID, panelCols)
+					delete(a.kickForced, taskID)
+				}
 				a.pendingRerenderRestart[taskID] = true
 				// Cooperative repair preserves descendants; an unresponsive
 				// agent's escalation also reaps its process tree.
 				if err := sess.StopScoped(agent.StopRerender); err != nil {
 					a.setRerenderPending(taskID)
 					uxlog.Log("[tui] rerender: stop failed task=%s err=%v", taskID, err)
+					if forced {
+						a.hotkeyOutcome(taskID, panelCols, "error", "Re-render failed to stop the session")
+					}
 					delete(a.pendingRerenderRestart, taskID)
 					// Stop attempt failed — invalidate so the next
 					// same-cols reopen retries (mirrors DeferBusy).
