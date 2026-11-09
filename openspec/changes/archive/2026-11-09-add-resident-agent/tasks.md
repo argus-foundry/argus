@@ -87,5 +87,5 @@ Stage 6's slice of 1.1/1.3 is covered by `coord_hook_resident_test.go` and `Test
 - [x] 10.1 Write `context/knowledge/gotchas/resident.md` (choke-point predicate, worktree precondition, hook gate, signals, rail-box no-resize invariant, hotkey recipe) and add rows to `context/knowledge/index.md`
 - [x] 10.2 Update README Reference tables (config keys, keybindings); leave the marketing half alone unless a new pillar-class claim is warranted
 - [x] 10.3 Record the named parity follow-ups (`add-resident-macos`, `add-resident-web`, routines, notifications, `add-resident-hard-stop`) and the ai-ron `airon-dream` skip rule in design.md Non-Goals
-- [ ] 10.4 Run `make pre-pr` clean
-- [ ] 10.5 Archive in the same PR before merge: `openspec archive add-resident-agent` (or merge deltas into base specs and move to `openspec/changes/archive/<date>-add-resident-agent/`) and commit
+- [x] 10.4 Run `make pre-pr` clean
+- [x] 10.5 Archive in the same PR before merge: `openspec archive add-resident-agent` (or merge deltas into base specs and move to `openspec/changes/archive/<date>-add-resident-agent/`) and commit
