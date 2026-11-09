@@ -2049,8 +2049,10 @@ func (s *Server) toolTaskRecycle(id interface{}, args json.RawMessage) *Response
 // toolTaskRecycleAs is toolTaskRecycle for a connection bound to caller (the
 // task whose spawn-time MCP URL carried it; "" when unbound). The resident may
 // only recycle itself: its target comes from caller-supplied id/cwd, so without
-// this an injected resident could recycle another task. Binding only ever
-// restricts, so a spoofed caller gains nothing.
+// this an injected resident could recycle another task. Conversely only the
+// resident's own binding may recycle the resident. The caller is an
+// unauthenticated localhost query parameter: a local process forging the
+// resident's id could recycle it, which is no worse than unbound access was.
 func (s *Server) toolTaskRecycleAs(id interface{}, args json.RawMessage, caller string) *Response {
 	if !s.taskRecycleEnabled() {
 		return toolError(id, "task recycle not configured")

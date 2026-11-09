@@ -35,10 +35,11 @@ const (
 	deliveryTag   = "[argus-delivery:"
 )
 
-// SystemTurnPrefix starts every turn Argus itself types into a session
-// without the bridge (the resident's context-budget nudge, task-message
-// doorbells). Such a turn is never "the user's last message": Extract skips it
-// and stops attributing later replies to the earlier genuine human message.
+// SystemTurnPrefix starts every Argus-originated turn: notices typed into the
+// session or delivered over the bridge (the resident's context-budget nudge,
+// task-message doorbells) and the resident's own launch prompts (orientation,
+// recycle seed). Such a turn is never "the user's last message": Extract skips
+// it and stops attributing later replies to the earlier genuine human message.
 const SystemTurnPrefix = "[argus] "
 
 // RelayDirective is appended to a recycle seed prompt so the fresh session
