@@ -1414,3 +1414,38 @@ func TestBuildCmd_ResidentRefusesMultilineBackend(t *testing.T) {
 	testutil.Error(t, err)
 	testutil.Contains(t, err.Error(), "one line")
 }
+
+// TestBuildCmd_ResidentContinuationFlagsReachClaudeUnderSh runs the real
+// resident command through sh with a stub `claude` that prints its argv: a
+// backslash-newline continuation (leading or trailing) in the backend command
+// must still deliver every flag Argus appends as separate arguments. A later
+// trim of the command, for example, would turn a trailing `\` + appended
+// space into an escaped space and silently drop the forced permission mode.
+func TestBuildCmd_ResidentContinuationFlagsReachClaudeUnderSh(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	sandboxAvailabilityForSignalTest(t, false)
+	for _, backendCmd := range []string{"claude \\\n --model x", "claude --model x \\\n"} {
+		t.Run(strings.ReplaceAll(backendCmd, "\n", `\n`), func(t *testing.T) {
+			task, _ := residentFixture(t)
+			bin := t.TempDir()
+			testutil.NoError(t, os.WriteFile(filepath.Join(bin, "claude"),
+				[]byte("#!/bin/sh\nfor a in \"$@\"; do printf '<%s>\\n' \"$a\"; done\n"), 0o755)) //nolint:gosec // test stub must be executable
+			cfg := residentCfg()
+			cfg.Backends["claude"] = config.Backend{Command: backendCmd}
+			cmd := buildResident(t, task, cfg)
+			cmd.Env = append(cmd.Env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			cmd.Stdin = nil
+			out, err := cmd.Output()
+			testutil.NoError(t, err)
+			got := string(out)
+			for _, want := range []string{"<--model>", "<x>", "<--permission-mode>", "<default>", "<--setting-sources>", "<project>", "<--settings>"} {
+				testutil.Contains(t, got, want+"\n")
+			}
+			if strings.Contains(got, " --permission-mode") {
+				t.Fatalf("appended flags were joined into one argument: %s", got)
+			}
+		})
+	}
+}
