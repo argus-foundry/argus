@@ -185,3 +185,6 @@
 
 - **An empty usage session with totals null means unmeasured, even when context supplied a bridge session.** Preserve mismatch rejection for nonempty session identities; show one calm unmeasured line without a refresh nudge.
 - **Tool tabs must retain a single horizontally scrollable row.** Keep Messages short with the Agent messages accessible name and scroll selection into view without wrapping Inbox.
+
+- **Roster model resolution describes current configuration or planned intent, never confirmed launch telemetry.** Retain safe warnings and requested overrides separately; failed roster refresh labels retained team details stale and suppresses pressure styling.
+- **Roster pressure uses the server percent and the TUI 40/65/90 thresholds.** Null denominators stay uncomputed, null observation time says timing unknown, and coordinator denominators describe recycle budgets rather than model context.

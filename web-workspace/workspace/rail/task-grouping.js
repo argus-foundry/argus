@@ -13,7 +13,7 @@ export function taskRoles(roster = {}, tasks = []) {
     if (!role.live || !role.task_id) continue;
     const previous = result.get(role.task_id);
     const task = byId.get(role.task_id);
-    if (!previous || rank(role, task) > rank(previous, task)) result.set(role.task_id, role);
+    if (!previous || rank(role, task) > rank(previous, task)) result.set(role.task_id, {...role,roster_stale:!!roster.stale});
   }
   return result;
 }

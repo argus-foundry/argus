@@ -65,6 +65,7 @@ const tools = new TaskTools(api, review, {
     for(const orch of navigation.roster.orchestrators||[])for(const role of orch.roles||[])if(role.role_id===roleID)role.board_unread=unread;
     navigation.update(tasks,currentTask?.id,undefined,{roster:navigation.roster},{defer:true});
   },
+  refreshRoster:()=>rosterWatch?.refresh(true),
   reply:(task,item)=>composer.reply(task,item),
 });
 const navigation = new TaskNavigation(selectTask, (project, action) => {
@@ -197,7 +198,7 @@ async function refreshTasks() {
     tasks = events ? events.snapshot(result.tasks || [],tasks) : result.tasks || [];
     terminal?.retain(new Set(tasks.map(task=>task.id))); railActions.reconcile(tasks,pinSnapshot);
     attention?.update(tasks,currentTask?.id);
-    navigation.update(tasks, currentTask?.id, projects, hierarchy); tools.updateRoster(navigation.roster);
+    navigation.update(tasks, currentTask?.id, projects, hierarchy.warning?{...hierarchy,roster:{...navigation.roster,stale:true}}:hierarchy); tools.updateRoster(navigation.roster);
 
     if (currentTask) {
       const next = tasks.find(task => task.id === currentTask.id);
@@ -212,6 +213,11 @@ async function refreshTasks() {
     if(projects.warning||hierarchy.warning)events?.problem('Navigation details unavailable. Retry connection keeps the current task and draft.');else events?.healthy(); log('tasks', 'loaded', { count: tasks.length });
   } catch (error) {
     if (generation !== refreshGeneration || error.name === 'AbortError') return;
+    if ([401,403].includes(error.status)) {
+      navigation.update(tasks,currentTask?.id,undefined,{roster:{...navigation.roster,stale:true},warning:'Roster authentication failed. Reconnect to retry.'},{defer:true});
+      tools.updateRoster(navigation.roster);split?.select(currentTask,tasks,navigation.roster);
+      log('roster','snapshot authentication failed',{status:error.status});
+    }
     connectionState(error.status === 401 || error.status === 403 ? 'Token expired' : 'Connection unavailable', 'error');
     events?.problem('Task refresh failed. Retry connection keeps the current task and draft.');
     log('tasks', 'refresh failed', { status: error.status || 'error' });
@@ -279,7 +285,7 @@ events.callbacks.board=event=>{tools.event(event);events.scheduleSnapshot();};
 events.callbacks.reconcile=()=>tools.event({type:'resync'});
 split = new SplitWorkspace(() => terminal);
 rosterWatch = new WorkspaceRoster(api, () => navigation.roles?.size>0||split.enabled&&split.visible, result => {
-  const hierarchy=result.warning?{roster:navigation.roster,warning:result.warning}:result;
+  const hierarchy=result.warning?{roster:{...navigation.roster,stale:true},warning:result.warning}:result;
   navigation.update(tasks,currentTask?.id,undefined,hierarchy,{defer:true});tools.updateRoster(navigation.roster);split.select(currentTask,tasks,navigation.roster);
 });
 attention = new WorkspaceAttention(task => selectTask(task));

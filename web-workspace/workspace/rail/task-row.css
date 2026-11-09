@@ -29,3 +29,5 @@
 .project-header:has(.project-select){padding-right:36px}
 
 .task-mail{position:absolute;left:0;top:50%;transform:translateY(-50%);width:28px;height:28px;padding:6px;color:var(--warning);border:0;background:transparent}.task-mail svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.4}.message-body{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}.inbox-item{padding:var(--space-2) 0;border-bottom:1px solid var(--border)}.inbox-item>button{width:100%;text-align:left}
+
+.task-context-pressure{flex:0 0 auto;font-size:10px;font-variant-numeric:tabular-nums;color:var(--secondary)}.task-context-pressure[data-pressure=warm]{color:var(--warning)}.task-context-pressure[data-pressure=hot],.task-context-pressure[data-pressure=critical]{color:var(--error)}

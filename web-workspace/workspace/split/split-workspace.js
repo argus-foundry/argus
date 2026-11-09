@@ -69,12 +69,12 @@ export class SplitWorkspace {
     restoreToggle();restorePane();
   }
   rosterEntries(coordinator){
-    return [...(coordinator?.roles||[]),...(this.roster.freelance||[]).filter(role=>role.orch_id===coordinator?.id)].map(role=>({role,task:role.live?this.tasks.find(task=>task.id===role.task_id):null}));
+    return [...(coordinator?.roles||[]),...(this.roster.freelance||[]).filter(role=>role.orch_id===coordinator?.id)].map(role=>({role:{...role,roster_stale:!!this.roster.stale},task:role.live?this.tasks.find(task=>task.id===role.task_id):null}));
   }
   rosterRenderKey(coordinator){
     return JSON.stringify([coordinator?.id,coordinator?.name,this.task?.id,this.picker.value,
       this.rosterEntries(coordinator).map(({role,task})=>[
-        role.role_id,role.name,role.kind,role.live,role.status,role.ready_to_close,role.archived,role.needs_input,
+        role.role_id,role.name,role.kind,role.live,role.status,role.ready_to_close,role.archived,role.needs_input,role.context,role.roster_stale,
         task?.id,task?.name,task?.status,task?.archived,task?.archive_pending,task?.needs_input,task?.live,task?.idle,task?.pr_state,task?.failure,
       ]),
     ]);

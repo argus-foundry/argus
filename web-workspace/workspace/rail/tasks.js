@@ -64,7 +64,7 @@ export class TaskNavigation {
       this.tasks.map(task => [task.id, task.name, task.project, task.branch, task.worktree_path, task.status, task.archived, task.archive_pending, task.needs_input, task.live, task.idle, task.pr_state, task.pinned, task.failure]),
       this.projects.map(project => project.name), this.selected, this.selection?.active,[...this.selection?.ids||[]],
       [...this.pinned], [...coordinatorMap].map(([id,orch])=>[id,orch.id,orch.root,orch.kanban_status,orch.pinned,this.actions.heraKanban?.pending.has(orch.id)]),
-      [...this.roles || []].map(([id, role]) => [id, role.role_id, role.name, role.kind, role.live, role.status, role.ready_to_close, role.archived, role.needs_input]),
+      [...this.roles || []].map(([id, role]) => [id, role.role_id, role.name, role.kind, role.live, role.status, role.ready_to_close, role.archived, role.needs_input, role.context, role.roster_stale]),
       (this.roster.orchestrators||[]).flatMap(orch=>(orch.roles||[]).filter(role=>role.kind==='coordinator').map(role=>[role.role_id,role.task_id,role.board_unread])),
       [...this.hierarchy.parents], [...this.hierarchy.attention], [...this.hierarchy.failed],
       this.tasks.map(task => this.actions.pinKnown?.(task) ?? true),
