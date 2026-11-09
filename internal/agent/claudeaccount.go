@@ -185,10 +185,13 @@ func spawnAuthStrip(claudeExplicit, codexExplicit bool) []string {
 // (claudeenv.ParentSessionMarkers — present whenever the daemon/supervisor was
 // started from inside Claude Code, for every backend), and every name in
 // authStrip (the auth overrides a backend ranks above an explicit account's
-// login). Backend env_vars and the op bootstrap are appended after this, so
-// explicit mappings still win. Only stripped NAMES are logged, never values.
+// login). An inherited ARGUS_ARTIFACT_ACCOUNT is always dropped too: BuildCmd
+// recomputes it per task, and a parent's value must never reach a task that
+// should not see it (logged under [artifacts], not [account]). Backend
+// env_vars and the op bootstrap are appended after this, so explicit mappings
+// still win. Only stripped NAMES are logged, never values.
 func spawnBaseEnv(environ []string, authStrip []string, taskID string) []string {
-	strip := map[string]bool{"CLAUDE_CONFIG_DIR": true}
+	strip := map[string]bool{"CLAUDE_CONFIG_DIR": true, artifactAccountEnv: true}
 	for _, k := range claudeenv.ParentSessionMarkers {
 		strip[k] = true
 	}
@@ -205,6 +208,10 @@ func spawnBaseEnv(environ []string, authStrip []string, taskID string) []string 
 		}
 		out = append(out, kv)
 	}
+	if removed[artifactAccountEnv] {
+		delete(removed, artifactAccountEnv)
+		uxlog.Log("[artifacts] task %q: stripped inherited %s (recomputed per task)", taskID, artifactAccountEnv)
+	}
 	if len(removed) > 0 {
 		names := make([]string, 0, len(removed))
 		for n := range removed {
@@ -215,6 +222,10 @@ func spawnBaseEnv(environ []string, authStrip []string, taskID string) []string 
 	}
 	return out
 }
+
+// artifactAccountEnv names the artifact home account BuildCmd exports when an
+// agent must publish claude.ai artifacts through artpush.
+const artifactAccountEnv = "ARGUS_ARTIFACT_ACCOUNT"
 
 // sandboxWithClaudeConfigDir appends the task's own account Claude dir to
 // ExtraWrite when it lies outside the default Claude dir (already writable),

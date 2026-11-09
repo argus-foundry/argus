@@ -36,7 +36,6 @@ func TestResident_RESTHeraExcludesStandingTeam(t *testing.T) {
 
 func TestResidentWaitingUsesStickyDetector(t *testing.T) {
 	srv, d := testServer(t)
-	close(srv.stopCh)
 	r, _, err := d.EnsureResidentTask(filepath.Join(t.TempDir(), "resident"))
 	testutil.NoError(t, err)
 	state := newIdleWatcherState()
