@@ -44,7 +44,7 @@ func ReconcileStaleSessionsExcept(database *db.DB, alive map[string]bool) ([]str
 	}
 	var flipped []string
 	for _, t := range tasks {
-		if t.Status != model.StatusInProgress {
+		if t.Status != model.StatusInProgress || t.IsResident() {
 			continue
 		}
 		if alive[t.ID] {

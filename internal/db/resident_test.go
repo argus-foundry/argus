@@ -121,6 +121,9 @@ func TestResident_LifecycleWritesRejected(t *testing.T) {
 		{"SetArchived", func() error { return d.SetArchived(r.ID, true) }},
 		{"Delete", func() error { return d.Delete(r.ID) }},
 		{"SetTaskAccount", func() error { return d.SetTaskAccount(r.ID, "work", false) }},
+		{"SetPinned", func() error { return d.SetPinned(r.ID, true) }},
+		{"Rename", func() error { return d.Rename(r.ID, "x") }},
+		{"RenameIfName", func() error { _, err := d.RenameIfName(r.ID, r.Name, "x"); return err }},
 		{"Update status", func() error {
 			c := *r
 			c.Status = model.StatusComplete

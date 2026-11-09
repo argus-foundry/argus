@@ -5,19 +5,19 @@ Every stage follows TDD (write the failing test first), adds `[resident]`-prefix
 ## 1. Failing tests from the deltas
 
 - [ ] 1.1 Write failing tests for each scenario in `specs/resident-agent/spec.md`, `specs/resident-tui/spec.md`, `specs/keybindings/spec.md`, `specs/coordinator-context-management/spec.md` and `specs/task-recycle/spec.md`
-- [ ] 1.2 Write `TestResidentExcludedEverywhere`, a table test listing every task enumeration, sweeper and lifecycle choke point against a seeded resident row
+- [x] 1.2 Write `TestResidentExcludedEverywhere`, a table test listing every task enumeration, sweeper and lifecycle choke point against a seeded resident row
 - [ ] 1.3 Confirm each `it should` criterion in design.md has a failing test (Prove-It Pattern)
 
 ## 2. Resident entity and exclusion
 
 **Depends on:** Stage 1
 
-- [ ] 2.1 Add `Task.Kind`, the `tasks.kind` column (default `""`), the partial unique index, `IsResident()`, and singleton create/lookup helpers in `internal/db`
-- [ ] 2.2 Relax the `BuildCmd` worktree precondition for a resident-kind task whose `Worktree` equals the resident working directory; verify `resume.go` and `bgsessionreap.go` need no change (Chesterton's Fence: worktree safety exists to keep agents out of project dirs)
-- [ ] 2.3 Apply the predicate at DB list queries for user-facing views and counts, then at each sweeper, reaper, PR poller, merge-safety, reconciliation, auto-prune and orphan-sweep site
-- [ ] 2.4 Reject complete, archive, delete, fork, set-status and account-move for the resident at DB and entry-point level (TUI, REST, MCP)
-- [ ] 2.5 Exclude the resident from REST `/api/tasks*`, MCP `task_list`/`task_get` and task SSE; publish `resident.*` events instead
-- [ ] 2.6 Make `TestResidentExcludedEverywhere` pass
+- [x] 2.1 Add `Task.Kind`, the `tasks.kind` column (default `""`), the partial unique index, `IsResident()`, and singleton create/lookup helpers in `internal/db`
+- [x] 2.2 Relax the `BuildCmd` worktree precondition for a resident-kind task whose `Worktree` equals the resident working directory; verify `resume.go` and `bgsessionreap.go` need no change (Chesterton's Fence: worktree safety exists to keep agents out of project dirs)
+- [x] 2.3 Apply the predicate at DB list queries for user-facing views and counts, then at each sweeper, reaper, PR poller, merge-safety, reconciliation, auto-prune and orphan-sweep site
+- [x] 2.4 Reject complete, archive, delete, fork, set-status and account-move for the resident at DB and entry-point level (TUI, REST, MCP)
+- [x] 2.5 Exclude the resident from REST `/api/tasks*`, MCP `task_list`/`task_get` and task SSE; publish `resident.*` events instead
+- [x] 2.6 Make `TestResidentExcludedEverywhere` pass
 
 ## 3. Keymap
 

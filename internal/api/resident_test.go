@@ -97,3 +97,14 @@ func TestResident_RESTRawUpdateCannotPromote(t *testing.T) {
 	w := serve(srv.routes(), "PUT", "/api/tasks/p/raw", `{"id":"p","name":"p","status":"in_progress","kind":"resident"}`)
 	testutil.Equal(t, w.Code, http.StatusConflict)
 }
+
+func TestResident_NeedsInputSetExcludesResident(t *testing.T) {
+	srv, d := testServer(t)
+	r, _, err := d.EnsureResidentTask(filepath.Join(t.TempDir(), "resident"))
+	testutil.NoError(t, err)
+
+	got := srv.withoutResident([]string{"a", r.ID, "b"})
+	testutil.DeepEqual(t, got, []string{"a", "b"})
+	testutil.DeepEqual(t, srv.withoutResident(nil), []string(nil))
+	testutil.DeepEqual(t, srv.withoutResident([]string{"a"}), []string{"a"})
+}

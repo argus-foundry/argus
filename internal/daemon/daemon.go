@@ -718,7 +718,7 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 	eligible := make([]*model.Task, 0, len(tasks))
 	var skipped int
 	for _, t := range tasks {
-		if t == nil || t.Archived || t.Branch == "" {
+		if !prPollEligible(t) {
 			continue
 		}
 		// Parse the cached PR state once: it drives both the terminal skip and the
@@ -978,6 +978,12 @@ func (d *Daemon) notifyRoleOfMergedPR(t *model.Task, prURL string) {
 	if _, sErr := d.heraNotifyService().Send(coord.ID, role.ID, body, tldr, nil); sErr != nil {
 		uxlog.Log("[pr] poll: role merge notice failed for %s: %v", t.ID, sErr)
 	}
+}
+
+// prPollEligible is the PR poller's base eligibility: a live, branched task.
+// The resident has no branch and is never polled (add-resident-agent).
+func prPollEligible(t *model.Task) bool {
+	return t != nil && !t.Archived && !t.IsResident() && t.Branch != ""
 }
 
 // prPollCadenceStride returns how many poll cycles apart a task should be
