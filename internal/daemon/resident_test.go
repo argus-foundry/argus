@@ -301,6 +301,7 @@ func TestResident_UserStopIsRestartedWhileEnabled(t *testing.T) {
 func TestResident_StateUnreadAndViewed(t *testing.T) {
 	e := newResEnv(t)
 	e.m.tick()
+	e.m.waiting = func(string) bool { return true }
 	row, _ := e.db.ResidentTask()
 	st := e.m.State()
 	testutil.Equal(t, st.Running, true)
@@ -313,11 +314,13 @@ func TestResident_StateUnreadAndViewed(t *testing.T) {
 	testutil.NoError(t, e.db.SetMeta(row.ID, db.ResidentMetaNamespace, db.MetaKeyLastReplyAt, reply))
 	st = e.m.State()
 	testutil.Equal(t, st.Unread, true)
+	testutil.Equal(t, st.Waiting, true)
 	testutil.Equal(t, st.LastReply, "hello")
 
 	e.now = e.now.Add(time.Second)
 	testutil.NoError(t, e.m.MarkViewed())
 	testutil.Equal(t, e.m.State().Unread, false)
+	testutil.Equal(t, e.m.State().Waiting, true) // viewing does not answer a permission prompt
 
 	// A newer reply re-arms unread.
 	e.now = e.now.Add(time.Second)

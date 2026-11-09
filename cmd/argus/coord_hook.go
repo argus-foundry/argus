@@ -11,14 +11,18 @@ import (
 	"net/rpc"
 	"net/rpc/jsonrpc"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/drn/argus/internal/bridge"
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/daemon"
 	"github.com/drn/argus/internal/db"
+	"github.com/drn/argus/internal/uxlog"
 )
 
 // --- `argus coord-hook`: the context-budget Stop hook ---
@@ -33,10 +37,9 @@ import (
 // session on the machine, including sessions with no relation to Argus. It
 // self-gates hard: the very first check is ARGUS_TASK_ID (only set for
 // Argus-spawned sessions — internal/agent/agent.go) plus the task carrying
-// ANY hera role binding (coordinator, worker, or freelance); an unbound task
-// is a silent no-op. Only a coordinator reaches the budget/nudge/hard-stop/
-// recycle machinery — a worker or freelance session gets its context_size
-// stamped (for the rail's context-pressure indicator) and stops there.
+// ANY hera role binding (coordinator, worker, or freelance), or the resident
+// singleton identity. Other unbound tasks silently no-op. Only a coordinator
+// can hard-stop; the resident gets non-blocking budget nudges and reply stamps.
 //
 // See openspec/changes/add-coordinator-context-management/design.md
 // Decision 1 and specs/coordinator-context-management/spec.md.
@@ -46,8 +49,12 @@ import (
 // file; tests inject in-memory fakes so the gating/nudge logic is unit
 // testable without a live daemon (context/knowledge/testing.md).
 type coordHookEnv struct {
-	Getenv          func(key string) string
-	ResolveRoleKind func(taskID string) (string, error)
+	Getenv             func(key string) string
+	ResolveRoleKind    func(taskID string) (string, error)
+	IsResident         func(taskID string) (bool, error)
+	ResidentConfig     func(taskID string) (config.ResidentConfig, error)
+	StampResidentReply func(taskID, preview string) error
+	ResidentDelivery   func(taskID, text string) error
 	// PendingRecycleAlready reports whether the coordinator has already
 	// requested a self-service recycle (task_meta hera/pending_recycle ==
 	// "true") — checked BEFORE emitting a graceful block decision so an
@@ -102,7 +109,8 @@ type coordHookEnv struct {
 // data — only the transcript path — so reading it is the only way to learn
 // the session's current context size.
 type stopHookInput struct {
-	TranscriptPath string `json:"transcript_path"`
+	TranscriptPath       string `json:"transcript_path"`
+	LastAssistantMessage string `json:"last_assistant_message"`
 }
 
 // stopHookDecision is Claude Code's Stop-hook JSON output contract: a
@@ -115,17 +123,16 @@ type stopHookDecision struct {
 }
 
 // runCoordHook is the pure, testable core of the coord-hook subcommand. It
-// gates on ARGUS_TASK_ID + a resolved hera role BEFORE touching the
-// transcript or the REST API (no-op with zero side effects when the task
-// carries no hera binding at all — ResolveRoleKind resolves unbound tasks to
-// ""), unconditionally stamps task_meta(hera, context_size) for ANY
+// gates on ARGUS_TASK_ID + a resolved hera role or resident identity before
+// reading the transcript (other unbound tasks have no writes). It
+// unconditionally stamps task_meta(hera, context_size) for any
 // hera-bound role — coordinator, worker, or freelance (rail-context-high
 // widened this from coordinator-only, so the rail's context-pressure
 // indicator has a live signal for workers too) — regardless of budget, and
 // writes a Stop-hook block decision to out only when the role is a
-// coordinator AND at/over budget: the budget/nudge/hard-stop/recycle
-// machinery below remains coordinator-only, since only a coordinator is
-// long-lived enough to need it. Re-evaluates fresh on every invocation —
+// coordinator AND at/over budget. Hard-stop remains coordinator-only. The
+// resident records reply state and queues a non-blocking nudge. Re-evaluates
+// on every invocation —
 // nothing is remembered between processes — but the nudge itself is
 // throttled (throttle-coord-hook-nudge): once it fires, it recurs only after
 // context_size has grown by at least the configured increment past the size
@@ -138,18 +145,34 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 	}
 
 	kind, err := env.ResolveRoleKind(taskID)
-	if err != nil {
+	resident := false
+	if kind == "" && env.IsResident != nil {
+		var residentErr error
+		resident, residentErr = env.IsResident(taskID)
+		if residentErr != nil {
+			uxlog.Log("[resident] Stop subject lookup failed task=%s: %v", taskID, residentErr)
+		}
+	}
+	if err != nil && !resident {
 		_, _ = fmt.Fprintf(errOut, "coord-hook: resolve role kind: %v\n", err)
 		return
 	}
-	if kind == "" {
+	if kind == "" && !resident {
 		return
 	}
+	err = nil // a resident identity can recover a failed role-mirror read
 
 	var in stopHookInput
 	if err := json.NewDecoder(stdin).Decode(&in); err != nil {
 		_, _ = fmt.Fprintf(errOut, "coord-hook: decode stdin: %v\n", err)
 		return
+	}
+	if resident {
+		if err := env.StampResidentReply(taskID, residentReplyPreview(in.LastAssistantMessage)); err != nil {
+			uxlog.Log("[resident] Stop reply stamp failed task=%s: %v", taskID, err)
+		} else {
+			uxlog.Log("[resident] Stop reply recorded task=%s", taskID)
+		}
 	}
 
 	var size int
@@ -161,6 +184,9 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 		size, err = env.ReadContextSize(taskID, in.TranscriptPath)
 	}
 	if err != nil {
+		if resident {
+			uxlog.Log("[resident] context measurement failed task=%s: %v", taskID, err)
+		}
 		_, _ = fmt.Fprintf(errOut, "coord-hook: read context size: %v\n", err)
 		return
 	}
@@ -168,9 +194,14 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 	// Always stamp, regardless of kind or budget — this is the live signal a
 	// human, the rail's context-pressure indicator, or the recycle mechanism
 	// reads, with zero dependency on the session's cooperation.
-	if !contextKnown {
+	if !contextKnown || resident {
 		if err := env.StampContextSize(taskID, size); err != nil {
+			if resident {
+				uxlog.Log("[resident] context stamp failed task=%s: %v", taskID, err)
+			}
 			_, _ = fmt.Fprintf(errOut, "coord-hook: stamp context size: %v\n", err)
+		} else if resident {
+			uxlog.Log("[resident] context stamped task=%s size=%d", taskID, size)
 		}
 	}
 
@@ -178,7 +209,7 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 	// scope as the context_size stamp above — every hera-bound role kind,
 	// regardless of budget — best-effort and non-fatal, since this is cost
 	// telemetry, not the hook's primary budget/nudge responsibility.
-	if !costKnown {
+	if !costKnown && !resident {
 		totals, err := env.ReadTokenTotals(in.TranscriptPath)
 		if err != nil {
 			_, _ = fmt.Fprintf(errOut, "coord-hook: read token totals: %v\n", err)
@@ -187,14 +218,24 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 		}
 	}
 
-	// Budget/nudge/hard-stop/recycle enforcement is coordinator-only: a
-	// worker or freelance session is stamped above and stops here.
-	if kind != string(db.HeraKindCoordinator) {
+	// Only coordinators and the resident need budget nudges. Workers and
+	// freelance sessions are stamped above and stop here.
+	if kind != string(db.HeraKindCoordinator) && !resident {
 		return
 	}
 
-	budget, err := env.Budget(taskID)
+	var budget int
+	var residentCfg config.ResidentConfig
+	if resident {
+		residentCfg, err = env.ResidentConfig(taskID)
+		budget = residentCfg.ContextBudget
+	} else {
+		budget, err = env.Budget(taskID)
+	}
 	if err != nil {
+		if resident {
+			uxlog.Log("[resident] context config read failed task=%s: %v", taskID, err)
+		}
 		_, _ = fmt.Fprintf(errOut, "coord-hook: read budget: %v\n", err)
 		return
 	}
@@ -210,7 +251,7 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 	// pending_recycle: that flag only gates the GRACEFUL path's re-blocking,
 	// not this unconditional escalation, so the pending-recycle read is
 	// skipped entirely here — it can't change the outcome.
-	if size*2 >= budget*3 {
+	if !resident && size*2 >= budget*3 {
 		if err := env.ForceRecycle(taskID); err != nil {
 			_, _ = fmt.Fprintf(errOut, "coord-hook: force recycle: %v\n", err)
 		}
@@ -237,6 +278,9 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 		increment = 0
 	}
 	if hadLastNudged && size >= lastNudged && size < lastNudged+increment {
+		if resident {
+			uxlog.Log("[resident] context nudge growth suppressed task=%s size=%d last=%d increment=%d", taskID, size, lastNudged, increment)
+		}
 		return
 	}
 
@@ -250,10 +294,12 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 	// watcher a real idle window. A read error falls back to treating the
 	// flag as not-yet-pending (the pre-fix behavior) rather than silently
 	// dropping the nudge.
-	if pending, err := env.PendingRecycleAlready(taskID); err != nil {
-		_, _ = fmt.Fprintf(errOut, "coord-hook: read pending recycle: %v\n", err)
-	} else if pending {
-		return
+	if !resident {
+		if pending, err := env.PendingRecycleAlready(taskID); err != nil {
+			_, _ = fmt.Fprintf(errOut, "coord-hook: read pending recycle: %v\n", err)
+		} else if pending {
+			return
+		}
 	}
 
 	dec := stopHookDecision{
@@ -262,6 +308,13 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 			"Context budget reached (%d/%d cache-read tokens). Reach a safe seam: bring design.md's open questions current, write a handoff_note, then call hera_status(request_recycle=true) to recycle.",
 			size, budget,
 		),
+	}
+	if resident {
+		memoryDir := residentCfg.MemoryDir
+		if memoryDir == "" {
+			memoryDir = "resident"
+		}
+		dec.Reason = fmt.Sprintf("Context budget reached (%d/%d tokens). Write undone items to %s, then call task_recycle with a short handoff_note. Do not recycle while background work is in flight or while this session owes the user a turn.", size, budget, path.Join(memoryDir, "open-loops.md"))
 	}
 	// Preserve the existing gates and cadence; only the transport changes.
 	queued := false
@@ -276,9 +329,20 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 		}
 	}
 	if !queued {
-		if err := json.NewEncoder(out).Encode(dec); err != nil {
-			_, _ = fmt.Fprintf(errOut, "coord-hook: encode decision: %v\n", err)
-			return
+		if resident {
+			if env.ResidentDelivery == nil {
+				uxlog.Log("[resident] context nudge delivery unavailable task=%s size=%d; allowing Stop", taskID, size)
+				return
+			}
+			if err := env.ResidentDelivery(taskID, dec.Reason); err != nil {
+				uxlog.Log("[resident] context nudge delivery failed task=%s: %v", taskID, err)
+				return
+			}
+		} else {
+			if err := json.NewEncoder(out).Encode(dec); err != nil {
+				_, _ = fmt.Fprintf(errOut, "coord-hook: encode decision: %v\n", err)
+				return
+			}
 		}
 	}
 
@@ -289,6 +353,26 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 	if err := env.StampLastNudgedContextSize(taskID, size); err != nil {
 		_, _ = fmt.Fprintf(errOut, "coord-hook: stamp last nudged context size: %v\n", err)
 	}
+	if resident {
+		uxlog.Log("[resident] context nudge queued task=%s size=%d budget=%d", taskID, size, budget)
+	}
+}
+
+// residentReplyPreview strips controls from the first line and limits by runes,
+// so multibyte reply previews never end in broken UTF-8.
+func residentReplyPreview(text string) string {
+	line, _, _ := strings.Cut(text, "\n")
+	preview := make([]rune, 0, 200)
+	for _, r := range line {
+		if unicode.IsControl(r) {
+			continue
+		}
+		preview = append(preview, r)
+		if len(preview) == 200 {
+			break
+		}
+	}
+	return string(preview)
 }
 
 // runCoordHookCommand wires runCoordHook to the real world: os.Stdin/Stdout/
@@ -320,6 +404,10 @@ func realCoordHookEnv() coordHookEnv {
 	return coordHookEnv{
 		Getenv:                     os.Getenv,
 		ResolveRoleKind:            resolveRoleKindReal,
+		IsResident:                 isResidentReal,
+		ResidentConfig:             residentConfigReal,
+		StampResidentReply:         stampResidentReplyReal,
+		ResidentDelivery:           residentDeliveryReal,
 		PendingRecycleAlready:      pendingRecycleAlreadyReal,
 		ReadContextSize:            readContextSizeReal,
 		BridgeMeasurement:          bridgeMeasurementReal,
@@ -759,6 +847,66 @@ func budgetReal(_ string) (int, error) {
 		return 0, fmt.Errorf("decode config: %w", err)
 	}
 	return cfg.Hera.CoordinatorContextBudget, nil
+}
+
+// Use the daemon's singleton identity; the resident deliberately has no Hera
+// role and is invisible to the generic task read endpoints.
+func isResidentReal(taskID string) (bool, error) {
+	client, err := coordHookDial()
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = client.Close() }()
+	var state daemon.ResidentStateResp
+	if err := client.Call("Daemon.ResidentState", &daemon.Empty{}, &state); err != nil {
+		return false, err
+	}
+	return state.TaskID != "" && state.TaskID == taskID, nil
+}
+
+// ResidentSend uses the same idle-gated reliable delivery as normal messages;
+// unlike a Stop block it cannot steal the current user conversation.
+func residentDeliveryReal(_ string, text string) error {
+	client, err := coordHookDial()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = client.Close() }()
+	var resp daemon.StatusResp
+	if err := client.Call("Daemon.ResidentSend", &daemon.ResidentSendReq{Text: text}, &resp); err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("resident nudge: %s", resp.Error)
+	}
+	return nil
+}
+
+func residentConfigReal(_ string) (config.ResidentConfig, error) {
+	body, err := coordHookRequest(http.MethodGet, "/api/config", nil)
+	if err != nil {
+		return config.ResidentConfig{}, err
+	}
+	var cfg config.Config
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return config.ResidentConfig{}, fmt.Errorf("decode config: %w", err)
+	}
+	return cfg.Resident, nil
+}
+
+func stampResidentReplyReal(taskID, preview string) error {
+	payload, err := json.Marshal(map[string]any{
+		"namespace": db.ResidentMetaNamespace,
+		"entries": map[string]string{
+			db.MetaKeyLastReply:   preview,
+			db.MetaKeyLastReplyAt: time.Now().UTC().Format(db.ResidentTimeFormat),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = coordHookRequest(http.MethodPut, "/api/tasks/"+taskID+"/meta", bytes.NewReader(payload))
+	return err
 }
 
 // contextSizeRetryInterval / contextSizeRetryBudget bound readContextSizeReal's

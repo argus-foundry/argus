@@ -1222,6 +1222,29 @@ func TestCoordHookReal_REST(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, nudgeIncrement, 50000)
 
+	// Resident Stop metadata uses the same sidecar endpoint, even though the
+	// resident itself is excluded from ordinary task read endpoints.
+	resident, _, err := database.EnsureResidentTask(filepath.Join(home, "resident"))
+	testutil.NoError(t, err)
+	testutil.NoError(t, stampResidentReplyReal(resident.ID, "hello 世界"))
+	replyEntries, err := database.ListMeta(resident.ID, db.ResidentMetaNamespace)
+	testutil.NoError(t, err)
+	replyMeta := map[string]string{}
+	for _, entry := range replyEntries {
+		replyMeta[entry.Key] = entry.Value
+	}
+	testutil.Equal(t, replyMeta[db.MetaKeyLastReply], "hello 世界")
+	_, err = time.Parse(db.ResidentTimeFormat, replyMeta[db.MetaKeyLastReplyAt])
+	testutil.NoError(t, err)
+	residentCfg, err := residentConfigReal(resident.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, residentCfg.ContextBudget, database.Config().Resident.ContextBudget)
+	// Disabled resident delivery fails cleanly and never launches an agent.
+	testutil.Equal(t, residentDeliveryReal(resident.ID, "budget nudge") != nil, true)
+	isResident, err := isResidentReal(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, isResident, false)
+
 	if _, err := resolveRoleKindReal("no-such-task"); err == nil {
 		t.Fatal("expected an error resolving role kind for an unknown task id")
 	}

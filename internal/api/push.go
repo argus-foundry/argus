@@ -776,7 +776,10 @@ func (s *Server) detectNeedsInputTick(state *idleWatcherState, running, idle []s
 	state.needsInputNow = needsSet
 	// The resident is excluded from the generic task needs-input set that the
 	// Tasks list and rail read; its own waiting signal is exposed separately.
-	s.residentWaiting.Store(s.containsResident(needs))
+	waiting := s.containsResident(needs)
+	if s.residentWaiting.Swap(waiting) != waiting {
+		uxlog.Log("[resident] waiting changed waiting=%t", waiting)
+	}
 	s.runner.SetNeedsInputIDs(s.withoutResident(needs))
 }
 
