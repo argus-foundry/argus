@@ -828,6 +828,11 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	cmdStr := backend.Command
 
 	fam := FamilyOf(backend.Command)
+	// Fail closed: a resident on a family that cannot enforce its tool policy
+	// and strip bypass flags must never launch with the policy silently dropped.
+	if task.IsResident() && (fam.PermissionRulesFlag == nil || fam.StripPermissionFlags == nil) {
+		return nil, nil, fmt.Errorf("resident backend %q cannot enforce the resident permission policy", backend.Command)
+	}
 	// The resident's ask rules only prompt outside bypass modes: drop any
 	// bypass/permission-mode flag from its command and force default mode
 	// below, regardless of defaults.permission_mode.
