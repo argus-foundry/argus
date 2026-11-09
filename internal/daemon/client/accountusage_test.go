@@ -119,3 +119,26 @@ func TestCliRouteFresh(t *testing.T) {
 	fd.mu.Unlock()
 	testutil.Equal(t, calls, 2)
 }
+
+func TestCliAcctRedial(t *testing.T) {
+	fd := newFakeDaemon(t)
+	fd.mu.Lock()
+	fd.usage = map[string]usagebudget.Reading{"personal": {Percentage: 15}}
+	fd.mu.Unlock()
+	c := fakeClient(t, fd)
+
+	// Daemon bounce: the original connection is dead for good, yet the
+	// account-move picker's usage source must still read the live daemon
+	// instead of reporting every account unknown (auto then picked the
+	// over-budget default account).
+	testutil.NoError(t, c.rpc.Close())
+	_, err := c.AccountUsage()
+	testutil.Error(t, err)
+
+	got := c.AccountUsageSource()(config.Config{})
+	testutil.Equal(t, got["personal"].Percentage, 15.0)
+
+	// Daemon gone entirely: unknown (nil), no panic.
+	c.sockPath = filepath.Join(t.TempDir(), "gone.sock")
+	testutil.Nil(t, c.AccountUsageSource()(config.Config{}))
+}

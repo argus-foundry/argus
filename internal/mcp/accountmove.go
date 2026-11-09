@@ -19,7 +19,7 @@ var accountMoveToolDefs = []Tool{
 		Name: "task_move_account",
 		Description: `Move an Argus task (Claude backends only) to another account and resume its conversation there. Use it to rescue an agent stuck on its account's usage limit when another account has budget. It copies the conversation into the target account, switches the task's account, and restarts the same task in place (same worktree, branch and hera role); no new task is created.
 
-` + "`account`" + ` is a configured account name, "default", or "auto" (the other account with the lowest current usage). Check each account's 5-hour and weekly usage first with argus_api_get on /api/accounts. A task whose agent is actively working is refused unless ` + "`force`" + ` is true, which interrupts it. A task cannot move itself (the restart would end the session waiting for the answer): pass your own ` + "`caller_id`" + ` or ` + "`cwd`" + `, and ask your coordinator or the user to move you instead.`,
+` + "`account`" + ` is a configured account name, "default", or "auto" (the other account with the lowest current usage). Naming the account the task is already on restarts it in place there. Check each account's 5-hour and weekly usage first with argus_api_get on /api/accounts. A task whose agent is actively working is refused unless ` + "`force`" + ` is true, which interrupts it. A task cannot move itself (the restart would end the session waiting for the answer): pass your own ` + "`caller_id`" + ` or ` + "`cwd`" + `, and ask your coordinator or the user to move you instead.`,
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

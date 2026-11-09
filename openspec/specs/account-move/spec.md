@@ -61,3 +61,26 @@ When no transcript exists, the move SHALL still complete, the session SHALL star
 - **WHEN** a task is moved from `default` to `personal` and later back to `default`
 - **THEN** it resumes the newest conversation, including turns taken on `personal`
 
+
+### Requirement: Account usage for moves survives a daemon bounce
+
+The TUI SHALL read per-account usage for the `>` picker and the `auto` target over a fresh daemon connection when its long-lived client has failed, and SHALL treat usage as unknown only when the daemon is unreachable on that fresh connection too.
+
+#### Scenario: Daemon bounced since the TUI started
+
+- **WHEN** the TUI's original daemon connection is dead but the daemon is running
+- **THEN** the picker and `auto` use the daemon's current per-account usage readings
+
+### Requirement: The move picker lists every account and allows re-picking the current one
+
+The TUI `>` picker SHALL list `auto` plus every account that supports the task's backend, including the account the task is on, which SHALL be marked as current. Each row SHALL show the account's 5-hour and weekly usage and SHALL warn when either window is at or above 80%; a warned account SHALL remain selectable. A move whose target is the task's current account SHALL restart the task in place on that account (resuming its conversation when a transcript exists), copy nothing, and pin the account.
+
+#### Scenario: Current account is listed and marked
+
+- **WHEN** a task on `default` opens the picker and `personal` also exists
+- **THEN** the rows are `auto`, `default` (marked current) and `personal`, each with usage
+
+#### Scenario: Re-picking the current account restarts in place
+
+- **WHEN** a live task on `default` is moved to `default`
+- **THEN** the session restarts in place on `default` with the conversation resumed, and the task is pinned to `default`

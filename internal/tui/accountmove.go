@@ -64,8 +64,8 @@ func (a *App) openAccountPicker(taskID string) {
 	}()
 }
 
-// accountMoveChoices lists "auto" plus every other account that can run the
-// task, labelled with usage. A non-empty notice means the task cannot move.
+// accountMoveChoices lists "auto" plus every account that can run the task
+// (the current one marked), labelled with usage. A non-empty notice means the task cannot move.
 func (a *App) accountMoveChoices(t *model.Task) ([]modal.AccountChoice, string) {
 	cfg := a.db.Config()
 	current := agent.NormalizeAccount(t.Account)
@@ -80,22 +80,40 @@ func (a *App) accountMoveChoices(t *model.Task) ([]modal.AccountChoice, string) 
 	names := cfg.AccountNamesFor("claude")
 	usage := agent.AccountUsage(cfg)
 	now := time.Now()
-	var others []modal.AccountChoice
+	var all []modal.AccountChoice
 	for _, n := range names {
-		if n == current {
-			continue
-		}
 		five, week := usagebudget.LiveWindows(usage[n], now)
-		others = append(others, modal.AccountChoice{Name: n, Detail: usageDetail(windowPct(five), windowPct(week))})
+		all = append(all, accountChoice(n, n == current, windowPct(five), windowPct(week)))
 	}
-	if len(others) == 0 {
+	if len(names) < 2 {
 		return nil, "No other account can run this task"
 	}
 	auto := modal.AccountChoice{Name: agent.AutoMoveTarget, Detail: autoDetail}
 	if picked, _, ok := agent.PickMoveTarget(cfg, usage, "claude", current); ok {
 		auto.Detail = autoDetail + " (now " + picked + ")"
 	}
-	return append([]modal.AccountChoice{auto}, others...), ""
+	return append([]modal.AccountChoice{auto}, all...), ""
+}
+
+// nearLimitPct is the usage at or above which the picker warns on an account.
+// The account stays selectable.
+const nearLimitPct = 80.0
+
+// accountChoice builds one picker row: usage, a "current" marker for the
+// account the task is on (re-picking it restarts the task in place), and a
+// warning when either window is at or near its limit.
+func accountChoice(name string, current bool, five, week *float64) modal.AccountChoice {
+	detail := usageDetail(five, week)
+	for _, p := range []*float64{five, week} {
+		if p != nil && *p >= nearLimitPct {
+			detail += " ⚠ near limit"
+			break
+		}
+	}
+	if current {
+		detail += " (current, restarts in place)"
+	}
+	return modal.AccountChoice{Name: name, Detail: detail}
 }
 
 // remoteAccountMoveChoices builds the choices from the remote daemon's
@@ -105,21 +123,21 @@ func remoteAccountMoveChoices(rl remoteAccountLister, current string) ([]modal.A
 	if err != nil {
 		return nil, "Move account: could not list accounts: " + err.Error()
 	}
-	var others []modal.AccountChoice
+	var all []modal.AccountChoice
 	for _, ac := range list {
-		if !ac.Supports.Claude || ac.Name == current {
+		if !ac.Supports.Claude {
 			continue
 		}
-		detail := usageDetail(nil, nil)
+		var five, week *float64
 		if u := ac.Usage; u != nil {
-			detail = usageDetail(u.FiveHourPct, u.WeeklyPct)
+			five, week = u.FiveHourPct, u.WeeklyPct
 		}
-		others = append(others, modal.AccountChoice{Name: ac.Name, Detail: detail})
+		all = append(all, accountChoice(ac.Name, ac.Name == current, five, week))
 	}
-	if len(others) == 0 {
+	if len(all) < 2 {
 		return nil, "No other account can run this task"
 	}
-	return append([]modal.AccountChoice{{Name: agent.AutoMoveTarget, Detail: autoDetail}}, others...), ""
+	return append([]modal.AccountChoice{{Name: agent.AutoMoveTarget, Detail: autoDetail}}, all...), ""
 }
 
 // autoDetail describes the "auto" choice in the picker.

@@ -908,6 +908,19 @@ func (c *Client) RoutingUsageFreshResilient() (backendtier.Usage, error) {
 }
 
 func (c *Client) resilientUsage(call func(*Client) (backendtier.Usage, error)) (backendtier.Usage, error) {
+	return resilient(c, call)
+}
+
+// AccountUsageResilient is AccountUsage with the same reconnect-once behavior
+// as RoutingUsageResilient: AccountUsageSource is bound to the client dialed
+// at TUI startup, which is dead after any daemon bounce.
+func (c *Client) AccountUsageResilient() (map[string]usagebudget.Reading, error) {
+	return resilient(c, (*Client).AccountUsage)
+}
+
+// resilient runs call on c, and on failure once more over a short-lived fresh
+// connection to c's socket. The original error is returned if that also fails.
+func resilient[T any](c *Client, call func(*Client) (T, error)) (T, error) {
 	usage, err := call(c)
 	if err == nil || c == nil || c.sockPath == "" {
 		return usage, err
@@ -932,7 +945,7 @@ func (c *Client) resilientUsage(call func(*Client) (backendtier.Usage, error)) (
 // account unknown.
 func (c *Client) AccountUsageSource() func(config.Config) map[string]usagebudget.Reading {
 	return func(config.Config) map[string]usagebudget.Reading {
-		usage, err := c.AccountUsage()
+		usage, err := c.AccountUsageResilient()
 		if err != nil {
 			uxlog.Log("[account] usage read from daemon failed, treating every account as unknown: %v", err)
 			return nil

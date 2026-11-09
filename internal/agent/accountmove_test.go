@@ -278,6 +278,27 @@ func TestMoveTaskAccount_ExplicitDefaultStaysPinned(t *testing.T) {
 	testutil.False(t, got.AccountRouted)
 }
 
+func TestMoveTaskAccount_SameAccountRestartsInPlace(t *testing.T) {
+	f := newMoveFixture(t, true)
+	r := &moveRunner{sess: &moveSession{idle: true, alive: true}}
+	_, res, err := MoveTaskAccount(f.d, r, AccountMoveInput{TaskID: "mv", Account: "default"})
+	testutil.NoError(t, err)
+	testutil.Equal(t, res, AccountMoveResult{From: "default", To: "default", Resumed: true, Started: true})
+	testutil.NotNil(t, r.kicked)
+	testutil.Equal(t, r.kicked.SessionID, "sid-1")
+	got, _ := f.d.Get("mv")
+	testutil.False(t, got.AccountRouted)
+}
+
+func TestMoveTaskAccount_SameAccountNoTranscriptRevives(t *testing.T) {
+	f := newMoveFixture(t, false)
+	r := &moveRunner{sess: &moveSession{idle: true, alive: true}}
+	_, res, err := MoveTaskAccount(f.d, r, AccountMoveInput{TaskID: "mv", Account: "default"})
+	testutil.NoError(t, err)
+	testutil.False(t, res.Resumed)
+	testutil.NotNil(t, r.revived)
+}
+
 func TestMoveTaskAccount_MoveBackKeepsNewerHistory(t *testing.T) {
 	f := newMoveFixture(t, true)
 	r := &moveRunner{sess: &moveSession{idle: true, alive: true}}
@@ -316,7 +337,6 @@ func TestMoveTaskAccount_Rejections(t *testing.T) {
 	}{
 		{"unknown task", nil, AccountMoveInput{TaskID: "nope", Account: "work"}, db.ErrTaskNotFound, ""},
 		{"empty target", nil, AccountMoveInput{TaskID: "mv"}, ErrAccount, "account is required"},
-		{"same account", nil, AccountMoveInput{TaskID: "mv", Account: "default"}, ErrAccount, "already on account"},
 		{"unknown target", nil, AccountMoveInput{TaskID: "mv", Account: "ghost"}, ErrAccount, "unknown account"},
 		{"target lacks the backend's tool", nil, AccountMoveInput{TaskID: "mv", Account: "cx"}, ErrAccount, "does not support"},
 		{"non-Claude task", func(f *moveFixture) {
