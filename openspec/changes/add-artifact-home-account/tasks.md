@@ -42,5 +42,5 @@
 
 - [x] 5.1 Add a `context/knowledge/gotchas/misc.md` bullet: artifact home account is separate from routing; the export is conditional and never empty; there is no fallback to the built-in tool when artpush fails; config.toml only for now, with Settings UI as a named follow-up. Update the index row.
 - [x] 5.2 Add `[project_artifact_accounts]` to the README Reference config table and `ARGUS_ARTIFACT_ACCOUNT` to the exported-env table
-- [ ] 5.3 `make pre-pr` passes clean
+- [x] 5.3 `make pre-pr` passes clean
 - [ ] 5.4 Archive the change (`openspec archive add-artifact-home-account`) on the branch before merge
