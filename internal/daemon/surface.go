@@ -210,6 +210,8 @@ const (
 	//     inline --settings flag and a non-bypass permission mode is forced
 	//     (add-resident-agent D6), and its Argus MCP URL is bound to its own task
 	//     (?caller=). A stale supervisor spawns the resident without them, so outward actions would not prompt.
+	//     The supervisor also rebuilds Task.Kind from the wire (protocol v12);
+	//     without it BuildCmd cannot tell the resident from a plain task.
 	SupervisorSpawnSurface = 39
 
 	// SupervisorStreamSurface names the observable behavior of the live-session

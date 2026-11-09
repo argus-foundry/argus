@@ -1,6 +1,7 @@
 package hera
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/drn/argus/internal/db"
@@ -20,7 +21,12 @@ func TestResidentReturnPreservesAttentionExcursion(t *testing.T) {
 	p.focus.SetRegion(FocusCoord)
 	p.focus.ToggleFullscreen()
 	snapshot := p.CaptureReturn()
+	before := make(map[int64]bool, len(p.rail.collapsed))
+	for k, v := range p.rail.collapsed {
+		before[k] = v
+	}
 	p.rail.ToggleCollapse()
+	testutil.False(t, reflect.DeepEqual(before, p.rail.collapsed))
 	p.focus.ToRail()
 	var focused Focus
 	p.OnFocusChange = func(f Focus) { focused = f }
@@ -29,6 +35,7 @@ func TestResidentReturnPreservesAttentionExcursion(t *testing.T) {
 	testutil.Equal(t, p.focus.State(), FocusCoord)
 	testutil.Equal(t, focused, FocusCoord)
 	testutil.True(t, p.focus.Fullscreen())
+	testutil.DeepEqual(t, p.rail.collapsed, before)
 	testutil.True(t, p.rail.excursion == attention)
 	testutil.True(t, p.rail.RestoreExcursion())
 }

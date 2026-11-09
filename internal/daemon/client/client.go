@@ -253,10 +253,34 @@ func (c *Client) Close() error {
 	return c.closeErr
 }
 
+// residentProtocolVersion is the first supervisor protocol that carries
+// Task.Kind on Start/Kick/Recycle.
+const residentProtocolVersion = 12
+
+// checkResidentSupported refuses to hand the resident to a handshaken
+// supervisor too old to carry Task.Kind: it would rebuild the task as a plain
+// one and spawn the resident without its forced permission mode and tool rules.
+func (c *Client) checkResidentSupported(task *model.Task) error {
+	if !task.IsResident() {
+		return nil
+	}
+	c.mu.Lock()
+	peer := c.peerProtocol
+	c.mu.Unlock()
+	if peer == 0 || peer >= residentProtocolVersion {
+		return nil
+	}
+	uxlog.Log("[resident] refusing task=%s: supervisor protocol v%d < v%d", task.ID, peer, residentProtocolVersion)
+	return fmt.Errorf("session supervisor is running an older Argus (protocol v%d) that cannot protect the resident agent; restart the supervisor (argus doctor) and retry", peer)
+}
+
 // Start requests the daemon to start a session and opens a stream for its output.
 func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, error) {
 	uxlog.Log("client.Start: task=%s session=%s resume=%v", task.ID, task.SessionID, resume)
 	if err := c.checkAccountSupported(task); err != nil {
+		return nil, err
+	}
+	if err := c.checkResidentSupported(task); err != nil {
 		return nil, err
 	}
 	req := &daemon.StartReq{
@@ -271,6 +295,7 @@ func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		Profile:         task.Profile,
 		Worktree:        task.Worktree,
 		Account:         task.Account,
+		Kind:            task.Kind,
 		SandboxOverride: task.SandboxOverride,
 		Branch:          task.Branch,
 		Rows:            rows,
@@ -562,6 +587,9 @@ func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, 
 	if err := c.checkAccountSupported(task); err != nil {
 		return err
 	}
+	if err := c.checkResidentSupported(task); err != nil {
+		return err
+	}
 	var resp daemon.StatusResp
 	if err := c.call(method, &daemon.KickReq{
 		Revive:          revive,
@@ -576,6 +604,7 @@ func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, 
 		Profile:         task.Profile,
 		Worktree:        task.Worktree,
 		Account:         task.Account,
+		Kind:            task.Kind,
 		SandboxOverride: task.SandboxOverride,
 		Branch:          task.Branch,
 		Rows:            rows,
@@ -609,6 +638,9 @@ func (c *Client) Recycle(task *model.Task, _ config.Config, rows, cols uint16) e
 	if err := c.checkAccountSupported(task); err != nil {
 		return err
 	}
+	if err := c.checkResidentSupported(task); err != nil {
+		return err
+	}
 	var resp daemon.StatusResp
 	if err := c.call("Daemon.Recycle", &daemon.RecycleReq{
 		MCPPort:         c.currentMCPPort(),
@@ -621,6 +653,7 @@ func (c *Client) Recycle(task *model.Task, _ config.Config, rows, cols uint16) e
 		Profile:         task.Profile,
 		Worktree:        task.Worktree,
 		Account:         task.Account,
+		Kind:            task.Kind,
 		SandboxOverride: task.SandboxOverride,
 		Branch:          task.Branch,
 		Rows:            rows,

@@ -300,11 +300,18 @@ func TestReadTaskWorktreesReadOnly(t *testing.T) {
 		testutil.NoError(t, d.Add(tk))
 	}
 	testutil.NoError(t, d.SetArchived("b", true))
+	res, _, err := d.EnsureResidentTask(filepath.Join(t.TempDir(), "resident"))
+	testutil.NoError(t, err)
 	testutil.NoError(t, d.Close())
 
 	rows, err = ReadTaskWorktreesReadOnly(path)
 	testutil.NoError(t, err)
-	testutil.Equal(t, len(rows), 2) // the worktree-less row is excluded
+	testutil.Equal(t, len(rows), 2) // the worktree-less and resident rows are excluded
+	for _, r := range rows {
+		if r.ID == res.ID {
+			t.Fatal("resident row must not appear in ReadTaskWorktreesReadOnly")
+		}
+	}
 	byID := map[string]TaskWorktreeRow{}
 	for _, r := range rows {
 		byID[r.ID] = r

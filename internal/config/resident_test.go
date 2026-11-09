@@ -119,6 +119,7 @@ context_budget = 123000
 memory_dir = "assistant"
 model = "opus"
 account = "work"
+allow_tools = ["c"]
 ask_tools = ["a"]
 deny_tools = ["b"]
 `), 0o644))
@@ -130,6 +131,7 @@ deny_tools = ["b"]
 	testutil.Equal(t, r.MemoryDir, "assistant")
 	testutil.Equal(t, r.Model, "opus")
 	testutil.Equal(t, r.Account, "work")
+	testutil.DeepEqual(t, r.AllowTools, []string{"c"})
 	testutil.DeepEqual(t, r.AskTools, []string{"a"})
 	testutil.DeepEqual(t, r.DenyTools, []string{"b"})
 }
@@ -158,4 +160,47 @@ func TestDefaultResidentConfig_TiersAreDisjoint(t *testing.T) {
 		testutil.Equal(t, seen[send], "deny")
 	}
 	testutil.Equal(t, seen["mcp__claude_ai_Slack__slack_send_message_draft"], "allow")
+}
+
+// Property: outward-acting tools never sit in the unprompted allow tier, and
+// the tools that must prompt or be refused are in the right tier.
+func TestDefaultResidentConfig_OutwardActionsNeverAllowed(t *testing.T) {
+	r := DefaultResidentConfig(1)
+	has := func(list []string, want string) bool {
+		for _, x := range list {
+			if x == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []string{
+		"mcp__claude_ai_Google_Calendar__create_event", "mcp__claude_ai_Google_Calendar__update_event",
+		"mcp__claude_ai_Google_Calendar__delete_event", "mcp__claude_ai_Google_Calendar__respond_to_event",
+		"mcp__claude_ai_Gmail__send_message", "mcp__claude_ai_Gmail__reply", "mcp__claude_ai_Gmail__forward",
+		"mcp__claude_ai_Superhuman_Mail__send_draft",
+		"mcp__claude_ai_Slack__slack_create_canvas", "mcp__claude_ai_Slack__slack_create_list",
+	} {
+		if !has(r.AskTools, want) {
+			t.Errorf("AskTools missing %s", want)
+		}
+	}
+	for _, want := range []string{"mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_schedule_message"} {
+		if !has(r.DenyTools, want) {
+			t.Errorf("DenyTools missing %s", want)
+		}
+	}
+	const draft = "mcp__claude_ai_Slack__slack_send_message_draft"
+	outward := []string{"send", "create_", "update", "delete", "respond", "reply", "forward", "schedule", "share"}
+	for _, tool := range r.AllowTools {
+		if tool == draft {
+			continue
+		}
+		name := tool[strings.LastIndex(tool, "__")+2:]
+		for _, verb := range outward {
+			if strings.Contains(name, verb) {
+				t.Errorf("allow tier holds outward-acting tool %s (matches %q)", tool, verb)
+			}
+		}
+	}
 }

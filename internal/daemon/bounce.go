@@ -306,7 +306,7 @@ func sendBounceSignals(database *db.DB, ids []string) int {
 	sent := 0
 	for _, id := range ids {
 		t, getErr := database.Get(id)
-		if getErr != nil || t == nil || t.Archived {
+		if getErr != nil || t == nil || t.Archived || t.IsResident() {
 			slog.Info("bounce: skipping task", "task", id)
 			continue
 		}

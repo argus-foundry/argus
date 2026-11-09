@@ -1,12 +1,17 @@
 package daemon
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/drn/argus/internal/agent"
+	"github.com/drn/argus/internal/api"
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/db"
 	"github.com/drn/argus/internal/model"
@@ -416,4 +421,81 @@ func TestResident_RPCRoundTrip(t *testing.T) {
 	testutil.NoError(t, svc.ResidentSend(&ResidentSendReq{Text: ""}, &ok))
 	testutil.Equal(t, ok.OK, false)
 	testutil.Equal(t, ok.Error != "", true)
+}
+
+// captureSlog swaps the default slog handler for one that records messages.
+func captureSlog(t *testing.T) *[]string {
+	t.Helper()
+	var mu sync.Mutex
+	var msgs []string
+	prev := slog.Default()
+	slog.SetDefault(slog.New(&recHandler{mu: &mu, msgs: &msgs}))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &msgs
+}
+
+type recHandler struct {
+	mu   *sync.Mutex
+	msgs *[]string
+}
+
+func (h *recHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	*h.msgs = append(*h.msgs, r.Message)
+	h.mu.Unlock()
+	return nil
+}
+func (h *recHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recHandler) WithGroup(string) slog.Handler      { return h }
+
+func TestResident_LogReachesSlog(t *testing.T) {
+	msgs := captureSlog(t)
+	e := newResEnv(t)
+	e.cfg.KB.Enabled = false // prerequisite failure
+	e.m.tick()
+	found := false
+	for _, m := range *msgs {
+		if strings.HasPrefix(m, "[resident] not starting:") {
+			found = true
+		}
+	}
+	testutil.Equal(t, found, true)
+}
+
+func TestResident_WaitsForMCPServer(t *testing.T) {
+	e := newResEnv(t)
+	ready := false
+	e.m.mcpReady = func() bool { return ready }
+	e.m.tick()
+	testutil.Equal(t, len(e.run.starts), 0)
+	testutil.Equal(t, e.m.lastReason, "waiting for the Argus MCP server")
+	ready = true
+	e.m.tick()
+	testutil.Equal(t, len(e.run.starts), 1)
+}
+
+func TestResident_DaemonManagerClosures(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	database, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	runner := agent.NewRunner(nil)
+	d := &Daemon{db: database, sessionCore: newSessionCore(runner, config.DefaultConfig, make(chan struct{}))}
+	m := d.residentMgr()
+	testutil.Equal(t, m.mcpReady(), false)
+	d.mu.Lock()
+	d.mcpPort = 7742
+	d.mu.Unlock()
+	testutil.Equal(t, m.mcpReady(), true)
+
+	testutil.Equal(t, m.recycling("r1"), false)
+	d.taskRecycler = newTaskRecycleRunner(d.db, d.runner, func() config.Config { return config.DefaultConfig() })
+	d.taskRecycler.inFlight.Store("r1", struct{}{})
+	testutil.Equal(t, m.recycling("r1"), true)
+	testutil.Equal(t, m.recycling("other"), false)
+
+	testutil.Equal(t, m.waiting("r1"), false)
+	d.apiServer = api.New(d.db, d.runner, "tok", nil, nil)
+	testutil.Equal(t, m.waiting("r1"), false)
 }

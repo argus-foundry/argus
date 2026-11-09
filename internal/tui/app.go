@@ -362,6 +362,7 @@ type App struct {
 	residentSt            residentAttention
 	residentPollPending   bool
 	residentPolledAt      time.Time
+	residentMarkViewedFn  func() error                             // test seam; default daemonClient.ResidentMarkViewed
 	residentStateFn       func() (daemon.ResidentStateResp, error) // test seam; default daemonClient.ResidentState
 	agentState            agentview.State
 	daemonConnected       bool
@@ -794,6 +795,11 @@ func New(database store.Store, runner agent.SessionProvider, daemonConnected boo
 
 	app.settings = NewSettingsView(database)
 	app.settings.Keys = app.activeKeymap
+	// Rename/enable applies live: no waiting for the next resident tick.
+	app.settings.OnResidentChange = func(string, bool) {
+		app.refreshResidentTab()
+		app.syncResidentBox()
+	}
 	app.settings.OnHostSleepUpdate = func() {
 		app.tapp.QueueUpdateDraw(func() { app.settings.Refresh() })
 	}
@@ -4099,9 +4105,23 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 	a.repaint.noteKey() // echo frames keep the fast cap; nil-safe before the pump exists
 	// This global action also works with a rune binding on a focused pane.
 	// A modal or text editor owns it as an ignored key, without dismissing it.
-	if act, ok := a.activeKeymap().Resolve(keymap.CtxGlobal, event); ok && act == keymap.ActGlobalResident {
-		a.toggleResident()
-		return nil
+	// A plugin view is full surrender, so the key falls through to the plugin.
+	// A modal swallows it (so dismiss-on-any-key modals stay open), but a text
+	// field keeps it as ordinary input (a rune binding like "~" must stay typeable).
+	if a.mode != modePluginView {
+		if act, ok := a.activeKeymap().Resolve(keymap.CtxGlobal, event); ok && act == keymap.ActGlobalResident {
+			switch {
+			case a.residentModalBlocked():
+				uxlog.Log("[resident] toggle skipped: modal open")
+				return nil
+			case a.residentTextInputBlocked():
+				// Fall through to the normal dispatch below so the field gets the key.
+				uxlog.Log("[resident] toggle skipped: text input owns the key")
+			default:
+				a.toggleResident()
+				return nil
+			}
+		}
 	}
 	var entered time.Time
 	if a.typing != nil {

@@ -3,6 +3,7 @@ package daemon
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"sync"
@@ -37,6 +38,14 @@ const residentMaxSendBytes = 64 << 10
 // session (see resident_memory.go). A var so tests can stub it.
 var residentOrientationPrompt = buildResidentOrientation
 
+// residentLog writes a [resident] line to both the uxlog and slog. The daemon
+// (and supervisor) never call uxlog.Init, so uxlog.Log alone is a silent no-op
+// there; slog reaches the daemon log. Same dual-write as internal/api/bridge.go.
+func residentLog(format string, args ...any) {
+	uxlog.Log(format, args...)
+	slog.Info(fmt.Sprintf(format, args...)) //nolint:gosec // G706: internal diagnostics, not a user-controlled log-forging surface
+}
+
 // residentRunner is the slice of agent.SessionRunner the manager uses.
 type residentRunner interface {
 	Get(taskID string) agent.SessionHandle
@@ -64,7 +73,11 @@ type residentManager struct {
 	notifier  func() residentNotifier // late-bound: the notifier is built in Serve
 	recycling func(taskID string) bool
 	waiting   func(taskID string) bool
-	now       func() time.Time
+	// mcpReady reports whether the daemon's MCP server has bound. nil means
+	// ready. The resident's --mcp-config needs the port at spawn, and a session
+	// started before it binds never gets the config.
+	mcpReady func() bool
+	now      func() time.Time
 
 	mu           sync.Mutex
 	failures     int
@@ -135,7 +148,7 @@ func (m *residentManager) reason(msg string) {
 	m.loggedReason = msg
 	m.mu.Unlock()
 	if changed && msg != "" {
-		uxlog.Log("[resident] not starting: %s", msg)
+		residentLog("[resident] not starting: %s", msg)
 	}
 }
 
@@ -150,6 +163,10 @@ func (m *residentManager) tick() {
 	}
 	if err := cfg.ResidentPrereq(); err != nil {
 		m.reason(err.Error())
+		return
+	}
+	if m.mcpReady != nil && !m.mcpReady() {
+		m.reason("waiting for the Argus MCP server")
 		return
 	}
 	backend, err := residentBackend(cfg)
@@ -177,7 +194,7 @@ func (m *residentManager) tick() {
 			m.aliveSince = now
 		}
 		if m.failures > 0 && now.Sub(m.aliveSince) >= residentStableAfter {
-			uxlog.Log("[resident] stable for %s, backoff reset", residentStableAfter)
+			residentLog("[resident] stable for %s, backoff reset", residentStableAfter)
 			m.failures = 0
 		}
 		m.mu.Unlock()
@@ -222,24 +239,24 @@ func (m *residentManager) start(task *model.Task, cfg config.Config, backend str
 		}
 	}
 	if err := m.db.Update(task); err != nil {
-		uxlog.Log("[resident] persist row before start failed: %v", err)
+		residentLog("[resident] persist row before start failed: %v", err)
 		m.reason(fmt.Sprintf("persist resident row: %v", err))
 		return
 	}
 	_, reattached, err := m.runner.StartOrReattach(task, cfg, 24, 80, resume)
 	if err != nil {
-		uxlog.Log("[resident] start failed attempt=%d resume=%t backend=%s: %v", attempt, resume, backend, err)
+		residentLog("[resident] start failed attempt=%d resume=%t backend=%s: %v", attempt, resume, backend, err)
 		m.reason(fmt.Sprintf("start failed: %v", err))
 		return
 	}
 	if reattached {
-		uxlog.Log("[resident] re-attached to running session task=%s", task.ID)
+		residentLog("[resident] re-attached to running session task=%s", task.ID)
 		m.mu.Lock()
 		m.failures = 0
 		m.mu.Unlock()
 		return
 	}
-	uxlog.Log("[resident] started task=%s attempt=%d resume=%t backend=%s", task.ID, attempt, resume, backend)
+	residentLog("[resident] started task=%s attempt=%d resume=%t backend=%s", task.ID, attempt, resume, backend)
 }
 
 func (m *residentManager) stopIfRunning(why string) {
@@ -254,10 +271,10 @@ func (m *residentManager) stopIfRunning(why string) {
 		return
 	}
 	if err := m.runner.Stop(task.ID); err != nil {
-		uxlog.Log("[resident] stop (%s) failed: %v", why, err)
+		residentLog("[resident] stop (%s) failed: %v", why, err)
 		return
 	}
-	uxlog.Log("[resident] stopped task=%s (%s)", task.ID, why)
+	residentLog("[resident] stopped task=%s (%s)", task.ID, why)
 }
 
 // run drives tick until done closes.
@@ -339,7 +356,7 @@ func (m *residentManager) MarkViewed() error {
 	if err := m.db.SetMeta(task.ID, db.ResidentMetaNamespace, db.MetaKeyLastViewedAt, ts); err != nil {
 		return err
 	}
-	uxlog.Log("[resident] marked viewed at %s", ts)
+	residentLog("[resident] marked viewed at %s", ts)
 	return nil
 }
 
@@ -373,7 +390,7 @@ func (m *residentManager) Send(text, deliveryID string) error {
 		deliveryID = fmt.Sprintf("%d", m.now().UnixNano())
 	}
 	n.ReliableNotify(task.ID, text, "resident:"+deliveryID, notify.NotifyOpts{})
-	uxlog.Log("[resident] send queued task=%s delivery=%s bytes=%d", task.ID, deliveryID, len(text))
+	residentLog("[resident] send queued task=%s delivery=%s bytes=%d", task.ID, deliveryID, len(text))
 	return nil
 }
 
@@ -394,6 +411,11 @@ func (d *Daemon) residentMgr() *residentManager {
 			}
 			_, in := d.taskRecycler.inFlight.Load(id)
 			return in
+		}
+		m.mcpReady = func() bool {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			return d.mcpPort != 0
 		}
 		m.waiting = func(id string) bool {
 			return d.apiServer != nil && d.apiServer.ResidentWaiting()

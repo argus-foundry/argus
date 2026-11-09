@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -779,6 +780,8 @@ func (s *Server) detectNeedsInputTick(state *idleWatcherState, running, idle []s
 	waiting := s.containsResident(needs)
 	if s.residentWaiting.Swap(waiting) != waiting {
 		uxlog.Log("[resident] waiting changed waiting=%t", waiting)
+		// uxlog is a no-op in the daemon; slog reaches daemon.log.
+		slog.Info("[resident] waiting changed", "waiting", waiting)
 	}
 	s.runner.SetNeedsInputIDs(s.withoutResident(needs))
 }

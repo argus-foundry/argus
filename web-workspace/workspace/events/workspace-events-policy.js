@@ -4,6 +4,7 @@ export function patchEvent(tasks,event){
   'task.status_changed':{status:p.to},'task.completed':{status:'complete'},'task.renamed':{name:p.to},
   'session.needs_input':{needs_input:!!p.needs_input},'session.idle':{idle:true},'session.started':{live:true,idle:false,needs_input:false},'session.exited':{live:false},
  };
+ if(typeof type==='string'&&type.startsWith('resident.'))return {tasks,resnapshot:false};
  if(type==='task.archived')return {tasks:tasks.map(task=>task.id===id?{...task,archive_pending:true}:task),resnapshot:true};
  if(type==='task.deleted')return {tasks:tasks.filter(task=>task.id!==id),resnapshot:false};
  if(type in changes)return {tasks:tasks.map(task=>task.id===id?{...task,...changes[type]}:task),resnapshot:!tasks.some(task=>task.id===id)};

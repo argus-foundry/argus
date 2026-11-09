@@ -7,7 +7,6 @@ import (
 
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/kb"
-	"github.com/drn/argus/internal/uxlog"
 )
 
 // residentMemoryDir returns the vault-relative working-memory folder: the
@@ -40,9 +39,9 @@ func (m *residentManager) seedResidentMemory(cfg config.Config) {
 		created, err := kb.SeedVaultFile(m.db, cfg.KB.MetisVaultPath, path.Join(dir, f.name), content)
 		switch {
 		case err != nil:
-			uxlog.Log("[resident] seed %s/%s failed: %v", dir, f.name, err)
+			residentLog("[resident] seed %s/%s failed: %v", dir, f.name, err)
 		case created:
-			uxlog.Log("[resident] seeded %s/%s", dir, f.name)
+			residentLog("[resident] seeded %s/%s", dir, f.name)
 		}
 	}
 }

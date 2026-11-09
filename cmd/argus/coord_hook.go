@@ -151,6 +151,7 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 		resident, residentErr = env.IsResident(taskID)
 		if residentErr != nil {
 			uxlog.Log("[resident] Stop subject lookup failed task=%s: %v", taskID, residentErr)
+			_, _ = fmt.Fprintf(errOut, "coord-hook: resident subject lookup: %v\n", residentErr)
 		}
 	}
 	if err != nil && !resident {
@@ -170,6 +171,7 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 	if resident {
 		if err := env.StampResidentReply(taskID, residentReplyPreview(in.LastAssistantMessage)); err != nil {
 			uxlog.Log("[resident] Stop reply stamp failed task=%s: %v", taskID, err)
+			_, _ = fmt.Fprintf(errOut, "coord-hook: stamp resident reply: %v\n", err)
 		} else {
 			uxlog.Log("[resident] Stop reply recorded task=%s", taskID)
 		}
@@ -336,6 +338,7 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 			}
 			if err := env.ResidentDelivery(taskID, dec.Reason); err != nil {
 				uxlog.Log("[resident] context nudge delivery failed task=%s: %v", taskID, err)
+				_, _ = fmt.Fprintf(errOut, "coord-hook: resident nudge delivery: %v\n", err)
 				return
 			}
 		} else {

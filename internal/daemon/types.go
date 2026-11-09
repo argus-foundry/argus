@@ -138,11 +138,15 @@ type BootInfoResp struct {
 //   - v11 (add-sandbox-session-signal): spawned agents receive the reserved
 //     ARGUS_SANDBOXED=1 signal only when actually wrapped in sandbox-exec.
 //     No wire fields change; spawn surface v20 identifies this new contract.
+//   - v12 (add-resident-agent): + Kind on StartReq, KickReq, and RecycleReq.
+//     BuildCmd gates the resident's forced permission mode, --settings rules,
+//     and ?caller= on it; a pre-v12 supervisor drops it and would spawn the
+//     resident unprotected, so the client refuses.
 //
 // StartResp.SessionID is additive and zero-value-safe: newer clients preserve
 // their existing ID when an older server omits it. Supervisor surface v19
 // identifies the launch recovery behavior that makes this field necessary.
-const ProtocolVersion = 11
+const ProtocolVersion = 12
 
 // SupervisorProtocolMatch reports whether a supervisor's handshake version
 // equals the daemon's. A mismatch is NOT fatal and NEVER triggers an auto-
@@ -222,6 +226,7 @@ type StartReq struct {
 	Archetype       string
 	Profile         string
 	Account         string
+	Kind            string
 	SandboxOverride string
 	Worktree        string
 	Branch          string
@@ -321,6 +326,7 @@ type KickReq struct {
 	Archetype       string
 	Profile         string
 	Account         string
+	Kind            string
 	SandboxOverride string
 	Worktree        string
 	Branch          string
@@ -349,6 +355,7 @@ type RecycleReq struct {
 	Archetype       string
 	Profile         string
 	Account         string
+	Kind            string
 	SandboxOverride string
 	Worktree        string
 	Branch          string

@@ -125,3 +125,56 @@ func TestResidentNudgeDeliveryFallback(t *testing.T) {
 		})
 	}
 }
+
+// Custom memory_dir must flow into the nudge text (not the "resident" default).
+func TestCoordHookResidentCustomMemoryDir(t *testing.T) {
+	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}, contextSize: 200}
+	env := f.env()
+	env.IsResident = func(string) (bool, error) { return true, nil }
+	env.ResidentConfig = func(string) (config.ResidentConfig, error) {
+		return config.ResidentConfig{ContextBudget: 100, MemoryDir: "assistant"}, nil
+	}
+	env.StampResidentReply = func(string, string) error { return nil }
+	var nudge string
+	env.BridgeDelivery = func(_ string, _ int, text string) (bool, error) { nudge = text; return true, nil }
+	var out, errs bytes.Buffer
+	runCoordHook(strings.NewReader(`{}`), &out, &errs, env)
+	testutil.Contains(t, nudge, "assistant/open-loops.md")
+	testutil.Equal(t, strings.Contains(nudge, "resident/open-loops.md"), false)
+}
+
+// Resident failure paths must reach stderr (uxlog is a no-op in the hook
+// process) while stdout stays empty.
+func TestCoordHookResidentFailuresWriteStderr(t *testing.T) {
+	t.Run("subject lookup", func(t *testing.T) {
+		f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}}
+		env := f.env()
+		env.IsResident = func(string) (bool, error) { return false, errors.New("daemon down") }
+		var out, errs bytes.Buffer
+		runCoordHook(strings.NewReader(`{}`), &out, &errs, env)
+		testutil.Contains(t, errs.String(), "coord-hook: resident subject lookup: daemon down")
+		testutil.Equal(t, out.String(), "")
+	})
+	t.Run("reply stamp", func(t *testing.T) {
+		f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}, readContextErr: errors.New("x")}
+		env := f.env()
+		env.IsResident = func(string) (bool, error) { return true, nil }
+		env.StampResidentReply = func(string, string) error { return errors.New("meta write failed") }
+		var out, errs bytes.Buffer
+		runCoordHook(strings.NewReader(`{}`), &out, &errs, env)
+		testutil.Contains(t, errs.String(), "coord-hook: stamp resident reply: meta write failed")
+		testutil.Equal(t, out.String(), "")
+	})
+	t.Run("nudge delivery", func(t *testing.T) {
+		f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}, contextSize: 200}
+		env := f.env()
+		env.IsResident = func(string) (bool, error) { return true, nil }
+		env.ResidentConfig = func(string) (config.ResidentConfig, error) { return config.ResidentConfig{ContextBudget: 100}, nil }
+		env.StampResidentReply = func(string, string) error { return nil }
+		env.ResidentDelivery = func(string, string) error { return errors.New("not running") }
+		var out, errs bytes.Buffer
+		runCoordHook(strings.NewReader(`{}`), &out, &errs, env)
+		testutil.Contains(t, errs.String(), "coord-hook: resident nudge delivery: not running")
+		testutil.Equal(t, out.String(), "")
+	})
+}

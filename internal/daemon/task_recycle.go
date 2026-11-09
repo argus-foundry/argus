@@ -11,7 +11,6 @@ import (
 	"github.com/drn/argus/internal/agent"
 	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/db"
-	"github.com/drn/argus/internal/uxlog"
 )
 
 // taskRecycleMetaNamespace/taskRecycleMetaKeyTimedOutPrompt persist a
@@ -110,7 +109,7 @@ func (r *taskRecycleRunner) Recycle(taskID, handoffNote string) error {
 	if task.IsResident() {
 		cfg := r.cfgFn()
 		seedPrompt = buildResidentRecycleSeedPrompt(residentOrientationPrompt(cfg), handoffNote, cfg.Resident.MemoryDir)
-		uxlog.Log("[resident] recycle seed composed task=%s bytes=%d", taskID, len(seedPrompt))
+		residentLog("[resident] recycle seed composed task=%s bytes=%d", taskID, len(seedPrompt))
 	}
 	r.spawn(func() {
 		defer r.inFlight.Delete(taskID)

@@ -7,6 +7,7 @@ import (
 	"github.com/drn/argus/internal/spinner"
 	"github.com/drn/argus/internal/tui/theme"
 	"github.com/gdamore/tcell/v2"
+	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
 )
 
@@ -203,7 +204,7 @@ func (h *Header) Draw(screen tcell.Screen) {
 	for _, tab := range tabs {
 		label := h.TabLabel(tab)
 		text := fmt.Sprintf(" %s ", label)
-		totalWidth += 1 + len(text) + 1 // open sep + text + close sep
+		totalWidth += 1 + textCells(text) + 1 // open sep + text cells + close sep
 	}
 
 	col := x + (width-totalWidth)/2
@@ -224,6 +225,24 @@ func (h *Header) Draw(screen tcell.Screen) {
 			col = h.drawSegment(screen, col, y, x+width, text, headerInactiveBG, headerInactiveFG, false)
 		}
 	}
+}
+
+// runeCells is the terminal cell advance for r: wide runes (the resident
+// marker) take two, zero-width runes still advance one so width math agrees.
+func runeCells(r rune) int {
+	if w := runewidth.RuneWidth(r); w > 1 {
+		return w
+	}
+	return 1
+}
+
+// textCells sums runeCells over text; it must match drawSegment's advance.
+func textCells(text string) int {
+	n := 0
+	for _, r := range text {
+		n += runeCells(r)
+	}
+	return n
 }
 
 // drawSegment renders a powerline-style segment: opening chevron, text, closing chevron.
@@ -248,7 +267,7 @@ func (h *Header) drawSegment(screen tcell.Screen, col, y, maxCol int, text strin
 			return col
 		}
 		screen.SetContent(col, y, r, nil, textStyle)
-		col++
+		col += runeCells(r)
 	}
 
 	// Closing separator: transition from segment → base

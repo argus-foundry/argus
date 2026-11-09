@@ -46,3 +46,41 @@ func TestStart_RefusesAccountOnOldSupervisor(t *testing.T) {
 }
 
 func configZero() config.Config { return config.Config{} }
+
+func TestCheckResidentSupported(t *testing.T) {
+	testutil.Equal(t, residentProtocolVersion, 12)
+	testutil.True(t, residentProtocolVersion <= daemon.ProtocolVersion)
+	cases := []struct {
+		name    string
+		peer    int
+		kind    string
+		wantErr bool
+	}{
+		{"never handshaken resident", 0, model.KindResident, false},
+		{"old supervisor resident", 11, model.KindResident, true},
+		{"current supervisor resident", residentProtocolVersion, model.KindResident, false},
+		{"old supervisor plain", 11, "", false},
+		{"current supervisor plain", residentProtocolVersion, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Client{peerProtocol: tc.peer}
+			err := c.checkResidentSupported(&model.Task{ID: "t", Kind: tc.kind})
+			if tc.wantErr {
+				testutil.Error(t, err)
+				testutil.Contains(t, err.Error(), "restart the supervisor")
+				return
+			}
+			testutil.NoError(t, err)
+		})
+	}
+}
+
+func TestStart_RefusesResidentOnOldSupervisor(t *testing.T) {
+	c := &Client{peerProtocol: 11}
+	res := &model.Task{ID: "t", Kind: model.KindResident}
+	_, err := c.Start(res, configZero(), 24, 80, false)
+	testutil.Error(t, err)
+	testutil.Error(t, c.KickRerender(res, configZero(), 24, 80))
+	testutil.Error(t, c.Recycle(res, configZero(), 24, 80))
+}

@@ -563,7 +563,7 @@ func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
 	if t.IsResident() {
 		// The resident stays in_progress permanently; the ensure-running loop
 		// (not a status flip) handles its exit.
-		uxlog.Log("[resident] session exit task=%s clean=%t (status unchanged)", taskID, cleanExit)
+		residentLog("[resident] session exit task=%s clean=%t (status unchanged)", taskID, cleanExit)
 		return
 	}
 	if cleanExit {
@@ -1460,11 +1460,6 @@ func (d *Daemon) Serve(sockPath string) error {
 	// synthetic times instead of sleeping.
 	go d.runHostSuspendWatcher()
 
-	// Resident agent ensure-running loop (add-resident-agent D3). Runs after
-	// ReconcileOnStartup so a supervisor-held session is re-attached rather than
-	// double-started. Inert while resident.enabled is false.
-	go d.residentMgr().run(d.done)
-
 	// Hera plan-DAG gater (add-hera-plan-substrate). Runs whenever hera is
 	// enabled, independent of the KB/MCP server: it materializes already-authored
 	// planned nodes whose blockers have all reached role-status done. Inert when no
@@ -1641,6 +1636,14 @@ func (d *Daemon) Serve(sockPath string) error {
 			}
 		}
 	}
+
+	// Resident agent ensure-running loop (add-resident-agent D3). Runs after
+	// ReconcileOnStartup so a supervisor-held session is re-attached rather than
+	// double-started, and after the MCP/API servers are set up so the recycling
+	// and waiting closures see d.taskRecycler/d.apiServer and the first spawn
+	// gets the MCP port (the loop also waits on mcpReady). Inert while
+	// resident.enabled is false.
+	go d.residentMgr().run(d.done)
 
 	// Register RPC service.
 	// Embed the same *sessionCore so the session-scoped RPC methods (promoted

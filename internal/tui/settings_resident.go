@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -159,6 +160,10 @@ func (sv *SettingsView) commitResidentEdit() bool {
 	case resKeyMemory:
 		if buf == "" {
 			return sv.residentNotify("memory dir cannot be empty")
+		}
+		clean := filepath.Clean(buf)
+		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+			return sv.residentNotify("memory dir must be vault-relative with no '..'")
 		}
 	}
 	sv.resEdit = residentEdit{}

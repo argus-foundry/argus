@@ -235,3 +235,28 @@ func readAllScreenText(screen tcell.SimulationScreen, width, height int) string 
 	}
 	return strings.Join(lines, "\n")
 }
+
+func TestHeader_WideLabelKeepsCentering(t *testing.T) {
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	t.Cleanup(sim.Fini)
+	const width = 80
+	sim.SetSize(width, 1)
+	h := NewHeader()
+	h.SetRect(0, 0, width, 1)
+	h.SetTabLabel(TabResident, "Sol 界")
+	h.SetTab(TabTasks)
+	h.Draw(sim)
+	sim.Show()
+	total := 0
+	for _, tab := range []Tab{TabResident, TabTasks, TabHera, TabSettings} {
+		total += 2 + textCells(" "+h.TabLabel(tab)+" ")
+	}
+	want := (width - total) / 2
+	r, _, _, _ := sim.GetContent(want, 0)
+	testutil.Equal(t, r, powerlineSep)
+	r, _, _, _ = sim.GetContent(want-1, 0)
+	testutil.True(t, r != powerlineSep)
+	testutil.Equal(t, textCells("界"), 2)
+	testutil.Equal(t, textCells("a"), 1)
+}

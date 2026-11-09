@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/drn/argus/internal/app/agentview"
+	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/daemon"
 	"github.com/drn/argus/internal/db"
 	"github.com/drn/argus/internal/tui/hera"
@@ -36,7 +37,8 @@ func (a *App) refreshResidentTab() {
 	d, local := a.db.(*db.DB)
 	cfg := a.db.Config().Resident
 	label := ""
-	if local && cfg.Enabled {
+	// An invalid name (too long, control bytes) must never reach the header.
+	if local && cfg.Enabled && config.ValidResidentName(cfg.Name) == nil {
 		label = cfg.Name
 	}
 	// The marker is folded into this single label write so the tick can never
@@ -105,10 +107,17 @@ func (a *App) forwardResidentKey(event *tcell.EventKey) {
 }
 
 func (a *App) residentInputBlocked() bool {
-	if a.mode != modeTaskList && a.mode != modeAgent {
-		return true
-	}
-	if a.mode == modeAgent {
+	return a.residentModalBlocked() || a.residentTextInputBlocked()
+}
+
+// residentModalBlocked reports a modal or non-list mode owning the keyboard.
+func (a *App) residentModalBlocked() bool {
+	return a.mode != modeTaskList && a.mode != modeAgent
+}
+
+// residentTextInputBlocked reports a focused text field on the list modes.
+func (a *App) residentTextInputBlocked() bool {
+	if a.mode != modeTaskList {
 		return false
 	}
 	switch a.header.ActiveTab() {
@@ -202,15 +211,21 @@ func (a *App) restoreResidentReturn(ret *residentReturn) bool {
 }
 
 func (a *App) markResidentViewed() {
-	if c := a.daemonClient; c != nil {
-		go func() {
-			if err := c.ResidentMarkViewed(); err != nil {
-				uxlog.Log("[resident] mark viewed failed: %v", err)
-			} else {
-				uxlog.Log("[resident] marked viewed")
-			}
-		}()
+	fn := a.residentMarkViewedFn
+	if fn == nil {
+		c := a.daemonClient
+		if c == nil {
+			return
+		}
+		fn = c.ResidentMarkViewed
 	}
+	go func() {
+		if err := fn(); err != nil {
+			uxlog.Log("[resident] mark viewed failed: %v", err)
+		} else {
+			uxlog.Log("[resident] marked viewed")
+		}
+	}()
 }
 
 // residentPollInterval bounds how often the UI tick asks the daemon for the

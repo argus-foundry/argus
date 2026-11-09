@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -149,15 +150,17 @@ func TestResidentExcludedEverywhere(t *testing.T) {
 			if !known[e.resident.Worktree] {
 				return "resident dir not protected as a known path"
 			}
-			root := filepath.Join(e.home, ".argus", "worktrees")
-			if n := agent.CountOrphanedWorktrees(root, known); n != 0 {
-				return "sweep counted orphans in an empty managed root"
+			// Positive control: an unknown sibling under the same parent as the
+			// resident dir is counted, proving the walk really runs there, while
+			// the resident dir itself (protected via known paths) adds nothing.
+			parent := filepath.Dir(e.resident.Worktree)
+			testutil.NoError(t, os.MkdirAll(e.resident.Worktree, 0o755))
+			testutil.NoError(t, os.MkdirAll(filepath.Join(parent, "stray-proj", "stray-task"), 0o755))
+			if n := agent.CountOrphanedWorktrees(parent, known); n != 1 {
+				return fmt.Sprintf("sweep counted %d orphans, want exactly the 1 stray sibling", n)
 			}
-			if _, err := os.Stat(e.resident.Worktree); err == nil {
-				// Directory exists only if something created it; the sweep must leave it.
-				if n := agent.CountOrphanedWorktrees(filepath.Dir(e.resident.Worktree), known); n != 0 {
-					return "sweep would treat the resident dir as an orphan"
-				}
+			if _, err := os.Stat(e.resident.Worktree); err != nil {
+				return "resident dir missing after sweep"
 			}
 			return ""
 		}},
@@ -196,6 +199,17 @@ func TestResidentExcludedEverywhere(t *testing.T) {
 			sent := sendHostSuspendSignals(e.db, []string{e.resident.ID, e.plain.ID}, 0)
 			if sent != 1 {
 				return "advisory sent to resident (or control failed)"
+			}
+			return ""
+		}},
+		{"bounce signals", func(t *testing.T, e *residentEnv) string {
+			sent := sendBounceSignals(e.db, []string{e.resident.ID, e.plain.ID})
+			if sent != 1 {
+				return fmt.Sprintf("bounce signal sent to %d tasks, want only the plain control", sent)
+			}
+			msgs, err := e.db.Inbox(e.resident.ID, db.InboxFilter{})
+			if err == nil && len(msgs) > 0 {
+				return "resident inbox received ARGUS_BOUNCED"
 			}
 			return ""
 		}},

@@ -43,26 +43,35 @@ func TestSessionCore_RebuildCarriesAccount(t *testing.T) {
 
 	t.Run("start", func(t *testing.T) {
 		var resp StartResp
-		testutil.NoError(t, c.StartSession(&StartReq{TaskID: "a", Account: "work", SandboxOverride: "enabled"}, &resp))
+		testutil.NoError(t, c.StartSession(&StartReq{TaskID: "a", Account: "work", SandboxOverride: "enabled", Kind: model.KindResident}, &resp))
 		testutil.Equal(t, r.started.Account, "work")
 		testutil.Equal(t, r.started.SandboxOverride, "enabled")
+		testutil.True(t, r.started.IsResident())
 	})
 	t.Run("kick", func(t *testing.T) {
 		var resp StatusResp
-		testutil.NoError(t, c.KickRerender(&KickReq{TaskID: "a", Account: "work", SandboxOverride: "disabled"}, &resp))
+		testutil.NoError(t, c.KickRerender(&KickReq{TaskID: "a", Account: "work", SandboxOverride: "disabled", Kind: model.KindResident}, &resp))
 		testutil.Equal(t, r.kicked.Account, "work")
 		testutil.Equal(t, r.kicked.SandboxOverride, "disabled")
+		testutil.True(t, r.kicked.IsResident())
 	})
 	t.Run("recycle", func(t *testing.T) {
 		var resp StatusResp
-		testutil.NoError(t, c.Recycle(&RecycleReq{TaskID: "a", Account: "work", SandboxOverride: "enabled"}, &resp))
+		testutil.NoError(t, c.Recycle(&RecycleReq{TaskID: "a", Account: "work", SandboxOverride: "enabled", Kind: model.KindResident}, &resp))
 		testutil.Equal(t, r.recycled.Account, "work")
 		testutil.Equal(t, r.recycled.SandboxOverride, "enabled")
+		testutil.True(t, r.recycled.IsResident())
 	})
 }
 
 func TestProtocolVersionCoversTaskAccount(t *testing.T) {
 	if ProtocolVersion < 8 {
 		t.Fatalf("task launch requests carry Account/SandboxOverride, which landed in v8; ProtocolVersion is %d", ProtocolVersion)
+	}
+}
+
+func TestProtocolVersionCoversResidentKind(t *testing.T) {
+	if ProtocolVersion < 12 {
+		t.Fatalf("launch requests carry Task.Kind, which landed in v12; ProtocolVersion is %d", ProtocolVersion)
 	}
 }

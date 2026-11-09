@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/drn/argus/internal/agent"
@@ -351,4 +352,35 @@ func TestSmoke_CommandPaletteOpensFromPlainTaskList(t *testing.T) {
 	syncUI(t, app.tapp)
 	readUI(t, app.tapp, func() { mode = app.mode })
 	testutil.Equal(t, mode, modeTaskList)
+}
+
+func TestPaletteApplicableActions_ResidentTabIsTrimmedGlobalSet(t *testing.T) {
+	a, _ := residentTestApp(t)
+	a.switchTab(widget.TabResident)
+	km := a.activeKeymap()
+	rows := a.paletteApplicableActions()
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.Label)
+	}
+	want := []string{
+		km.ActionLabel(keymap.ActGlobalResident),
+		km.ActionLabel(keymap.ActGlobalSwitcher),
+		km.ActionLabel(keymap.ActGlobalTabTasks),
+		km.ActionLabel(keymap.ActGlobalTabHera),
+		km.ActionLabel(keymap.ActGlobalTabSettings),
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	testutil.DeepEqual(t, got, want)
+}
+
+func TestPaletteApplicableActions_AgentViewResidentRowFollowsEnabled(t *testing.T) {
+	a, d := residentTestApp(t)
+	a.mode = modeAgent
+	label := a.activeKeymap().ActionLabel(keymap.ActGlobalResident)
+	testutil.True(t, containsLabel(a.paletteApplicableActions(), label))
+	testutil.NoError(t, d.SetConfigValue("resident.enabled", "false"))
+	a.refreshResidentTab()
+	testutil.False(t, containsLabel(a.paletteApplicableActions(), label))
 }

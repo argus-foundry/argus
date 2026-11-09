@@ -15,6 +15,7 @@ import (
 	"github.com/drn/argus/internal/testutil"
 	"github.com/drn/argus/internal/tui/hera"
 	"github.com/drn/argus/internal/tui/keymap"
+	"github.com/drn/argus/internal/tui/views"
 	"github.com/drn/argus/internal/tui/widget"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -239,6 +240,203 @@ func TestSmoke_ResidentIgnoredInModalAndFilter(t *testing.T) {
 	}
 }
 
+func TestSmoke_ResidentRuneBindingTypeableInTextInput(t *testing.T) {
+	for _, mode := range []string{"filter", "settings edit", "modal"} {
+		t.Run(mode, func(t *testing.T) {
+			a, _ := residentTestApp(t)
+			km, warnings := keymap.Build(config.Keybindings{Global: map[string]string{"resident": "~"}})
+			testutil.Equal(t, len(warnings), 0)
+			a.keymap = km
+			switch mode {
+			case "modal":
+				a.openHelp()
+			case "filter":
+				a.tasklist.InputHandler()(tcell.NewEventKey(tcell.KeyRune, '/', 0), func(tview.Primitive) {})
+			case "settings edit":
+				a.switchTab(widget.TabSettings)
+				selectRowInCategory(t, a.settings, catResident, srResident, resKeyName)
+				testutil.True(t, a.settings.handleEnter())
+			}
+			_, stop := wireApp(t, a)
+			defer stop()
+			if mode == "settings edit" {
+				readUI(t, a.tapp, func() { a.tapp.SetFocus(a.settingsPage) })
+			}
+			a.tapp.QueueEvent(tcell.NewEventKey(tcell.KeyRune, '~', 0))
+			syncUI(t, a.tapp)
+			readUI(t, a.tapp, func() {
+				testutil.True(t, a.header.ActiveTab() != widget.TabResident)
+				switch mode {
+				case "modal":
+					testutil.Equal(t, a.mode, modeHelp) // swallowed, not dismissed
+				case "filter":
+					testutil.True(t, strings.HasSuffix(a.tasklist.Filter(), "~"))
+				case "settings edit":
+					testutil.True(t, strings.HasSuffix(a.settings.resEdit.buf, "~"))
+				}
+			})
+		})
+	}
+}
+
+func TestSmoke_ResidentKeyForwardedInPluginView(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := testDB(t)
+	testutil.NoError(t, d.SetConfigValue("resident.enabled", "true"))
+	testutil.NoError(t, d.SetConfigValue("resident.name", "Solo"))
+	_, _, err := d.EnsureResidentTask(t.TempDir())
+	testutil.NoError(t, err)
+	_, err = views.New(d).Register("", "Ludwig", "ctrl+l", "ws://127.0.0.1:5111/ws")
+	testutil.NoError(t, err)
+	a := New(d, agent.NewRunner(nil), true)
+	fake := &fakePluginConnector{}
+	var plugIn <-chan []byte
+	a.pluginConnFactory = func(url string, onBytes func([]byte), onControl func([]byte), in <-chan []byte) pluginConnector {
+		fake.onBytes, fake.onControl, plugIn = onBytes, onControl, in
+		return fake
+	}
+	a.loadPluginViews()
+	sim, stop := wireApp(t, a)
+	defer stop()
+	sim.InjectKey(tcell.KeyCtrlL, 0, 0)
+	syncUI(t, a.tapp)
+	waitFor(t, time.Second, func() bool { return fake.dialed.Load() })
+	// A rune binding is the only form keyenc can forward (it has no ctrl+\
+	// encoding), and the pre-fix resolve swallowed it before the plugin saw it.
+	km, warnings := keymap.Build(config.Keybindings{Global: map[string]string{"resident": "~"}})
+	testutil.Equal(t, len(warnings), 0)
+	readUI(t, a.tapp, func() { a.keymap = km })
+	sim.InjectKey(tcell.KeyRune, '~', 0)
+	syncUI(t, a.tapp)
+	select {
+	case b := <-plugIn:
+		testutil.Equal(t, string(b), "~")
+	case <-time.After(time.Second):
+		t.Fatal("the resident key was not forwarded to the plugin")
+	}
+	readUI(t, a.tapp, func() {
+		testutil.Equal(t, a.mode, modePluginView)
+		testutil.Equal(t, a.header.ActiveTab(), widget.TabTasks)
+	})
+}
+
+func TestResidentTabIgnoresInvalidName(t *testing.T) {
+	for name, bad := range map[string]string{"too long": strings.Repeat("x", config.ResidentNameMaxRunes+1), "control byte": "So\x1blo"} {
+		t.Run(name, func(t *testing.T) {
+			a, d := residentTestApp(t)
+			testutil.NoError(t, d.SetConfigValue("resident.name", bad))
+			a.refreshResidentTab()
+			testutil.Equal(t, a.header.TabLabel(widget.TabResident), "")
+			a.toggleResident()
+			testutil.True(t, a.header.ActiveTab() != widget.TabResident)
+			a.handleGlobalKey(tcell.NewEventKey(tcell.KeyRune, '0', 0))
+			testutil.True(t, a.header.ActiveTab() != widget.TabResident)
+		})
+	}
+}
+
+func TestResidentSettingsChangeAppliesBeforeTick(t *testing.T) {
+	a, _ := residentTestApp(t)
+	a.refreshResidentTab()
+	testutil.Equal(t, a.header.TabLabel(widget.TabResident), "Solo")
+	residentEditField(t, a.settings, resKeyName, "Renamed")
+	testutil.Equal(t, a.header.TabLabel(widget.TabResident), "Renamed")
+	selectRowInCategory(t, a.settings, catResident, srResident, resKeyEnabled)
+	testutil.True(t, a.settings.handleEnter())
+	testutil.Equal(t, a.header.TabLabel(widget.TabResident), "")
+}
+
+func TestResidentMarkViewedSeam(t *testing.T) {
+	a, _ := residentTestApp(t)
+	calls := make(chan struct{}, 4)
+	a.residentMarkViewedFn = func() error { calls <- struct{}{}; return nil }
+	_, stop := wireApp(t, a)
+	defer stop()
+	expect := func(want bool, what string) {
+		t.Helper()
+		select {
+		case <-calls:
+			if !want {
+				t.Fatalf("%s: unexpected mark viewed", what)
+			}
+		case <-time.After(300 * time.Millisecond):
+			if want {
+				t.Fatalf("%s: mark viewed not called", what)
+			}
+		}
+	}
+	readUI(t, a.tapp, func() { a.switchTab(widget.TabResident) })
+	expect(true, "switchTab(resident)")
+	readUI(t, a.tapp, func() { a.applyResidentState(daemon.ResidentStateResp{Unread: true}) })
+	expect(true, "unread while viewing")
+	readUI(t, a.tapp, func() {
+		a.switchTab(widget.TabTasks)
+		a.applyResidentState(daemon.ResidentStateResp{Unread: true})
+	})
+	expect(false, "unread while not viewing")
+}
+
+func TestSmoke_ResidentRoundTripKeepsCursors(t *testing.T) {
+	t.Run("tasks list", func(t *testing.T) {
+		a, d := residentTestApp(t)
+		for _, n := range []string{"one", "two", "three"} {
+			testutil.NoError(t, d.Add(&model.Task{ID: n, Name: n, Status: model.StatusInProgress}))
+		}
+		a.refreshTasks()
+		a.tasklist.SelectByID("two")
+		want := a.tasklist.SelectedTask().ID
+		a.toggleResident()
+		testutil.Equal(t, a.header.ActiveTab(), widget.TabResident)
+		a.toggleResident()
+		testutil.Equal(t, a.tasklist.SelectedTask().ID, want)
+	})
+	t.Run("settings cursor", func(t *testing.T) {
+		a, _ := residentTestApp(t)
+		a.switchTab(widget.TabSettings)
+		a.settings.setCategory(catAppearance)
+		a.settings.FocusRightPane()
+		testutil.True(t, len(a.settings.rows) > 2)
+		a.settings.cursor = 2
+		a.toggleResident()
+		a.settings.cursor = 0 // anything the resident tab did in between
+		a.toggleResident()
+		testutil.Equal(t, a.header.ActiveTab(), widget.TabSettings)
+		testutil.Equal(t, a.settings.cursor, 2)
+	})
+}
+
+func TestSmoke_ResidentBoxDoesNotResizeHeraPanes(t *testing.T) {
+	a, d := residentTestApp(t)
+	orch, err := d.CreateHeraOrchestrator("origin", "")
+	testutil.NoError(t, err)
+	sim, stop := wireApp(t, a)
+	defer stop()
+	sim.SetSize(160, 40)
+	readUI(t, a.tapp, func() {
+		a.switchTab(widget.TabHera)
+		testutil.True(t, a.heraPage.SelectOrch(orch.ID))
+		a.heraPage.CoordPane().SetSession(newRepaintSession())
+		a.heraPage.AgentPane().SetSession(newRepaintSession())
+	})
+	redrawUI(t, a)
+	var coord, agentR, coord2, agent2 image
+	readUI(t, a.tapp, func() {
+		coord.x, coord.y, coord.w, coord.h = a.heraPage.CoordPane().GetRect()
+		agentR.x, agentR.y, agentR.w, agentR.h = a.heraPage.AgentPane().GetRect()
+		a.applyResidentState(daemon.ResidentStateResp{Unread: true, LastReply: "hello"})
+	})
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		testutil.Contains(t, screenText(sim, 160, 40), "Solo: hello")
+		coord2.x, coord2.y, coord2.w, coord2.h = a.heraPage.CoordPane().GetRect()
+		agent2.x, agent2.y, agent2.w, agent2.h = a.heraPage.AgentPane().GetRect()
+		testutil.Equal(t, coord2, coord)
+		testutil.Equal(t, agent2, agentR)
+		testutil.Equal(t, len(a.kickWait), 0)
+		testutil.Equal(t, len(a.pendingRerenderRestart), 0)
+	})
+}
+
 func TestSmoke_ResidentDigitsRenameAndInput(t *testing.T) {
 	a, d := residentTestApp(t)
 	_, stop := wireApp(t, a)
@@ -362,6 +560,7 @@ func TestSmoke_ResidentBoxStacksWithAttentionBar(t *testing.T) {
 	sim.SetSize(160, 40)
 	readUI(t, a.tapp, func() {
 		enterAgentViewFor(a, &model.Task{ID: "cur", Name: "cur"}, nil)
+		a.agentPane.SetSession(newRepaintSession()) // live session: a resize could arm a kick
 		a.pages.SwitchToPage("agent")
 		a.clearAgentZen() // zen hides the left column
 		a.updateAttentionBar()

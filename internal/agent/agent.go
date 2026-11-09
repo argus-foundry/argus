@@ -899,6 +899,8 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		if flag := fam.PermissionRulesFlag(cfg.Resident.AllowTools, cfg.Resident.AskTools, cfg.Resident.DenyTools); flag != "" {
 			cmdStr += flag
 			uxlog.Log("[resident] permission rules delivered allow=%d ask=%d deny=%d", len(cfg.Resident.AllowTools), len(cfg.Resident.AskTools), len(cfg.Resident.DenyTools))
+			// BuildCmd runs in the daemon/supervisor, which never calls uxlog.Init.
+			slog.Info("[resident] permission rules delivered", "allow", len(cfg.Resident.AllowTools), "ask", len(cfg.Resident.AskTools), "deny", len(cfg.Resident.DenyTools))
 		}
 	}
 

@@ -33,7 +33,7 @@ func residentCfg() config.Config {
 func TestBuildCmd_ResidentGetsAskAndDenyRules(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
-	task := &model.Task{ID: "r", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir()}
+	task := &model.Task{ID: "r", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir(), Prompt: "hi"}
 	cmd, cleanup, err := BuildCmd(task, residentCfg(), false)
 	testutil.NoError(t, err)
 	if cleanup != nil {
@@ -62,6 +62,18 @@ func TestBuildCmd_ResidentGetsAskAndDenyRules(t *testing.T) {
 		if strings.HasSuffix(d, "slack_send_message_draft") {
 			t.Fatalf("draft tool must not be denied: %v", deny)
 		}
+	}
+	// The prompt is a positional arg: --settings and the forced permission
+	// mode must come before it or the CLI would not apply them.
+	line := strings.Join(cmd.Args, " ")
+	pi := strings.Index(line, "'hi'")
+	si := strings.Index(line, "--settings")
+	mi := strings.Index(line, "--permission-mode default")
+	if pi < 0 || si < 0 || mi < 0 {
+		t.Fatalf("missing prompt/--settings/--permission-mode default in %s", line)
+	}
+	if si > pi || mi > pi {
+		t.Fatalf("--settings (%d) and --permission-mode (%d) must precede the prompt (%d)", si, mi, pi)
 	}
 }
 

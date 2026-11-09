@@ -227,17 +227,71 @@ func TestResident_OpenMarksExistingResidentForEvents(t *testing.T) {
 	testutil.NoError(t, err)
 	r, _, err := d.EnsureResidentTask(residentDir(t))
 	testutil.NoError(t, err)
+	// events' resident-ID set is process-global, so EnsureResidentTask above has
+	// already marked r.ID. Re-key the persisted row to an ID nothing has marked
+	// so only db.Open's markExistingResident can make it resident-namespaced.
+	freshID := "res-fresh-" + generateID()
+	_, err = d.conn.Exec(`UPDATE tasks SET id=? WHERE id=?`, freshID, r.ID)
+	testutil.NoError(t, err)
 	testutil.NoError(t, d.Close())
 
 	var got []model.Event
 	prev := events.SetSink(sinkFunc(func(ev model.Event) { got = append(got, ev) }))
 	t.Cleanup(func() { events.SetSink(prev) })
 
+	// Control: before Open the fresh ID is a plain task ID.
+	events.Emit(model.EventTypeSessionIdle, freshID, nil)
+	testutil.Equal(t, got[len(got)-1].Type, string(model.EventTypeSessionIdle))
+
 	d2, err := Open(path)
 	testutil.NoError(t, err)
 	t.Cleanup(func() { _ = d2.Close() })
-	events.Emit(model.EventTypeSessionIdle, r.ID, nil)
+	events.Emit(model.EventTypeSessionIdle, freshID, nil)
 	testutil.Equal(t, got[len(got)-1].Type, "resident.session.idle")
+}
+
+// The Cleanup/prune sweeps must carry their own kind=” filter: none of them
+// may surface the resident row even when its columns match the predicate.
+func TestResident_SweepFiltersExcludeResidentRow(t *testing.T) {
+	d := heraTestDB(t)
+	r, _, err := d.EnsureResidentTask(residentDir(t))
+	testutil.NoError(t, err)
+	ctl := &model.Task{ID: "ctl", Name: "ctl", Status: model.StatusPending}
+	testutil.NoError(t, d.Add(ctl))
+
+	t.Run("StuckTaskCandidates", func(t *testing.T) {
+		_, err := d.conn.Exec(`UPDATE tasks SET archived=1, status='in_review' WHERE id IN (?, ?)`, r.ID, ctl.ID)
+		testutil.NoError(t, err)
+		got, err := d.StuckTaskCandidates()
+		testutil.NoError(t, err)
+		testutil.Equal(t, len(got), 1)
+		testutil.Equal(t, got[0].Task.ID, ctl.ID)
+	})
+
+	t.Run("HeraNukeReclaimCandidates", func(t *testing.T) {
+		orch := mkOrch(t, d, "nuke")
+		for _, id := range []string{r.ID, ctl.ID} {
+			role := mkRole(t, d, orch.ID, "w-"+id, HeraKindWorker)
+			b := bind(t, d, role.ID, id)
+			testutil.NoError(t, d.EndHeraBinding(b.ID, HeraEndReasonUserDeleted))
+		}
+		got, err := d.HeraNukeReclaimCandidates()
+		testutil.NoError(t, err)
+		testutil.Equal(t, len(got), 1)
+		testutil.Equal(t, got[0].ID, ctl.ID)
+	})
+
+	t.Run("PruneCompleted", func(t *testing.T) {
+		_, err := d.conn.Exec(`UPDATE tasks SET status='complete' WHERE id IN (?, ?)`, r.ID, ctl.ID)
+		testutil.NoError(t, err)
+		pruned, _, err := d.PruneCompleted()
+		testutil.NoError(t, err)
+		testutil.Equal(t, len(pruned), 1)
+		testutil.Equal(t, pruned[0].ID, ctl.ID)
+		if got, _ := d.Get(r.ID); got == nil {
+			t.Fatal("resident row must survive PruneCompleted")
+		}
+	})
 }
 
 type sinkFunc func(model.Event)

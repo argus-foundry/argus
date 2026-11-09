@@ -137,6 +137,39 @@ func TestSettingsResident_RemoteReadOnly(t *testing.T) {
 	testutil.Contains(t, sv.residentMsg, "read-only")
 }
 
+func TestSettingsResident_MemoryDirMustBeVaultRelative(t *testing.T) {
+	for _, bad := range []string{"../x", "/abs", "..", "a/../../b"} {
+		t.Run(bad, func(t *testing.T) {
+			sv := testSettingsView(t)
+			before := sv.database.Config().Resident.MemoryDir
+			residentEditField(t, sv, resKeyMemory, bad)
+			testutil.True(t, sv.IsEditing()) // rejected edit stays open
+			testutil.Contains(t, sv.residentMsg, "vault-relative")
+			testutil.Equal(t, sv.database.Config().Resident.MemoryDir, before)
+		})
+	}
+	sv := testSettingsView(t)
+	residentEditField(t, sv, resKeyMemory, "assistant/mem")
+	testutil.False(t, sv.IsEditing())
+	testutil.Equal(t, sv.database.Config().Resident.MemoryDir, "assistant/mem")
+}
+
+func TestSettingsResident_PasteNormalizesWhitespace(t *testing.T) {
+	sv := testSettingsView(t)
+	selectRowInCategory(t, sv, catResident, srResident, resKeyName)
+	sv.handleEnter()
+	for sv.resEdit.buf != "" {
+		sv.HandleKey(tcell.NewEventKey(tcell.KeyBackspace2, 0, tcell.ModNone))
+	}
+	sv.PasteHandler()("A\n r i", nil)
+	testutil.Equal(t, sv.resEdit.buf, "A r i")
+	sv.SetRect(0, 0, 100, 30)
+	sim := drawSim(t)
+	sv.Draw(sim)
+	sim.Show()
+	testutil.Contains(t, screenText(sim, 100, 30), "A r i▎")
+}
+
 func TestSettingsResident_PasteAndRender(t *testing.T) {
 	sv := testSettingsView(t)
 	selectRowInCategory(t, sv, catResident, srResident, resKeyName)

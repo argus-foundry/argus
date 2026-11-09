@@ -12,6 +12,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/drn/argus/internal/config"
 	"github.com/drn/argus/internal/daemon"
 	"github.com/drn/argus/internal/db"
 	"github.com/drn/argus/internal/model"
@@ -102,6 +103,15 @@ type fakeCoordHookEnv struct {
 	stampedTokenTotalsTask  string
 	stampedTokenTotals      tokenTotals
 	stampTokenAccrualErr    error
+
+	// Resident seams. isResident defaults false: a fake env models a plain
+	// hera session, and the tests assert the resident branch stays inert.
+	isResident          bool
+	isResidentErr       error
+	isResidentCalled    bool
+	residentStampCalled bool
+	residentDelivered   []string
+	residentDeliveryErr error
 }
 
 func (f *fakeCoordHookEnv) env() coordHookEnv {
@@ -159,6 +169,21 @@ func (f *fakeCoordHookEnv) env() coordHookEnv {
 			f.stampedTokenTotals = totals
 			return f.stampTokenAccrualErr
 		},
+		IsResident: func(string) (bool, error) {
+			f.isResidentCalled = true
+			return f.isResident, f.isResidentErr
+		},
+		ResidentConfig: func(string) (config.ResidentConfig, error) {
+			return config.ResidentConfig{ContextBudget: f.budget}, nil
+		},
+		StampResidentReply: func(string, string) error {
+			f.residentStampCalled = true
+			return nil
+		},
+		ResidentDelivery: func(_, text string) error {
+			f.residentDelivered = append(f.residentDelivered, text)
+			return f.residentDeliveryErr
+		},
 	}
 }
 
@@ -208,6 +233,12 @@ func TestCoordHook_UnboundRole_NoOp(t *testing.T) {
 	if strings.Contains(out.String(), "block") {
 		t.Errorf("unbound no-op path must not emit a block decision; got stdout=%q", out.String())
 	}
+	// An unbound, non-resident task consults the resident seam and then
+	// stays inert: no reply stamp, no resident delivery, no stderr output.
+	testutil.Equal(t, f.isResidentCalled, true)
+	testutil.Equal(t, f.residentStampCalled, false)
+	testutil.Equal(t, len(f.residentDelivered), 0)
+	testutil.Equal(t, errOut.String(), "")
 }
 
 // TestCoordHook_WorkerRole_StampsButSkipsBudgetEnforcement pins the widened
@@ -367,6 +398,12 @@ func TestCoordHook_Coordinator_OverBudget_EmitsNudge(t *testing.T) {
 	testutil.Equal(t, f.forceRecycleCalled, false) // 250000 is under the 1.5x (300000) hard-stop threshold
 	testutil.Contains(t, out.String(), "block")
 	testutil.Contains(t, out.String(), "seam")
+	// Coordinators never touch the resident seams and stdout carries the
+	// unchanged hera nudge (a JSON block decision, not a resident delivery).
+	testutil.Equal(t, f.isResidentCalled, false)
+	testutil.Equal(t, f.residentStampCalled, false)
+	testutil.Equal(t, len(f.residentDelivered), 0)
+	testutil.Equal(t, errOut.String(), "")
 }
 
 // TestCoordHook_OverBudgetNudge_RecursThenStops pins both "Nudge is suppressed
@@ -1240,10 +1277,29 @@ func TestCoordHookReal_REST(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, residentCfg.ContextBudget, database.Config().Resident.ContextBudget)
 	// Disabled resident delivery fails cleanly and never launches an agent.
-	testutil.Equal(t, residentDeliveryReal(resident.ID, "budget nudge") != nil, true)
+	deliveryErr := residentDeliveryReal(resident.ID, "budget nudge")
+	testutil.Equal(t, deliveryErr != nil, true)
+	testutil.Contains(t, deliveryErr.Error(), "not enabled")
 	isResident, err := isResidentReal(task.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, isResident, false)
+
+	// Enabled with a valid name but kb.enabled=false: the start prerequisite
+	// fails (no agent spawns) yet the daemon still reports the resident's
+	// TaskID, so the hook recognizes the resident and not an ordinary task.
+	testutil.NoError(t, database.SetConfigValue("resident.enabled", "true"))
+	testutil.NoError(t, database.SetConfigValue("resident.name", "Ava"))
+	testutil.NoError(t, database.SetConfigValue("kb.enabled", "false"))
+	isResident, err = isResidentReal(resident.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, isResident, true)
+	isResident, err = isResidentReal(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, isResident, false)
+	// Enabled with an existing resident row: delivery is accepted by the
+	// daemon's reliable (idle-gated) notifier. Nothing spawns an agent; the
+	// message simply queues for the not-running session.
+	testutil.NoError(t, residentDeliveryReal(resident.ID, "budget nudge"))
 
 	if _, err := resolveRoleKindReal("no-such-task"); err == nil {
 		t.Fatal("expected an error resolving role kind for an unknown task id")
