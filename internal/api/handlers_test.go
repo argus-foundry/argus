@@ -32,6 +32,19 @@ import (
 
 func testServer(t *testing.T) (*Server, *db.DB) {
 	t.Helper()
+	srv, d := testServerWithWatcher(t)
+	// Tests swap srv.runner after New; stop the idle watcher (and wait for it)
+	// first so that write cannot race the watcher's reads. Tests that need a
+	// tick call idleWatcherTick directly.
+	close(srv.stopCh)
+	<-srv.idleWatcherDone
+	return srv, d
+}
+
+// testServerWithWatcher is testServer with the idle watcher left running, for
+// tests of the watcher goroutine itself. Such tests must not swap srv.runner.
+func testServerWithWatcher(t *testing.T) (*Server, *db.DB) {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	d, err := db.OpenInMemory()
 	if err != nil {
@@ -2210,7 +2223,7 @@ func TestIdleWatcher_StartAndStopGracefully(t *testing.T) {
 // push is configured because it also drives session.idle event emission.
 // The goroutine should NOT return on its own — it terminates via stopCh.
 func TestIdleWatcher_NilPushStillRuns(t *testing.T) {
-	srv, _ := testServer(t)
+	srv, _ := testServerWithWatcher(t)
 	srv.push = nil
 	done := make(chan struct{})
 	go func() {

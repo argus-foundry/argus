@@ -57,7 +57,6 @@ func TestResidentWaitingChangeReachesSlog(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	srv, d := testServer(t)
-	close(srv.stopCh)
 	r, _, err := d.EnsureResidentTask(t.TempDir())
 	testutil.NoError(t, err)
 	state := newIdleWatcherState()
