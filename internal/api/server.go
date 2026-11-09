@@ -44,6 +44,9 @@ type TaskCreator func(name, prompt, project, backend, taskModel, sandboxOverride
 // Server is the HTTP REST API server.
 type Server struct {
 	db *db.DB
+	// residentWaiting mirrors whether the resident is flagged needs-input
+	// (set by the needs-input tick, read by ResidentWaiting).
+	residentWaiting atomic.Bool
 
 	deleteOps          deleteOps
 	deleteJobMu        sync.Mutex
