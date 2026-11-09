@@ -2,7 +2,7 @@
 
 ### Requirement: Project artifact home account resolution
 
-The system SHALL resolve a project's artifact home account from config. It SHALL use the project's `[project_artifact_accounts]` entry when that entry names a valid account. It SHALL otherwise use the project's `[project_accounts]` entry when that entry names a valid account. It SHALL otherwise resolve no home account. An entry naming an unknown account SHALL be skipped and logged, never treated as fatal. The global `default_account` SHALL NOT be used as a fallback.
+The system SHALL resolve a project's artifact home account from config. It SHALL use the project's `[project_artifact_accounts]` entry when that entry names a valid Claude account. It SHALL otherwise use the project's `[project_accounts]` entry when that entry names a valid Claude account. It SHALL otherwise resolve no home account. A valid Claude account is the `default` account or a configured account with a `claude_config_dir`. An entry naming an unknown account, or an account with no `claude_config_dir`, SHALL be skipped and logged, never treated as fatal. The global `default_account` SHALL NOT be used as a fallback.
 
 #### Scenario: Explicit artifact entry wins
 
@@ -23,6 +23,11 @@ The system SHALL resolve a project's artifact home account from config. It SHALL
 
 - **WHEN** a project's `[project_artifact_accounts]` entry names an account that is not configured, and its `[project_accounts]` entry is `personal`
 - **THEN** the unknown entry is logged and the project's artifact home account is `personal`
+
+#### Scenario: Account without a Claude config dir is skipped
+
+- **WHEN** a project's `[project_artifact_accounts]` entry names a configured account that has only a `codex_home`, and its `[project_accounts]` entry is `personal`
+- **THEN** the entry is logged and the project's artifact home account is `personal`
 
 ### Requirement: Artifact account export at spawn
 
@@ -55,7 +60,7 @@ When building an agent's launch command, the system SHALL export `ARGUS_ARTIFACT
 
 ### Requirement: Artifact publish routing guidance
 
-The system SHALL inject builtin routing guidance into every agent. The guidance SHALL be inert when `ARGUS_ARTIFACT_ACCOUNT` is unset. When the variable is set, the guidance SHALL instruct the agent to publish and update claude.ai artifacts with `artpush publish <path> --account "$ARGUS_ARTIFACT_ACCOUNT"` (adding `--update <url>` for an existing artifact) instead of the built-in artifact tool. It SHALL instruct the agent to report artpush failures to the user, including a missing login with the `artpush login <account>` remedy, rather than fall back to the built-in tool.
+The system SHALL inject builtin routing guidance into every agent whose backend family receives builtin routing content. The guidance SHALL be inert when `ARGUS_ARTIFACT_ACCOUNT` is unset. When the variable is set, the guidance SHALL instruct the agent to publish and update claude.ai artifacts with `artpush publish <path> --account "$ARGUS_ARTIFACT_ACCOUNT"` (adding `--update <url>` for an existing artifact) instead of the built-in artifact tool. It SHALL instruct the agent to report artpush failures to the user, including a missing login with the `artpush login <account>` remedy, rather than fall back to the built-in tool.
 
 #### Scenario: Guidance names the artpush command
 

@@ -47,7 +47,7 @@ Alternatives considered:
 
 ### D2. Home account resolution: explicit map, then `project_accounts`, else none
 
-`ArtifactAccount(project)` returns `ProjectArtifactAccounts[project]` when it is a valid account. Otherwise it returns `ProjectAccounts[project]` when that is valid. Otherwise it returns `""`. An entry naming an unknown account is skipped with a log line, never fatal, mirroring `ResolveAccount`. The `default` account name is valid. It deliberately does **not** fall back to `default_account`: an unmapped project has no home account and keeps today's behavior.
+`ArtifactAccount(project)` returns `ProjectArtifactAccounts[project]` when it is a valid Claude account. Otherwise it returns `ProjectAccounts[project]` when that is a valid Claude account. Otherwise it returns `""`. A valid Claude account is `default` or a configured account with a `claude_config_dir` (`AccountSupports` for a Claude command): artifacts live on a claude.ai login, so a `codex_home`-only account cannot be a home. An entry naming an unknown or non-Claude account is skipped with a log line, never fatal, mirroring `ResolveAccount`. The `default` account name is valid. It deliberately does **not** fall back to `default_account`: an unmapped project has no home account and keeps today's behavior.
 
 ### D3. Argus exports one variable, only when the agent must use artpush
 
@@ -74,6 +74,7 @@ The snippet says: if `ARGUS_ARTIFACT_ACCOUNT` is unset, ignore this section. If 
 - **A publish turns out to need model budget** → the artpush spike verifies this before the Argus side ships. If it does need budget, D1 is revisited before implementation.
 - **artpush is not installed or not logged in** → the agent reports the CLI's error to the user. Argus does not check for artpush at spawn: that would mean a new doctor-style check, out of scope, and a possible follow-up.
 - **Two publish paths for edits** → a project's artifacts always live on its home account. An edit made while routed away goes through artpush `--update`, and an edit made on the home account uses the built-in tool. Both target the same artifact.
+- **Cursor and custom backends get the variable but no guidance** → neither family has a routing-delivery mechanism, so the `argus-artifacts` snippet never reaches them. They still receive `ARGUS_ARTIFACT_ACCOUNT` (harmless, and usable by a project skill). Known gap; adding routing delivery to those families is out of scope.
 - **An env var is fixed for the session's lifetime** → account moves restart the session (kick), so `BuildCmd` re-runs and the variable is recomputed.
 
 ## Migration Plan

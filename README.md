@@ -664,7 +664,7 @@ Tier routing and account moves can run a project's Claude task on an account oth
 history = "personal"
 ```
 
-At every spawn, resume, restart and account move, Argus exports `ARGUS_ARTIFACT_ACCOUNT=<home account>` to the agent when the project has a home account and either the task runs on a different account or its backend has no built-in artifact tool (every backend except Claude). Otherwise the variable is absent (never empty), and an inherited value is removed. Argus's builtin routing guidance tells an agent that sees it to publish with the external `artpush` CLI (`artpush publish <path> --account "$ARGUS_ARTIFACT_ACCOUNT"`, `--update <url>` for an existing artifact) and to report an artpush failure rather than fall back to the built-in tool. Install `artpush` and run `artpush login <account>` once per account. The table is `config.toml`-only for now.
+At every spawn, resume, restart and account move, Argus exports `ARGUS_ARTIFACT_ACCOUNT=<home account>` to the agent when the project has a home account and either the task runs on a different account or its backend has no built-in artifact tool (every backend except Claude). Otherwise the variable is absent (never empty), and an inherited value is removed. Argus's builtin routing guidance tells an agent that sees it to publish with the external `artpush` CLI (`artpush publish <path> --account "$ARGUS_ARTIFACT_ACCOUNT"`, `--update <url>` for an existing artifact) and to report an artpush failure rather than fall back to the built-in tool. Install `artpush` and run `artpush login <account>` once per account. The home account must be `default` or an account with a `claude_config_dir`. Cursor and custom backends receive the variable but not the routing guidance (they have no routing delivery), so their agents won't know to use artpush unless a project skill tells them. The table is `config.toml`-only for now.
 
 #### Clients and API
 
@@ -1191,7 +1191,7 @@ Named work / personal accounts for Claude Code and Codex. How resolution, first 
 | `[accounts.<name>] inherit` | array | `["CLAUDE.md","skills","commands","agents"]` | Entries symlinked from `~/.claude` into the Claude config dir. `settings.json` is copied once instead (add it here to symlink it). `.credentials*`, `.claude.json`, `projects`, `plugins` are never linked. An empty list links nothing. |
 | `default_account` | string | `""` | Account used when the task, project, and routed tier name none. Empty = `default`. |
 | `project_accounts` | table | `{}` | Top-level map of project name to default account, e.g. `[project_accounts] acme-api = "work"`. Recommended for every work repo. |
-| `project_artifact_accounts` | table | `{}` | Top-level map of project name to its [artifact home account](#artifact-home-account), e.g. `[project_artifact_accounts] history = "personal"`. Falls back to `project_accounts`; never to `default_account`. `config.toml` only. |
+| `project_artifact_accounts` | table | `{}` | Top-level map of project name to its [artifact home account](#artifact-home-account), e.g. `[project_artifact_accounts] history = "personal"`. Must be `default` or an account with `claude_config_dir`. Falls back to `project_accounts`; never to `default_account`. `config.toml` only. |
 
 #### `[projects.<name>]`
 
