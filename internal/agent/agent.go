@@ -863,7 +863,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	fam := FamilyOf(backend.Command)
 	// Fail closed: a resident on a family that cannot enforce its tool policy
 	// and strip bypass flags must never launch with the policy silently dropped.
-	if task.IsResident() && (fam.PermissionRulesFlag == nil || fam.StripPermissionFlags == nil) {
+	if task.IsResident() && (fam.PermissionRulesFlag == nil || fam.StripPermissionFlags == nil || fam.ResidentCommandCheck == nil) {
 		return nil, nil, fmt.Errorf("resident backend %q cannot enforce the resident permission policy", backend.Command)
 	}
 	// The resident's ask rules only prompt outside bypass modes: drop any
@@ -877,6 +877,11 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		}
 		backend.Command = stripped
 		cmdStr = backend.Command
+		// Flag allowlist: refuse anything but the executable and known-benign
+		// flags (--allowedTools, --plugin-dir, --mcp-config, --settings, ...).
+		if err := fam.ResidentCommandCheck(backend.Command); err != nil {
+			return nil, nil, fmt.Errorf("resident backend %q refused: %w", backend.Command, err)
+		}
 	}
 	isCodex := fam.Kind == backendkind.Codex
 	isClaude := fam.Kind == backendkind.Claude
@@ -975,7 +980,10 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// over when nothing else chose one. Families without the flag cannot be a
 	// resident backend (checked above), so nothing is silently dropped.
 	if task.IsResident() && fam.PermissionRulesFlag != nil {
-		us := readResidentUserSettings(task, cfg)
+		// Claude's Bash sandbox cannot nest inside Argus's sandbox-exec, so the
+		// user's `enabled` is not carried when the resident is itself sandboxed.
+		argusSandboxed := task.Sandboxed || (ResolveSandboxConfig(task, cfg).Enabled && IsSandboxAvailable())
+		us := readResidentUserSettings(task, cfg, argusSandboxed)
 		policy := ResidentPolicy{
 			Allow:       cfg.Resident.AllowTools,
 			Ask:         mergeRules(cfg.Resident.AskTools, us.Ask),

@@ -273,7 +273,7 @@ type residentUserSettings struct {
 	Ask, Deny     []string
 	Model, Effort string
 	// Sandbox is the user's Claude `sandbox` block with its permission-widening
-	// keys neutralized (see residentSandbox), carried inline.
+	// keys dropped by allowlist (see residentSandbox), carried inline.
 	Sandbox json.RawMessage
 	// SkippedHooks names the user hook events the restricted setting sources
 	// drop (hooks are never carried: one may auto-approve; see gotchas).
@@ -301,7 +301,8 @@ func residentAccountDir(task *model.Task, cfg config.Config) string {
 
 // readResidentUserSettings best-effort reads the account's settings.json. A
 // missing or unreadable file yields the zero value (the resident's own lists).
-func readResidentUserSettings(task *model.Task, cfg config.Config) residentUserSettings {
+// underArgusSandbox gates the sandbox carry (see residentSandbox).
+func readResidentUserSettings(task *model.Task, cfg config.Config, underArgusSandbox bool) residentUserSettings {
 	dir := residentAccountDir(task, cfg)
 	if dir == "" {
 		return residentUserSettings{}
@@ -347,7 +348,7 @@ func readResidentUserSettings(task *model.Task, cfg config.Config) residentUserS
 		Ask: strs(doc.Permissions.Ask), Deny: strs(doc.Permissions.Deny),
 		Model: str(doc.Model), Effort: str(doc.EffortLevel),
 	}
-	us.Sandbox = residentSandbox(doc.Sandbox)
+	us.Sandbox = residentSandbox(doc.Sandbox, underArgusSandbox)
 	for event := range doc.Hooks {
 		us.SkippedHooks = append(us.SkippedHooks, event)
 	}
@@ -392,8 +393,60 @@ func readResidentUserClaudeMD(task *model.Task, cfg config.Config) string {
 	return strings.TrimSpace(string(raw))
 }
 
+// residentLaunchDirName is the daemon/supervisor-owned directory (under the
+// Argus data dir) holding the resident's launch-time files.
+const residentLaunchDirName = "resident-launch"
+
+// residentLaunchDir returns ~/.argus/resident-launch, created 0700. It must stay
+// OUTSIDE every sandbox write grant: ~/.argus/cache is writable by every
+// sandboxed agent, and the resident's own worktree (~/.argus/resident) is its
+// own write grant, so a file there could be rewritten by the very agent whose
+// policy it carries. ~/.argus/routing is placed the same way (data dir root, no
+// grant). Never a subpath of ~/.argus/cache or db.ResidentWorkDir().
+func residentLaunchDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("no home dir: %w", err)
+	}
+	dir := filepath.Join(home, ".argus", residentLaunchDirName)
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return "", err
+	}
+	if err := ensurePrivateDir(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// ensurePrivateDir makes path a real (non-symlink) 0700 directory. Lstat, not
+// Stat: a symlink or file planted at path is removed and replaced, never
+// followed.
+func ensurePrivateDir(path string) error {
+	fi, err := os.Lstat(path)
+	switch {
+	case err == nil && fi.IsDir():
+		if fi.Mode().Perm() != 0o700 {
+			return os.Chmod(path, 0o700) //nolint:gosec // a directory; 0700 is the private mode
+		}
+		return nil
+	case err == nil:
+		if rerr := os.Remove(path); rerr != nil {
+			return rerr
+		}
+	case !errors.Is(err, fs.ErrNotExist):
+		return err
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o700) //nolint:gosec // a directory; 0700 is the private mode
+}
+
 // materializeResidentPrompt writes routingPath's content (when set) followed by
-// the user CLAUDE.md as one content-addressed file and returns its path.
+// the user CLAUDE.md to <resident-launch>/system-prompt.md (a fixed name, so
+// nothing accumulates) and returns its path. The file is verified on every
+// launch and atomically rewritten when its bytes differ or it is not a regular
+// file.
 func materializeResidentPrompt(routingPath, claudeMD string) (string, error) {
 	var buf []byte
 	if routingPath != "" {
@@ -407,33 +460,31 @@ func materializeResidentPrompt(routingPath, claudeMD string) (string, error) {
 	buf = append(buf, "# User instructions (CLAUDE.md)\n\n"...)
 	buf = append(buf, claudeMD...)
 	buf = append(buf, '\n')
-	root, err := argusCacheDir("resident-prompt")
+	root, err := residentLaunchDir()
 	if err != nil {
 		return "", err
 	}
-	dir, err := materializeContentAddressed(root, map[string][]byte{"system-prompt.md": buf})
-	if err != nil {
-		return "", err
-	}
-	file := filepath.Join(dir, "system-prompt.md")
-	// ~/.argus/cache is writable by every sandboxed agent and a populated hash dir is
-	// reused on its marker alone, so a tampered file would become the resident's
-	// system prompt. Verify the bytes and atomically restore them when they differ.
-	if got, rerr := os.ReadFile(file); rerr != nil || !bytes.Equal(got, buf) {
-		uxlog.Log("[resident] system prompt file differed from expected; restoring %s", file)
-		slog.Warn("[resident] system prompt file tampered or missing; restoring", "path", file)
-		if err := atomicWriteFile(file, buf); err != nil {
-			return "", fmt.Errorf("restore resident prompt: %w", err)
+	file := filepath.Join(root, "system-prompt.md")
+	// Lstat so a planted symlink is never read through; anything but a regular
+	// file with the exact bytes is replaced by rename (which never writes through).
+	if fi, lerr := os.Lstat(file); lerr == nil && fi.Mode().IsRegular() {
+		if got, rerr := os.ReadFile(file); rerr == nil && bytes.Equal(got, buf) {
+			return file, nil
 		}
+		uxlog.Log("[resident] system prompt file differed from expected; restoring %s", file)
+		slog.Warn("[resident] system prompt file differed; restoring", "path", file)
+	}
+	if err := atomicWriteFile(file, buf); err != nil {
+		return "", fmt.Errorf("write resident prompt: %w", err)
 	}
 	return file, nil
 }
 
-// atomicWriteFile writes data to a temp file beside path and renames it over
-// path. A rename replaces a tampered symlink or file rather than writing
-// through it.
+// atomicWriteFile writes data (mode 0600) to an O_EXCL temp file beside path
+// and renames it over path. A rename replaces a planted symlink or file rather
+// than writing through it.
 func atomicWriteFile(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".restore-")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-") // O_EXCL, 0600
 	if err != nil {
 		return err
 	}
@@ -457,7 +508,8 @@ func atomicWriteFile(path string, data []byte) error {
 // ensureResidentUserSkillsDir returns an --add-dir root whose .claude/skills
 // links to the account's user skills dir, or "" when the account has none.
 // Claude discovers skills only under <added dir>/.claude/skills; the link lives
-// in the Argus cache, keyed by the source path so accounts never share one.
+// in the private resident-launch dir, keyed by the source path so accounts
+// never share one (bounded by the number of accounts).
 func ensureResidentUserSkillsDir(task *model.Task, cfg config.Config) string {
 	dir := residentAccountDir(task, cfg)
 	if dir == "" {
@@ -467,22 +519,32 @@ func ensureResidentUserSkillsDir(task *model.Task, cfg config.Config) string {
 	if fi, err := os.Stat(src); err != nil || !fi.IsDir() {
 		return ""
 	}
-	cache, err := argusCacheDir("resident-skills")
+	launch, err := residentLaunchDir()
 	if err != nil {
+		uxlog.Log("[resident] launch dir failed (skipping user skills): %v", err)
+		slog.Warn("[resident] launch dir failed", "err", err)
 		return ""
 	}
 	sum := sha256.Sum256([]byte(src))
-	root := filepath.Join(cache, hex.EncodeToString(sum[:])[:16])
-	link := filepath.Join(root, ".claude", "skills")
+	root := filepath.Join(launch, "skills", hex.EncodeToString(sum[:])[:16])
+	claudeDir := filepath.Join(root, ".claude")
+	link := filepath.Join(claudeDir, "skills")
+	for _, d := range []string{filepath.Join(launch, "skills"), root, claudeDir} {
+		if err := ensurePrivateDir(d); err != nil {
+			uxlog.Log("[resident] user skills link dir failed (skipping user skills): %v", err)
+			slog.Warn("[resident] user skills link dir failed", "err", err)
+			return ""
+		}
+	}
 	if cur, err := os.Readlink(link); err == nil && cur == src {
 		return root
 	}
-	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
-		uxlog.Log("[resident] user skills link dir failed (skipping user skills): %v", err)
-		slog.Warn("[resident] user skills link dir failed", "err", err)
+	// Whatever sits at link (stale symlink, file, directory) is replaced, never followed.
+	if err := os.RemoveAll(link); err != nil {
+		uxlog.Log("[resident] user skills link failed (skipping user skills): %v", err)
+		slog.Warn("[resident] user skills link failed", "err", err)
 		return ""
 	}
-	_ = os.Remove(link)
 	if err := os.Symlink(src, link); err != nil {
 		uxlog.Log("[resident] user skills link failed (skipping user skills): %v", err)
 		slog.Warn("[resident] user skills link failed", "err", err)
@@ -492,23 +554,71 @@ func ensureResidentUserSkillsDir(task *model.Task, cfg config.Config) string {
 }
 
 // residentSandbox carries the user's Claude `sandbox` block for its
-// restrictions only. The block is NOT restrict-only as written: with sandboxing
-// enabled, autoAllowBashIfSandboxed (default true) auto-approves Bash, and
-// excludedCommands / allowUnsandboxedCommands loosen it. So the resident gets
-// the block with autoAllowBashIfSandboxed and allowUnsandboxedCommands forced
-// false and excludedCommands removed; every Bash call still prompts. A
-// missing or non-object block yields nil.
-func residentSandbox(raw json.RawMessage) json.RawMessage {
-	var block map[string]any
-	if s := bytes.TrimSpace(raw); len(s) == 0 || s[0] != '{' || json.Unmarshal(s, &block) != nil {
+// restrictions only, by ALLOWLIST: the block is not restrict-only as written
+// (allowAppleEvents, filesystem.disabled, enableWeakerNetworkIsolation,
+// allowNestedUserNamespaces, network.allow*, credentials.allowPlaintextInject,
+// excludedCommands and any future key can all loosen it), so only the keys
+// known to restrict are copied and everything else is dropped, including keys
+// this binary has never heard of. The carried set is `enabled`,
+// `failIfUnavailable`, `network.deniedDomains`, `filesystem.denyRead` and
+// `filesystem.denyWrite`. credentials.* is deliberately omitted: its mask mode
+// injects real credentials at hosts, so it is not provably restrict-only.
+// autoAllowBashIfSandboxed and allowUnsandboxedCommands are forced false on
+// whatever is carried, so every Bash call still prompts.
+//
+// underArgusSandbox: when the resident itself runs under Argus's sandbox-exec,
+// Claude's own Bash sandbox cannot nest inside it (Bash would fail on every
+// call once allowUnsandboxedCommands is false), so enabled and
+// failIfUnavailable are not carried; the deny lists still are. A missing or
+// non-object block, or one with no allowlisted key left, yields nil.
+func residentSandbox(raw json.RawMessage, underArgusSandbox bool) json.RawMessage {
+	var in map[string]any
+	if s := bytes.TrimSpace(raw); len(s) == 0 || s[0] != '{' || json.Unmarshal(s, &in) != nil {
 		return nil
 	}
-	block["autoAllowBashIfSandboxed"] = false
-	block["allowUnsandboxedCommands"] = false
-	delete(block, "excludedCommands")
-	out, err := json.Marshal(block)
+	out := map[string]any{}
+	if !underArgusSandbox {
+		for _, k := range []string{"enabled", "failIfUnavailable"} {
+			// Only a true value restricts; false (or a non-bool) carries nothing.
+			if v, ok := in[k].(bool); ok && v {
+				out[k] = true
+			}
+		}
+	}
+	if list := sandboxStringList(in, "network", "deniedDomains"); list != nil {
+		out["network"] = map[string]any{"deniedDomains": list}
+	}
+	fs := map[string]any{}
+	for _, k := range []string{"denyRead", "denyWrite"} {
+		if list := sandboxStringList(in, "filesystem", k); list != nil {
+			fs[k] = list
+		}
+	}
+	if len(fs) > 0 {
+		out["filesystem"] = fs
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	out["autoAllowBashIfSandboxed"] = false
+	out["allowUnsandboxedCommands"] = false
+	b, err := json.Marshal(out)
 	if err != nil {
 		return nil
+	}
+	return b
+}
+
+// sandboxStringList returns the non-empty string entries of in[group][key], or
+// nil when absent, mistyped or empty.
+func sandboxStringList(in map[string]any, group, key string) []string {
+	g, _ := in[group].(map[string]any)
+	arr, _ := g[key].([]any)
+	var out []string
+	for _, v := range arr {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			out = append(out, s)
+		}
 	}
 	return out
 }

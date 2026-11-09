@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -174,6 +175,12 @@ type Family struct {
 	// so the resident can be forced out of bypass modes (ask rules do not
 	// prompt under bypass).
 	StripPermissionFlags func(command string) (string, error)
+	// ResidentCommandCheck is the resident's flag ALLOWLIST over the backend
+	// command (run after StripPermissionFlags): it returns an error naming
+	// the first word that is not the executable or an allowlisted flag/value.
+	// A user-supplied command could otherwise carry flags that load code or
+	// widen permissions outside the resident's inline settings.
+	ResidentCommandCheck func(command string) error
 
 	// Prelaunch runs before the fork (Pi's ollama warmup); nil skips.
 	Prelaunch func(ctx context.Context, task *model.Task, backend config.Backend) error
@@ -244,7 +251,7 @@ type ResidentPolicy struct {
 	// resident does not silently change model when user settings are dropped.
 	Model, Effort string
 	// Sandbox is the user's Claude `sandbox` settings block with its
-	// permission-widening keys neutralized (residentSandbox). Nil omits it.
+	// allowlisted restrictive keys only (residentSandbox). Nil omits it.
 	Sandbox json.RawMessage
 }
 
@@ -381,9 +388,9 @@ func splitShellWords(command string) ([]shellWord, error) {
 
 // stripClaudePermissionFlags drops --dangerously-skip-permissions,
 // --allow-dangerously-skip-permissions, --permission-mode (both "--permission-mode X"
-// and "--permission-mode=X" forms) and --allowedTools/--allowed-tools (variadic:
-// the following words up to the next option; `=` form one word) from a command.
-// --disallowedTools only restricts and is kept. Words are compared by their
+// and "--permission-mode=X" forms) from a command. (--allowedTools and every
+// other non-allowlisted flag is refused outright by checkClaudeResidentCommand,
+// which runs after this.) Words are compared by their
 // quote-removed value (the command runs under sh -c, so `"--flag"` is a real
 // flag), but only top-level words are considered: a quoted argument that merely
 // mentions a flag is untouched. Splicing is by word range: every kept word and
@@ -408,15 +415,6 @@ func stripClaudePermissionFlags(command string) (string, error) {
 		case v == "--permission-mode":
 			if i+1 < len(words) {
 				last = i + 1 // its value word
-			}
-		case strings.HasPrefix(v, "--allowedTools="), strings.HasPrefix(v, "--allowed-tools="):
-			// A CLI allow list is not a setting source, so it would widen the
-			// resident's inline allow rules. The `=` form carries one value.
-		case v == "--allowedTools", v == "--allowed-tools":
-			// Variadic: the flag takes every following word up to the next
-			// option (claude --help: "<tools...>").
-			for last+1 < len(words) && !strings.HasPrefix(words[last+1].value, "-") {
-				last++
 			}
 		default:
 			continue
@@ -630,6 +628,7 @@ var families = []*Family{
 		PermissionFlags:      config.PermissionModeFlags,
 		PermissionRulesFlag:  claudePermissionRulesFlag,
 		StripPermissionFlags: stripClaudePermissionFlags,
+		ResidentCommandCheck: checkClaudeResidentCommand,
 		PermissionFlagTokens: []string{
 			"--permission-mode", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
 		},
@@ -859,4 +858,75 @@ func ensureSandboxGrantDirsIn(f *Family, sb config.SandboxConfig, home string) {
 			uxlog.Log("[%s] create sandbox grant dir %s failed (continuing): %v", f.Kind, dir, err)
 		}
 	}
+}
+
+// residentClaudeValueFlags are the flags the resident's Claude command may
+// carry that take one value; residentClaudeBoolFlags take none. Everything
+// else is refused. --model is the only flag Argus itself ever appends to a
+// Claude command (hasModelFlag/ResolveModel); the rest are plain session
+// tuning verified against `claude --help` and none loads code, tools, MCP
+// servers, settings or directories, or touches permissions.
+var (
+	residentClaudeValueFlags = []string{"--model", "--effort", "--fallback-model"}
+	residentClaudeBoolFlags  = []string{"--verbose"}
+)
+
+// residentSafeWord is a command word that needs no shell quoting and contains
+// no shell metacharacter; the resident's command is accepted only when every
+// word's raw text matches it, so a value like `x;rm` or `$(...)` cannot ride
+// the allowlist into the sh -c line.
+var residentSafeWord = regexp.MustCompile(`^[A-Za-z0-9_./+@%:,=\[\]-]+$`)
+
+// checkClaudeResidentCommand enforces the resident's flag allowlist on a
+// Claude backend command: word 0 must be a Claude binary (any path whose base
+// is claude) and every other word must be an allowlisted flag, `=` form or
+// followed by its value word. The error names the offending word.
+func checkClaudeResidentCommand(command string) error {
+	words, err := splitShellWords(command)
+	if err != nil {
+		return fmt.Errorf("cannot check resident flags: %w", err)
+	}
+	if len(words) == 0 {
+		return fmt.Errorf("empty backend command")
+	}
+	raw := func(i int) string { return command[words[i].start:words[i].end] }
+	safe := func(i int) error {
+		if !residentSafeWord.MatchString(raw(i)) {
+			return fmt.Errorf("backend command word %q is not allowed for the resident (quotes, spaces and shell operators are refused)", raw(i))
+		}
+		return nil
+	}
+	if err := safe(0); err != nil {
+		return err
+	}
+	if backendkind.Of(words[0].value) != backendkind.Claude {
+		return fmt.Errorf("backend executable %q is not a Claude binary", words[0].value)
+	}
+	for i := 1; i < len(words); i++ {
+		v := words[i].value
+		name, _, hasEq := strings.Cut(v, "=")
+		switch {
+		case slices.Contains(residentClaudeBoolFlags, v):
+			if err := safe(i); err != nil {
+				return err
+			}
+		case slices.Contains(residentClaudeValueFlags, name):
+			if err := safe(i); err != nil {
+				return err
+			}
+			if hasEq {
+				continue
+			}
+			if i+1 >= len(words) || strings.HasPrefix(words[i+1].value, "-") {
+				return fmt.Errorf("flag %s needs a value", v)
+			}
+			i++
+			if err := safe(i); err != nil {
+				return fmt.Errorf("flag %s: %w", v, err)
+			}
+		default:
+			return fmt.Errorf("flag %q is not allowed in the resident backend command (allowed: --model, --effort, --fallback-model, --verbose)", v)
+		}
+	}
+	return nil
 }

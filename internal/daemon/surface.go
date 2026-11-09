@@ -227,6 +227,10 @@ const (
 	//     sandbox block with its Bash auto-approve escapes forced off, strips
 	//     --allowedTools, reads user files from the account dir (never an
 	//     inherited $CLAUDE_CONFIG_DIR) and re-verifies its cached prompt file.
+	//     The sandbox carry is an allowlist of restrictive keys (no `enabled`
+	//     under Argus's own sandbox), the backend command must pass a flag
+	//     allowlist (else the resident refuses to start), and its prompt file
+	//     and skills root live in a private 0700 ~/.argus/resident-launch.
 	SupervisorSpawnSurface = 40
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -534,7 +538,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "c8862cc35928e7d022c5fb3223df8f7f95882f6d90fa72e20d9a32d4436cd773"
+	SpawnSurfaceDigest  = "5cb8380757116d4ddc91826e58d406fdb3288c17e3eb59526bc644809077616c"
 	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 

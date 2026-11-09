@@ -144,9 +144,9 @@ The resident SHALL record durable facts (people, customers, projects, decisions)
 
 The resident's permission policy SHALL have three tiers, configurable by `resident.allow_tools`, `resident.ask_tools` and `resident.deny_tools` with shipped defaults, and SHALL run under a non-bypass permission mode so the ask and deny tiers are enforced: read-only connector tools and `kb_*` SHALL run without a prompt; outward tools (every write/send/delete/modify tool of the outward connectors (Notion, Gmail, Superhuman, Slack, Linear, Google Calendar, Granola), except draft creation/update) SHALL require an explicit user confirmation through the Claude permission prompt; Slack message sending (including scheduled sends) SHALL be denied, with draft creation/update (such as `slack_send_message_draft`) allowed; Slack send and schedule are denied. A pending confirmation SHALL raise the resident's waiting (`?`) signal.
 
-The resident launch SHALL strip `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, `--permission-mode` and `--allowedTools`/`--allowed-tools` (with their values) from the backend command, because CLI allow lists are not a setting source and would widen the allow tier.
+The resident launch SHALL strip `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions` and `--permission-mode` (with its value) from the backend command, and SHALL then apply a flag allowlist to what remains: the executable SHALL be a Claude binary (any path whose base name is `claude`) and every other word SHALL be `--model`, `--effort`, `--fallback-model` (each with a value, space or `=` form) or `--verbose`, free of quotes and shell metacharacters. Any other word (including `--allowedTools`/`--allowed-tools`, `--plugin-dir`, `--plugin-url`, `--agent`, `--agents`, `--mcp-config`, `--settings`, `--setting-sources`, `--add-dir`, positional words and shell operators) SHALL make the launch fail with an error naming it, surfaced as the resident's reason; plain tasks are unaffected.
 
-The policy SHALL be self-contained: the resident SHALL launch with setting sources restricted to `project` so the user's own settings (allow rules, hooks, plugins, model) do not apply, and only the resident's own allow list SHALL run without a prompt. The user's `permissions.deny` and `permissions.ask` rules SHALL be merged into the resident's lists (never the user's `allow` rules), its inline settings SHALL set the default permission mode and disable bypass mode, SHALL carry the account's `model` and `effortLevel` when no other model is chosen and the account's `sandbox` settings block for its restrictions only, with its Bash auto-approve and unsandboxed-command escapes forced off (user hooks are never carried; skipped hook events are logged), and SHALL register the `argus coord-hook` Stop hook inline in place of the dropped user-level hook. The account's `CLAUDE.md` and user `skills/` SHALL still be provided to the resident. Sending a message to another task (`task_message_send`) SHALL require confirmation, while reading and acknowledging the resident's own inbox SHALL NOT.
+The policy SHALL be self-contained: the resident SHALL launch with setting sources restricted to `project` so the user's own settings (allow rules, hooks, plugins, model) do not apply, and only the resident's own allow list SHALL run without a prompt. The user's `permissions.deny` and `permissions.ask` rules SHALL be merged into the resident's lists (never the user's `allow` rules), its inline settings SHALL set the default permission mode and disable bypass mode, SHALL carry the account's `model` and `effortLevel` when no other model is chosen and the account's `sandbox` settings block by allowlist (only `enabled`, `failIfUnavailable`, `network.deniedDomains`, `filesystem.denyRead` and `filesystem.denyWrite` are carried; every other key, including unknown ones and `credentials.*`, is dropped; nothing carried when none remains) with its Bash auto-approve and unsandboxed-command escapes forced off, except that `enabled` and `failIfUnavailable` SHALL NOT be carried when the resident itself runs under Argus's sandbox (user hooks are never carried; skipped hook events are logged), and SHALL register the `argus coord-hook` Stop hook inline in place of the dropped user-level hook. The account's `CLAUDE.md` and user `skills/` SHALL still be provided to the resident. Sending a message to another task (`task_message_send`) SHALL require confirmation, while reading and acknowledging the resident's own inbox SHALL NOT.
 
 #### Scenario: Calendar invite asks first
 
@@ -167,6 +167,28 @@ The policy SHALL be self-contained: the resident SHALL launch with setting sourc
 
 - **WHEN** the resident lists calendar events or searches the KB
 - **THEN** no confirmation is requested
+
+#### Scenario: Sandbox block is carried by allowlist
+
+- **WHEN** the user's sandbox block holds `enabled`, `network.deniedDomains`, `filesystem.denyRead`, `network.allowedDomains`, `excludedCommands`, `allowAppleEvents` and an unknown key
+- **THEN** the resident's inline settings carry only `enabled`, the deny lists and the two forced-false Bash keys
+
+#### Scenario: Sandbox block with nothing restrictive is not carried
+
+- **WHEN** the user's sandbox block holds only loosening or unknown keys
+- **THEN** the resident's inline settings contain no `sandbox` block
+
+#### Scenario: Argus-sandboxed resident drops enabled
+
+- **WHEN** the resident runs under Argus's own sandbox and the user's sandbox block has `enabled: true`
+- **THEN** `enabled` and `failIfUnavailable` are not carried while the deny lists still are
+
+#### Scenario: Resident backend flag allowlist
+
+- **WHEN** the resident's backend command is `claude --model sonnet` or `/opt/x/claude --model=opus`
+- **THEN** it launches
+- **WHEN** it contains `--allowedTools`, `--plugin-dir`, `--mcp-config`, `--settings`, `--add-dir` or a positional word
+- **THEN** the launch fails with an error naming the flag, and a plain task with the same command still launches
 
 ### Requirement: Resident reply and unread state is daemon-held
 

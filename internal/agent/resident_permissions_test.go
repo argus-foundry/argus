@@ -1,12 +1,17 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/config"
@@ -232,12 +237,6 @@ func TestStripClaudePermissionFlags_ShellOracle(t *testing.T) {
 		{"quoted mention survives", `claude --append-system-prompt "use --permission-mode x" -p`, []string{"claude", "--append-system-prompt", "use --permission-mode x", "-p"}},
 		{"continuation inside kept words", "claude \\\n --model x \\\n --permission-mode plan \\\n -p", []string{"claude", "--model", "x", "-p"}},
 		{"untouched", "claude --model opus", []string{"claude", "--model", "opus"}},
-		{"allowedTools single value", `claude --allowedTools "Bash(git *)" -p`, []string{"claude", "-p"}},
-		{"allowedTools variadic list", `claude --allowedTools Read 'Bash(ls *)' Edit --model x`, []string{"claude", "--model", "x"}},
-		{"allowed-tools quoted flag", `claude "--allowed-tools" Read -p`, []string{"claude", "-p"}},
-		{"allowedTools equals form", `claude --allowedTools="Bash(*)" -p`, []string{"claude", "-p"}},
-		{"allowed-tools equals form", `claude --allowed-tools=Read,Edit -p`, []string{"claude", "-p"}},
-		{"allowedTools last word", `claude -p --allowedTools`, []string{"claude", "-p"}},
 		{"disallowedTools kept", `claude --disallowedTools "Bash(rm *)" -p`, []string{"claude", "--disallowedTools", "Bash(rm *)", "-p"}},
 		{"allowedTools quoted mention survives", `claude --append-system-prompt "--allowedTools x" -p`, []string{"claude", "--append-system-prompt", "--allowedTools x", "-p"}},
 	}
@@ -298,18 +297,17 @@ func TestBuildCmd_ResidentUnbalancedBackendCommandErrors(t *testing.T) {
 
 // A quoted argument that merely mentions --permission-mode must not suppress
 // the forced default mode (HasPermissionFlag is a substring search).
-func TestBuildCmd_ResidentForcedModeSurvivesQuotedMention(t *testing.T) {
+func TestBuildCmd_ResidentRefusesQuotedArgumentCommand(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
 	cfg := residentCfg()
 	cfg.Backends["claude"] = config.Backend{Command: `claude --append-system-prompt "never use --permission-mode bypassPermissions"`}
 	task := &model.Task{ID: "r", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir()}
-	cmd, cleanup, err := BuildCmd(task, cfg, false)
-	testutil.NoError(t, err)
-	if cleanup != nil {
-		t.Cleanup(cleanup)
+	_, _, err := BuildCmd(task, cfg, false)
+	if err == nil {
+		t.Fatal("expected the resident to refuse an --append-system-prompt command")
 	}
-	testutil.Contains(t, strings.Join(cmd.Args, " "), "--permission-mode default")
+	testutil.Contains(t, err.Error(), "--append-system-prompt")
 }
 
 func TestBuildCmd_ResidentMarkerEnvResidentOnly(t *testing.T) {
@@ -445,7 +443,7 @@ func TestBuildCmd_ResidentIsSelfContainedUnderUserAllowAll(t *testing.T) {
 			"ask": ["mcp__claude_ai_Notion__notion-fetch", "Bash(git push:*)"],
 			"deny": ["Bash(rm -rf:*)", "mcp__claude_ai_Slack__slack_send_message"]
 		},
-		"sandbox": {"enabled": true, "autoAllowBashIfSandboxed": true, "excludedCommands": ["git"], "network": {"allowedDomains": ["example.com"]}},
+		"sandbox": {"enabled": true, "autoAllowBashIfSandboxed": true, "excludedCommands": ["git"], "network": {"allowedDomains": ["example.com"], "deniedDomains": ["blocked.test"]}},
 		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "auto-approve.sh"}]}]}
 		}`), 0o644))
 	cmd := buildResident(t, task, residentCfg())
@@ -500,7 +498,11 @@ func TestBuildCmd_ResidentIsSelfContainedUnderUserAllowAll(t *testing.T) {
 	if _, has := sb["excludedCommands"]; has {
 		t.Fatalf("excludedCommands must not be carried: %v", sb)
 	}
-	testutil.Contains(t, line, "example.com")
+	// allowedDomains loosens, so it is dropped; deniedDomains restricts, so it is kept.
+	if strings.Contains(line, "example.com") {
+		t.Fatalf("network.allowedDomains must not be carried: %s", line)
+	}
+	testutil.Contains(t, line, "blocked.test")
 	// User hooks are never carried: only the inline Stop coord-hook exists.
 	testutil.Equal(t, len(hooks), 1)
 	if strings.Contains(line, "auto-approve.sh") {
@@ -513,14 +515,106 @@ func TestReadResidentUserSettings_SandboxAndSkippedHooks(t *testing.T) {
 	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"), []byte(`{
 		"sandbox": {"enabled": true},
 		"hooks": {"Stop": [], "PreToolUse": [], "PermissionRequest": []}}`), 0o644))
-	us := readResidentUserSettings(task, residentCfg())
+	us := readResidentUserSettings(task, residentCfg(), false)
 	testutil.Equal(t, string(us.Sandbox), `{"allowUnsandboxedCommands":false,"autoAllowBashIfSandboxed":false,"enabled":true}`)
+	// Under Argus's own sandbox `enabled` is not carried, so nothing remains.
+	us = readResidentUserSettings(task, residentCfg(), true)
+	testutil.Equal(t, len(us.Sandbox), 0)
+	us = readResidentUserSettings(task, residentCfg(), false)
 	testutil.DeepEqual(t, us.SkippedHooks, []string{"PermissionRequest", "PreToolUse", "Stop"})
 	// A non-object sandbox value is ignored rather than injected.
 	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"), []byte(`{"sandbox": true}`), 0o644))
-	us = readResidentUserSettings(task, residentCfg())
+	us = readResidentUserSettings(task, residentCfg(), false)
 	testutil.Equal(t, len(us.Sandbox), 0)
 	testutil.Equal(t, len(us.SkippedHooks), 0)
+}
+
+// syncBuf is a mutex-guarded writer so a slog handler can be read safely.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func TestReadResidentUserSettings_LogsSkippedHooks(t *testing.T) {
+	task, acct := residentFixture(t)
+	var logs syncBuf
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"),
+		[]byte(`{"hooks": {"Stop": [], "PreToolUse": [], "PermissionRequest": []}}`), 0o644))
+	readResidentUserSettings(task, residentCfg(), false)
+	testutil.Contains(t, logs.String(), "[resident] user hooks not applied")
+	testutil.Contains(t, logs.String(), "PermissionRequest,PreToolUse,Stop")
+
+	// No hooks: nothing is logged.
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"), []byte(`{}`), 0o644))
+	before := logs.String()
+	readResidentUserSettings(task, residentCfg(), false)
+	testutil.Equal(t, logs.String(), before)
+}
+
+func TestResidentSandbox_Robustness(t *testing.T) {
+	for name, raw := range map[string]string{
+		"null":      `null`,
+		"empty":     ``,
+		"true":      `true`,
+		"string":    `"x"`,
+		"array":     `[1]`,
+		"number":    `3`,
+		"malformed": `{"a":`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := residentSandbox(json.RawMessage(raw), false); got != nil {
+				t.Fatalf("want nil, got %s", got)
+			}
+		})
+	}
+	t.Run("empty object carries nothing", func(t *testing.T) {
+		if got := residentSandbox(json.RawMessage(`{}`), false); got != nil {
+			t.Fatalf("want nil, got %s", got)
+		}
+	})
+	t.Run("through settings.json null", func(t *testing.T) {
+		task, acct := residentFixture(t)
+		testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"), []byte(`{"sandbox": null}`), 0o644))
+		testutil.Equal(t, len(readResidentUserSettings(task, residentCfg(), false).Sandbox), 0)
+	})
+}
+
+// A backend CLAUDE_CONFIG_DIR mapping that resolves to unset launches on
+// Claude's default dir, so the resident must read ~/.claude, not skip it.
+func TestResidentAccountDir_UnsetBackendMappingFallsBackToDefault(t *testing.T) {
+	task, acct := residentFixture(t)
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"),
+		[]byte(`{"permissions":{"deny":["Bash(rm:*)"]}}`), 0o644))
+	cfg := residentCfg()
+	b := cfg.Backends["claude"]
+	b.EnvVars = map[string]string{"CLAUDE_CONFIG_DIR": "R12_UNSET_VAR"}
+	cfg.Backends["claude"] = b
+	t.Setenv("R12_UNSET_VAR", "")
+	_ = os.Unsetenv("R12_UNSET_VAR")
+
+	testutil.Equal(t, residentAccountDir(task, cfg), config.DefaultClaudeDir())
+	testutil.Equal(t, residentAccountDir(task, cfg), acct)
+	st, ok := settingsArg(t, buildResident(t, task, cfg).Args)
+	testutil.True(t, ok)
+	perms, _ := st["permissions"].(map[string]any)
+	deny, _ := perms["deny"].([]any)
+	testutil.True(t, slices.Contains(deny, any("Bash(rm:*)")))
 }
 
 func TestBuildCmd_ResidentModelPrecedenceAndMissingSettings(t *testing.T) {
@@ -599,7 +693,7 @@ func TestBuildCmd_ResidentMissingClaudeMDAndSkillsSkipped(t *testing.T) {
 	defer SetEnsureBuiltinRoutingForTest(func() (string, error) { return routing, nil })()
 	line := strings.Join(buildResident(t, task, residentCfg()).Args, " ")
 	testutil.Contains(t, line, "--append-system-prompt-file "+shellQuote(routing))
-	if strings.Contains(line, "resident-skills") || strings.Contains(line, "resident-prompt") {
+	if strings.Contains(line, residentLaunchDirName) {
 		t.Fatalf("nothing to add: %s", line)
 	}
 }
@@ -648,8 +742,7 @@ func TestBuildCmd_ResidentIgnoresInheritedClaudeConfigDir(t *testing.T) {
 	testutil.False(t, strings.Contains(line, "inherited-dir-model"))
 }
 
-// The content-addressed prompt dir is writable by sandboxed agents, so a
-// tampered file must be restored (atomically, replacing even a symlink).
+// A tampered prompt file must be restored (atomically, replacing even a symlink).
 func TestMaterializeResidentPrompt_RestoresTamperedFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	first, err := materializeResidentPrompt("", "RULES")
@@ -758,7 +851,7 @@ func TestBuildCmd_PlainTaskGetsRoutingNotResidentPrompt(t *testing.T) {
 	plain := &model.Task{ID: "p", Name: "plain", Worktree: t.TempDir()}
 	pline := strings.Join(buildResident(t, plain, residentCfg()).Args, " ")
 	testutil.Contains(t, pline, "--append-system-prompt-file "+shellQuote(routing))
-	testutil.Equal(t, strings.Contains(pline, "resident-prompt"), false)
+	testutil.Equal(t, strings.Contains(pline, residentLaunchDirName), false)
 }
 
 func TestBuildCmd_ResidentTaskModelWinsOverAccountModel(t *testing.T) {
@@ -787,4 +880,312 @@ func TestBuildCmd_BackendEnvVarsCannotForgeResidentMarker(t *testing.T) {
 			t.Fatalf("backend env_vars forged %s", kv)
 		}
 	}
+}
+
+// sandboxWriteRoots parses the generated SBPL profile for a task sandboxed on
+// worktree and returns every file-write* subpath/prefix/literal it grants.
+func sandboxWriteRoots(t *testing.T, home, worktree string) []string {
+	t.Helper()
+	path, _, cleanup, err := GenerateSandboxConfig(worktree, config.SandboxConfig{})
+	testutil.NoError(t, err)
+	defer cleanup()
+	raw, err := os.ReadFile(path)
+	testutil.NoError(t, err)
+	grant := regexp.MustCompile(`\(allow file-write\* \((?:subpath|prefix|literal) (.+)\)\)`)
+	var roots []string
+	for _, m := range grant.FindAllStringSubmatch(string(raw), -1) {
+		expr := m[1]
+		switch {
+		case strings.HasPrefix(expr, `(param "WORKTREE")`):
+			roots = append(roots, evalSymlinksOrKeep(worktree))
+		case strings.HasPrefix(expr, `(string-append (param "HOME")`):
+			rel := regexp.MustCompile(`"([^"]*)"\)$`).FindStringSubmatch(expr)
+			if rel != nil {
+				roots = append(roots, filepath.Join(evalSymlinksOrKeep(home), rel[1]))
+			}
+		case strings.HasPrefix(expr, `"`):
+			roots = append(roots, strings.Trim(expr, `"`))
+		}
+	}
+	return roots
+}
+
+func under(path, root string) bool {
+	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+// The resident's launch files must live where no sandboxed agent can write,
+// including the resident's own sandbox (its worktree grant) and every other
+// task's (~/.argus/cache and an arbitrary worktree).
+func TestResidentLaunchDir_NotWritableBySandbox(t *testing.T) {
+	task, acct := residentFixture(t)
+	home, _ := os.UserHomeDir()
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "CLAUDE.md"), []byte("x"), 0o644))
+	testutil.NoError(t, os.MkdirAll(filepath.Join(acct, "skills"), 0o755))
+	prompt, err := materializeResidentPrompt("", "x")
+	testutil.NoError(t, err)
+	skills := ensureResidentUserSkillsDir(task, residentCfg())
+	testutil.True(t, skills != "")
+	dir, err := residentLaunchDir()
+	testutil.NoError(t, err)
+
+	fi, err := os.Lstat(dir)
+	testutil.NoError(t, err)
+	testutil.Equal(t, fi.Mode().Perm(), os.FileMode(0o700))
+	pfi, err := os.Lstat(prompt)
+	testutil.NoError(t, err)
+	testutil.Equal(t, pfi.Mode().Perm(), os.FileMode(0o600))
+
+	realHome := evalSymlinksOrKeep(home)
+	for _, p := range []string{evalSymlinksOrKeep(prompt), evalSymlinksOrKeep(skills)} {
+		testutil.False(t, under(p, filepath.Join(realHome, ".argus", "cache")))
+		testutil.False(t, under(p, evalSymlinksOrKeep(db.ResidentWorkDir())))
+		testutil.False(t, under(p, evalSymlinksOrKeep(WorktreeDir("proj", "task"))))
+	}
+	for name, wt := range map[string]string{
+		"resident": db.ResidentWorkDir(),
+		"task":     WorktreeDir("proj", "task"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			testutil.NoError(t, os.MkdirAll(wt, 0o755))
+			roots := sandboxWriteRoots(t, home, wt)
+			testutil.True(t, slices.ContainsFunc(roots, func(r string) bool { return strings.HasSuffix(r, "/.argus/cache") }))
+			for _, r := range roots {
+				if under(realHome, r) {
+					continue // test HOME lives in a temp dir; real HOMEs are not under a temp grant
+				}
+				for _, p := range []string{evalSymlinksOrKeep(prompt), evalSymlinksOrKeep(skills), evalSymlinksOrKeep(dir)} {
+					if under(p, r) {
+						t.Fatalf("%s is covered by sandbox write grant %s", p, r)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A symlink pre-planted at the launch dir, the prompt file, or the skills link
+// is replaced, never followed, and its target stays untouched.
+func TestResidentLaunch_PlantedSymlinksReplacedNotFollowed(t *testing.T) {
+	t.Run("launch dir is a symlink", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		victim := t.TempDir()
+		testutil.NoError(t, os.MkdirAll(filepath.Join(home, ".argus"), 0o755))
+		testutil.NoError(t, os.Symlink(victim, filepath.Join(home, ".argus", residentLaunchDirName)))
+		file, err := materializeResidentPrompt("", "RULES")
+		testutil.NoError(t, err)
+		fi, err := os.Lstat(filepath.Dir(file))
+		testutil.NoError(t, err)
+		testutil.True(t, fi.IsDir() && fi.Mode()&os.ModeSymlink == 0)
+		ents, _ := os.ReadDir(victim)
+		testutil.Equal(t, len(ents), 0)
+	})
+	t.Run("prompt file is a symlink", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		file, err := materializeResidentPrompt("", "RULES")
+		testutil.NoError(t, err)
+		victim := filepath.Join(t.TempDir(), "victim.md")
+		testutil.NoError(t, os.WriteFile(victim, []byte("evil"), 0o644))
+		testutil.NoError(t, os.Remove(file))
+		testutil.NoError(t, os.Symlink(victim, file))
+		got, err := materializeResidentPrompt("", "RULES")
+		testutil.NoError(t, err)
+		fi, err := os.Lstat(got)
+		testutil.NoError(t, err)
+		testutil.True(t, fi.Mode().IsRegular())
+		b, _ := os.ReadFile(victim)
+		testutil.Equal(t, string(b), "evil")
+		cur, _ := os.ReadFile(got)
+		testutil.Contains(t, string(cur), "RULES")
+	})
+	t.Run("skills link parents are planted", func(t *testing.T) {
+		task, acct := residentFixture(t)
+		testutil.NoError(t, os.MkdirAll(filepath.Join(acct, "skills"), 0o755))
+		root := ensureResidentUserSkillsDir(task, residentCfg())
+		testutil.True(t, root != "")
+		victim := t.TempDir()
+		// Replace .claude with a symlink to a victim dir.
+		testutil.NoError(t, os.RemoveAll(filepath.Join(root, ".claude")))
+		testutil.NoError(t, os.Symlink(victim, filepath.Join(root, ".claude")))
+		root2 := ensureResidentUserSkillsDir(task, residentCfg())
+		testutil.Equal(t, root2, root)
+		ents, _ := os.ReadDir(victim)
+		testutil.Equal(t, len(ents), 0)
+		link, err := os.Readlink(filepath.Join(root, ".claude", "skills"))
+		testutil.NoError(t, err)
+		testutil.Equal(t, link, filepath.Join(acct, "skills"))
+		// A planted wrong link target is replaced.
+		testutil.NoError(t, os.Remove(filepath.Join(root, ".claude", "skills")))
+		testutil.NoError(t, os.Symlink(victim, filepath.Join(root, ".claude", "skills")))
+		ensureResidentUserSkillsDir(task, residentCfg())
+		link, _ = os.Readlink(filepath.Join(root, ".claude", "skills"))
+		testutil.Equal(t, link, filepath.Join(acct, "skills"))
+	})
+}
+
+func TestResidentSandbox_Allowlist(t *testing.T) {
+	// Every loosening key (and an unknown future one) is dropped; every
+	// allowlisted restricting key survives; the two Bash keys are forced false.
+	const in = `{
+		"enabled": true, "failIfUnavailable": true,
+		"autoAllowBashIfSandboxed": true, "allowUnsandboxedCommands": true,
+		"excludedCommands": ["git"], "allowAppleEvents": true,
+		"enableWeakerNetworkIsolation": true, "allowNestedUserNamespaces": true,
+		"futureLooseningKey": {"x": 1},
+		"credentials": {"allowPlaintextInject": true, "files": [{"path": "~/.aws", "mode": "deny"}]},
+		"network": {"allowedDomains": ["a.test"], "allowLocalBinding": true, "allowUnixSockets": ["/x"],
+			"deniedDomains": ["d.test", 5, ""]},
+		"filesystem": {"disabled": true, "allowRead": ["/r"], "allowWrite": ["/w"],
+			"denyRead": ["~/.ssh"], "denyWrite": ["/etc"]}}`
+	var got map[string]any
+	testutil.NoError(t, json.Unmarshal(residentSandbox(json.RawMessage(in), false), &got))
+	want := map[string]any{
+		"enabled": true, "failIfUnavailable": true,
+		"autoAllowBashIfSandboxed": false, "allowUnsandboxedCommands": false,
+		"network":    map[string]any{"deniedDomains": []any{"d.test"}},
+		"filesystem": map[string]any{"denyRead": []any{"~/.ssh"}, "denyWrite": []any{"/etc"}},
+	}
+	testutil.DeepEqual(t, got, want)
+
+	for name, loosening := range map[string]string{
+		"excludedCommands":    `{"excludedCommands":["git"]}`,
+		"allowAppleEvents":    `{"allowAppleEvents":true}`,
+		"filesystem.disabled": `{"filesystem":{"disabled":true}}`,
+		"weaker isolation":    `{"enableWeakerNetworkIsolation":true}`,
+		"nested userns":       `{"allowNestedUserNamespaces":true}`,
+		"network.allowed":     `{"network":{"allowedDomains":["a.test"]}}`,
+		"plaintext inject":    `{"credentials":{"allowPlaintextInject":true}}`,
+		"unknown future key":  `{"newThing":true}`,
+		"enabled false":       `{"enabled":false}`,
+		"autoAllow only":      `{"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":true}`,
+		"non-bool enabled":    `{"enabled":"yes"}`,
+		"mistyped deniedlist": `{"network":{"deniedDomains":"x"}}`,
+	} {
+		t.Run("alone drops "+name, func(t *testing.T) {
+			if got := residentSandbox(json.RawMessage(loosening), false); got != nil {
+				t.Fatalf("want nil (nothing restrictive), got %s", got)
+			}
+		})
+	}
+}
+
+func TestResidentSandbox_UnderArgusSandboxDropsEnabled(t *testing.T) {
+	const in = `{"enabled":true,"failIfUnavailable":true,"filesystem":{"denyRead":["~/.ssh"]}}`
+	var got map[string]any
+	testutil.NoError(t, json.Unmarshal(residentSandbox(json.RawMessage(in), true), &got))
+	if _, has := got["enabled"]; has {
+		t.Fatalf("enabled must not be carried under Argus's sandbox: %v", got)
+	}
+	if _, has := got["failIfUnavailable"]; has {
+		t.Fatalf("failIfUnavailable must not be carried under Argus's sandbox: %v", got)
+	}
+	testutil.Equal(t, got["allowUnsandboxedCommands"], any(false))
+	testutil.DeepEqual(t, got["filesystem"], any(map[string]any{"denyRead": []any{"~/.ssh"}}))
+	// Only enabled/failIfUnavailable in the block: nothing remains.
+	if g := residentSandbox(json.RawMessage(`{"enabled":true,"failIfUnavailable":true}`), true); g != nil {
+		t.Fatalf("want nil, got %s", g)
+	}
+}
+
+func TestBuildCmd_ResidentSandboxedTaskDropsEnabled(t *testing.T) {
+	task, acct := residentFixture(t)
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"),
+		[]byte(`{"sandbox":{"enabled":true,"failIfUnavailable":true,"network":{"deniedDomains":["blocked.test"]}}}`), 0o644))
+	st, _ := settingsArg(t, buildResident(t, task, residentCfg()).Args)
+	sb, _ := st["sandbox"].(map[string]any)
+	testutil.Equal(t, sb["enabled"], any(true))
+
+	task.Sandboxed = true
+	st, _ = settingsArg(t, buildResident(t, task, residentCfg()).Args)
+	sb, _ = st["sandbox"].(map[string]any)
+	if _, has := sb["enabled"]; has {
+		t.Fatalf("enabled carried for a Sandboxed resident: %v", sb)
+	}
+	if _, has := sb["failIfUnavailable"]; has {
+		t.Fatalf("failIfUnavailable carried for a Sandboxed resident: %v", sb)
+	}
+	testutil.Contains(t, fmt.Sprint(sb["network"]), "blocked.test")
+}
+
+func TestCheckClaudeResidentCommand(t *testing.T) {
+	ok := []string{
+		"claude",
+		"claude --model sonnet",
+		"/opt/x/claude --model=opus",
+		"claude --effort high",
+		"claude --effort=low --verbose",
+		"claude --fallback-model sonnet --model opus",
+		"claude --model opus[1m]",
+	}
+	for _, c := range ok {
+		t.Run("ok "+c, func(t *testing.T) { testutil.NoError(t, checkClaudeResidentCommand(c)) })
+	}
+	refused := []struct{ cmd, names string }{
+		{"claude --allowedTools Read", "--allowedTools"},
+		{"claude --allowed-tools=Read", "--allowed-tools=Read"},
+		{"claude --plugin-dir /x", "--plugin-dir"},
+		{"claude --plugin-url http://x", "--plugin-url"},
+		{"claude --agent foo", "--agent"},
+		{"claude --agents {}", "--agents"},
+		{"claude --mcp-config /x.json", "--mcp-config"},
+		{"claude --settings /x.json", "--settings"},
+		{"claude --setting-sources user", "--setting-sources"},
+		{"claude --add-dir /x", "--add-dir"},
+		{"claude --disallowedTools Bash", "--disallowedTools"},
+		{"claude positional", "positional"},
+		{"claude --model", "--model"},
+		{"claude --model --verbose", "--model"},
+		{"claude --model x; rm -rf y", ";"},
+		{"claude --model opus && ls", "&&"},
+		{"claude --model $(id)", "$(id)"},
+		{"claude --model `id`", "`id`"},
+		{"claude | tee", "|"},
+		{`claude "--allowedTools" Read`, "--allowedTools"},
+		{"codex --model x", "codex"},
+		{"/bin/sh --model x", "sh"},
+	}
+	for _, tt := range refused {
+		t.Run("refused "+tt.cmd, func(t *testing.T) {
+			err := checkClaudeResidentCommand(tt.cmd)
+			if err == nil {
+				t.Fatalf("expected refusal")
+			}
+			testutil.Contains(t, err.Error(), tt.names)
+		})
+	}
+}
+
+func TestBuildCmd_ResidentRefusesDisallowedFlagsAndSurfacesError(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
+	task := &model.Task{ID: "r", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir()}
+	for _, flag := range []string{"--allowedTools Read", "--plugin-dir /x", "--mcp-config /x.json", "--settings /x.json", "--add-dir /x"} {
+		t.Run(flag, func(t *testing.T) {
+			cfg := residentCfg()
+			cfg.Backends["claude"] = config.Backend{Command: "claude --dangerously-skip-permissions " + flag}
+			_, _, err := BuildCmd(task, cfg, false)
+			if err == nil {
+				t.Fatal("expected refusal")
+			}
+			name, _, _ := strings.Cut(flag, " ")
+			testutil.Contains(t, err.Error(), name)
+			testutil.Contains(t, err.Error(), "refused")
+			// A plain task with the same command is unaffected.
+			plain := &model.Task{ID: "p", Name: "plain", Worktree: t.TempDir()}
+			if _, cleanup, perr := BuildCmd(plain, cfg, false); perr != nil {
+				t.Fatalf("plain task must be unaffected: %v", perr)
+			} else if cleanup != nil {
+				cleanup()
+			}
+		})
+	}
+	cfg := residentCfg()
+	cfg.Backends["claude"] = config.Backend{Command: "/opt/x/claude --model=opus"}
+	cmd, cleanup, err := BuildCmd(task, cfg, false)
+	testutil.NoError(t, err)
+	if cleanup != nil {
+		cleanup()
+	}
+	testutil.Contains(t, strings.Join(cmd.Args, " "), "--model=opus")
 }
