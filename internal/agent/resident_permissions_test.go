@@ -1171,11 +1171,19 @@ func TestCheckClaudeResidentCommand(t *testing.T) {
 		"claude --model 'claude-opus-4-1'",
 		"claude --effort='high'",
 		"claude --model='opus[1m]' --verbose",
+		"claude \\\n --model x", // a backslash-newline continuation is one line to sh
 	}
 	for _, c := range ok {
 		t.Run("ok "+c, func(t *testing.T) { testutil.NoError(t, checkClaudeResidentCommand(c)) })
 	}
 	refused := []struct{ cmd, names string }{
+		{"claude --verbose\n--model opus", "one line"},
+		{"claude --model opus\n", "one line"},
+		{"claude\n--verbose", "one line"},
+		{"claude --model x\r--verbose", "one line"},
+		{"-a/x/claude", "plain path"},
+		{"+x/claude", "plain path"},
+		{"%/claude", "plain path"},
 		{"claude --allowedTools Read", "--allowedTools"},
 		{"claude --allowed-tools=Read", "--allowed-tools=Read"},
 		{"claude --plugin-dir /x", "--plugin-dir"},
@@ -1374,4 +1382,35 @@ func TestResidentLaunch_ConcurrentFirstLaunches(t *testing.T) {
 	cur, err := os.Readlink(filepath.Join(roots[0], ".claude", "skills"))
 	testutil.NoError(t, err)
 	testutil.Equal(t, cur, filepath.Join(acct, "skills"))
+}
+
+// Every printable ASCII character outside the allowed classes is refused in
+// both the executable and a value position, so widening either class is a
+// deliberate test change.
+func TestCheckClaudeResidentCommand_EveryUnsafeCharacterRefused(t *testing.T) {
+	const exeAllowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./+@%:,-"
+	const valueAllowed = exeAllowed + "="
+	for c := byte(0x21); c < 0x7f; c++ {
+		ch := string(c)
+		if !strings.Contains(exeAllowed, ch) {
+			err := checkClaudeResidentCommand("/opt/x" + ch + "y/claude")
+			if err == nil {
+				t.Errorf("executable with %q accepted", ch)
+			}
+		}
+		if !strings.Contains(valueAllowed, ch) {
+			if err := checkClaudeResidentCommand("claude --model x" + ch + "y"); err == nil {
+				t.Errorf("value with %q accepted", ch)
+			}
+		}
+	}
+}
+
+func TestBuildCmd_ResidentRefusesMultilineBackend(t *testing.T) {
+	task, _ := residentFixture(t)
+	cfg := residentCfg()
+	cfg.Backends["claude"] = config.Backend{Command: "claude --model opus\n"}
+	_, _, err := BuildCmd(task, cfg, false)
+	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "one line")
 }

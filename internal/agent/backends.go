@@ -885,9 +885,10 @@ var (
 	residentSafeWord = regexp.MustCompile(`^(?:[A-Za-z0-9_./+@%:,=-]|'[A-Za-z0-9_./+@%:,=\[\]-]+')+$`)
 	// residentSafeExe is the executable word: plain path characters only (no
 	// quoting, globs, escapes or `=` — `A=/x/claude` is a shell assignment, not
-	// a command), so its raw text is exactly the path stray-job cleanup and the
-	// backend-family lookup see.
-	residentSafeExe = regexp.MustCompile(`^[A-Za-z0-9_./+@%:,-]+$`)
+	// a command), starting with a letter, digit, `_`, `.` or `/` (sh reads a
+	// leading `-`/`+` as options and `%` as a job spec), so its raw text is
+	// exactly the path stray-job cleanup and the backend-family lookup see.
+	residentSafeExe = regexp.MustCompile(`^[A-Za-z0-9_./][A-Za-z0-9_./+@%:,-]*$`)
 	residentQuoted  = regexp.MustCompile(`'[^']*'`)
 )
 
@@ -910,6 +911,15 @@ func onlyUnquotedBrackets(text string) bool {
 // is claude) and every other word must be an allowlisted flag, `=` form or
 // followed by its value word. The error names the offending word.
 func checkClaudeResidentCommand(command string) error {
+	// sh ends a command at an unescaped newline (like `;`), so anything after
+	// it — including every flag Argus appends — would run as a separate,
+	// failing command and the resident would launch without its policy. A
+	// `\`+newline continuation is fine: the word rules refuse `\` inside a
+	// word, so it can only sit in a gap. A bare CR splits words for the
+	// tokenizer but not for sh, so it is refused too.
+	if strings.ContainsAny(strings.ReplaceAll(command, "\\\n", ""), "\n\r") {
+		return fmt.Errorf("resident backend command must be one line (an unescaped newline ends the command in sh; end a line with \\ to continue it)")
+	}
 	words, err := splitShellWords(command)
 	if err != nil {
 		return fmt.Errorf("cannot check resident flags: %w", err)

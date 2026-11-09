@@ -231,7 +231,9 @@ const (
 	//     under Argus's own sandbox), the backend command must pass a flag
 	//     allowlist (else the resident refuses to start), and its prompt file
 	//     and skills root live in a private 0700 ~/.argus/resident-launch
-	//     (--allowedTools is refused by that allowlist, not stripped).
+	//     (--allowedTools is refused by that allowlist, not stripped). The
+	//     backend command must also be a single line (an unescaped newline
+	//     would split off every appended flag in sh).
 	SupervisorSpawnSurface = 40
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -539,7 +541,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "e703b4fb5618dce9c4eedfb8674a8133333670188e4ff674d95e94f495265bac"
+	SpawnSurfaceDigest  = "0c37f904d211613a919eff481d9718e23cd9efe7b366d160e63193a8619b050d"
 	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 
