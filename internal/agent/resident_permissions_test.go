@@ -190,3 +190,12 @@ func TestBuildCmd_ResidentMCPURLBoundToItself(t *testing.T) {
 		t.Fatalf("plain task must not be caller-bound: %s", plain)
 	}
 }
+
+func TestBuildCmd_ResidentFailsClosedOnUnenforceableFamily(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := testConfig()
+	cfg.Backends["nocodexperm"] = config.Backend{Command: "codex"}
+	task := &model.Task{ID: "r1", Kind: model.KindResident, Backend: "nocodexperm", Worktree: db.ResidentWorkDir()}
+	_, _, err := BuildCmd(task, cfg, false)
+	testutil.Error(t, err)
+}
