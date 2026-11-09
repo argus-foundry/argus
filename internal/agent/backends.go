@@ -20,6 +20,7 @@ import (
 	injectantigravity "github.com/argus-foundry/argus/internal/inject/antigravity"
 	injectcursor "github.com/argus-foundry/argus/internal/inject/cursor"
 	injectopencode "github.com/argus-foundry/argus/internal/inject/opencode"
+	injectpi "github.com/argus-foundry/argus/internal/inject/pi"
 	"github.com/argus-foundry/argus/internal/mcplimits"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/routing"
@@ -674,8 +675,13 @@ var families = []*Family{
 		RoutingDelivery: RoutingAppendFlag,
 		// Pi's argv parser does not honor "--" as end-of-flags.
 		PromptPositional: true,
-		Prelaunch:        piPrelaunch,
-		StartTimeout:     PiStartTimeout,
+		InjectGlobal: func(port int, _ bool) error {
+			err := injectpi.InjectGlobal(port)
+			uxlog.Log("[pi] MCP registration port=%d error=%v", port, err)
+			return err
+		},
+		Prelaunch:    piPrelaunch,
+		StartTimeout: PiStartTimeout,
 		SandboxGrants: []SandboxGrant{
 			{HomeRel: "/.pi", Comment: "Pi session files (~/.pi/agent/sessions) plus auth/config; capture reads them post-exit."},
 		},
