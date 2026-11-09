@@ -55,17 +55,27 @@ func LatestForThread(home, cwd string, thread Thread, additionalHomes ...string)
 		return Reading{}, time.Time{}, false, err
 	}
 	defer f.Close() //nolint:errcheck // read-only handle
-	fi, err := f.Stat()
+	started, err := ValidateThreadRollout(f, cwd, thread)
 	if err != nil {
 		return Reading{}, time.Time{}, false, err
 	}
+	r, ok, err := latestRegular(f)
+	return r, started, ok, err
+}
+
+// ValidateThreadRollout checks the bounded session header on the opened descriptor.
+func ValidateThreadRollout(f *os.File, cwd string, thread Thread) (time.Time, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return time.Time{}, err
+	}
 	if !fi.Mode().IsRegular() {
-		return Reading{}, time.Time{}, false, fmt.Errorf("codexctx: rollout is not a regular file")
+		return time.Time{}, fmt.Errorf("codexctx: rollout is not a regular file")
 	}
 	// Session metadata is the first record. Bound it independently of the tail.
 	raw, err := bufio.NewReader(io.LimitReader(f, 64<<10)).ReadBytes('\n')
 	if err != nil {
-		return Reading{}, time.Time{}, false, fmt.Errorf("codexctx: missing session metadata")
+		return time.Time{}, fmt.Errorf("codexctx: missing session metadata")
 	}
 	var meta struct {
 		Type    string `json:"type"`
@@ -76,10 +86,9 @@ func LatestForThread(home, cwd string, thread Thread, additionalHomes ...string)
 		} `json:"payload"`
 	}
 	if json.Unmarshal(raw, &meta) != nil || meta.Type != "session_meta" || meta.Payload.ID != thread.ID || meta.Payload.Cwd != cwd || meta.Payload.Timestamp.IsZero() {
-		return Reading{}, time.Time{}, false, fmt.Errorf("codexctx: rollout session identity mismatch")
+		return time.Time{}, fmt.Errorf("codexctx: rollout session identity mismatch")
 	}
-	r, ok, err := Latest(f, fi.Size())
-	return r, meta.Payload.Timestamp, ok, err
+	return meta.Payload.Timestamp, nil
 }
 
 func openAccountRollout(homes []string, path string) (*os.File, error) {

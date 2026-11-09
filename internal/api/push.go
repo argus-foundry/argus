@@ -592,6 +592,7 @@ func (s *Server) idleWatcherTick(state *idleWatcherState) {
 	}
 
 	s.emitReaderContextChanges(state, running)
+	s.emitReaderUsageChanges(state, running)
 
 	for _, id := range running {
 		seen[id] = true

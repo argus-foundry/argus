@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -26,7 +27,9 @@ func codexTokenLine(ts string, in, out, window int64) string {
 
 func newCodexCtxEnv(t *testing.T, sessionID string) *codexCtxEnv {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	s, d := testServer(t)
+	testutil.NoError(t, s.Shutdown(context.Background()))
 	dir := t.TempDir()
 	t.Setenv("CODEX_SQLITE_HOME", dir)
 	t.Setenv("CODEX_HOME", dir)

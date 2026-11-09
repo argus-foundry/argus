@@ -476,6 +476,10 @@ func (d *DB) createTables() error {
 		return err
 	}
 
+	if err := d.createTaskUsageTables(); err != nil {
+		return err
+	}
+
 	return nil
 }
 

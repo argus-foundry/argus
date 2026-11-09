@@ -73,6 +73,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/draft", s.handleBridgeDraft)
 	mux.HandleFunc("GET /api/tasks/{id}/bridge", s.handleBridgeState)
 	mux.HandleFunc("GET /api/tasks/{id}/context", s.handleTaskContext)
+	mux.HandleFunc("GET /api/tasks/{id}/usage", s.handleTaskUsage)
 	mux.HandleFunc("GET /api/tasks/{id}/bridge/ui", s.handleBridgeUI)
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/deliveries", s.handleBridgeDeliveries)
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/deliveries/authorize", s.handleBridgeAuthorize)
