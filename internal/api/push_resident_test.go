@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,21 +24,35 @@ import (
 	"github.com/argus-foundry/argus/internal/testutil"
 )
 
-// capturedLog is a minimal slog handler recording rendered messages.
-type capturedLog struct{ buf *bytes.Buffer }
+// capturedLog is a minimal slog handler recording rendered messages. It is
+// mutex-guarded: the global default logger also receives records from other
+// tests' still-running server goroutines.
+type capturedLog struct {
+	mu  *sync.Mutex
+	buf *bytes.Buffer
+}
+
+func newCapturedLog() capturedLog { return capturedLog{mu: &sync.Mutex{}, buf: &bytes.Buffer{}} }
 
 func (h capturedLog) Enabled(context.Context, slog.Level) bool { return true }
 func (h capturedLog) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.buf.WriteString(r.Message + "\n")
 	return nil
 }
 func (h capturedLog) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h capturedLog) WithGroup(string) slog.Handler      { return h }
+func (h capturedLog) String() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.buf.String()
+}
 
 func TestResidentWaitingChangeReachesSlog(t *testing.T) {
-	buf := &bytes.Buffer{}
+	logs := newCapturedLog()
 	prev := slog.Default()
-	slog.SetDefault(slog.New(capturedLog{buf}))
+	slog.SetDefault(slog.New(logs))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	srv, d := testServer(t)
@@ -47,7 +62,7 @@ func TestResidentWaitingChangeReachesSlog(t *testing.T) {
 	state := newIdleWatcherState()
 	srv.detectNeedsInputTick(state, []string{r.ID}, []string{r.ID}, func(string) []byte { return blockedTail })
 	testutil.Equal(t, srv.ResidentWaiting(), true)
-	testutil.Contains(t, buf.String(), "[resident] waiting changed")
+	testutil.Contains(t, logs.String(), "[resident] waiting changed")
 }
 
 // TestIdleWatcherTick_ResidentSkipsPush drives a resident and an ordinary
