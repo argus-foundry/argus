@@ -58,6 +58,12 @@ type Config struct {
 	// the task is routed to. Unset falls back to ProjectAccounts. config.toml
 	// only. See ArtifactAccount.
 	ProjectArtifactAccounts map[string]string `toml:"project_artifact_accounts"`
+	// ArtifactTokens maps an account name to the secret SOURCE of that
+	// account's `claude setup-token` token (op://, keychain:// or env:// — a
+	// literal token is rejected), used by the daemon's claude.ai artifact
+	// publisher. Resolved inside the daemon at publish time; the token never
+	// reaches an agent. config.toml only. See ArtifactTokenSource.
+	ArtifactTokens map[string]string `toml:"artifact_tokens"`
 	// BackendRouting chooses backend/account pairs at task creation. Explicit
 	// or project backends restrict backend selection but still allow account
 	// routing. Coordinator creation filters tiers to Claude-capable backends.

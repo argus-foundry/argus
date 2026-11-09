@@ -2,7 +2,7 @@
 
 ## 1. Tests
 
-- [ ] 1.1 `internal/claudeartifacts`: `httptest` server tests for the client:
+- [x] 1.1 `internal/claudeartifacts`: `httptest` server tests for the client:
   - request shape (URL path, the four headers, JSON-RPC `tools/call` body)
   - create returns the link
   - update calls `get_artifact` then `publish_version` with `slug` + `base_version`
@@ -11,8 +11,8 @@
   - other errors include status and a body excerpt
   - SSE-framed responses parse
   - the token is never present in returned errors
-- [ ] 1.2 `internal/claudeartifacts`: input validation table (non-HTML extension, missing doctype/`<html`, >16 MiB) rejected with no request made
-- [ ] 1.3 `internal/config`: `[artifact_tokens]` decodes and merges; a non-reference value is rejected
+- [x] 1.2 `internal/claudeartifacts`: input validation table (non-HTML extension, missing doctype/`<html`, >16 MiB) rejected with no request made
+- [x] 1.3 `internal/config`: `[artifact_tokens]` decodes and merges; a non-reference value is rejected
 - [ ] 1.4 `internal/mcp`: `artifact_publish` and `artifact_open` tests:
   - success result
   - no-token error
@@ -29,13 +29,13 @@
 
 **Depends on:** Stage 1
 
-- [ ] 2.1 Add `ArtifactTokens map[string]string \`toml:"artifact_tokens"\`` to `Config` and clone it in the `file.go` merge
-- [ ] 2.2 Implement `internal/claudeartifacts`:
+- [x] 2.1 Add `ArtifactTokens map[string]string \`toml:"artifact_tokens"\`` to `Config` and clone it in the `file.go` merge
+- [x] 2.2 Implement `internal/claudeartifacts`:
   - `Client{HTTP, BaseURL}` with `Publish(ctx, token, PublishInput) (Result, error)` and `Probe(ctx, token) error`
   - slug parsing for `claude.ai/artifact/…` and `claude.ai/code/artifact/…` links
   - input validation and error mapping per design D3/D4
-- [ ] 2.3 A token-resolution helper in the daemon layer using `agent.Resolve(cfg.Secrets, source)`
-- [ ] 2.4 Tests 1.1–1.3 pass
+- [x] 2.3 A token-resolution helper in the daemon layer using `agent.Resolve(cfg.Secrets, source)`
+- [x] 2.4 Tests 1.1–1.3 pass
 
 ## 3. MCP tools
 
