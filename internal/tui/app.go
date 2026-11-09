@@ -366,6 +366,7 @@ type App struct {
 	residentPolledAt      time.Time
 	residentMarkViewedFn  func() error                             // test seam; default daemonClient.ResidentMarkViewed
 	residentStateFn       func() (daemon.ResidentStateResp, error) // test seam; default daemonClient.ResidentState
+	onSwitchTab           func(widget.Tab)                         // test seam: records every switchTab target
 	agentState            agentview.State
 	daemonConnected       bool
 	tasks                 []*model.Task
@@ -5434,6 +5435,9 @@ func (a *App) persistLastTab(t widget.Tab) {
 
 // switchTab changes the active top-level tab.
 func (a *App) switchTab(t widget.Tab) {
+	if a.onSwitchTab != nil {
+		a.onSwitchTab(t)
+	}
 	if t == widget.TabResident {
 		a.refreshResidentTab()
 		if a.header.TabLabel(t) == "" {

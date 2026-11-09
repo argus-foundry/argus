@@ -840,6 +840,9 @@ func NeedsSessionRecapture(task *model.Task, cfg config.Config) bool {
 	}
 }
 
+// ResidentEnvMarker is exported (=1) into the resident's agent process only.
+const ResidentEnvMarker = "ARGUS_RESIDENT"
+
 // BuildCmd constructs the exec.Cmd for running an agent on a task.
 // If the task has a SessionID, the command uses --resume to reconnect.
 // If resume is false and SessionID is set, it uses --session-id for a new session with a known ID.
@@ -868,7 +871,11 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// below, regardless of defaults.permission_mode.
 	forceDefaultPerm := task.IsResident() && fam.StripPermissionFlags != nil
 	if forceDefaultPerm {
-		backend.Command = fam.StripPermissionFlags(backend.Command)
+		stripped, err := fam.StripPermissionFlags(backend.Command)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resident backend %q: %w", backend.Command, err)
+		}
+		backend.Command = stripped
 		cmdStr = backend.Command
 	}
 	isCodex := fam.Kind == backendkind.Codex
@@ -917,7 +924,9 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// receive one. Skipped when the command already names a permission flag
 	// (command wins) so we never double-inject. Injected before
 	// resume/session-id/prompt suffixes so the flags precede the "--" separator.
-	if fam.PermissionFlags != nil && !fam.HasPermissionFlag(backend.Command) {
+	// forceDefaultPerm already stripped every top-level permission flag; a
+	// substring match would also hit quoted arguments mentioning one.
+	if fam.PermissionFlags != nil && (forceDefaultPerm || !fam.HasPermissionFlag(backend.Command)) {
 		mode := cfg.Defaults.PermissionMode
 		if forceDefaultPerm {
 			mode = config.PermissionModeDefault
@@ -1285,6 +1294,12 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	if task.ID != "" {
 		cmd.Env = append(cmd.Env, "ARGUS_BRIDGE_GENERATION="+model.GenerateSessionID())
 		cmd.Env = append(cmd.Env, "ARGUS_TASK_ID="+task.ID)
+		// Marks the resident spawn only, so the Stop hook asks the daemon
+		// "am I the resident?" for the resident alone; every other task pays
+		// zero extra RPCs per turn.
+		if task.IsResident() {
+			cmd.Env = append(cmd.Env, ResidentEnvMarker+"=1")
+		}
 	}
 
 	// Diligence-profile env export (add-diligence-profiles). When a bound

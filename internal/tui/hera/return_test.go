@@ -49,3 +49,19 @@ func TestResidentReturnEmptyAndAbsentSnapshots(t *testing.T) {
 	snapshot.rail.selRef = -999
 	testutil.False(t, p.RestoreReturn(snapshot))
 }
+
+func TestResidentReturnFocusMismatchRestoresBestEffort(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := memDB(t)
+	orch := seedOrch(t, d, "origin")
+	p := NewHeraPage(d)
+	p.Refresh()
+	testutil.True(t, p.SelectOrch(orch))
+	snapshot := p.CaptureReturn()
+	snapshot.focus = FocusCoord
+	p.focus.SetCoordPresent(false) // the coordinator pane is no longer in the layout
+	snapshot.fullscreen = true
+	testutil.True(t, p.RestoreReturn(snapshot))
+	testutil.Equal(t, p.rail.currentRef(), -orch)
+	testutil.Equal(t, p.focus.State(), FocusRail)
+}

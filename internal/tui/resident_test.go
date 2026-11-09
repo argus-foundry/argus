@@ -252,8 +252,10 @@ func TestSmoke_ResidentRuneBindingTypeableInTextInput(t *testing.T) {
 	for _, mode := range []string{"filter", "settings edit", "modal", "hera rail filter"} {
 		t.Run(mode, func(t *testing.T) {
 			a, _ := residentTestApp(t)
+			// A bare rune binding is rejected (Q10) so the default stays and '~'
+			// is ordinary typing.
 			km, warnings := keymap.Build(config.Keybindings{Global: map[string]string{"resident": "~"}})
-			testutil.Equal(t, len(warnings), 0)
+			testutil.Equal(t, len(warnings), 1)
 			a.keymap = km
 			switch mode {
 			case "hera rail filter":
@@ -317,16 +319,16 @@ func TestSmoke_ResidentKeyForwardedInPluginView(t *testing.T) {
 	sim.InjectKey(tcell.KeyCtrlL, 0, 0)
 	syncUI(t, a.tapp)
 	waitFor(t, time.Second, func() bool { return fake.dialed.Load() })
-	// A rune binding is the only form keyenc can forward (it has no ctrl+\
-	// encoding), and the pre-fix resolve swallowed it before the plugin saw it.
-	km, warnings := keymap.Build(config.Keybindings{Global: map[string]string{"resident": "~"}})
+	// The default ctrl+\ has no keyenc encoding, so rebind to ctrl+x (bare runes
+	// are rejected); the pre-fix resolve swallowed it before the plugin saw it.
+	km, warnings := keymap.Build(config.Keybindings{Global: map[string]string{"resident": "ctrl+x"}})
 	testutil.Equal(t, len(warnings), 0)
 	readUI(t, a.tapp, func() { a.keymap = km })
-	sim.InjectKey(tcell.KeyRune, '~', 0)
+	sim.InjectKey(tcell.KeyCtrlX, 0, 0)
 	syncUI(t, a.tapp)
 	select {
 	case b := <-plugIn:
-		testutil.Equal(t, string(b), "~")
+		testutil.Equal(t, string(b), "\x18")
 	case <-time.After(time.Second):
 		t.Fatal("the resident key was not forwarded to the plugin")
 	}
@@ -511,13 +513,13 @@ func TestResidentReboundToggleAndMissingHera(t *testing.T) {
 	testutil.NoError(t, d.DeleteHeraOrchestrator(orch.ID))
 	a.toggleResident()
 	testutil.Equal(t, a.header.ActiveTab(), widget.TabTasks)
-	// Any representable override has the same reach as ctrl+backslash.
-	km, warnings := keymap.Build(config.Keybindings{Global: map[string]string{"resident": "~"}})
+	// Any accepted override has the same reach as ctrl+backslash.
+	km, warnings := keymap.Build(config.Keybindings{Global: map[string]string{"resident": "ctrl+x"}})
 	testutil.Equal(t, len(warnings), 0)
 	a.keymap = km
-	a.handleGlobalKey(tcell.NewEventKey(tcell.KeyRune, '~', 0))
+	a.handleGlobalKey(tcell.NewEventKey(tcell.KeyCtrlX, 0, 0))
 	testutil.Equal(t, a.header.ActiveTab(), widget.TabResident)
-	a.handleGlobalKey(tcell.NewEventKey(tcell.KeyRune, '~', 0))
+	a.handleGlobalKey(tcell.NewEventKey(tcell.KeyCtrlX, 0, 0))
 	testutil.Equal(t, a.header.ActiveTab(), widget.TabTasks)
 	testutil.False(t, strings.Contains(a.header.TabLabel(widget.TabTasks), "resident"))
 }
@@ -728,5 +730,126 @@ func TestSmoke_ResidentBoxOnTasksRailWhenUnbound(t *testing.T) {
 	redrawUI(t, a)
 	readUI(t, a.tapp, func() {
 		testutil.True(t, !strings.Contains(screenText(sim, 160, 40), "Solo:"))
+	})
+}
+
+// TestSmoke_ResidentReturnIsDirect: toggling back lands on the origin with ONE
+// switchTab (no intermediate Tasks hop, so no double persist/box sync).
+func TestSmoke_ResidentReturnIsDirect(t *testing.T) {
+	for _, from := range []string{"tasks", "agent", "hera", "hera focus mismatch", "settings"} {
+		t.Run(from, func(t *testing.T) {
+			a, d := residentTestApp(t)
+			var coordTask string
+			want := widget.TabTasks
+			switch from {
+			case "agent":
+				task := &model.Task{ID: "origin", Name: "Origin", Status: model.StatusInProgress}
+				testutil.NoError(t, d.Add(task))
+				a.refreshTasks()
+				a.onTaskSelect(task, false)
+			case "hera", "hera focus mismatch":
+				want = widget.TabHera
+				orch, err := d.CreateHeraOrchestrator("origin", "")
+				testutil.NoError(t, err)
+				if from == "hera focus mismatch" {
+					coordTask = "coord"
+					testutil.NoError(t, d.Add(&model.Task{ID: "coord", Name: "Coord", Status: model.StatusInProgress}))
+					role, err := d.CreateHeraRole(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "coord", Kind: db.HeraKindCoordinator})
+					testutil.NoError(t, err)
+					_, err = d.CreateHeraBinding(db.CreateHeraBindingInput{RoleID: role.ID, ArgusTaskID: "coord", WorktreePath: t.TempDir()})
+					testutil.NoError(t, err)
+				}
+				a.switchTab(widget.TabHera)
+				testutil.True(t, a.heraPage.SelectOrch(orch.ID))
+				if coordTask != "" {
+					a.heraPage.Machine().SetRegion(hera.FocusCoord)
+					testutil.Equal(t, a.heraPage.Machine().State(), hera.FocusCoord)
+				}
+			case "settings":
+				want = widget.TabSettings
+				a.switchTab(widget.TabSettings)
+				a.settings.setCategory(catAppearance)
+			}
+			a.toggleResident()
+			testutil.Equal(t, a.header.ActiveTab(), widget.TabResident)
+			if coordTask != "" {
+				// The coordinator pane leaves the layout while away (narrow
+				// terminal); the selected orchestrator stays.
+				a.heraPage.Machine().SetCoordPresent(false)
+			}
+			var hops []widget.Tab
+			a.onSwitchTab = func(tab widget.Tab) { hops = append(hops, tab) }
+			a.toggleResident()
+			testutil.DeepEqual(t, hops, []widget.Tab{want})
+			testutil.Equal(t, a.header.ActiveTab(), want)
+			last, err := d.LoadLastTab()
+			testutil.NoError(t, err)
+			testutil.Equal(t, last, lastTabString(want))
+			if from == "agent" {
+				testutil.Equal(t, a.mode, modeAgent)
+			}
+			if coordTask != "" {
+				testutil.NotEqual(t, a.heraPage.Machine().State(), hera.FocusCoord)
+			}
+		})
+	}
+}
+
+type residentFixedRunner struct {
+	agent.SessionProvider
+	sess agent.SessionHandle
+}
+
+func (r *residentFixedRunner) Get(string) agent.SessionHandle { return r.sess }
+
+// TestSmoke_ResidentFirstAttachResizesPTY: a freshly bound live session is
+// resized to the pane even though the pane's seeded size already matches (no
+// width delta), via the one-shot forced resync (Q7).
+func TestSmoke_ResidentFirstAttachResizesPTY(t *testing.T) {
+	a, _ := residentTestApp(t)
+	first, second := newRepaintSession(), newRepaintSession()
+	r := &residentFixedRunner{SessionProvider: a.runner, sess: first}
+	a.runner = r
+	_, stop := wireApp(t, a)
+	defer stop()
+	readUI(t, a.tapp, func() { a.switchTab(widget.TabResident) })
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() { a.residentPane.SyncPTYSize() })
+	testutil.True(t, first.resizes.Load() >= 1)
+	// The pane size is now settled and SetSession seeds the tracked size from
+	// the pane, so only the forced resync can resize a replacement PTY.
+	readUI(t, a.tapp, func() { a.attachResidentSession(second) })
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() { a.residentPane.SyncPTYSize() })
+	testutil.True(t, second.resizes.Load() >= 1)
+}
+
+// TestSmoke_ResidentReasonShownInPlaceholderAndSettings: the daemon's reason
+// reaches the resident tab's no-session placeholder and Settings -> Resident,
+// control bytes stripped, and clears when the daemon reports none (Q11).
+func TestSmoke_ResidentReasonShownInPlaceholderAndSettings(t *testing.T) {
+	a, _ := residentTestApp(t)
+	sim, stop := wireApp(t, a)
+	defer stop()
+	readUI(t, a.tapp, func() {
+		a.switchTab(widget.TabResident)
+		a.applyResidentState(daemon.ResidentStateResp{Reason: "waiting for the Argus MCP server\x1b[31m"})
+	})
+	redrawUI(t, a)
+	readUI(t, a.tapp, func() {
+		testutil.Equal(t, a.residentSt.reason, "waiting for the Argus MCP server [31m")
+		sim.Show()
+		testutil.Contains(t, screenText(sim, 80, 24), "waiting for the Argus MCP server")
+	})
+	readUI(t, a.tapp, func() {
+		a.switchTab(widget.TabSettings)
+		selectRowInCategory(t, a.settings, catResident, srResident, resKeyName)
+		a.settings.SetRect(0, 0, 100, 30)
+		s2 := drawSim(t)
+		a.settings.Draw(s2)
+		s2.Show()
+		testutil.Contains(t, screenText(s2, 80, 24), "Not running: waiting for the Argus MCP server")
+		a.applyResidentState(daemon.ResidentStateResp{})
+		testutil.Equal(t, a.settings.residentReason, "")
 	})
 }

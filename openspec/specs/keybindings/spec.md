@@ -254,6 +254,13 @@ The keymap SHALL define a rebindable `CtxAgent` action `agent.rerender`, default
 
 The keymap SHALL define `global.resident` (default `ctrl+\`) and `global.tab_resident` (default `0`) in `CtxGlobal` through `defaultSpecs`, `actionLabels` and `contextOrder`, so the `?` help overlay and the command palette list them automatically. `global.resident` SHALL be an unconditional global dispatch like `global.palette` and `global.switcher`. `keymap.Parse` SHALL accept the `ctrl+\` keyspec and map it to `tcell.KeyCtrlBackslash` (control byte 0x1c), pinned by a test in the same way as `ctrlKeys`. The README SHALL document the terminal-mapping recipe that sends 0x1c for Cmd+` in iTerm2 and Ghostty and note that macOS must not reserve Cmd+` for window cycling.
 
+`keymap.Build` SHALL reject a modifier-less printable rune binding for `global.resident` (for example `~`) with a warning that says it needs a modifier and keep the default, because the toggle is dispatched ahead of tab and modal handling and a bare rune would steal typing. Modified keys (`ctrl+<letter>`) and named keys remain accepted; other global actions such as `global.tab_resident` keep their rune bindings.
+
+#### Scenario: Bare rune rejected for the resident toggle
+
+- **WHEN** `[keybindings.global] resident = "~"` is configured
+- **THEN** `Build` returns a warning naming `global.resident` and the default `ctrl+\` stays bound
+
 #### Scenario: ctrl+backslash parses
 
 - **WHEN** `keymap.Parse("ctrl+\\")` is called

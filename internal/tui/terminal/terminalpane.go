@@ -487,6 +487,11 @@ type TerminalPane struct {
 	// its middle pane so the same widget reads correctly in both surfaces.
 	borderTitle string
 
+	// placeholderNote is an optional extra line drawn under the "no session"
+	// placeholder (the resident tab's "why isn't it running" reason). UI
+	// goroutine only, like borderTitle.
+	placeholderNote string
+
 	// borderHint is drawn immediately after borderTitle in a distinct
 	// highlight style (theme.StyleClipboardHint), rather than being baked
 	// into borderTitle itself — so it renders visibly distinct from the rest
@@ -836,6 +841,12 @@ func (tp *TerminalPane) SetFocused(f bool) {
 // by the native Hera view to label its coordinator pane distinctly.
 func (tp *TerminalPane) SetBorderTitle(t string) {
 	tp.borderTitle = t
+}
+
+// SetPlaceholderNote sets (or clears, via "") a reason line drawn under the
+// "no session" placeholder. Never shown once content or a session exists.
+func (tp *TerminalPane) SetPlaceholderNote(n string) {
+	tp.placeholderNote = n
 }
 
 // SetBorderHint sets (or clears, via "") a highlight-styled affordance drawn
@@ -2136,6 +2147,13 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 		// never leak a prior frame's cells regardless of which path got here).
 		widget.FillArea(screen, x, y, width, height, ' ', tcell.StyleDefault)
 		widget.DrawText(screen, midX, midY, width, msg, theme.StyleDimmed)
+		if note := tp.placeholderNote; note != "" && height > 2 {
+			nx := x + (width-utf8.RuneCountInString(note))/2
+			if nx < x {
+				nx = x
+			}
+			widget.DrawText(screen, nx, midY+2, width-(nx-x), note, theme.StyleDimmed)
+		}
 		return
 	}
 

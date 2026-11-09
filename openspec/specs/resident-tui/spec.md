@@ -24,7 +24,7 @@ When the resident is enabled the TUI header SHALL show the resident tab first, l
 
 ### Requirement: A global hotkey toggles the resident and returns exactly
 
-The `global.resident` action (default `ctrl+\`) SHALL be dispatched unconditionally from `CtxGlobal` like `ctrl+k` and `ctrl+j`, except while a modal or text-input mode is open, where it SHALL be ignored. From any non-resident screen it SHALL record a `residentReturn` snapshot of the current tab, mode, agent-view task and zoom, Hera selection, focus and fullscreen state (through the existing Hera excursion snapshot) and Settings category and focus, then open the resident tab. On the resident tab, `global.resident` and `ctrl+q` SHALL restore the snapshot exactly. If no snapshot exists or its target vanished, they SHALL land on the Tasks list. Any other navigation away from the resident tab SHALL discard the snapshot.
+The `global.resident` action (default `ctrl+\`) SHALL be dispatched unconditionally from `CtxGlobal` like `ctrl+k` and `ctrl+j`, except while a modal or text-input mode is open, where it SHALL be ignored. From any non-resident screen it SHALL record a `residentReturn` snapshot of the current tab, mode, agent-view task and zoom, Hera selection, focus and fullscreen state (through the existing Hera excursion snapshot) and Settings category and focus, then open the resident tab. On the resident tab, `global.resident` and `ctrl+q` SHALL restore the snapshot exactly and SHALL return DIRECTLY to the origin tab and mode with a single tab switch: no intermediate switch to Tasks, and no extra last-tab persistence or rail-box sync. A pane that is no longer present in the Hera layout (a focus-only mismatch) SHALL NOT count as a vanished target: the tab, mode and selection are restored and focus is applied best-effort. If no snapshot exists or its target vanished (for example the selected task or role no longer exists), they SHALL land on the Tasks list. Any other navigation away from the resident tab SHALL discard the snapshot.
 
 #### Scenario: Round trip from a zoomed agent view
 
@@ -41,6 +41,16 @@ The `global.resident` action (default `ctrl+\`) SHALL be dispatched unconditiona
 - **WHEN** a modal or text-input mode is open and the hotkey is pressed
 - **THEN** the key is not consumed as a toggle and the modal is unaffected
 
+#### Scenario: Direct return without a Tasks detour
+
+- **WHEN** the user toggles back from the resident tab to the Tasks list, an agent view, the Hera tab or Settings
+- **THEN** exactly one tab switch to the origin is performed and the persisted last tab is the origin tab
+
+#### Scenario: Hera focus mismatch
+
+- **WHEN** the recorded Hera pane is no longer present when the user returns
+- **THEN** the Hera tab and selection are restored with best-effort focus and the TUI does not fall back to Tasks
+
 #### Scenario: Vanished target
 
 - **WHEN** the recorded task no longer exists when the user returns
@@ -50,6 +60,20 @@ The `global.resident` action (default `ctrl+\`) SHALL be dispatched unconditiona
 
 - **WHEN** the user rebinds `global.resident` in `[keybindings]`
 - **THEN** the new key toggles the resident and the `?` help overlay shows it
+
+### Requirement: The resident pane resizes on first attach and explains why it is not running
+
+When a live session is newly bound to the resident pane, the TUI SHALL schedule a one-shot forced PTY resync so the session is resized to the pane even when no width delta would be detected. The resident pane SHALL NOT use the Hera size-drift kill-and-resume kick machinery: that machinery is coupled to Hera pane bindings and its restart path would race the daemon's ensure loop. The TUI SHALL carry `ResidentStateResp.Reason` from its existing poll (UI goroutine only, control bytes stripped) into the resident tab's no-session placeholder and into the Settings -> Resident detail pane (`Not running: <reason>`), and SHALL clear it when the daemon reports none.
+
+#### Scenario: Replacement session is resized
+
+- **WHEN** a new live session is bound to the resident pane at an unchanged pane size
+- **THEN** the session receives a resize to the pane size
+
+#### Scenario: Reason visible
+
+- **WHEN** the daemon reports a reason such as "waiting for the Argus MCP server" and no session is attached
+- **THEN** the resident tab placeholder and Settings -> Resident both show it, and both clear when the reason is empty
 
 ### Requirement: Rail box shows the resident's attention state beside needs-attention
 

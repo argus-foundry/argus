@@ -314,6 +314,9 @@ type SettingsView struct {
 	// and the rename/enable callback (OnResidentChange).
 	resEdit     residentEdit
 	residentMsg string
+	// residentReason is the daemon's "why isn't it running" text from the 2s
+	// ResidentState poll (UI goroutine only; set via SetResidentReason).
+	residentReason string
 	// OnResidentChange fires after any persisted resident setting change with
 	// the current name and enabled flag; the header tab label hooks here.
 	OnResidentChange func(name string, enabled bool)

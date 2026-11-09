@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -161,10 +162,94 @@ func TestBuildCmd_NonResidentKeepsConfiguredPermissionFlags(t *testing.T) {
 }
 
 func TestStripClaudePermissionFlags(t *testing.T) {
-	testutil.Equal(t, stripClaudePermissionFlags("claude --dangerously-skip-permissions --permission-mode plan -x"), "claude -x")
-	testutil.Equal(t, stripClaudePermissionFlags("claude --permission-mode=acceptEdits"), "claude")
-	testutil.Equal(t, stripClaudePermissionFlags("claude --allow-dangerously-skip-permissions"), "claude")
-	testutil.Equal(t, stripClaudePermissionFlags("claude --model opus"), "claude --model opus")
+	tests := []struct {
+		name, in, want string
+	}{
+		{"all forms", "claude --dangerously-skip-permissions --permission-mode plan -x", "claude -x"},
+		{"equals form", "claude --permission-mode=acceptEdits", "claude"},
+		{"allow bypass", "claude --allow-dangerously-skip-permissions", "claude"},
+		{"untouched", "claude --model opus", "claude --model opus"},
+		{"quoted arg internal spaces survive", `claude --append-system-prompt "a   b  c" --permission-mode plan --model x`, `claude --append-system-prompt "a   b  c" --model x`},
+		{"quoted mention not stripped", `claude --append-system-prompt "use --permission-mode x and --dangerously-skip-permissions"`, `claude --append-system-prompt "use --permission-mode x and --dangerously-skip-permissions"`},
+		{"single quotes", `claude --settings '{"a":  "--permission-mode x"}' --dangerously-skip-permissions`, `claude --settings '{"a":  "--permission-mode x"}'`},
+		{"escaped quote", `claude --append-system-prompt "say \"hi  there\"" --permission-mode=plan`, `claude --append-system-prompt "say \"hi  there\""`},
+		{"backslash space", `claude --add-dir /a\ b --permission-mode plan`, `claude --add-dir /a\ b`},
+		{"quoted flag word is not the flag", `claude "--permission-mode" x`, `claude "--permission-mode" x`},
+		{"newline preserved", "claude --model x\nfoo --permission-mode plan", "claude --model x\nfoo"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := stripClaudePermissionFlags(tt.in)
+			testutil.NoError(t, err)
+			testutil.Equal(t, got, tt.want)
+		})
+	}
+}
+
+func TestStripClaudePermissionFlags_UnbalancedQuoteErrors(t *testing.T) {
+	for _, in := range []string{`claude --x "oops`, `claude --x 'oops`, `claude --x oops\`} {
+		t.Run(in, func(t *testing.T) {
+			_, err := stripClaudePermissionFlags(in)
+			if err == nil {
+				t.Fatalf("expected error for %q", in)
+			}
+		})
+	}
+}
+
+func TestBuildCmd_ResidentUnbalancedBackendCommandErrors(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
+	cfg := residentCfg()
+	cfg.Backends["claude"] = config.Backend{Command: `claude --append-system-prompt "oops --permission-mode bypassPermissions`}
+	task := &model.Task{ID: "r", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir()}
+	if _, _, err := BuildCmd(task, cfg, false); err == nil {
+		t.Fatal("expected BuildCmd to refuse an unparseable resident command")
+	}
+}
+
+// A quoted argument that merely mentions --permission-mode must not suppress
+// the forced default mode (HasPermissionFlag is a substring search).
+func TestBuildCmd_ResidentForcedModeSurvivesQuotedMention(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
+	cfg := residentCfg()
+	cfg.Backends["claude"] = config.Backend{Command: `claude --append-system-prompt "never use --permission-mode bypassPermissions"`}
+	task := &model.Task{ID: "r", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir()}
+	cmd, cleanup, err := BuildCmd(task, cfg, false)
+	testutil.NoError(t, err)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+	testutil.Contains(t, strings.Join(cmd.Args, " "), "--permission-mode default")
+}
+
+func TestBuildCmd_ResidentMarkerEnvResidentOnly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
+	cfg := residentCfg()
+	has := func(cmd *exec.Cmd) bool {
+		for _, kv := range cmd.Env {
+			if kv == ResidentEnvMarker+"=1" {
+				return true
+			}
+		}
+		return false
+	}
+	res := &model.Task{ID: "r", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir()}
+	cmd, cleanup, err := BuildCmd(res, cfg, false)
+	testutil.NoError(t, err)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+	testutil.Equal(t, has(cmd), true)
+	plain := &model.Task{ID: "p", Name: "plain", Worktree: t.TempDir()}
+	cmd2, cleanup2, err := BuildCmd(plain, cfg, false)
+	testutil.NoError(t, err)
+	if cleanup2 != nil {
+		t.Cleanup(cleanup2)
+	}
+	testutil.Equal(t, has(cmd2), false)
 }
 
 // The resident's Argus MCP connection is bound to its own task at spawn, which

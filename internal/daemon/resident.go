@@ -262,7 +262,17 @@ func (m *residentManager) start(task *model.Task, cfg config.Config, backend str
 		m.failStart(fmt.Sprintf("persist resident row: %v", err))
 		return
 	}
-	_, reattached, err := m.runner.StartOrReattach(task, cfg, 24, 80, resume)
+	// Launch at the freshest viewer-reported pane size (the same resolution a
+	// revive/recycle uses) so the resident commits history at the width its tab
+	// will show, instead of always 24x80. Falls back to the live session's size
+	// (a re-attach) and then 24x80.
+	var sizer interface{ PTYSize() (int, int) }
+	if sess := m.runner.Get(task.ID); sess != nil {
+		sizer = sess
+	}
+	rows, cols, source := resolveSpawnSize(m.db, "", sizer, m.now())
+	residentLog("[resident] spawn size source=%s rows=%d cols=%d", source, rows, cols)
+	_, reattached, err := m.runner.StartOrReattach(task, cfg, rows, cols, resume)
 	if err != nil {
 		residentLog("[resident] start failed attempt=%d resume=%t backend=%s: %v", attempt, resume, backend, err)
 		m.failStart(fmt.Sprintf("start failed: %v", err))

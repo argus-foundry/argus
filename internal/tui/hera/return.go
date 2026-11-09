@@ -15,7 +15,9 @@ func (p *HeraPage) CaptureReturn() *ReturnSnapshot {
 }
 
 // RestoreReturn reapplies a captured view. False means the selected target no
-// longer exists; the caller should fall back to its Tasks list.
+// longer exists; the caller should fall back to its Tasks list. A pane that is
+// no longer present (focus mismatch) is NOT a vanished target: focus is applied
+// best-effort and the restore still succeeds.
 func (p *HeraPage) RestoreReturn(s *ReturnSnapshot) bool {
 	if s == nil || s.rail == nil {
 		return false
@@ -44,5 +46,5 @@ func (p *HeraPage) RestoreReturn(s *ReturnSnapshot) bool {
 	if p.OnFocusChange != nil {
 		p.OnFocusChange(p.focus.State())
 	}
-	return p.focus.State() == s.focus
+	return true
 }

@@ -215,7 +215,11 @@ const (
 	//     (add-resident-agent D6), and its Argus MCP URL is bound to its own task
 	//     (?caller=). A stale supervisor spawns the resident without them, so outward actions would not prompt.
 	//     The supervisor also rebuilds Task.Kind from the wire (protocol v13);
-	//     without it BuildCmd cannot tell the resident from a plain task.
+	//     without it BuildCmd cannot tell the resident from a plain task. The
+	//     resident spawn also exports ARGUS_RESIDENT=1 (its Stop hook gates the
+	//     resident lookup on it), strips bypass flags with a shell-words parser
+	//     and refuses an unparseable command, and carries the widened default
+	//     ask list.
 	SupervisorSpawnSurface = 40
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -523,7 +527,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "efb4f9aa05182f8b6283fe40280f7f87579ba347cfc3d6e7a65e84a8ad6e851a"
+	SpawnSurfaceDigest  = "db9983701cfa74ae1092fca18bdf05382295402dd995a758ff7f7bb3fcbb05ff"
 	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 

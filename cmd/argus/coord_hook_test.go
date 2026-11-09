@@ -233,9 +233,9 @@ func TestCoordHook_UnboundRole_NoOp(t *testing.T) {
 	if strings.Contains(out.String(), "block") {
 		t.Errorf("unbound no-op path must not emit a block decision; got stdout=%q", out.String())
 	}
-	// An unbound, non-resident task consults the resident seam and then
-	// stays inert: no reply stamp, no resident delivery, no stderr output.
-	testutil.Equal(t, f.isResidentCalled, true)
+	// An unbound plain task (no ARGUS_RESIDENT marker) never pays the resident
+	// RPC and stays inert: no reply stamp, no resident delivery, no stderr.
+	testutil.Equal(t, f.isResidentCalled, false)
 	testutil.Equal(t, f.residentStampCalled, false)
 	testutil.Equal(t, len(f.residentDelivered), 0)
 	testutil.Equal(t, errOut.String(), "")

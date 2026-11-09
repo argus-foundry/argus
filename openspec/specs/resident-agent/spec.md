@@ -84,6 +84,24 @@ The system SHALL start the resident only when `kb.enabled` is true and `metis_va
 - **WHEN** the user enables the resident while the KB is disabled
 - **THEN** the session does not start and Settings names the missing prerequisite
 
+### Requirement: The resident requires the REST API
+
+The system SHALL start the resident only when `api.enabled` is true, because the resident's reply stamping, context budget reads, notification delivery and waiting signal are carried by the REST API and its idle watcher. Otherwise it SHALL NOT start and the prerequisite error SHALL name `api.enabled` and how to set it, shown in Settings and logged under the `[resident]` prefix.
+
+#### Scenario: API disabled
+
+- **WHEN** the resident is enabled while `api.enabled` is false
+- **THEN** the session does not start and Settings shows an error telling the user to enable `api.enabled`
+
+### Requirement: The Stop hook consults the daemon only for the resident
+
+The resident's spawn environment SHALL carry `ARGUS_RESIDENT=1` alongside `ARGUS_TASK_ID`, and no other task's SHALL. The coord-hook SHALL ask the daemon whether the task is the resident only when that variable is set and the task has no Hera role, so plain tasks incur no added Stop-time RPC. Hera coordinator, worker and freelance behavior SHALL be unchanged.
+
+#### Scenario: Plain task Stop
+
+- **WHEN** a task without `ARGUS_RESIDENT` and without a Hera role stops
+- **THEN** the coord-hook makes no resident lookup and exits silently
+
 ### Requirement: Working memory lives in a fenced folder of the Metis vault
 
 The resident SHALL keep working memory in the vault-relative folder `resident/` (configurable as `resident.memory_dir`, independent of the display name): `open-loops.md`, `profile.md`, `preferences.md` and `log/YYYY-MM-DD.md`. Every working file SHALL carry the KB-required `title` and `tags` frontmatter plus `dream: skip`. All vault I/O SHALL go through the `kb_*` MCP tools. The resident's orientation prompt and every recycle seed SHALL instruct it to read `resident/open-loops.md` before any other action. Renaming the agent SHALL NOT move or rewrite the folder.
@@ -114,7 +132,7 @@ The resident SHALL record durable facts (people, customers, projects, decisions)
 
 ### Requirement: Outward actions need one-key confirmation and Slack is drafts only
 
-The resident's permission policy SHALL have three tiers, configurable by `resident.allow_tools`, `resident.ask_tools` and `resident.deny_tools` with shipped defaults, and SHALL run under a non-bypass permission mode so the ask and deny tiers are enforced: read-only connector tools and `kb_*` SHALL run without a prompt; outward tools (creating, updating or deleting calendar events, responding to events, sending mail or drafts, creating Slack canvases or lists) SHALL require an explicit user confirmation through the Claude permission prompt; Slack message sending (including scheduled sends) SHALL be denied, with only `slack_send_message_draft` allowed. A pending confirmation SHALL raise the resident's waiting (`?`) signal.
+The resident's permission policy SHALL have three tiers, configurable by `resident.allow_tools`, `resident.ask_tools` and `resident.deny_tools` with shipped defaults, and SHALL run under a non-bypass permission mode so the ask and deny tiers are enforced: read-only connector tools and `kb_*` SHALL run without a prompt; outward tools (creating, updating or deleting calendar events, responding to events, sending mail or drafts, sharing mail threads, creating Slack conversations, canvases or lists and editing them, and every Linear and Notion write or delete tool) SHALL require an explicit user confirmation through the Claude permission prompt; Slack message sending (including scheduled sends) SHALL be denied, with only `slack_send_message_draft` allowed. A pending confirmation SHALL raise the resident's waiting (`?`) signal.
 
 #### Scenario: Calendar invite asks first
 

@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/bridge"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/daemon"
@@ -146,7 +147,9 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 
 	kind, err := env.ResolveRoleKind(taskID)
 	resident := false
-	if kind == "" && env.IsResident != nil {
+	// Only the resident's spawn carries the marker, so plain tasks never pay
+	// the Stop-time ResidentState RPC. The RPC still confirms identity.
+	if kind == "" && env.IsResident != nil && env.Getenv(agent.ResidentEnvMarker) == "1" {
 		var residentErr error
 		resident, residentErr = env.IsResident(taskID)
 		if residentErr != nil {

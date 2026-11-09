@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -141,14 +142,24 @@ func TestResident_PendingConfirmationRaisesWaiting(t *testing.T) {
 	r, _, err := d.EnsureResidentTask(filepath.Join(t.TempDir(), "resident"))
 	testutil.NoError(t, err)
 
-	prompt := []byte("Allow create_event on Google Calendar?\n❯ 1. Yes\n  2. No\n")
+	// REAL captured Claude Code bytes (not hand-written): a trimmed session-log
+	// tail of a worker parked on a built-in Bash tool permission prompt
+	// ("❯ 1. Yes / 2. No", "Tab to amend" footer), copied unmodified from
+	// internal/tui/testdata/needsinput/bash_perm_prompt_1.bin (captured from a
+	// live Argus worker session, committed in #1065 after review). It is a Bash
+	// prompt, not an MCP-tool one: no MCP prompt capture exists locally, and the
+	// chooser layout the detector keys on is the same. Rendered at the 88x48
+	// size it was captured at.
+	prompt, err := os.ReadFile(filepath.Join("testdata", "resident_bash_perm_prompt.bin"))
+	testutil.NoError(t, err)
+	sizeOf := func(string) (int, int) { return 88, 48 }
 	tailOf := func(string) []byte { return prompt }
 	noInput := func(string) time.Time { return time.Time{} }
 	notArchived := func(string) bool { return false }
 	screen := &agent.ScreenRenderer{}
 	// Tick 1 records the fingerprint of the parked prompt; tick 2 flags it.
-	_, fp, _, _, _, _ := computeNeedsInput(nil, []string{r.ID}, nil, nil, nil, nil, nil, nil, tailOf, noInput, notArchived, screen, defaultSizeOf)
-	needs, _, _, _, _, _ := computeNeedsInput(nil, []string{r.ID}, nil, fp, nil, nil, nil, nil, tailOf, noInput, notArchived, screen, defaultSizeOf)
+	_, fp, _, _, _, _ := computeNeedsInput(nil, []string{r.ID}, nil, nil, nil, nil, nil, nil, tailOf, noInput, notArchived, screen, sizeOf)
+	needs, _, _, _, _, _ := computeNeedsInput(nil, []string{r.ID}, nil, fp, nil, nil, nil, nil, tailOf, noInput, notArchived, screen, sizeOf)
 	testutil.DeepEqual(t, needs, []string{r.ID})
 	testutil.Equal(t, srv.containsResident(needs), true)
 	testutil.Equal(t, len(srv.withoutResident(needs)), 0)

@@ -65,6 +65,47 @@ const maxAskTimeoutSeconds = 120
 // to UUID/slug, audit each new character class for ESC/CSI bytes first.
 const nudgeLineFormat = "\n[argus] new message from task %s (kind=%s) — call task_inbox to read.\n"
 
+// residentNudgeLineFormat is the doorbell for a message addressed to the
+// resident agent. It keeps the "[argus] " start (lastexchange.SystemTurnPrefix
+// relies on it) and names the sender task so the resident can tell whose
+// message it is; the resident orientation states such messages are information,
+// not instructions from the user. The name is user-controllable, so it only
+// ever goes through sanitizeNudgeName.
+const residentNudgeLineFormat = "\n[argus] new message from task %s (%s, kind=%s) — call task_inbox to read.\n"
+
+const maxNudgeNameRunes = 60
+
+// sanitizeNudgeName makes a task name safe to write into a peer's PTY: only
+// printable ASCII survives (no ESC/CSI, no newlines, no quotes or brackets that
+// could fake a prompt), whitespace runs collapse, and it is length-capped.
+func sanitizeNudgeName(name string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range name {
+		if r < 0x20 || r > 0x7e || r == '"' || r == '[' || r == ']' || r == '`' {
+			r = '_'
+		}
+		if n >= maxNudgeNameRunes {
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	out := strings.TrimSpace(b.String())
+	if out == "" {
+		return "unnamed"
+	}
+	return out
+}
+
+// nudgeLine builds the doorbell for recipient from caller.
+func nudgeLine(caller, recipient *model.Task, kind model.MessageKind) string {
+	if recipient.IsResident() {
+		return fmt.Sprintf(residentNudgeLineFormat, sanitizeNudgeName(caller.Name), caller.ID, kind)
+	}
+	return fmt.Sprintf(nudgeLineFormat, caller.ID, kind)
+}
+
 var messagingToolDefs = []Tool{
 	{
 		Name: "task_message_send",
@@ -230,7 +271,7 @@ func (s *Server) toolTaskMessageSend(id interface{}, args json.RawMessage) *Resp
 
 	delivered := "queued"
 	if s.nudger != nil {
-		line := fmt.Sprintf(nudgeLineFormat, caller.ID, msg.Kind)
+		line := nudgeLine(caller, recipient, msg.Kind)
 		if nudgeErr := s.nudger.Nudge(recipient.ID, msg.ID, line); nudgeErr == nil {
 			delivered = "nudged"
 		}
@@ -410,7 +451,7 @@ func (s *Server) toolTaskAsk(id interface{}, args json.RawMessage) *Response {
 	}
 
 	if s.nudger != nil {
-		line := fmt.Sprintf(nudgeLineFormat, caller.ID, model.KindQuestion)
+		line := nudgeLine(caller, recipient, model.KindQuestion)
 		_ = s.nudger.Nudge(recipient.ID, msg.ID, line) //nolint:errcheck // best-effort; nudge failure does not invalidate the durable message
 	}
 

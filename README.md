@@ -219,7 +219,7 @@ A terminal UI cannot see Cmd, and macOS reserves Cmd+\` for cycling windows. So 
 - **Ghostty:** add `keybind = super+grave_accent=text:\x1c` to your config.
 - **macOS:** turn off System Settings → Keyboard → Keyboard Shortcuts → Keyboard → **Move focus to next window** (or rebind it), otherwise the system consumes Cmd+\` before the terminal sees it.
 
-Rebind the action itself with `[keybindings.global] resident = "<keyspec>"`; any representable spec works.
+Rebind the action itself with `[keybindings.global] resident = "<keyspec>"`; any spec with a modifier or a named key works (`ctrl+<letter>`, `ctrl+\`, ...). A bare printable key such as `~` is rejected with a config warning and the default stays, because it would steal ordinary typing.
 
 #### Agent View
 
@@ -1321,7 +1321,7 @@ Full enable/verify walkthrough: **[docs/knowledge-base.md](docs/knowledge-base.m
 
 #### `[resident]`
 
-The always-on [resident agent](#resident-hotkey-recipe): one persistent Claude session in its own tab, toggled with `ctrl+\`. Off by default; choosing a `name` is the act of opting in. Needs `kb.enabled` and an existing `kb.metis_vault_path` (its memory lives in the vault). Claude backend only.
+The always-on [resident agent](#resident-hotkey-recipe): one persistent Claude session in its own tab, toggled with `ctrl+\`. Off by default; choosing a `name` is the act of opting in. Needs `api.enabled` (its reply, budget and attention signals run through the REST API), `kb.enabled` and an existing `kb.metis_vault_path` (its memory lives in the vault); Settings shows whichever is missing. Claude backend only.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -1335,7 +1335,7 @@ The always-on [resident agent](#resident-hotkey-recipe): one persistent Claude s
 | `ask_tools` | list | outward actions | Tools that require a confirmation: calendar create/update/delete/respond, Gmail send/reply/forward, Superhuman send, Slack canvas/list creation. |
 | `deny_tools` | list | Slack sends | Tools refused outright: `slack_send_message`, `slack_schedule_message`. Deny always wins. |
 
-The resident always runs in `--permission-mode default` (any bypass flag is stripped), with the three tool lists delivered as inline `--settings` rules, so any tool in none of them prompts. Restart the supervisor after installing a build that changes this (spawn surface 40); an older supervisor refuses to start the resident until it is restarted. The Settings screen edits `enabled`, `name`, `context_budget`, `memory_dir`, `model` and `account`; the three tool lists are `config.toml` only. **A `[resident]` value in `config.toml` overrides the same value edited in Settings, with no warning** (standard precedence: defaults < Settings < `config.toml`).
+The resident always runs in `--permission-mode default` (any bypass flag is stripped), with the three tool lists delivered as inline `--settings` rules, so any tool in none of them prompts. Every Linear/Notion write, Slack conversation/canvas/list edit, Superhuman event/share and calendar or mail send defaults to the ask list; Slack send and schedule stay denied. Restart the supervisor after installing a build that changes this (spawn surface 40); an older supervisor refuses to start the resident until it is restarted. The Settings screen edits `enabled`, `name`, `context_budget`, `memory_dir`, `model` and `account`; the three tool lists are `config.toml` only. **A `[resident]` value in `config.toml` overrides the same value edited in Settings, with no warning** (standard precedence: defaults < Settings < `config.toml`).
 
 #### `[todo]`
 

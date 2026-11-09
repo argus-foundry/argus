@@ -3,6 +3,7 @@ package tui
 import (
 	"time"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/app/agentview"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/daemon"
@@ -63,7 +64,7 @@ func (a *App) refreshResidentTab() {
 	}
 	a.residentPane.SetBorderTitle(cfg.Name)
 	if a.daemonClient == nil {
-		a.residentPane.SetSession(a.runner.Get(row.ID))
+		a.attachResidentSession(a.runner.Get(row.ID))
 		return
 	}
 	if a.residentAttachPending {
@@ -79,10 +80,24 @@ func (a *App) refreshResidentTab() {
 				uxlog.Log("[resident] skipped stale session attachment task=%s", taskID)
 				return
 			}
-			a.residentPane.SetSession(sess)
+			a.attachResidentSession(sess)
 			uxlog.Log("[resident] session attachment task=%s available=%v", taskID, sess != nil)
 		})
 	}()
+}
+
+// attachResidentSession binds sess to the resident pane. A newly bound live
+// session gets a one-shot forced PTY resync so it is resized to the pane on its
+// first attach instead of waiting for a width delta (the delta check cannot
+// fire when the pane's tracked size already matches but the fresh PTY started
+// elsewhere). UI goroutine only.
+func (a *App) attachResidentSession(sess agent.SessionHandle) {
+	fresh := sess != nil && a.residentPane.Session() != agentview.TerminalAdapter(sess)
+	a.residentPane.SetSession(sess)
+	if fresh {
+		a.residentPane.ForceResyncPTY()
+		uxlog.Log("[resident] first attach: forced PTY resync to pane size")
+	}
 }
 
 func (a *App) forwardResidentKey(event *tcell.EventKey) {
@@ -134,8 +149,10 @@ func (a *App) toggleResident() {
 		return
 	}
 	if a.header.ActiveTab() == widget.TabResident {
+		// Return directly to the origin: restoreResidentReturn makes the single
+		// switchTab to the target, so there is no detour through Tasks (which
+		// would persist/sync twice and flash the wrong tab).
 		ret := a.residentReturn
-		a.switchTab(widget.TabTasks)
 		if ret == nil || !a.restoreResidentReturn(ret) {
 			uxlog.Log("[resident] return target missing; using Tasks")
 			a.switchTab(widget.TabTasks)
@@ -162,6 +179,10 @@ func (a *App) toggleResident() {
 	uxlog.Log("[resident] opened from tab=%d mode=%d task=%s", ret.tab, ret.mode, ret.taskID)
 }
 
+// restoreResidentReturn leaves the resident tab for the recorded origin with
+// one switchTab. False means the target vanished (nothing was switched for an
+// agent-view target; a tab target may already be showing) and the caller falls
+// back to Tasks.
 func (a *App) restoreResidentReturn(ret *residentReturn) bool {
 	if ret.mode == modeAgent || ret.railViewing {
 		task, err := a.db.Get(ret.taskID)
@@ -233,6 +254,7 @@ const residentPollInterval = 2 * time.Second
 type residentAttention struct {
 	unread, waiting bool
 	preview         string
+	reason          string // daemon's "why isn't it running"; empty when healthy
 }
 
 // residentLabelWithMarker appends the marker to the tab label. The marker is
@@ -290,11 +312,14 @@ func (a *App) applyResidentState(resp daemon.ResidentStateResp) {
 		a.markResidentViewed()
 		unread = false
 	}
-	next := residentAttention{unread: unread, waiting: resp.Waiting, preview: resp.LastReply}
+	next := residentAttention{unread: unread, waiting: resp.Waiting, preview: resp.LastReply,
+		reason: sanitizeResidentReason(resp.Reason)}
 	if next != a.residentSt {
-		uxlog.Log("[resident] attention state unread=%v waiting=%v", next.unread, next.waiting)
+		uxlog.Log("[resident] attention state unread=%v waiting=%v reason=%q", next.unread, next.waiting, next.reason)
 	}
 	a.residentSt = next
+	a.settings.SetResidentReason(next.reason)
+	a.residentPane.SetPlaceholderNote(next.reason)
 	a.refreshResidentTab()
 	a.syncResidentBox()
 }

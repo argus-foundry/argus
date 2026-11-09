@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -170,7 +172,7 @@ type Family struct {
 	// StripPermissionFlags removes permission-mode flags from a backend command
 	// so the resident can be forced out of bypass modes (ask rules do not
 	// prompt under bypass).
-	StripPermissionFlags func(command string) string
+	StripPermissionFlags func(command string) (string, error)
 
 	// Prelaunch runs before the fork (Pi's ollama warmup); nil skips.
 	Prelaunch func(ctx context.Context, task *model.Task, backend config.Backend) error
@@ -250,23 +252,118 @@ func claudePermissionRulesFlag(allow, ask, deny []string) string {
 	return " --settings " + shellQuote(string(raw))
 }
 
+// shellWord is one top-level shell word: its half-open byte range in the
+// source string (quotes and escapes intact) and its unquoted-literal flag.
+type shellWord struct {
+	start, end int
+	// plain is true when the word contains no quote or backslash, so its
+	// text is exactly its value and can be compared against a flag name.
+	plain bool
+}
+
+// splitShellWords tokenizes command with POSIX word rules (whitespace
+// separates; single quotes, double quotes with backslash escapes, and
+// backslash escapes group), returning each word's original byte range. An
+// unterminated quote or trailing backslash returns an error.
+func splitShellWords(command string) ([]shellWord, error) {
+	var words []shellWord
+	i, n := 0, len(command)
+	for i < n {
+		if c := command[i]; c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			i++
+			continue
+		}
+		w := shellWord{start: i, plain: true}
+		for i < n {
+			c := command[i]
+			if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+				break
+			}
+			switch c {
+			case '\'':
+				w.plain = false
+				j := strings.IndexByte(command[i+1:], '\'')
+				if j < 0 {
+					return nil, errors.New("unterminated single quote")
+				}
+				i += j + 2
+			case '"':
+				w.plain = false
+				i++
+				for {
+					if i >= n {
+						return nil, errors.New("unterminated double quote")
+					}
+					if command[i] == '\\' {
+						i += 2
+						continue
+					}
+					if command[i] == '"' {
+						i++
+						break
+					}
+					i++
+				}
+			case '\\':
+				w.plain = false
+				if i+1 >= n {
+					return nil, errors.New("trailing backslash")
+				}
+				i += 2
+			default:
+				i++
+			}
+		}
+		w.end = i
+		words = append(words, w)
+	}
+	return words, nil
+}
+
 // stripClaudePermissionFlags drops --dangerously-skip-permissions,
 // --allow-dangerously-skip-permissions and --permission-mode (both "--permission-mode X"
-// and "--permission-mode=X" forms) from a command.
-func stripClaudePermissionFlags(command string) string {
-	fields := strings.Fields(command)
-	out := fields[:0:0]
-	for i := 0; i < len(fields); i++ {
-		switch f := fields[i]; {
-		case f == "--dangerously-skip-permissions", f == "--allow-dangerously-skip-permissions":
-		case f == "--permission-mode":
-			i++ // skip its value
-		case strings.HasPrefix(f, "--permission-mode="):
-		default:
-			out = append(out, f)
+// and "--permission-mode=X" forms) from a command. Only top-level unquoted
+// words are considered, so a quoted argument that merely mentions a flag is
+// untouched, and every other byte of the command (quoting, internal spaces,
+// newlines) is preserved. An unparseable command (unbalanced quote) is an
+// error rather than a guess: the resident must not launch on a command whose
+// permission flags could not be reliably removed.
+func stripClaudePermissionFlags(command string) (string, error) {
+	words, err := splitShellWords(command)
+	if err != nil {
+		return "", fmt.Errorf("cannot strip permission flags: %w", err)
+	}
+	var b strings.Builder
+	prev := 0 // end of the last kept word
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		text := command[w.start:w.end]
+		drop := false
+		if w.plain {
+			switch {
+			case text == "--dangerously-skip-permissions", text == "--allow-dangerously-skip-permissions":
+				drop = true
+			case text == "--permission-mode":
+				drop = true
+				if i+1 < len(words) {
+					i++ // skip its value
+					w.end = words[i].end
+				}
+			case strings.HasPrefix(text, "--permission-mode="):
+				drop = true
+			}
+		}
+		if drop {
+			b.WriteString(command[prev:w.start])
+			// Remove the whitespace run preceding the dropped word too.
+			str := b.String()
+			b.Reset()
+			b.WriteString(strings.TrimRight(str, " \t\n\r"))
+			prev = w.end
 		}
 	}
-	return strings.Join(out, " ")
+	b.WriteString(command[prev:])
+	return b.String(), nil
 }
 
 func codexMCPFlag(url string) string {

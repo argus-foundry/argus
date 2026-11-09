@@ -70,6 +70,24 @@ func (sv *SettingsView) residentRows() []settingsRow {
 	return rows
 }
 
+// SetResidentReason stores the daemon-reported reason the resident is not
+// running (empty when healthy). UI goroutine only.
+func (sv *SettingsView) SetResidentReason(reason string) {
+	sv.residentReason = reason
+}
+
+// sanitizeResidentReason keeps a daemon-supplied reason to one printable line
+// before it reaches a cell.
+func sanitizeResidentReason(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return ' '
+		}
+		return r
+	}, s)
+	return strings.TrimSpace(s)
+}
+
 // residentNotify records a user-facing message shown in the detail pane.
 func (sv *SettingsView) residentNotify(format string, args ...any) bool {
 	sv.residentMsg = fmt.Sprintf(format, args...)
@@ -214,7 +232,12 @@ func (sv *SettingsView) renderResidentDetail(screen tcell.Screen, x, y, w, h int
 		text = "allow_tools, ask_tools and deny_tools are edited in config.toml under [resident]."
 	}
 	widget.DrawText(screen, x, y+2, w, text, theme.StyleDimmed)
+	line := y + 4
 	if sv.residentMsg != "" && h > 4 {
-		widget.DrawText(screen, x, y+4, w, sv.residentMsg, theme.StyleDimmed)
+		widget.DrawText(screen, x, line, w, sv.residentMsg, theme.StyleDimmed)
+		line += 2
+	}
+	if sv.residentReason != "" && h > line-y {
+		widget.DrawText(screen, x, line, w, "Not running: "+sv.residentReason, theme.StyleDimmed)
 	}
 }

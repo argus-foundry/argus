@@ -71,6 +71,7 @@ func TestResidentPrereq(t *testing.T) {
 		c := DefaultConfig()
 		c.Resident.Enabled = true
 		c.Resident.Name = "Solo"
+		c.API.Enabled = true
 		c.KB.Enabled = true
 		c.KB.MetisVaultPath = vault
 		return c
@@ -84,6 +85,7 @@ func TestResidentPrereq(t *testing.T) {
 		{"disabled", func(c *Config) { c.Resident.Enabled = false }, "not enabled"},
 		{"no name", func(c *Config) { c.Resident.Name = "" }, "valid name"},
 		{"bad name", func(c *Config) { c.Resident.Name = "x\x00" }, "valid name"},
+		{"api off", func(c *Config) { c.API.Enabled = false }, "api.enabled"},
 		{"kb off", func(c *Config) { c.KB.Enabled = false }, "kb.enabled"},
 		{"vault unset", func(c *Config) { c.KB.MetisVaultPath = "" }, "metis_vault_path"},
 		{"vault missing", func(c *Config) { c.KB.MetisVaultPath = filepath.Join(vault, "nope") }, "metis_vault_path"},
@@ -230,4 +232,61 @@ func TestDefaultResidentConfig_OutwardActionsNeverAllowed(t *testing.T) {
 			t.Errorf("exception %s also in ask/deny", ex)
 		}
 	}
+}
+
+func TestResidentPrereq_APIOffMessageIsActionable(t *testing.T) {
+	enforceResidentPermissions(t)
+	c := DefaultConfig()
+	c.Resident.Enabled = true
+	c.Resident.Name = "Solo"
+	c.KB.Enabled = true
+	c.KB.MetisVaultPath = t.TempDir()
+	c.API.Enabled = false
+	err := c.ResidentPrereq()
+	if err == nil || !strings.Contains(err.Error(), "api.enabled = true") {
+		t.Fatalf("ResidentPrereq() = %v, want actionable api.enabled refusal", err)
+	}
+}
+
+// TestResidentDefaults_NoWriteToolAllowed pins that no known write/send tool
+// from the outward connectors can run unprompted: each is in Ask or Deny and
+// never in Allow.
+func TestResidentDefaults_NoWriteToolAllowed(t *testing.T) {
+	r := DefaultResidentConfig(1)
+	in := func(list []string, s string) bool {
+		for _, x := range list {
+			if x == s {
+				return true
+			}
+		}
+		return false
+	}
+	writes := []string{
+		"mcp__claude_ai_Gmail__send_message", "mcp__claude_ai_Gmail__reply", "mcp__claude_ai_Gmail__forward",
+		"mcp__claude_ai_Google_Calendar__create_event", "mcp__claude_ai_Google_Calendar__update_event",
+		"mcp__claude_ai_Google_Calendar__delete_event", "mcp__claude_ai_Google_Calendar__respond_to_event",
+		"mcp__claude_ai_Superhuman_Mail__send_draft", "mcp__claude_ai_Superhuman_Mail__create_or_update_event",
+		"mcp__claude_ai_Superhuman_Mail__share_thread",
+		"mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_schedule_message",
+		"mcp__claude_ai_Slack__slack_create_conversation", "mcp__claude_ai_Slack__slack_create_canvas",
+		"mcp__claude_ai_Slack__slack_update_canvas", "mcp__claude_ai_Slack__slack_create_list",
+		"mcp__claude_ai_Slack__slack_add_list_record", "mcp__claude_ai_Slack__slack_update_list",
+		"mcp__claude_ai_Slack__slack_update_list_record",
+		"mcp__claude_ai_Linear__save_issue", "mcp__claude_ai_Linear__save_comment", "mcp__claude_ai_Linear__save_document",
+		"mcp__claude_ai_Linear__save_project", "mcp__claude_ai_Linear__save_milestone", "mcp__claude_ai_Linear__save_status_update",
+		"mcp__claude_ai_Linear__save_customer", "mcp__claude_ai_Linear__save_initiative", "mcp__claude_ai_Linear__delete_comment",
+		"mcp__claude_ai_Notion__notion-create-pages", "mcp__claude_ai_Notion__notion-update-page",
+		"mcp__claude_ai_Notion__notion-create-comment", "mcp__claude_ai_Notion__notion-create-database",
+		"mcp__claude_ai_Notion__notion-update-data-source", "mcp__claude_ai_Notion__notion-move-pages",
+		"mcp__claude_ai_Notion__notion-duplicate-page", "mcp__claude_ai_Notion__notion-delete-pages",
+	}
+	for _, w := range writes {
+		t.Run(w, func(t *testing.T) {
+			testutil.Equal(t, in(r.AllowTools, w), false)
+			testutil.Equal(t, in(r.AskTools, w) || in(r.DenyTools, w), true)
+		})
+	}
+	// Slack send/schedule stay refused outright, never merely prompted.
+	testutil.Equal(t, in(r.DenyTools, "mcp__claude_ai_Slack__slack_send_message"), true)
+	testutil.Equal(t, in(r.DenyTools, "mcp__claude_ai_Slack__slack_schedule_message"), true)
 }

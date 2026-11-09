@@ -30,6 +30,7 @@ func residentEditField(t *testing.T, sv *SettingsView, key, text string) {
 func residentEnableKB(t *testing.T, sv *SettingsView) {
 	t.Helper()
 	testutil.NoError(t, sv.database.SetConfigValue("kb.enabled", "true"))
+	testutil.NoError(t, sv.database.SetConfigValue("api.enabled", "true"))
 	testutil.NoError(t, sv.database.SetConfigValue("kb.metis_vault_path", t.TempDir()))
 }
 
@@ -57,12 +58,24 @@ func TestSettingsResident_EnableBlockedUntilNamed(t *testing.T) {
 
 func TestSettingsResident_EnableBlockedByPrereq(t *testing.T) {
 	sv := testSettingsView(t)
+	testutil.NoError(t, sv.database.SetConfigValue("api.enabled", "true"))
 	testutil.NoError(t, sv.database.SetConfigValue("kb.enabled", "false"))
 	residentEditField(t, sv, resKeyName, "Solo")
 	selectRowInCategory(t, sv, catResident, srResident, resKeyEnabled)
 	testutil.True(t, sv.handleEnter())
 	testutil.False(t, sv.database.Config().Resident.Enabled)
 	testutil.Contains(t, sv.residentMsg, "kb.enabled")
+}
+
+func TestSettingsResident_EnableBlockedWithoutAPI(t *testing.T) {
+	sv := testSettingsView(t)
+	residentEnableKB(t, sv)
+	testutil.NoError(t, sv.database.SetConfigValue("api.enabled", "false"))
+	residentEditField(t, sv, resKeyName, "Solo")
+	selectRowInCategory(t, sv, catResident, srResident, resKeyEnabled)
+	testutil.True(t, sv.handleEnter())
+	testutil.False(t, sv.database.Config().Resident.Enabled)
+	testutil.Contains(t, sv.residentMsg, "api.enabled")
 }
 
 func TestSettingsResident_EnableAndLiveRename(t *testing.T) {

@@ -79,8 +79,50 @@ func DefaultResidentConfig(budget int) ResidentConfig {
 			"mcp__claude_ai_Gmail__reply",
 			"mcp__claude_ai_Gmail__forward",
 			"mcp__claude_ai_Superhuman_Mail__send_draft",
+			"mcp__claude_ai_Superhuman_Mail__create_or_update_event",
+			"mcp__claude_ai_Superhuman_Mail__share_thread",
 			"mcp__claude_ai_Slack__slack_create_canvas",
 			"mcp__claude_ai_Slack__slack_create_list",
+			"mcp__claude_ai_Slack__slack_create_conversation",
+			"mcp__claude_ai_Slack__slack_update_canvas",
+			"mcp__claude_ai_Slack__slack_add_list_record",
+			"mcp__claude_ai_Slack__slack_update_list",
+			"mcp__claude_ai_Slack__slack_update_list_record",
+			"mcp__claude_ai_Linear__save_issue",
+			"mcp__claude_ai_Linear__save_comment",
+			"mcp__claude_ai_Linear__save_document",
+			"mcp__claude_ai_Linear__save_project",
+			"mcp__claude_ai_Linear__save_milestone",
+			"mcp__claude_ai_Linear__save_status_update",
+			"mcp__claude_ai_Linear__save_customer",
+			"mcp__claude_ai_Linear__save_customer_need",
+			"mcp__claude_ai_Linear__save_initiative",
+			"mcp__claude_ai_Linear__save_release",
+			"mcp__claude_ai_Linear__save_release_note",
+			"mcp__claude_ai_Linear__save_diff_comment",
+			"mcp__claude_ai_Linear__save_issue_label",
+			"mcp__claude_ai_Linear__save_project_label",
+			"mcp__claude_ai_Linear__save_initiative_label",
+			"mcp__claude_ai_Linear__create_issue_label",
+			"mcp__claude_ai_Linear__create_initiative_label",
+			"mcp__claude_ai_Linear__create_attachment",
+			"mcp__claude_ai_Linear__create_attachment_from_upload",
+			"mcp__claude_ai_Linear__delete_attachment",
+			"mcp__claude_ai_Linear__delete_comment",
+			"mcp__claude_ai_Linear__delete_customer",
+			"mcp__claude_ai_Linear__delete_customer_need",
+			"mcp__claude_ai_Linear__delete_diff_comment",
+			"mcp__claude_ai_Linear__delete_status_update",
+			"mcp__claude_ai_Linear__share_issue",
+			"mcp__claude_ai_Linear__unshare_issue",
+			"mcp__claude_ai_Notion__notion-create-pages",
+			"mcp__claude_ai_Notion__notion-update-page",
+			"mcp__claude_ai_Notion__notion-create-comment",
+			"mcp__claude_ai_Notion__notion-create-database",
+			"mcp__claude_ai_Notion__notion-update-data-source",
+			"mcp__claude_ai_Notion__notion-move-pages",
+			"mcp__claude_ai_Notion__notion-duplicate-page",
+			"mcp__claude_ai_Notion__notion-delete-pages",
 		},
 		DenyTools: []string{
 			"mcp__claude_ai_Slack__slack_send_message",
@@ -114,7 +156,8 @@ var ResidentPermissionsEnforced = true
 
 // ResidentPrereq reports why the resident cannot start, or nil when it can: it
 // must be enabled, carry a valid name, and have the knowledge base available
-// (kb.enabled and an existing metis_vault_path directory).
+// (kb.enabled and an existing metis_vault_path directory) and the REST API
+// (api.enabled), which carries the resident's attention signals.
 func (c Config) ResidentPrereq() error {
 	r := c.Resident
 	if !r.Enabled {
@@ -125,6 +168,9 @@ func (c Config) ResidentPrereq() error {
 	}
 	if !ResidentPermissionsEnforced {
 		return errors.New("resident permission policy (ask_tools/deny_tools) is not enforced yet; refusing to start")
+	}
+	if !c.API.Enabled {
+		return errors.New("api.enabled must be true: the resident's reply tracking, context budget and attention signals go through the REST API (enable it in Settings -> API or set api.enabled = true in config.toml)")
 	}
 	if !c.KB.Enabled {
 		return errors.New("kb.enabled must be true: the resident keeps its memory in the knowledge base")

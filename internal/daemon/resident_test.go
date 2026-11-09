@@ -38,8 +38,9 @@ type fakeResRunner struct {
 }
 
 type startCall struct {
-	task   model.Task
-	resume bool
+	task       model.Task
+	resume     bool
+	rows, cols uint16
 }
 
 func (f *fakeResRunner) Get(id string) agent.SessionHandle {
@@ -48,8 +49,8 @@ func (f *fakeResRunner) Get(id string) agent.SessionHandle {
 	}
 	return nil
 }
-func (f *fakeResRunner) StartOrReattach(t *model.Task, _ config.Config, _, _ uint16, resume bool) (agent.SessionHandle, bool, error) {
-	f.starts = append(f.starts, startCall{*t, resume})
+func (f *fakeResRunner) StartOrReattach(t *model.Task, _ config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, bool, error) {
+	f.starts = append(f.starts, startCall{*t, resume, rows, cols})
 	if f.startErr != nil {
 		return nil, false, f.startErr
 	}
@@ -96,6 +97,7 @@ func newResEnv(t *testing.T) *resEnv {
 	vault := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.Resident.Enabled = true
+	cfg.API.Enabled = true
 	cfg.Resident.Name = "Solo"
 	cfg.KB.Enabled = true
 	cfg.KB.MetisVaultPath = vault
@@ -309,6 +311,7 @@ func TestResident_DisableStopsButPreservesRow(t *testing.T) {
 	testutil.Equal(t, again != nil && again.ID == row.ID, true)
 	// Re-enable starts again without a second row.
 	e.cfg.Resident.Enabled = true
+	e.cfg.API.Enabled = true
 	e.now = e.now.Add(time.Hour)
 	e.m.tick()
 	testutil.Equal(t, len(e.run.starts), 2)
@@ -411,6 +414,7 @@ func TestResident_Send(t *testing.T) {
 		t.Fatal("send while disabled must fail")
 	}
 	e.cfg.Resident.Enabled = true
+	e.cfg.API.Enabled = true
 	e.m.notifier = func() residentNotifier { return nil }
 	if err := e.m.Send("x", ""); err == nil {
 		t.Fatal("send without a notifier must fail")
@@ -561,6 +565,7 @@ func TestResident_StartFailureReasonSurvivesBackoff(t *testing.T) {
 		e.cfg.Resident.Enabled = false
 		e.m.tick()
 		e.cfg.Resident.Enabled = true
+		e.cfg.API.Enabled = true
 		ready := false
 		e.m.mcpReady = func() bool { return ready }
 		e.m.tick()
@@ -664,4 +669,28 @@ func TestResident_DaemonManagerClosures(t *testing.T) {
 	d.apiServer = api.New(d.db, d.runner, "tok", nil, nil)
 	d.mu.Unlock()
 	testutil.Equal(t, m.waiting("r1"), false)
+}
+
+func TestResident_StartUsesReportedPaneSize(t *testing.T) {
+	e := newResEnv(t)
+	testutil.NoError(t, e.db.PublishInitialPTYLayout(db.InitialPTYLayout{
+		Active:     db.PTYSize{Rows: 50, Cols: 160},
+		ReportedAt: e.now,
+	}))
+	e.m.tick()
+	if len(e.run.starts) != 1 {
+		t.Fatalf("starts = %d, want 1", len(e.run.starts))
+	}
+	testutil.Equal(t, e.run.starts[0].rows, uint16(50))
+	testutil.Equal(t, e.run.starts[0].cols, uint16(160))
+}
+
+func TestResident_StartFallsBackTo24x80WithoutReport(t *testing.T) {
+	e := newResEnv(t)
+	e.m.tick()
+	if len(e.run.starts) != 1 {
+		t.Fatalf("starts = %d, want 1", len(e.run.starts))
+	}
+	testutil.Equal(t, e.run.starts[0].rows, uint16(24))
+	testutil.Equal(t, e.run.starts[0].cols, uint16(80))
 }

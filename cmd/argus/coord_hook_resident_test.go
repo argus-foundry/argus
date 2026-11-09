@@ -25,7 +25,7 @@ func TestCoordHookResident(t *testing.T) {
 		{"stale prior session", 100, 300, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}, contextSize: tc.size, lastNudged: tc.last, hadLastNudged: tc.hadLast, nudgeIncrement: 10}
+			f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident", "ARGUS_RESIDENT": "1"}, contextSize: tc.size, lastNudged: tc.last, hadLastNudged: tc.hadLast, nudgeIncrement: 10}
 			env := f.env()
 			env.IsResident = func(string) (bool, error) { return true, nil }
 			env.ResidentConfig = func(string) (config.ResidentConfig, error) { return config.ResidentConfig{ContextBudget: 100}, nil }
@@ -53,7 +53,7 @@ func TestCoordHookResident(t *testing.T) {
 }
 
 func TestResidentBridgeMeasurementAfterRoleReadError(t *testing.T) {
-	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}, roleKindErr: errors.New("mirror unavailable")}
+	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident", "ARGUS_RESIDENT": "1"}, roleKindErr: errors.New("mirror unavailable")}
 	env := f.env()
 	env.IsResident = func(string) (bool, error) { return true, nil }
 	env.StampResidentReply = func(string, string) error { return nil }
@@ -79,7 +79,7 @@ func TestResidentReplyPreview(t *testing.T) {
 }
 
 func TestResidentReplyCapturedWithoutContext(t *testing.T) {
-	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}, readContextErr: bytes.ErrTooLarge}
+	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident", "ARGUS_RESIDENT": "1"}, readContextErr: bytes.ErrTooLarge}
 	env := f.env()
 	env.IsResident = func(string) (bool, error) { return true, nil }
 	var reply string
@@ -104,7 +104,7 @@ func TestResidentNudgeDeliveryFallback(t *testing.T) {
 		{"unavailable", errors.New("unavailable"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}, contextSize: 200}
+			f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident", "ARGUS_RESIDENT": "1"}, contextSize: 200}
 			env := f.env()
 			env.IsResident = func(string) (bool, error) { return true, nil }
 			env.ResidentConfig = func(string) (config.ResidentConfig, error) { return config.ResidentConfig{ContextBudget: 100}, nil }
@@ -130,7 +130,7 @@ func TestResidentNudgeDeliveryFallback(t *testing.T) {
 
 // Custom memory_dir must flow into the nudge text (not the "resident" default).
 func TestCoordHookResidentCustomMemoryDir(t *testing.T) {
-	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}, contextSize: 200}
+	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident", "ARGUS_RESIDENT": "1"}, contextSize: 200}
 	env := f.env()
 	env.IsResident = func(string) (bool, error) { return true, nil }
 	env.ResidentConfig = func(string) (config.ResidentConfig, error) {
@@ -149,7 +149,7 @@ func TestCoordHookResidentCustomMemoryDir(t *testing.T) {
 // process) while stdout stays empty.
 func TestCoordHookResidentFailuresWriteStderr(t *testing.T) {
 	t.Run("subject lookup", func(t *testing.T) {
-		f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}}
+		f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident", "ARGUS_RESIDENT": "1"}}
 		env := f.env()
 		env.IsResident = func(string) (bool, error) { return false, errors.New("daemon down") }
 		var out, errs bytes.Buffer
@@ -158,7 +158,7 @@ func TestCoordHookResidentFailuresWriteStderr(t *testing.T) {
 		testutil.Equal(t, out.String(), "")
 	})
 	t.Run("reply stamp", func(t *testing.T) {
-		f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}, readContextErr: errors.New("x")}
+		f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident", "ARGUS_RESIDENT": "1"}, readContextErr: errors.New("x")}
 		env := f.env()
 		env.IsResident = func(string) (bool, error) { return true, nil }
 		env.StampResidentReply = func(string, string) error { return errors.New("meta write failed") }
@@ -168,7 +168,7 @@ func TestCoordHookResidentFailuresWriteStderr(t *testing.T) {
 		testutil.Equal(t, out.String(), "")
 	})
 	t.Run("nudge delivery", func(t *testing.T) {
-		f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident"}, contextSize: 200}
+		f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "resident", "ARGUS_RESIDENT": "1"}, contextSize: 200}
 		env := f.env()
 		env.IsResident = func(string) (bool, error) { return true, nil }
 		env.ResidentConfig = func(string) (config.ResidentConfig, error) { return config.ResidentConfig{ContextBudget: 100}, nil }
@@ -179,4 +179,34 @@ func TestCoordHookResidentFailuresWriteStderr(t *testing.T) {
 		testutil.Contains(t, errs.String(), "coord-hook: resident nudge delivery: not running")
 		testutil.Equal(t, out.String(), "")
 	})
+}
+
+// Only the resident's spawn carries ARGUS_RESIDENT: a plain task's Stop hook
+// must never issue the ResidentState RPC.
+func TestCoordHookResident_MarkerGatesSubjectLookup(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		getenv     map[string]string
+		wantCalled bool
+	}{
+		{"marker set consults IsResident", map[string]string{"ARGUS_TASK_ID": "t", "ARGUS_RESIDENT": "1"}, true},
+		{"marker unset never consults IsResident", map[string]string{"ARGUS_TASK_ID": "t"}, false},
+		{"marker not 1 never consults IsResident", map[string]string{"ARGUS_TASK_ID": "t", "ARGUS_RESIDENT": "0"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeCoordHookEnv{getenv: tc.getenv, isResident: true}
+			var out, errs bytes.Buffer
+			runCoordHook(strings.NewReader(`{}`), &out, &errs, f.env())
+			testutil.Equal(t, f.isResidentCalled, tc.wantCalled)
+			testutil.Equal(t, f.residentStampCalled, tc.wantCalled)
+		})
+	}
+}
+
+// A hera-bound role never reaches the resident lookup even with the marker.
+func TestCoordHookResident_HeraRoleSkipsLookup(t *testing.T) {
+	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "t", "ARGUS_RESIDENT": "1"}, roleKind: "worker"}
+	var out, errs bytes.Buffer
+	runCoordHook(strings.NewReader(`{}`), &out, &errs, f.env())
+	testutil.Equal(t, f.isResidentCalled, false)
 }

@@ -1,5 +1,6 @@
 ## Key Bindings & Navigation
 
+- **Resident toggle-back makes ONE `switchTab` to the origin (`restoreResidentReturn`); never pre-switch to Tasks.** A detour persists the last tab and syncs the rail box twice (a crash mid-way records Tasks) and flashes the wrong tab; only a vanished target falls back to Tasks. A Hera focus-only mismatch is best-effort, not a vanished target (`RestoreReturn` returns true). `bindingAllowed` rejects a bare printable rune for `global.resident` (needs a modifier, like the agent context), so a rune rebinding can no longer steal typing in a PTY or text input.
 - **Resident excursions record `residentReturn` only AFTER `switchTab`, which clears both resident and agent cross-tab hops.** The agent cross-tab hop now uses the same snapshot type; resident round trips also retain any earlier agent hop. Hera return captures a separate copy of the existing rail excursion snapshot, preserving an outstanding ctrl+g excursion, then restores pane focus/fullscreen after tab entry resets it. Resident modal/toggle dispatch must precede modal dismissal, and palette/switcher/help close paths must restore the resident terminal as focus owner so bracketed paste reaches its PTY.
 
 ### Customizable keymap (`internal/tui/keymap`)
