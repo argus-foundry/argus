@@ -19,6 +19,7 @@ type Config struct {
 	KB          KBConfig           `toml:"kb"`
 	API         APIConfig          `toml:"api"`
 	Hera        HeraConfig         `toml:"hera"`
+	Resident    ResidentConfig     `toml:"resident"`
 	DevStack    DevStackConfig     `toml:"devstack"`
 	Supervisor  SupervisorConfig   `toml:"supervisor"`
 	Bridge      BridgeConfig       `toml:"bridge"`
@@ -564,6 +565,7 @@ func DefaultConfig() Config {
 			CoordinatorNudgeIncrement: 50000,
 			WorkerContextWindow:       1000000,
 		},
+		Resident: DefaultResidentConfig(300000),
 		DevStack: DevStackConfig{StopFinished: true},
 		Bridge:   BridgeConfig{Enabled: true, Delivery: true, Band: true, Toasts: true},
 		Supervisor: SupervisorConfig{

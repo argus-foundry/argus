@@ -182,7 +182,14 @@ type Daemon struct {
 	// polls for coordinators with a pending recycle request and restarts
 	// each once its session goes idle.
 	heraRecycleWatcher *hera.RecycleWatcher
-	clipboard          *clipboard.Store // agent-staged clipboard, in-memory
+
+	// taskRecycler is the one task_recycle runner (nil until MCP wiring); the
+	// resident manager consults it so its restart never races a recycle.
+	taskRecycler *taskRecycleRunner
+
+	residentOnce sync.Once
+	resident     *residentManager // add-resident-agent; built lazily by residentMgr
+	clipboard    *clipboard.Store // agent-staged clipboard, in-memory
 
 	// Boot identity — recorded once at New() so the TUI can detect when the
 	// on-disk binary has been rebuilt since the daemon started. binaryHash is
@@ -1453,6 +1460,11 @@ func (d *Daemon) Serve(sockPath string) error {
 	// synthetic times instead of sleeping.
 	go d.runHostSuspendWatcher()
 
+	// Resident agent ensure-running loop (add-resident-agent D3). Runs after
+	// ReconcileOnStartup so a supervisor-held session is re-attached rather than
+	// double-started. Inert while resident.enabled is false.
+	go d.residentMgr().run(d.done)
+
 	// Hera plan-DAG gater (add-hera-plan-substrate). Runs whenever hera is
 	// enabled, independent of the KB/MCP server: it materializes already-authored
 	// planned nodes whose blockers have all reached role-status done. Inert when no
@@ -1519,6 +1531,7 @@ func (d *Daemon) Serve(sockPath string) error {
 		// (see task_recycle.go) only works across calls if the map itself
 		// persists between them.
 		taskRecycler := newTaskRecycleRunner(d.db, d.runner, d.cfgFn)
+		d.taskRecycler = taskRecycler
 		mcpSrv.SetTaskRecycler(func(in mcp.TaskRecycleInput) error {
 			return taskRecycler.Recycle(in.TaskID, in.HandoffNote)
 		})

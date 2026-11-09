@@ -183,6 +183,29 @@ func (d *DB) Config() config.Config {
 		cfg.Hera.Enabled = v == "true"
 	}
 
+	// Resident agent config (add-resident-agent). Absent keys keep the
+	// DefaultConfig values (disabled, no name); config.toml still wins.
+	if v, ok := kv["resident.enabled"]; ok {
+		cfg.Resident.Enabled = v == "true"
+	}
+	if v, ok := kv["resident.name"]; ok {
+		cfg.Resident.Name = v
+	}
+	if v, ok := kv["resident.context_budget"]; ok {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Resident.ContextBudget = n
+		}
+	}
+	if v, ok := kv["resident.memory_dir"]; ok && v != "" {
+		cfg.Resident.MemoryDir = v
+	}
+	if v, ok := kv["resident.model"]; ok {
+		cfg.Resident.Model = v
+	}
+	if v, ok := kv["resident.account"]; ok {
+		cfg.Resident.Account = v
+	}
+
 	// Supervisor config. Absent key ⇒ true (on by default as of P4 — the base
 	// value from DefaultConfig is true, mirroring hera.enabled): agents run
 	// under the out-of-process session-supervisor so the daemon can bounce

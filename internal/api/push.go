@@ -776,7 +776,30 @@ func (s *Server) detectNeedsInputTick(state *idleWatcherState, running, idle []s
 	state.needsInputNow = needsSet
 	// The resident is excluded from the generic task needs-input set that the
 	// Tasks list and rail read; its own waiting signal is exposed separately.
+	s.residentWaiting.Store(s.containsResident(needs))
 	s.runner.SetNeedsInputIDs(s.withoutResident(needs))
+}
+
+// ResidentWaiting reports whether the resident agent is currently flagged
+// needs-input by the daemon-side detector. The resident is stripped from the
+// generic needs-input set, so its flag is exposed separately (add-resident-agent D7).
+func (s *Server) ResidentWaiting() bool { return s.residentWaiting.Load() }
+
+// containsResident reports whether ids includes the resident task's id.
+func (s *Server) containsResident(ids []string) bool {
+	if s.db == nil || len(ids) == 0 {
+		return false
+	}
+	r, err := s.db.ResidentTask()
+	if err != nil || r == nil {
+		return false
+	}
+	for _, id := range ids {
+		if id == r.ID {
+			return true
+		}
+	}
+	return false
 }
 
 // withoutResident returns ids minus the resident task's id (add-resident-agent).

@@ -486,3 +486,28 @@ type SetFocusedReq struct {
 	TaskID  string
 	Focused bool
 }
+
+// ResidentStateResp is the resident agent's daemon-held state (add-resident-agent
+// D7). Name is empty and Enabled false when the resident is off. Reason carries
+// the unmet prerequisite (name, KB, vault, backend) when enabled but unable to
+// run, so frontends can show why.
+type ResidentStateResp struct {
+	Enabled     bool
+	Name        string
+	TaskID      string
+	Running     bool
+	Unread      bool
+	Waiting     bool
+	LastReply   string
+	LastReplyAt string // RFC3339Nano UTC, empty when none
+	ViewedAt    string // RFC3339Nano UTC, empty when never viewed
+	Reason      string
+}
+
+// ResidentSendReq is the request to deliver text to the resident through the
+// reliable, idle-gated notify bus. DeliveryID is optional; supplying one makes
+// the send idempotent (exactly-once per ID).
+type ResidentSendReq struct {
+	Text       string
+	DeliveryID string
+}

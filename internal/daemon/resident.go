@@ -1,0 +1,403 @@
+package daemon
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/drn/argus/internal/agent"
+	"github.com/drn/argus/internal/backendkind"
+	"github.com/drn/argus/internal/config"
+	"github.com/drn/argus/internal/db"
+	"github.com/drn/argus/internal/model"
+	"github.com/drn/argus/internal/notify"
+	"github.com/drn/argus/internal/uxlog"
+)
+
+// Resident ensure-running loop tuning (add-resident-agent D3). Vars only so
+// tests can shorten them.
+var (
+	residentTickInterval = 5 * time.Second
+	// residentBackoffBase doubles per consecutive failed (re)start up to
+	// residentBackoffMax. The first start after a clean slate is immediate.
+	residentBackoffBase = 5 * time.Second
+	residentBackoffMax  = 5 * time.Minute
+	// residentStableAfter is how long a session must stay alive before the
+	// failure count resets.
+	residentStableAfter = 2 * time.Minute
+)
+
+// residentMaxSendBytes caps one ResidentSend body (matches the task-message cap).
+const residentMaxSendBytes = 64 << 10
+
+// residentOrientationPrompt builds the opening prompt of a fresh resident
+// session. Stage 5 (memory/orientation) replaces it; an empty prompt starts the
+// session with the backend's own default.
+var residentOrientationPrompt = func(config.Config) string { return "" }
+
+// residentRunner is the slice of agent.SessionRunner the manager uses.
+type residentRunner interface {
+	Get(taskID string) agent.SessionHandle
+	StartOrReattach(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, bool, error)
+	Stop(taskID string) error
+	HasPendingRestart(taskID string) bool
+}
+
+// residentNotifier is the slice of *notify.Notifier ResidentSend uses.
+type residentNotifier interface {
+	ReliableNotify(taskID, text, deliveryID string, opts notify.NotifyOpts) func()
+}
+
+// residentManager keeps the singleton resident session running while
+// resident.enabled is true, and serves the resident RPCs. Driven by one loop
+// (run); State/MarkViewed/Send are safe to call concurrently.
+//
+// A manual stop of the resident session (REST/TUI stop) is NOT sticky: the loop
+// restarts it with the normal backoff, because "enabled" means "kept running".
+// The way to stop it is to disable it.
+type residentManager struct {
+	db        *db.DB
+	runner    residentRunner
+	cfgFn     func() config.Config
+	notifier  func() residentNotifier // late-bound: the notifier is built in Serve
+	recycling func(taskID string) bool
+	waiting   func(taskID string) bool
+	now       func() time.Time
+
+	mu           sync.Mutex
+	failures     int
+	nextAttempt  time.Time
+	aliveSince   time.Time
+	lastReason   string // last prerequisite/start failure reason (logged on change)
+	loggedReason string
+}
+
+func newResidentManager(database *db.DB, runner residentRunner, cfgFn func() config.Config) *residentManager {
+	return &residentManager{
+		db:        database,
+		runner:    runner,
+		cfgFn:     cfgFn,
+		recycling: func(string) bool { return false },
+		waiting:   func(string) bool { return false },
+		now:       time.Now,
+	}
+}
+
+// residentBackend resolves the backend name the resident runs on: the default
+// backend when it is Claude-family, else the first Claude-family backend
+// (preferring one named "claude"), else an explicit error. The Stop hook and
+// task_recycle are Claude-hook based, so no other family is supported.
+func residentBackend(cfg config.Config) (string, error) {
+	isClaude := func(name string) bool {
+		b, ok := cfg.Backends[name]
+		return ok && agent.FamilyOf(b.Command).Kind == backendkind.Claude
+	}
+	if n := cfg.Defaults.Backend; n != "" && isClaude(n) {
+		return n, nil
+	}
+	if isClaude("claude") {
+		return "claude", nil
+	}
+	names := make([]string, 0, len(cfg.Backends))
+	for n := range cfg.Backends {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if isClaude(n) {
+			return n, nil
+		}
+	}
+	return "", errors.New("the resident requires a Claude-family backend and none is configured")
+}
+
+func residentBackoff(failures int) time.Duration {
+	if failures <= 0 {
+		return 0
+	}
+	d := residentBackoffBase
+	for i := 1; i < failures && d < residentBackoffMax; i++ {
+		d *= 2
+	}
+	if d > residentBackoffMax {
+		d = residentBackoffMax
+	}
+	return d
+}
+
+// reason records why the resident is not running, logging only on change.
+func (m *residentManager) reason(msg string) {
+	m.mu.Lock()
+	m.lastReason = msg
+	changed := msg != m.loggedReason
+	m.loggedReason = msg
+	m.mu.Unlock()
+	if changed && msg != "" {
+		uxlog.Log("[resident] not starting: %s", msg)
+	}
+}
+
+// tick runs one ensure-running pass.
+func (m *residentManager) tick() {
+	cfg := m.cfgFn()
+
+	if !cfg.Resident.Enabled {
+		m.reason("")
+		m.stopIfRunning("disabled")
+		return
+	}
+	if err := cfg.ResidentPrereq(); err != nil {
+		m.reason(err.Error())
+		return
+	}
+	backend, err := residentBackend(cfg)
+	if err != nil {
+		m.reason(err.Error())
+		return
+	}
+	m.reason("")
+
+	workDir := db.ResidentWorkDir()
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		m.reason(fmt.Sprintf("create %s: %v", workDir, err))
+		return
+	}
+	task, _, err := m.db.EnsureResidentTask(workDir)
+	if err != nil {
+		m.reason(fmt.Sprintf("resident row: %v", err))
+		return
+	}
+
+	now := m.now()
+	if sess := m.runner.Get(task.ID); sess != nil && sess.Alive() {
+		m.mu.Lock()
+		if m.aliveSince.IsZero() {
+			m.aliveSince = now
+		}
+		if m.failures > 0 && now.Sub(m.aliveSince) >= residentStableAfter {
+			uxlog.Log("[resident] stable for %s, backoff reset", residentStableAfter)
+			m.failures = 0
+		}
+		m.mu.Unlock()
+		return
+	}
+	if m.runner.HasPendingRestart(task.ID) || m.recycling(task.ID) {
+		return // a kick or task_recycle is mid-flight; it owns the restart
+	}
+
+	m.mu.Lock()
+	m.aliveSince = time.Time{}
+	if now.Before(m.nextAttempt) {
+		m.mu.Unlock()
+		return
+	}
+	attempt := m.failures + 1
+	m.failures = attempt
+	m.nextAttempt = now.Add(residentBackoff(attempt))
+	m.mu.Unlock()
+
+	m.start(task, cfg, backend, attempt)
+}
+
+// start (re)starts the resident session: it stamps the resolved backend, model,
+// account and sandbox on the row, then resumes the prior Claude session unless
+// there is none (first start, or after an intentional recycle cleared it).
+func (m *residentManager) start(task *model.Task, cfg config.Config, backend string, attempt int) {
+	task.Backend = backend
+	task.Model = cfg.Resident.Model
+	task.Account = cfg.Resident.Account
+	task.Sandboxed = agent.IsTaskSandboxed(task, cfg)
+
+	resume := task.SessionID != ""
+	if resume {
+		agent.RefreshResumeSessionID(m.db, task)
+	} else {
+		task.SessionID = model.GenerateSessionID()
+		if task.Prompt == "" {
+			task.Prompt = residentOrientationPrompt(cfg)
+		}
+	}
+	if err := m.db.Update(task); err != nil {
+		uxlog.Log("[resident] persist row before start failed: %v", err)
+		m.reason(fmt.Sprintf("persist resident row: %v", err))
+		return
+	}
+	_, reattached, err := m.runner.StartOrReattach(task, cfg, 24, 80, resume)
+	if err != nil {
+		uxlog.Log("[resident] start failed attempt=%d resume=%t backend=%s: %v", attempt, resume, backend, err)
+		m.reason(fmt.Sprintf("start failed: %v", err))
+		return
+	}
+	if reattached {
+		uxlog.Log("[resident] re-attached to running session task=%s", task.ID)
+		m.mu.Lock()
+		m.failures = 0
+		m.mu.Unlock()
+		return
+	}
+	uxlog.Log("[resident] started task=%s attempt=%d resume=%t backend=%s", task.ID, attempt, resume, backend)
+}
+
+func (m *residentManager) stopIfRunning(why string) {
+	task, err := m.db.ResidentTask()
+	if err != nil || task == nil {
+		return
+	}
+	m.mu.Lock()
+	m.failures, m.nextAttempt, m.aliveSince = 0, time.Time{}, time.Time{}
+	m.mu.Unlock()
+	if m.runner.Get(task.ID) == nil && !m.runner.HasPendingRestart(task.ID) {
+		return
+	}
+	if err := m.runner.Stop(task.ID); err != nil {
+		uxlog.Log("[resident] stop (%s) failed: %v", why, err)
+		return
+	}
+	uxlog.Log("[resident] stopped task=%s (%s)", task.ID, why)
+}
+
+// run drives tick until done closes.
+func (m *residentManager) run(done <-chan struct{}) {
+	t := time.NewTicker(residentTickInterval)
+	defer t.Stop()
+	m.tick()
+	for {
+		select {
+		case <-done:
+			return
+		case <-t.C:
+			m.tick()
+		}
+	}
+}
+
+func parseResidentTime(s string) time.Time {
+	t, _ := time.Parse(db.ResidentTimeFormat, s)
+	return t
+}
+
+func (m *residentManager) metaValues(taskID string) map[string]string {
+	out := map[string]string{}
+	entries, err := m.db.ListMeta(taskID, db.ResidentMetaNamespace)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		out[e.Key] = e.Value
+	}
+	return out
+}
+
+// State reads the resident's daemon-held state. Unread is last_reply_at after
+// last_viewed_at; Waiting is the sticky needs-input signal for the resident.
+func (m *residentManager) State() ResidentStateResp {
+	cfg := m.cfgFn()
+	resp := ResidentStateResp{Enabled: cfg.Resident.Enabled, Name: cfg.Resident.Name}
+	if !resp.Enabled {
+		return resp
+	}
+	if err := cfg.ResidentPrereq(); err != nil {
+		resp.Reason = err.Error()
+	} else {
+		m.mu.Lock()
+		resp.Reason = m.lastReason
+		m.mu.Unlock()
+	}
+	task, err := m.db.ResidentTask()
+	if err != nil || task == nil {
+		return resp
+	}
+	resp.TaskID = task.ID
+	if sess := m.runner.Get(task.ID); sess != nil && sess.Alive() {
+		resp.Running = true
+		resp.Waiting = m.waiting(task.ID)
+	}
+	meta := m.metaValues(task.ID)
+	resp.LastReply = meta[db.MetaKeyLastReply]
+	resp.LastReplyAt = meta[db.MetaKeyLastReplyAt]
+	resp.ViewedAt = meta[db.MetaKeyLastViewedAt]
+	if resp.LastReplyAt != "" {
+		resp.Unread = parseResidentTime(resp.LastReplyAt).After(parseResidentTime(resp.ViewedAt))
+	}
+	return resp
+}
+
+// MarkViewed stamps last_viewed_at = now, clearing unread.
+func (m *residentManager) MarkViewed() error {
+	task, err := m.db.ResidentTask()
+	if err != nil {
+		return err
+	}
+	if task == nil {
+		return errors.New("no resident agent exists")
+	}
+	ts := m.now().UTC().Format(db.ResidentTimeFormat)
+	if err := m.db.SetMeta(task.ID, db.ResidentMetaNamespace, db.MetaKeyLastViewedAt, ts); err != nil {
+		return err
+	}
+	uxlog.Log("[resident] marked viewed at %s", ts)
+	return nil
+}
+
+// Send queues text for the resident over the reliable, idle-gated notify bus.
+func (m *residentManager) Send(text, deliveryID string) error {
+	if text == "" {
+		return errors.New("resident send: text must not be empty")
+	}
+	if len(text) > residentMaxSendBytes {
+		return fmt.Errorf("resident send: text exceeds %d bytes", residentMaxSendBytes)
+	}
+	cfg := m.cfgFn()
+	if !cfg.Resident.Enabled {
+		return errors.New("resident send: the resident is not enabled")
+	}
+	task, err := m.db.ResidentTask()
+	if err != nil {
+		return err
+	}
+	if task == nil {
+		return errors.New("resident send: the resident has not started yet")
+	}
+	var n residentNotifier
+	if m.notifier != nil {
+		n = m.notifier()
+	}
+	if n == nil {
+		return errors.New("resident send: delivery service is not available")
+	}
+	if deliveryID == "" {
+		deliveryID = fmt.Sprintf("%d", m.now().UnixNano())
+	}
+	n.ReliableNotify(task.ID, text, "resident:"+deliveryID, notify.NotifyOpts{})
+	uxlog.Log("[resident] send queued task=%s delivery=%s bytes=%d", task.ID, deliveryID, len(text))
+	return nil
+}
+
+// residentMgr returns the daemon's resident manager, building it on first use
+// from the runner mounted at that time (UseSupervisorRunner runs before Serve).
+func (d *Daemon) residentMgr() *residentManager {
+	d.residentOnce.Do(func() {
+		m := newResidentManager(d.db, d.runner, d.cfgFn)
+		m.notifier = func() residentNotifier {
+			if d.notifier == nil {
+				return nil
+			}
+			return d.notifier
+		}
+		m.recycling = func(id string) bool {
+			if d.taskRecycler == nil {
+				return false
+			}
+			_, in := d.taskRecycler.inFlight.Load(id)
+			return in
+		}
+		m.waiting = func(id string) bool {
+			return d.apiServer != nil && d.apiServer.ResidentWaiting()
+		}
+		d.resident = m
+	})
+	return d.resident
+}

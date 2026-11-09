@@ -32,10 +32,10 @@ Every stage follows TDD (write the failing test first), adds `[resident]`-prefix
 
 **Depends on:** Stage 2
 
-- [ ] 4.1 Add the `[resident]` config block (defaults, name validation with no default name, `config.toml` override layer) and the KB/vault prerequisite check
-- [ ] 4.2 Implement the daemon ensure-running loop: start on supervisor re-attach, on setting flip, and on unexpected exit with bounded backoff and `--resume`; stop on disable; create `~/.argus/resident/`
-- [ ] 4.3 Resolve backend (default Claude-family), model and account overrides, and sandbox through the existing resolvers
-- [ ] 4.4 Add resident RPCs (state read, mark-viewed, send) and a minimal `ResidentSend` that reuses `notify.Notifier` reliable delivery (the routines seam)
+- [x] 4.1 Add the `[resident]` config block (defaults, name validation with no default name, `config.toml` override layer) and the KB/vault prerequisite check
+- [x] 4.2 Implement the daemon ensure-running loop: start on supervisor re-attach, on setting flip, and on unexpected exit with bounded backoff and `--resume`; stop on disable; create `~/.argus/resident/`
+- [x] 4.3 Resolve backend (default Claude-family), model and account overrides, and sandbox through the existing resolvers
+- [x] 4.4 Add resident RPCs (state read, mark-viewed, send) and a minimal `ResidentSend` that reuses `notify.Notifier` reliable delivery (the routines seam)
 
 ## 5. Memory, orientation and permissions
 

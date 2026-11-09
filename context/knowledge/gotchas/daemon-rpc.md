@@ -197,3 +197,10 @@
 
 - **Codex thread-index reads preflight the database and existing WAL, SHM and journal files as regular, non-symlink files before the normal read-only SQLite open.** Preserve SQLite's real pathname so uncheckpointed WAL threads remain visible; the owner-controlled replacement race after preflight is an accepted residual.
 - **A fresh Codex account can write sessions directly into its derived Argus overlay when source storage does not exist yet.** Trust only that account's source home and exact derived overlay, and use kernel `openat` with no-follow on rollout components because `os.Root.OpenFile` resolves in-root relative symlinks despite the supplied flag.
+
+## Resident ensure-running loop (add-resident-agent Stage 4)
+
+- **The resident ensure-loop restarts a manually stopped resident session while `resident.enabled` is true.** Stop via REST/TUI is not sticky (first start is immediate, then 5s doubling to a 5m cap; the count resets after 2 minutes alive); the only way to stop it is to disable it. A prerequisite loss (name, KB, vault) blocks (re)starts but does not kill a running session.
+- **The loop skips while `HasPendingRestart` or a `task_recycle` is in flight** (`taskRecycleRunner.inFlight`), else it would start a session inside Recycle's kill-then-start gap. A cleared `SessionID` is what makes the next start fresh instead of `--resume`.
+- **The resident's `Waiting` flag comes from `api.Server.ResidentWaiting()`**, set in the needs-input tick just before the resident is stripped from the generic set; with the API server disabled it reads false.
+- **No supervisor wire fields were added**: the resident RPCs (`Daemon.ResidentState`, `Daemon.ResidentMarkViewed`, `Daemon.ResidentSend`) live on the daemon service only, so ProtocolVersion and the spawn-surface digest are unchanged.
