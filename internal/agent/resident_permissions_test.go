@@ -53,11 +53,10 @@ func TestBuildCmd_ResidentGetsAskAndDenyRules(t *testing.T) {
 	}
 	allow, ask, deny := toStrings(perms["allow"]), toStrings(perms["ask"]), toStrings(perms["deny"])
 	// Read-only tier runs unprompted; KB and recycle must never prompt.
-	for _, want := range []string{"mcp__argus__kb_search", "mcp__argus__kb_ingest", "mcp__claude_ai_Slack__slack_send_message_draft"} {
+	for _, want := range []string{"mcp__argus__kb_search", "mcp__argus__kb_ingest", "mcp__argus__task_recycle", "mcp__claude_ai_Slack__slack_send_message_draft"} {
 		testutil.Contains(t, strings.Join(allow, ","), want)
 	}
 	testutil.Contains(t, strings.Join(ask, ","), "mcp__claude_ai_Google_Calendar__create_event")
-	testutil.Contains(t, strings.Join(ask, ","), "mcp__argus__task_recycle")
 	testutil.Contains(t, strings.Join(deny, ","), "mcp__claude_ai_Slack__slack_send_message")
 	for _, d := range deny {
 		if strings.HasSuffix(d, "slack_send_message_draft") {
@@ -154,4 +153,28 @@ func TestStripClaudePermissionFlags(t *testing.T) {
 	testutil.Equal(t, stripClaudePermissionFlags("claude --permission-mode=acceptEdits"), "claude")
 	testutil.Equal(t, stripClaudePermissionFlags("claude --allow-dangerously-skip-permissions"), "claude")
 	testutil.Equal(t, stripClaudePermissionFlags("claude --model opus"), "claude --model opus")
+}
+
+// The resident's Argus MCP connection is bound to its own task at spawn, which
+// is what lets task_recycle sit in the allow tier; other tasks carry no binding.
+func TestBuildCmd_ResidentMCPURLBoundToItself(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
+	cfg := residentCfg()
+	cfg.MCPPort = 7742
+	build := func(task *model.Task) string {
+		cmd, cleanup, err := BuildCmd(task, cfg, false)
+		testutil.NoError(t, err)
+		if cleanup != nil {
+			t.Cleanup(cleanup)
+		}
+		return strings.Join(cmd.Args, " ")
+	}
+	res := build(&model.Task{ID: "res-9", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir()})
+	testutil.Contains(t, res, "http://localhost:7742/mcp?caller=res-9")
+	plain := build(&model.Task{ID: "p1", Name: "plain", Worktree: t.TempDir()})
+	testutil.Contains(t, plain, "http://localhost:7742/mcp")
+	if strings.Contains(plain, "caller=") {
+		t.Fatalf("plain task must not be caller-bound: %s", plain)
+	}
 }

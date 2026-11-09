@@ -492,6 +492,7 @@ func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 		writeError(w, nil, -32700, "parse error")
 		return
 	}
+	req.caller = r.URL.Query().Get("caller")
 
 	if !hasID {
 		// Notification: dispatch for any side effect; the returned
@@ -1207,7 +1208,7 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	case "task_set_result":
 		return s.toolTaskSetResult(req.ID, params.Arguments)
 	case "task_recycle":
-		return s.toolTaskRecycle(req.ID, params.Arguments)
+		return s.toolTaskRecycleAs(req.ID, params.Arguments, req.caller)
 	case "argus_clipboard_set":
 		return s.toolClipboardSet(req.ID, params.Arguments)
 	case "sandbox_propose_write_paths":
@@ -2046,6 +2047,15 @@ func (s *Server) toolTaskSetResult(id interface{}, args json.RawMessage) *Respon
 // calling session goes idle, so this call returns as soon as the recycle is
 // scheduled — it does not wait for the restart to happen.
 func (s *Server) toolTaskRecycle(id interface{}, args json.RawMessage) *Response {
+	return s.toolTaskRecycleAs(id, args, "")
+}
+
+// toolTaskRecycleAs is toolTaskRecycle for a connection bound to caller (the
+// task whose spawn-time MCP URL carried it; "" when unbound). The resident may
+// only recycle itself: its target comes from caller-supplied id/cwd, so without
+// this an injected resident could recycle another task. Binding only ever
+// restricts, so a spoofed caller gains nothing.
+func (s *Server) toolTaskRecycleAs(id interface{}, args json.RawMessage, caller string) *Response {
 	if !s.taskRecycleEnabled() {
 		return toolError(id, "task recycle not configured")
 	}
@@ -2068,6 +2078,10 @@ func (s *Server) toolTaskRecycle(id interface{}, args json.RawMessage) *Response
 	task, err := s.resolveTask(p.ID, p.Cwd)
 	if err != nil {
 		return toolError(id, err.Error())
+	}
+	if caller != "" && s.isResidentID(caller) && task.ID != caller {
+		log.Printf("[resident] task_recycle refused: resident caller=%s targeted task=%s", caller, task.ID)
+		return toolError(id, "the resident agent may only recycle itself")
 	}
 
 	if err := s.taskRecycle(TaskRecycleInput{TaskID: task.ID, HandoffNote: note}); err != nil {
@@ -2358,6 +2372,17 @@ func (s *Server) resolveTask(taskID, cwd string) (*model.Task, error) {
 // residentLookup is the optional slice of *db.DB that surfaces the resident row.
 type residentLookup interface {
 	ResidentTask() (*model.Task, error)
+}
+
+// isResidentID reports whether id is the resident task's ID. Fails closed
+// (false) when the store has no resident lookup.
+func (s *Server) isResidentID(id string) bool {
+	rl, ok := s.taskDB.(residentLookup)
+	if !ok {
+		return false
+	}
+	r, err := rl.ResidentTask()
+	return err == nil && r != nil && r.ID == id
 }
 
 // residentByCwd returns the resident row when cleanCwd is inside its working

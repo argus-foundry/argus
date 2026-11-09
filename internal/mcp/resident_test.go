@@ -2,6 +2,9 @@ package mcp
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/drn/argus/internal/model"
@@ -94,4 +97,64 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// postTool sends a tools/call over HTTP to the given path (query included) so
+// the connection-bound caller identity is exercised end to end.
+func postTool(t *testing.T, s *Server, path, tool, args string) (string, bool) {
+	t.Helper()
+	body, err := json.Marshal(Request{JSONRPC: "2.0", ID: 1, Method: "tools/call",
+		Params: json.RawMessage(`{"name":"` + tool + `","arguments":` + args + `}`)})
+	testutil.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(body)))
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	var resp Response
+	testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	cr := callResult(t, &resp)
+	return cr.Content[0].Text, cr.IsError
+}
+
+func TestResident_TaskRecycleBoundToCaller(t *testing.T) {
+	newSrv := func() (*Server, *[]TaskRecycleInput) {
+		s, _ := residentServer(t)
+		var got []TaskRecycleInput
+		s.SetTaskRecycler(func(in TaskRecycleInput) error { got = append(got, in); return nil })
+		return s, &got
+	}
+	const note = `"handoff_note":"x"`
+
+	t.Run("resident caller may recycle itself", func(t *testing.T) {
+		s, got := newSrv()
+		text, isErr := postTool(t, s, "/mcp?caller=res-1", "task_recycle", `{"cwd":"/home/x/.argus/resident",`+note+`}`)
+		testutil.Equal(t, isErr, false)
+		testutil.Equal(t, len(*got), 1)
+		testutil.Equal(t, (*got)[0].TaskID, "res-1")
+		_ = text
+	})
+	t.Run("resident caller cannot recycle another task by id", func(t *testing.T) {
+		s, got := newSrv()
+		text, isErr := postTool(t, s, "/mcp?caller=res-1", "task_recycle", `{"id":"abc123",`+note+`}`)
+		testutil.Equal(t, isErr, true)
+		testutil.Contains(t, text, "resident")
+		testutil.Equal(t, len(*got), 0)
+	})
+	t.Run("resident caller cannot recycle another task by cwd", func(t *testing.T) {
+		s, got := newSrv()
+		_, isErr := postTool(t, s, "/mcp?caller=res-1", "task_recycle", `{"cwd":"/tmp/worktrees/myapp/fix-login",`+note+`}`)
+		testutil.Equal(t, isErr, true)
+		testutil.Equal(t, len(*got), 0)
+	})
+	t.Run("no caller identity leaves other tasks unrestricted", func(t *testing.T) {
+		s, got := newSrv()
+		_, isErr := postTool(t, s, "/mcp", "task_recycle", `{"id":"abc123",`+note+`}`)
+		testutil.Equal(t, isErr, false)
+		testutil.Equal(t, len(*got), 1)
+	})
+	t.Run("a non-resident caller id does not restrict", func(t *testing.T) {
+		s, got := newSrv()
+		_, isErr := postTool(t, s, "/mcp?caller=abc123", "task_recycle", `{"id":"def456",`+note+`}`)
+		testutil.Equal(t, isErr, false)
+		testutil.Equal(t, len(*got), 1)
+	})
 }

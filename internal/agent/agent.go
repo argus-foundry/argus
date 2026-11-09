@@ -854,7 +854,13 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	}
 	mcpFlag := ""
 	if cfg.MCPPort > 0 && fam.MCPFlag != nil {
-		mcpFlag = fam.MCPFlag(fmt.Sprintf("http://localhost:%d/mcp", cfg.MCPPort))
+		mcpURL := fmt.Sprintf("http://localhost:%d/mcp", cfg.MCPPort)
+		if task.IsResident() {
+			// Bind this connection to the resident so task_recycle can refuse to
+			// target any other task; the agent cannot alter its own spawn flags.
+			mcpURL += "?caller=" + url.QueryEscape(task.ID)
+		}
+		mcpFlag = fam.MCPFlag(mcpURL)
 		uxlog.Log("[mcp] configured task=%s family=%s client_timeout=%ds", task.ID, fam.Kind, mcplimits.ClientTimeoutSeconds)
 	}
 	cmdStr += mcpFlag
