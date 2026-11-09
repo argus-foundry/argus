@@ -1081,3 +1081,22 @@ The system SHALL load the task before writing any byte for `POST /api/tasks/{id}
 
 - **WHEN** the task is unknown, or live without a session, or live with a session
 - **THEN** the responses are 404 `task_not_found`, 404 `no_active_session`, and 200 respectively
+
+### Requirement: Cached provider usage is available to web Settings
+
+The authenticated REST API SHALL expose current valid cached provider usage needed by web Settings: Claude five-hour and weekly windows for each configured Claude account, and the default Codex weekly reading. Each available window SHALL include its percentage and a reset timestamp when known. The endpoint SHALL read caches only; it SHALL NOT start provider probes or sign-in status lookups. Missing or expired windows SHALL be represented as unavailable.
+
+#### Scenario: Provider snapshots are available
+
+- **WHEN** web Settings requests usage and the daemon has valid provider snapshots
+- **THEN** the response includes the percentages and known reset timestamps for each available window
+
+#### Scenario: Valid depleted Codex reading has no reset time
+
+- **WHEN** a valid cached Codex depleted reading has no reset timestamp
+- **THEN** the response includes its percentage and omits the reset timestamp
+
+#### Scenario: No current snapshot exists
+
+- **WHEN** a provider cache is empty or its reading has expired
+- **THEN** the response represents that provider window as unavailable

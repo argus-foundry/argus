@@ -1234,6 +1234,13 @@ textarea.settings-input { min-height: 70px; resize: vertical; }
     </div>
 
     <div class="settings-section">
+      <h3>Provider usage <span id="usage-updated" class="meta" style="text-transform:none;letter-spacing:0;float:right"></span></h3>
+      <div id="provider-usage-content">
+        <div class="settings-row"><div class="meta">Loading cached usage…</div></div>
+      </div>
+    </div>
+
+    <div class="settings-section">
       <h3>Sandbox <span class="sbx-badge" id="sandbox-pending-badge" hidden></span></h3>
       <div class="settings-row">
         <div class="grow">
@@ -2226,6 +2233,7 @@ async function api(path, opts = {}) {
 function logout() {
   localStorage.removeItem('argus-token');
   TOKEN = '';
+  stopProviderUsage();
   // Stop the poll loop. Without this, setInterval keeps calling refresh(),
   // which 401s with the empty token and would trip the offline screen
   // (after two failures) on top of the auth screen.
@@ -5865,6 +5873,7 @@ function switchTab(tab) {
   closeStream();
   destroyTerm();
   stopSystemMetrics(); // halt the metrics poller; loadSettings restarts it for the Settings tab
+  stopProviderUsage();
   if (tab === 'tasks') refresh();
   if (tab === 'hera') loadHera();
   if (tab === 'create') applyCreateDefaults();
@@ -6142,6 +6151,117 @@ let projectsCache = [];
 let backendsCache = [];
 let editingProject = null; // null = creating; otherwise the project being edited
 
+// Provider usage comes from cache-only daemon readings and polls only while
+// Settings is visible.
+let providerUsageTimer = null;
+let providerUsageExpiryTimer = null;
+let providerUsageSeq = 0;
+let providerUsageSnapshot = null;
+const PROVIDER_USAGE_INTERVAL = 30000;
+
+function formatUsageReset(value) {
+  if (!value) return 'Reset time unavailable';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Reset time unavailable';
+  return 'Resets ' + date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function usageMetric(label, percentage, resetAt) {
+  if (percentage === null || percentage === undefined || percentage === '') {
+    return '<div class="settings-row"><div class="grow"><div class="label">' + esc(label) +
+      '</div><div class="meta">Unavailable</div></div></div>';
+  }
+  const pct = Number(percentage);
+  if (!Number.isFinite(pct) || (resetAt && Number.isFinite(Date.parse(resetAt)) && Date.parse(resetAt) <= Date.now())) {
+    return '<div class="settings-row"><div class="grow"><div class="label">' + esc(label) +
+      '</div><div class="meta">Unavailable</div></div></div>';
+  }
+  const shown = Math.max(0, Math.min(100, pct));
+  const band = shown >= 90 ? 'crit' : shown >= 75 ? 'warn' : '';
+  return '<div class="metric"><div class="metric-head"><span class="label">' + esc(label) +
+    '</span><span class="value">' + pct.toFixed(0) + '% used</span></div><div class="metric-bar"><span class="' +
+    band + '" style="width:' + shown.toFixed(1) + '%"></span></div><div class="meta">' +
+    esc(formatUsageReset(resetAt)) + '</div></div>';
+}
+
+function renderProviderUsage(claudeAccounts, codex, unavailable = false) {
+  const el = document.getElementById('provider-usage-content');
+  if (!el) return;
+  let html = '';
+  if (unavailable) {
+    html += '<div class="settings-row"><div class="grow"><div class="label">Claude</div><div class="meta">Usage unavailable</div></div></div>';
+  } else if (!Array.isArray(claudeAccounts) || !claudeAccounts.length) {
+    html += '<div class="settings-row"><div class="grow"><div class="label">Claude</div><div class="meta">No Claude accounts configured</div></div></div>';
+  } else {
+    claudeAccounts.forEach((account, index) => {
+      const name = account.label || account.name || 'Claude';
+      html += '<div class="settings-row"><div class="label">Claude — ' + esc(name) + '</div></div>';
+      const usage = account.usage || {};
+      html += usageMetric('5-hour session', usage.five_hour_pct, usage.five_hour_resets_at);
+      html += usageMetric('Weekly', usage.weekly_pct, usage.weekly_resets_at);
+      if (index < claudeAccounts.length - 1) html += '<div style="height:8px"></div>';
+    });
+  }
+  html += '<div class="settings-row"><div class="label">Codex</div></div>';
+  html += usageMetric('Weekly', codex && codex.weekly_pct, codex && codex.weekly_resets_at);
+  el.innerHTML = html;
+}
+
+function providerUsageIsVisible() {
+  return TOKEN && document.getElementById('settings-view').style.display !== 'none';
+}
+
+function scheduleProviderUsageExpiry(data) {
+  if (providerUsageExpiryTimer) { clearTimeout(providerUsageExpiryTimer); providerUsageExpiryTimer = null; }
+  const resets = [];
+  (data.claude || []).forEach(account => {
+    const usage = account.usage || {};
+    [usage.five_hour_resets_at, usage.weekly_resets_at].forEach(value => {
+      const at = value ? Date.parse(value) : NaN;
+      if (Number.isFinite(at) && at > Date.now()) resets.push(at);
+    });
+  });
+  const codexReset = data.codex && data.codex.weekly_resets_at ? Date.parse(data.codex.weekly_resets_at) : NaN;
+  if (Number.isFinite(codexReset) && codexReset > Date.now()) resets.push(codexReset);
+  if (!resets.length) return;
+  providerUsageExpiryTimer = setTimeout(() => {
+    if (!providerUsageIsVisible() || !providerUsageSnapshot) return;
+    renderProviderUsage(providerUsageSnapshot.claude, providerUsageSnapshot.codex);
+    scheduleProviderUsageExpiry(providerUsageSnapshot);
+  }, Math.max(0, Math.min(...resets) - Date.now()) + 25);
+}
+
+async function loadProviderUsage() {
+  const seq = ++providerUsageSeq;
+  try {
+    const response = await api('/api/usage');
+    if (!response.ok) throw new Error('usage request failed');
+    const data = await response.json();
+    if (seq !== providerUsageSeq || !providerUsageIsVisible()) return;
+    providerUsageSnapshot = data || {};
+    renderProviderUsage(providerUsageSnapshot.claude, providerUsageSnapshot.codex);
+    scheduleProviderUsageExpiry(providerUsageSnapshot);
+    setText('usage-updated', 'updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+  } catch (e) {
+    if (seq !== providerUsageSeq || !providerUsageIsVisible()) return;
+    providerUsageSnapshot = null;
+    renderProviderUsage(null, null, true);
+  }
+}
+
+function startProviderUsage() {
+  stopProviderUsage();
+  loadProviderUsage();
+  providerUsageTimer = setInterval(loadProviderUsage, PROVIDER_USAGE_INTERVAL);
+}
+
+function stopProviderUsage() {
+  if (providerUsageTimer) { clearInterval(providerUsageTimer); providerUsageTimer = null; }
+  if (providerUsageExpiryTimer) { clearTimeout(providerUsageExpiryTimer); providerUsageExpiryTimer = null; }
+  providerUsageSnapshot = null;
+  providerUsageSeq++;
+}
+
 // --- System metrics (live host load) ---
 // Polls /api/system-metrics on a short interval, but ONLY while the Settings tab
 // is visible: startSystemMetrics is called from loadSettings, and switchTab calls
@@ -6237,6 +6357,7 @@ function stopSystemMetrics() {
 
 async function loadSettings() {
   startSystemMetrics();
+  startProviderUsage();
   await Promise.all([
     populateShareURL(),
     loadTokens(),

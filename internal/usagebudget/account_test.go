@@ -61,6 +61,25 @@ func TestCachedReadingForAccount(t *testing.T) {
 	})
 }
 
+func TestCachedDisplayReadingForAccountMergesValidWindows(t *testing.T) {
+	resetState(t)
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	nowFunc = func() time.Time { return now }
+	probeWeek := &Window{Percentage: 62, ResetAt: now.Add(48 * time.Hour), LastProbedAt: now.Add(-time.Minute)}
+	storeReading(Reading{SevenDay: probeWeek, LastProbedAt: probeWeek.LastProbedAt}, "work")
+	bridgeFive := &Window{Percentage: 35, ResetAt: now.Add(4 * time.Hour), LastProbedAt: now}
+	restore := SetBridgeReader(func(account string) (Reading, bool) {
+		return Reading{FiveHour: bridgeFive, LastProbedAt: now}, account == "work"
+	})
+	t.Cleanup(restore)
+
+	got, ok := CachedDisplayReadingForAccount("work", now)
+	testutil.True(t, ok)
+	testutil.Equal(t, got.FiveHour, bridgeFive)
+	testutil.Equal(t, got.SevenDay, probeWeek)
+	testutil.Equal(t, got.Percentage, 62.0)
+}
+
 func TestLiveWindows(t *testing.T) {
 	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 	live := &Window{Percentage: 30, ResetAt: now.Add(time.Hour), LastProbedAt: now}
