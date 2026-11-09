@@ -1,0 +1,7 @@
+- [x] Add `Profile` to `HeraCoordinatorSpawnInput` and thread it to `CreateAndStart`
+- [x] Add `hera_coordinator_requests` table and receipt methods
+- [x] Add `gitutil.ValidateBranchRef`
+- [x] Add `GET /api/hera/coordinator-options` and `POST /api/hera/orchestrators`
+- [x] Emit `hera.orchestrator_created`
+- [x] Tests: options, defaults, validation, idempotency (replay, concurrent, restart), model resolution, failure unwinds
+- [x] Document gotchas, README REST table, plugin event table

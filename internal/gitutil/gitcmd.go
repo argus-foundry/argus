@@ -3,6 +3,7 @@ package gitutil
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
@@ -231,4 +232,19 @@ func runGit(dir string, args ...string) (string, error) {
 	cmd.Stderr = io.Discard
 	err := cmd.Run()
 	return out.String(), err
+}
+
+// ValidateBranchRef reports whether ref is a well-formed ref name that resolves
+// to a commit in repoDir. It never fetches.
+func ValidateBranchRef(repoDir, ref string) error {
+	if ref == "" || strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("invalid ref %q", ref)
+	}
+	if _, err := runGit(repoDir, "check-ref-format", "--allow-onelevel", ref); err != nil {
+		return fmt.Errorf("invalid ref %q", ref)
+	}
+	if _, err := runGit(repoDir, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}"); err != nil {
+		return fmt.Errorf("ref %q not found", ref)
+	}
+	return nil
 }

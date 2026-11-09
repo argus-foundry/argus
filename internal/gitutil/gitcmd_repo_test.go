@@ -300,3 +300,26 @@ func TestListRemoteBranches_Repo(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateBranchRef(t *testing.T) {
+	repo := initRepo(t, t.TempDir())
+	tests := []struct {
+		name    string
+		ref     string
+		wantErr bool
+	}{
+		{"head resolves", "HEAD", false},
+		{"empty", "", true},
+		{"leading dash", "--upload-pack=x", true},
+		{"bad format", "a..b", true},
+		{"missing", "nope/branch", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateBranchRef(repo, tt.ref)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateBranchRef(%q) err=%v wantErr=%v", tt.ref, err, tt.wantErr)
+			}
+		})
+	}
+}

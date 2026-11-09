@@ -137,6 +137,7 @@ Argus sends `: ping` lines every 30 seconds so proxies and clients can detect de
 | `session.started`       | `{"pid":<n>,"resume":<bool>}`                        | `agent.Runner.Start`                         |
 | `session.exited`        | `{"stopped":<bool>,"err":"<str>","pending_restart":<bool>}` | session readLoop exit                  |
 | `session.idle`          | `null`                                               | push idle watcher                            |
+| `hera.orchestrator_created` | `{"orchestrator_id":<n>,"role_id":<n>,"task_id":"<id>"}` | `POST /api/hera/orchestrators`          |
 | `resync`                | `{"reason":"...","cursor":<n>,"oldest":<n>}`         | synthetic, SSE handler only                  |
 
 Payloads are stable. A future major version will rename or restructure them; v1 is append-only.

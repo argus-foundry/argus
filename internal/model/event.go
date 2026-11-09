@@ -38,6 +38,10 @@ const (
 	EventTypeSessionExited     = "session.exited"
 	EventTypeSessionIdle       = "session.idle"
 
+	// EventTypeHeraOrchestratorCreated fires after a bound coordinator is
+	// created over REST. Payload: {"orchestrator_id":1,"role_id":2,"task_id":"t1"}.
+	EventTypeHeraOrchestratorCreated = "hera.orchestrator_created"
+
 	// EventTypeSessionNeedsInput fires when a session transitions into or out
 	// of the "blocked waiting on the user" state (the red ? in the TUI). One
 	// event type carries both edges; the payload's needs_input bool

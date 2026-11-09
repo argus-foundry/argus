@@ -241,3 +241,11 @@ The system SHALL expose an `mcp__argus__profile_resolve` MCP tool that resolves 
 
 - **WHEN** `profile_resolve` returns a resolved profile whose `code_slice` archetype sets `model = "sonnet"` and whose `[rigor]` sets `review_passes = 2`
 - **THEN** the raw JSON response contains the keys `"model"` and `"review_passes"` (not `"Model"` or `"ReviewPasses"`)
+
+### Requirement: Per-spawn profile on coordinator spawn
+
+The coordinator spawn input SHALL carry an optional profile override stored on the task (`task.Profile`), with an empty value inheriting the project binding, alongside the existing archetype and base branch.
+
+#### Scenario: Explicit profile reaches model resolution
+- **WHEN** a coordinator is spawned with profile `lean`
+- **THEN** the task stores `lean` and model resolution uses that profile's archetype model
