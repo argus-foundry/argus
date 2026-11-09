@@ -32,7 +32,7 @@ Verified current state (from code and specs):
 **Non-Goals (each a named follow-up, per the AGENTS.md Frontend Parity rule):**
 
 - **macOS app:** global hotkey and floating panel. Follow-up: `add-resident-macos`.
-- **Web/PWA and mobile:** a "Solo" tab, then a native app distributed manually. Follow-up: `add-resident-web`. In phase 1 the resident is excluded from `/api/tasks`, so web and macOS simply do not see it.
+- **Web/PWA and mobile:** a resident tab, then a native app distributed manually. Follow-up: `add-resident-web`. In phase 1 the resident is excluded from `/api/tasks`, so web and macOS simply do not see it.
 - **Routines and scheduling:** "notify me every Thursday to take out the trash". Next phase after this one. See "Routines seam" below so this change does not design it into a corner.
 - **Push and system notifications** for resident replies (arrives with routines).
 - **Daemon-forced hard-stop recycle** at a higher budget multiple (the coordinator path has one at 1.5×; the resident gets it only if agent-driven recycling proves insufficient). Follow-up: `add-resident-hard-stop`.
@@ -81,6 +81,7 @@ Backend: the default Claude-family backend only (the Stop hook and `task_recycle
 - **Open-loops first:** the resident's orientation prompt and every recycle seed instruct it to `kb_read` `resident/open-loops.md` before anything else.
 - The folder name is fixed so renaming the agent in Settings never touches memory (and Argus rules forbid migration code).
 - The `dream: skip` marker fails safe once `airon-dream` honors it (cross-repo follow-up).
+- **Name prerequisite:** the resident has no default name. Naming it is the act of opting in, so `resident.enabled` cannot take effect without a valid `resident.name`; Settings asks for the name before enabling and an enabled-but-unnamed config does not start.
 - **KB prerequisite:** the resident requires `kb.enabled` and a resolvable `metis_vault_path`. If absent, Settings shows why and the resident does not start. Running a memory-less resident would silently violate "it learns".
 
 ### D5. Context self-management (agent-driven)
@@ -107,7 +108,7 @@ The coord-hook, already running on every resident Stop, records `task_meta(resid
 
 ### D8. TUI surfaces
 
-- **Tab:** first position, labelled with `resident.name` (default "Solo", sanitized, 1 to 12 printable runes). `1/2/3` keep selecting Tasks/Projects/Settings; new global action `global.tab_resident` defaults to `0`. Not persisted by "restore last tab" (a launch that would restore it lands on Tasks).
+- **Tab:** first position, labelled with `resident.name` (no default; required to enable the resident; 1 to 12 printable runes, validated). `1/2/3` keep selecting Tasks/Projects/Settings; new global action `global.tab_resident` defaults to `0`. Not persisted by "restore last tab" (a launch that would restore it lands on Tasks).
 - **Pane:** one full-width terminal pane bound to the resident session via the existing `TerminalPane`; typing goes straight to the PTY.
 - **Toggle (`global.resident`, default `ctrl+\`)**: unconditional `CtxGlobal` dispatch like ctrl+k/ctrl+j, ignored only while a modal or text-input mode is open. From any non-resident screen it records a `residentReturn` snapshot (the generalization of `agentCrossReturn`: tab, mode, agent-view task and zoom, Hera selection/focus/fullscreen via the existing Hera excursion snapshot, Settings category/focus) and opens the resident tab; on the resident tab it restores the snapshot, falling back to the Tasks list if the target vanished or no snapshot exists. `ctrl+q` on the resident tab behaves the same as the toggle. Leaving the tab by any other route discards the snapshot (any other navigation forgets the hop, same as `agentCrossReturn`).
 - **Rail box (`ResidentBox`)** stacked with `AttentionBar` in the agent-view left column, the Hera rail summary area and the Tasks rail. Fixed height 0 when read and not waiting; otherwise one row: `Name ● <preview>` or `Name ? <preview>`. It resizes only the left column through the same `OnHeightChange` flow, so PTY panes are never resized. It hides while the resident tab itself is showing.
@@ -187,4 +188,4 @@ TUI:
 
 ## Open Questions
 
-None blocking. Confirm at review (defaults chosen by the author, easy to change): default name "Solo"; `0` as the resident tab digit; default `resident.enabled=false`; Claude-family only; the preview source being the Stop-hook `last_assistant_message`; the exact default `resident.context_budget` (initially the coordinator default).
+None blocking. Confirm at review (defaults chosen by the author, easy to change): `0` as the resident tab digit; default `resident.enabled=false`; Claude-family only; the preview source being the Stop-hook `last_assistant_message`; the exact default `resident.context_budget` (initially the coordinator default).

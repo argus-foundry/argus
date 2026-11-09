@@ -144,14 +144,19 @@ On every resident Stop the coord-hook SHALL record `task_meta(resident, last_rep
 
 ### Requirement: Resident configuration
 
-The system SHALL read a `[resident]` config block with `enabled` (default false), `name` (default "Solo"; 1 to 12 printable runes, sanitized), `context_budget` (default the coordinator default), `memory_dir` (default `resident`), `model`, `account`, `ask_tools` and `deny_tools`. All resident behavior SHALL log under the `[resident]` uxlog prefix, including start, stop, restarts, memory-prerequisite failures and signal changes.
+The system SHALL read a `[resident]` config block with `enabled` (default false), `name` (no default; required to enable; 1 to 12 printable runes, validated), `context_budget` (default the coordinator default), `memory_dir` (default `resident`), `model`, `account`, `ask_tools` and `deny_tools`. All resident behavior SHALL log under the `[resident]` uxlog prefix, including start, stop, restarts, memory-prerequisite failures and signal changes.
 
 #### Scenario: Defaults
 
 - **WHEN** no `[resident]` block exists
-- **THEN** the resident is disabled, named "Solo", with the default budget and `memory_dir=resident`
+- **THEN** the resident is disabled, has no name, and uses the default budget and `memory_dir=resident`
 
-#### Scenario: Name sanitized
+#### Scenario: Name required to enable
 
-- **WHEN** the configured name is empty, longer than 12 runes, or contains control characters
-- **THEN** it is sanitized or replaced by the default so the tab label stays valid
+- **WHEN** `enabled` is true but `name` is empty, longer than 12 runes, or contains control characters
+- **THEN** the resident does not start, no tab appears, and a `[resident]` log line states that a valid name is required
+
+#### Scenario: Name is the opt-in
+
+- **WHEN** the user sets a valid name in Settings and enables the resident
+- **THEN** the resident starts and the tab appears labelled with that name

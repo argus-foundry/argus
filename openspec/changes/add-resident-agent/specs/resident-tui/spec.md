@@ -6,7 +6,7 @@ When the resident is enabled the TUI header SHALL show the resident tab first, l
 
 #### Scenario: Tab order and digits
 
-- **WHEN** the resident is enabled with name "Solo"
+- **WHEN** the resident is enabled and named "Solo"
 - **THEN** the header reads `Solo | Tasks | Projects | Settings` and `1/2/3` still select Tasks/Projects/Settings
 
 #### Scenario: Disabled hides everything
@@ -88,12 +88,17 @@ The resident tab label in the header SHALL show `●` when unread and `?` when w
 
 ### Requirement: Settings has a Resident category
 
-Settings SHALL provide a Resident category with enabled, name, context budget, memory directory, model and account, plus a read-only pointer to `ask_tools`/`deny_tools` in `config.toml`. Edits SHALL be local-only like Accounts, validate the name, and show the missing KB prerequisite when enabling is not possible.
+Settings SHALL provide a Resident category with enabled, name, context budget, memory directory, model and account, plus a read-only pointer to `ask_tools`/`deny_tools` in `config.toml`. Edits SHALL be local-only like Accounts, require a valid name before enabling (the field starts empty, with no default), and show the missing KB prerequisite when enabling is not possible.
 
 #### Scenario: Rename takes effect
 
 - **WHEN** the user changes the name to "Ari" and saves
 - **THEN** the tab label, rail box and marker use "Ari" without restarting the session
+
+#### Scenario: Enable blocked until named
+
+- **WHEN** the user turns on enabled while the name is empty
+- **THEN** the category asks for a name, the resident does not start, and nothing is persisted as enabled
 
 #### Scenario: Enable blocked by prerequisite
 
