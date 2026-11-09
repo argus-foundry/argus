@@ -1,3 +1,5 @@
+import {AgentMessages} from './messages/agent-messages.js';
+import {CoordinatorInbox,coordinatorRoles} from './messages/coordinator-inbox.js';
 import {captureFocus} from '../shared/focus-recovery.js';
 import {taskCostRows} from './task-cost.js';
 import { renderTaskLinks } from './task-links.js';
@@ -10,7 +12,8 @@ import { sizeLabel } from '../review/artifact-view.js';
 import { log } from '../core/api.js';
 
 export class TaskTools {
-  constructor(api, review) {
+  constructor(api, review, callbacks = {}) {
+    this.callbacks=callbacks;
     this.api = api;
     this.review = review;
     this.tool = 'changes';
@@ -35,12 +38,24 @@ export class TaskTools {
     this.abort?.abort(); this.generation++;
     this.api.selectTask?.(task?.id);
     this.task = task;
-    this.selectTab(`tool-${this.selectedTools.get(task?.id) || 'changes'}`);
+    this.inboxTab();
+    const saved=this.selectedTools.get(task?.id);
+    this.selectTab(`tool-${saved==='inbox'&&!coordinatorRoles(this.roster,task?.id).length?'changes':saved||'changes'}`);
   }
-  updateRoster(roster) { this.roster = roster; if (this.tool === 'status') this.drawStatus(); }
+  inboxTab(){const tab=$('tool-inbox');if(tab)tab.hidden=!coordinatorRoles(this.roster,this.task?.id).length;}
+  updateRoster(roster) {
+    this.roster = roster;this.inboxTab();
+    if(this.tool==='inbox'){
+      const roles=coordinatorRoles(roster,this.task?.id),role=roles.find(role=>role.role_id===this.inboxRoleID)||roles[0];
+      if(!role)this.selectTab('tool-changes');else if(this.mail?.role?.role_id!==role.role_id)this.load(false);
+      else if(this.mail.role.board_unread!==role.board_unread){this.mail.role=role;this.mail.event({type:'resync'});}
+    }
+    if (this.tool === 'status') this.drawStatus();
+  }
   updateTask(task) { this.task = task; if (this.tool === 'status') this.drawStatus(); }
   restoreLoadFocus() { const restore=this.restoreFocus;this.restoreFocus=null;restore?.(); }
   async load(refresh = true) {
+    this.mail?.destroy();this.mail=null;
     this.abort?.abort();this.restoreLoadFocus();
     if(refresh)this.invalidateIdentity();
     this.statusView=null;
@@ -50,6 +65,14 @@ export class TaskTools {
     const restore=this.restoreFocus=captureFocus($('tool-panel'),()=>document.getElementById(`tool-${this.tool}`),{signal:this.abort.signal});
     const task = this.task, tool = this.tool;
     if (!task) { empty($('tool-panel'), '', 'Select a task to explore its work.'); this.restoreLoadFocus(); return; }
+    if(['messages','inbox'].includes(tool)){
+      const roles=coordinatorRoles(this.roster,task.id),role=roles.find(role=>role.role_id===this.inboxRoleID)||roles[0];
+      if(tool==='inbox'&&!role){this.selectTab('tool-changes');return;}
+      this.mail=tool==='messages'?new AgentMessages(this.api,$('tool-panel')):new CoordinatorInbox(this.api,$('tool-panel'),{...this.callbacks,selectRole:id=>{this.inboxRoleID=id;this.load(false);}});
+      this.mail.roles=roles;
+      this.mail.select(task,role);await this.mail.refresh();
+      if(this.restoreFocus===restore)this.restoreLoadFocus();else restore();return;
+    }
     if (tool === 'status') { await this.drawStatus(); if(this.restoreFocus===restore)this.restoreLoadFocus();else restore(); return; }
     empty($('tool-panel'), '', tool === 'artifacts' ? 'Loading artifacts…' : 'Loading changes…');
     this.wasVisible=this.visible();this.live.select(task.id,tool);
@@ -58,7 +81,7 @@ export class TaskTools {
     const panel=$('tool-panel');
     return !!this.task&&!document.hidden&&document.hasFocus()&&!!panel?.getClientRects().length&&getComputedStyle(panel).visibility!=='hidden'&&!document.body.classList.contains('settings-mode');
   }
-  event(event) {this.live.event(event);}
+  event(event) {this.live.event(event);this.mail?.event?.(event);}
   apply(result) {
     const restore=captureFocus($('tool-panel'),()=>document.getElementById(`tool-${this.tool}`),{signal:this.abort.signal});
     this.error?.remove();this.error=null;
@@ -165,5 +188,5 @@ export class TaskTools {
       log('task-info','links loaded',{count:result.links?.length || 0});
     } catch(error) { if (generation === this.generation && links.isConnected) { links.setAttribute('role','alert'); links.textContent='Links unavailable. Refresh to retry.'; links.append(button('Refresh',()=>this.load())); log('task-info','links failed'); } }
   }
-  clear() { this.invalidateIdentity(); this.abort?.abort();this.restoreLoadFocus(); this.generation++; this.task = null; this.roster = null; this.selectedTools.clear(); this.tool = 'changes'; this.selectTab('tool-changes'); }
+  clear() { this.mail?.destroy();this.mail=null;this.invalidateIdentity(); this.abort?.abort();this.restoreLoadFocus(); this.generation++; this.task = null; this.roster = null; this.selectedTools.clear(); this.tool = 'changes'; this.selectTab('tool-changes'); }
 }

@@ -179,3 +179,7 @@ See `web-tests/tests/workspace/tasks/task-header.spec.ts` for desktop height, lo
 Feature folders own their UI, styles and pure policies. Nest single-use parts under their owner, at most two folders below the workspace root. `core/` holds shared data and transport modules. `shared/` holds reused UI primitives. Unit tests mirror source folders under `tests/`. Browser specs and their shared fixtures live under `../web-tests/tests/workspace/`. `workspace-push.js` stays at the root to preserve its service-worker URL and scope. Contracts and context notes live in `docs/`; the dictation diagnostic lives in `diagnostics/`.
 
 See [test commands](docs/testing.md) for all unit, browser, security and master verification commands.
+
+## Mail views
+
+Agent messages in task tools shows read-only history, including ended bindings and older pages, without acknowledging mail. Coordinator tasks also offer Inbox. Its mail glyph opens unread human items; opening marks the viewed revision read, while Mark unread and Dismiss remain explicit. Reply appends an Inbox reference to the existing composer draft without sending. A stopped coordinator still needs an explicit Resume before send.

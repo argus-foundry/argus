@@ -67,6 +67,12 @@ Task creation and repository configuration, addition and removal use existing AP
 
 `contextSnapshot` maps measured fields into context, account windows, identity and role-history totals. Quota never drives the context ring. Only a live bridge may supply live context. Persisted stamps show record time and do not infer a limit; different stamp timestamps cannot be paired. Use backend roster kind to classify custom backend names. Shared-account Claude identity/usage never appears as Codex identity/usage. See `docs/context-data.md` for per-backend availability and needed daemon work.
 
+## Agent messages and human Inbox
+
+Agent messages is a separate read-only task tools tab. It reads only GET hera-messages, pages 100 messages at a time and keeps up to 1,000 records using source plus ID identity. It never consumes or acknowledges agent mail. Older pages preserve scroll and expanded messages.
+
+Inbox is available only for coordinator task bindings, with a role selector when a task binds multiple coordinators. One mail glyph replaces the rail status slot while board_unread is positive and opens the matching Inbox. Opening unread items, Mark unread and Dismiss use the viewed expected_updated_at. Conflicts refetch and collapse the changed item without reading its newer revision. Returned unread_count updates the rail; hera.board_changed, reconnect and roster unread changes reconcile the view. TUI-originated event forwarding remains ENG-1125; Refresh Inbox recovers body-only TUI edits. Reply appends an item reference to the captured composer draft without sending, resolving or resuming the coordinator. Existing Stop/Resume controls remain explicit.
+
 ## Archive context
 
 Archive/restore retain the main task, viewer, rail filter and scroll position. A filtered-out task has no rail highlight; restoring reselects it when the current filter contains it. Keep the local archived flag and header/input state current even if the subsequent task read fails.

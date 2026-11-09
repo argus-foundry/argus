@@ -60,7 +60,13 @@ const review = new TaskReview(api, () => {
   selectTab('tab-review');
   if (layout.compact.matches && layout.visible.tools) layout.close('tools');
 }, writeLocation);
-const tools = new TaskTools(api, review);
+const tools = new TaskTools(api, review, {
+  changed:(roleID,unread)=>{
+    for(const orch of navigation.roster.orchestrators||[])for(const role of orch.roles||[])if(role.role_id===roleID)role.board_unread=unread;
+    navigation.update(tasks,currentTask?.id,undefined,{roster:navigation.roster},{defer:true});
+  },
+  reply:(task,item)=>composer.reply(task,item),
+});
 const navigation = new TaskNavigation(selectTask, (project, action) => {
   if (!settings.leaveForTask()) return;
   taskSettings.leaveForTask();
@@ -69,6 +75,7 @@ const navigation = new TaskNavigation(selectTask, (project, action) => {
   });
 }, {
   heraKanban,
+  openInbox:(task,roleID)=>{selectTask(task);tools.inboxRoleID=roleID;if(currentTask?.id!==task.id)return;tools.selectTab('tool-inbox');if(!layout.visible.tools)layout.toggle('tools');$('tool-inbox').focus();},
   bulkAction: tasks => taskBatch.open(tasks),
   deleteTask: task => {deleteFocus=taskNeighbor(task)?.id;taskDelete.open(task);},
   projectConfiguration: project => { taskSettings.leaveForTask(); settings.openProject(project); },
@@ -267,6 +274,8 @@ events = new WorkspaceEvents(api, { refresh: refreshTasks, pin:event=>railAction
   if(result.resnapshot)events.scheduleSnapshot();
   log('events','applied',{count:tasks.length});
 } });
+events.callbacks.board=event=>{tools.event(event);events.scheduleSnapshot();};
+events.callbacks.reconcile=()=>tools.event({type:'resync'});
 split = new SplitWorkspace(() => terminal);
 rosterWatch = new WorkspaceRoster(api, () => navigation.roles?.size>0||split.enabled&&split.visible, result => {
   const hierarchy=result.warning?{roster:navigation.roster,warning:result.warning}:result;
