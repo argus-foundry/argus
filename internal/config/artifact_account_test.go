@@ -25,6 +25,7 @@ func TestArtifactAccount(t *testing.T) {
 		Accounts: map[string]Account{
 			"personal": {ClaudeConfigDir: "~/.claude-personal"},
 			"work":     {ClaudeConfigDir: "/opt/claude-work"},
+			"codex":    {CodexHome: "/opt/codex-only"},
 		},
 		DefaultAccount: "personal",
 		ProjectAccounts: map[string]string{
@@ -34,6 +35,8 @@ func TestArtifactAccount(t *testing.T) {
 			"bad-project":    "nope",
 			"both-unknown":   "gone",
 			"artifact-blank": "work",
+			"codex-art":      "personal",
+			"codex-proj":     "codex",
 		},
 		ProjectArtifactAccounts: map[string]string{
 			"both":           "personal",
@@ -42,6 +45,7 @@ func TestArtifactAccount(t *testing.T) {
 			"default-home":   "default",
 			"both-unknown":   "missing",
 			"artifact-blank": "",
+			"codex-art":      "codex",
 		},
 	}
 	tests := []struct {
@@ -60,13 +64,15 @@ func TestArtifactAccount(t *testing.T) {
 		{name: "unknown project entry skipped", project: "bad-project", want: "", wantLog: "nope"},
 		{name: "both unknown resolves none", project: "both-unknown", want: "", wantLog: "missing"},
 		{name: "blank artifact entry falls back", project: "artifact-blank", want: "work"},
+		{name: "codex-only artifact entry skipped, falls back", project: "codex-art", want: "personal", wantLog: "has no claude_config_dir"},
+		{name: "codex-only project entry skipped", project: "codex-proj", want: "", wantLog: "has no claude_config_dir"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureSlog(t)
 			testutil.Equal(t, cfg.ArtifactAccount(tc.project), tc.want)
 			if tc.wantLog != "" {
-				testutil.Contains(t, logs.String(), "[artifacts] skipping unknown artifact account")
+				testutil.Contains(t, logs.String(), "[artifacts] skipping artifact account")
 				testutil.Contains(t, logs.String(), tc.wantLog)
 			} else {
 				testutil.Equal(t, logs.String(), "")
