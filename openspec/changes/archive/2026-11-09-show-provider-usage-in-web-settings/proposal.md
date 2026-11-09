@@ -14,7 +14,7 @@ The web app already has cached Claude and Codex quota readings for routing and a
 ## Non-goals
 
 - Adding new provider probes or changing probe cadence, routing, or quota behavior.
-- Showing account usage in TUI or macOS Settings; this change is limited to the web app.
+- Showing account usage in TUI or macOS Settings; named follow-up: `usage-display-tui-macos-parity`.
 - Displaying absolute request or token counts when the providers do not supply them.
 
 ## Risks

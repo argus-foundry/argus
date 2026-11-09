@@ -5,13 +5,27 @@ import (
 	"time"
 
 	"github.com/drn/argus/internal/backendtier"
+	"github.com/drn/argus/internal/usagebudget"
 	"github.com/drn/argus/internal/uxlog"
 )
 
-// providerUsageJSON complements the per-account Claude usage returned by
-// /api/accounts. Codex's existing cache measures the default account only.
+var (
+	codexUsageSnapshot  = backendtier.CachedReading
+	claudeUsageSnapshot = usagebudget.CachedDisplayReadingForAccount
+)
+
+// providerUsageJSON serves cache-only quota readings without the sign-in
+// subprocess lookups performed by /api/accounts. Codex's cache measures the
+// default account only.
 type providerUsageJSON struct {
-	Codex *codexUsageJSON `json:"codex"`
+	Claude []claudeUsageAccountJSON `json:"claude"`
+	Codex  *codexUsageJSON          `json:"codex"`
+}
+
+type claudeUsageAccountJSON struct {
+	Name  string            `json:"name"`
+	Label string            `json:"label"`
+	Usage *accountUsageJSON `json:"usage,omitempty"`
 }
 
 type codexUsageJSON struct {
@@ -20,11 +34,24 @@ type codexUsageJSON struct {
 	LastProbedAt   string  `json:"last_probed_at,omitempty"`
 }
 
-// handleUsage serves only the daemon's current cached reading. CachedReading
-// enforces Codex's reset/hold validity rules and never starts a provider probe.
+// handleUsage serves only the daemon's current cached readings. It never
+// starts a provider probe or performs provider sign-in lookups.
 func (s *Server) handleUsage(w http.ResponseWriter, _ *http.Request) {
-	var out providerUsageJSON
-	if reading, ok := backendtier.CachedReading(); ok {
+	cfg := s.db.Config()
+	now := time.Now()
+	out := providerUsageJSON{Claude: make([]claudeUsageAccountJSON, 0)}
+	for _, name := range cfg.AccountNamesFor("claude") {
+		label := cfg.Accounts[name].Label
+		if label == "" {
+			label = name
+		}
+		account := claudeUsageAccountJSON{Name: name, Label: label}
+		if reading, ok := claudeUsageSnapshot(name, now); ok {
+			account.Usage = usageJSON(reading, true, now)
+		}
+		out.Claude = append(out.Claude, account)
+	}
+	if reading, ok := codexUsageSnapshot(); ok {
 		out.Codex = &codexUsageJSON{WeeklyPct: reading.Percentage}
 		if !reading.ResetAt.IsZero() {
 			out.Codex.WeeklyResetsAt = reading.ResetAt.UTC().Format(time.RFC3339)
@@ -33,6 +60,6 @@ func (s *Server) handleUsage(w http.ResponseWriter, _ *http.Request) {
 			out.Codex.LastProbedAt = reading.LastProbedAt.UTC().Format(time.RFC3339)
 		}
 	}
-	uxlog.Log("[usage] cached provider snapshot: codex_available=%t", out.Codex != nil)
+	uxlog.Log("[usage] cached provider snapshot: claude_accounts=%d codex_available=%t", len(out.Claude), out.Codex != nil)
 	writeJSON(w, http.StatusOK, out)
 }
