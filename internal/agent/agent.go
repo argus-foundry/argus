@@ -1081,8 +1081,15 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	}()
 
 	// Every task must have a worktree — never run in the project directory.
+	// Chesterton's Fence: the rule exists to keep agents out of project
+	// directories. The resident agent has no project, so it is the single
+	// exception: a resident-kind task whose Worktree is exactly the resident
+	// working directory (a plain dir under the Argus data dir).
 	if task.Worktree == "" {
 		return nil, nil, fmt.Errorf("task %q has no worktree set — refusing to start without worktree isolation", task.Name)
+	}
+	if task.IsResident() && task.Worktree != db.ResidentWorkDir() {
+		return nil, nil, fmt.Errorf("resident task %q worktree %q is not the resident working directory %q", task.Name, task.Worktree, db.ResidentWorkDir())
 	}
 
 	// Pre-flight: confirm the worktree directory actually exists. Without this,

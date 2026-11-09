@@ -4,11 +4,22 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/drn/argus/internal/events"
 	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/uxlog"
 )
+
+// ResidentDirName is the resident working directory's name under DataDir.
+const ResidentDirName = "resident"
+
+// ResidentWorkDir returns the resident agent's working directory
+// (~/.argus/resident): a plain directory, not a git worktree. It resolves
+// through $HOME like DataDir, so tests redirect it with t.Setenv("HOME", ...).
+func ResidentWorkDir() string {
+	return filepath.Join(DataDir(), ResidentDirName)
+}
 
 // ErrResidentProtected is returned (wrapped) by every task write that the
 // resident agent row must refuse: complete, archive, delete, set-status,
