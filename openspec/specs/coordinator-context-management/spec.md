@@ -279,7 +279,7 @@ The hera recycle seed prompt SHALL include a "Last exchange with the user before
 - **THEN** the extracted human message is the latest genuine human message before them, and a human message surfaced mid-turn inside a tool result is included with its wrapper removed
 
 #### Scenario: Argus-injected turns are ignored
-- **WHEN** a user-role entry is text Argus typed into the session without the bridge (it starts with `[argus] `, e.g. the resident's context-budget nudge or a task-message doorbell)
+- **WHEN** a user-role entry is Argus-injected text, typed or bridge-delivered, that starts with `[argus] ` (e.g. the resident's context-budget nudge, its orientation or recycle seed, or a task-message doorbell)
 - **THEN** it is not the extracted human message, the latest genuine human message before it is kept, and the session's replies after the injected turn are not attributed to that human message
 
 ### Requirement: The Stop hook also acts for the resident task

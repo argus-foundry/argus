@@ -216,7 +216,9 @@ func buildResidentRecycleSeedPrompt(orientation, handoffNote, memoryDir, lastExc
 	if memoryDir == "" {
 		memoryDir = "resident"
 	}
-	return "You are a fresh resident session recycled to reset context. Follow this handoff first.\n\n" +
+	// Marked as Argus-injected so the next recycle's last-exchange extraction
+	// never quotes this seed as the user's message.
+	return lastexchange.SystemTurnPrefix + "You are a fresh resident session recycled to reset context. Follow this handoff first.\n\n" +
 		"## Handoff note from your prior session\n\n" + handoffNote + "\n" +
 		lastExchange + lastexchange.RelayDirective +
 		"\n## Recover working memory\n\nRead `" + path.Join(memoryDir, "open-loops.md") +

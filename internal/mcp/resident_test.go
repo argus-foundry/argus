@@ -145,6 +145,22 @@ func TestResident_TaskRecycleBoundToCaller(t *testing.T) {
 		testutil.Equal(t, isErr, true)
 		testutil.Equal(t, len(*got), 0)
 	})
+	t.Run("unbound caller cannot recycle the resident", func(t *testing.T) {
+		s, got := newSrv()
+		text, isErr := postTool(t, s, "/mcp", "task_recycle", `{"cwd":"/home/x/.argus/resident",`+note+`}`)
+		testutil.Equal(t, isErr, true)
+		testutil.Contains(t, text, "only the resident agent may recycle itself")
+		testutil.Equal(t, len(*got), 0)
+		_, isErr = postTool(t, s, "/mcp", "task_recycle", `{"id":"res-1",`+note+`}`)
+		testutil.Equal(t, isErr, true)
+		testutil.Equal(t, len(*got), 0)
+	})
+	t.Run("another bound task cannot recycle the resident", func(t *testing.T) {
+		s, got := newSrv()
+		_, isErr := postTool(t, s, "/mcp?caller=abc123", "task_recycle", `{"id":"res-1",`+note+`}`)
+		testutil.Equal(t, isErr, true)
+		testutil.Equal(t, len(*got), 0)
+	})
 	t.Run("no caller identity leaves other tasks unrestricted", func(t *testing.T) {
 		s, got := newSrv()
 		_, isErr := postTool(t, s, "/mcp", "task_recycle", `{"id":"abc123",`+note+`}`)

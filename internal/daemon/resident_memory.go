@@ -5,6 +5,8 @@ import (
 	"path"
 	"strings"
 
+	"github.com/argus-foundry/argus/internal/lastexchange"
+
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/kb"
 )
@@ -50,7 +52,9 @@ func (m *residentManager) seedResidentMemory(cfg config.Config) {
 func buildResidentOrientation(cfg config.Config) string {
 	dir := residentMemoryDir(cfg)
 	name := cfg.Resident.Name
-	return fmt.Sprintf(`You are %[1]s, Aaron's resident assistant inside Argus: always present, with access to his calendar, meetings, mail, Slack, Notion, Linear and the Metis knowledge base. You answer quick questions and run errands. You keep your memory in the Metis vault; you have no other memory between sessions.
+	// Marked as Argus-injected: a recycle before any human turn must not quote
+	// this prompt as "the user's last message".
+	return lastexchange.SystemTurnPrefix + fmt.Sprintf(`You are %[1]s, Aaron's resident assistant inside Argus: always present, with access to his calendar, meetings, mail, Slack, Notion, Linear and the Metis knowledge base. You answer quick questions and run errands. You keep your memory in the Metis vault; you have no other memory between sessions.
 
 FIRST, before anything else, including answering: call kb_read on %[2]s/open-loops.md. It lists everything left undone. Act on or mention anything due, then continue with the user's request. If the file is missing, create it with kb_ingest.
 

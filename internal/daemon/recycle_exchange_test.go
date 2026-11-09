@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/argus-foundry/argus/internal/claudesession"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/lastexchange"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -90,6 +92,28 @@ func TestRecycleExchangeSection_Resident(t *testing.T) {
 		got := recycleExchangeSection(resident, claudeCfg())
 		testutil.Contains(t, got, "Last exchange with the user before the reset")
 		testutil.Contains(t, got, "Mostly host CPU load.")
+	})
+
+	t.Run("recycle before any human turn quotes no Argus text", func(t *testing.T) {
+		// The session's only user turns are Argus's own: the orientation it
+		// launched with, a previous recycle seed, and a budget nudge.
+		cfg := claudeCfg()
+		cfg.Resident.Name = "Sol"
+		var body strings.Builder
+		for _, text := range []string{
+			buildResidentOrientation(cfg),
+			buildResidentRecycleSeedPrompt("orientation", "old handoff", "resident", ""),
+			lastexchange.SystemTurnPrefix + "Context budget reached (1/1 tokens).",
+		} {
+			line, err := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}})
+			testutil.NoError(t, err)
+			body.Write(line)
+			body.WriteString("\n" + `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ARGUS-ONLY-REPLY"}]}}` + "\n")
+		}
+		resident := &model.Task{ID: "r0", Kind: model.KindResident, Worktree: wd, SessionID: "sid-0", Backend: "claude"}
+		writeTranscript(t, home, wd, "sid-0", body.String())
+		got := recycleExchangeSection(resident, cfg)
+		testutil.Equal(t, got, "")
 	})
 
 	t.Run("named account reads its own config dir", func(t *testing.T) {

@@ -2082,6 +2082,14 @@ func (s *Server) toolTaskRecycleAs(id interface{}, args json.RawMessage, caller 
 		log.Printf("[resident] task_recycle refused: bound caller=%s targeted task=%s", caller, task.ID)
 		return toolError(id, "a bound caller (the resident agent) may only recycle itself")
 	}
+	// And the converse: only the resident itself may recycle the resident. Any
+	// other session's handoff_note would become the fresh resident's own
+	// authoritative handoff. Fails closed: the resident's URL always carries its
+	// caller, so an empty or foreign caller is refused.
+	if task.IsResident() && caller != task.ID {
+		log.Printf("[resident] task_recycle refused: caller=%q is not the resident task=%s", caller, task.ID)
+		return toolError(id, "only the resident agent may recycle itself")
+	}
 
 	if err := s.taskRecycle(TaskRecycleInput{TaskID: task.ID, HandoffNote: note}); err != nil {
 		log.Printf("[mcp] task_recycle failed: id=%s err=%v", task.ID, err)

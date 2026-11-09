@@ -63,3 +63,22 @@ When the recycled task is the resident, the seed prompt SHALL order: the caller-
 
 - **WHEN** a non-resident task is recycled
 - **THEN** its seed is the handoff note, the last-exchange section and relay directive, followed by the original prompt
+
+### Requirement: Only the resident recycles the resident
+
+The `task_recycle` MCP tool SHALL bind a connection that carries a caller identity (the resident's spawn URL `?caller=`) to recycling only that caller's own task, and SHALL refuse to recycle the resident unless the caller is the resident itself, failing closed when the caller is absent. Any other session's `handoff_note` would otherwise become the fresh resident's own authoritative handoff. Unbound callers SHALL keep recycling ordinary tasks unchanged.
+
+#### Scenario: Unbound caller targets the resident
+
+- **WHEN** a connection with no caller identity calls `task_recycle` for the resident, by id or by its working directory
+- **THEN** the call is refused and no recycle is scheduled
+
+#### Scenario: Another task targets the resident
+
+- **WHEN** a connection bound to a non-resident task calls `task_recycle` for the resident
+- **THEN** the call is refused and no recycle is scheduled
+
+#### Scenario: Resident recycles itself
+
+- **WHEN** the resident's own connection calls `task_recycle` for itself
+- **THEN** the recycle is scheduled
