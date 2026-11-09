@@ -35,11 +35,13 @@ const (
 	deliveryTag   = "[argus-delivery:"
 )
 
-// SystemTurnPrefix starts every Argus-originated turn: notices typed into the
-// session or delivered over the bridge (the resident's context-budget nudge,
-// task-message doorbells) and the resident's own launch prompts (orientation,
-// recycle seed). Such a turn is never "the user's last message": Extract skips
-// it and stops attributing later replies to the earlier genuine human message.
+// SystemTurnPrefix starts the Argus-originated turns Argus marks as its own:
+// the resident's context-budget nudge and task-message doorbells (typed or
+// bridge-delivered), and the resident's launch prompts (orientation, recycle
+// seed). Such a turn is never "the user's last message": Extract skips it and
+// stops attributing later replies to the earlier genuine human message. Hera
+// doorbells and other notify texts are not marked (follow-up
+// widen-last-exchange-delivery-tags).
 const SystemTurnPrefix = "[argus] "
 
 // RelayDirective is appended to a recycle seed prompt so the fresh session
@@ -372,12 +374,25 @@ func isSystemText(cleaned string) bool {
 	return strings.HasPrefix(cleaned, strings.TrimSpace(SystemTurnPrefix))
 }
 
+// unwrapPlugin drops the line Claude Code prepends to a prompt the argus-bridge
+// plugin submits ("The argus-bridge plugin sent a message…:"), so a
+// bridge-delivered "[argus] " notice is recognized like a typed one.
+func unwrapPlugin(cleaned string) string {
+	if !strings.HasPrefix(cleaned, pluginPrefix) {
+		return cleaned
+	}
+	if i := strings.IndexByte(cleaned, '\n'); i >= 0 {
+		return strings.TrimSpace(cleaned[i+1:])
+	}
+	return ""
+}
+
 // systemTurn reports whether a user-role entry is an Argus-injected turn (see
 // SystemTurnPrefix), as a plain string or as text blocks.
 func systemTurn(raw json.RawMessage) bool {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		return isSystemText(stripNoise(s))
+		return isSystemText(unwrapPlugin(stripNoise(s)))
 	}
 	var blocks []contentBlock
 	if json.Unmarshal(raw, &blocks) != nil {
@@ -389,5 +404,5 @@ func systemTurn(raw json.RawMessage) bool {
 			texts = append(texts, b.Text)
 		}
 	}
-	return isSystemText(stripNoise(strings.Join(texts, "\n")))
+	return isSystemText(unwrapPlugin(stripNoise(strings.Join(texts, "\n"))))
 }
