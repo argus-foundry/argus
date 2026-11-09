@@ -874,7 +874,8 @@ var (
 // residentSafeWord is a command word that needs no shell escaping: a run of
 // plain characters and/or simple single-quoted segments (no shell
 // metacharacter, space or quote inside). The resident's command is accepted
-// only when every word's raw text matches it, so a value like `x;rm`,
+// only when every word after the executable matches it (the executable must
+// match the stricter residentSafeExe: a plain unquoted path), so a value like `x;rm`,
 // `"$(...)"` or `$HOME` cannot ride the allowlist into the sh -c line. `[` and
 // `]` are accepted only inside single quotes: unquoted they are a sh glob
 // pattern (`opus[1m]` could match a file in the cwd), so that form is refused
@@ -882,10 +883,11 @@ var (
 // `~/` (shell tilde expansion; `~user` and `$HOME` stay refused).
 var (
 	residentSafeWord = regexp.MustCompile(`^(?:[A-Za-z0-9_./+@%:,=-]|'[A-Za-z0-9_./+@%:,=\[\]-]+')+$`)
-	// residentSafeExe is the executable word: plain characters only (no
-	// quoting at all), so its raw text is also exactly the path stray-job
-	// cleanup and the backend-family lookup see.
-	residentSafeExe = regexp.MustCompile(`^[A-Za-z0-9_./+@%:,=-]+$`)
+	// residentSafeExe is the executable word: plain path characters only (no
+	// quoting, globs, escapes or `=` — `A=/x/claude` is a shell assignment, not
+	// a command), so its raw text is exactly the path stray-job cleanup and the
+	// backend-family lookup see.
+	residentSafeExe = regexp.MustCompile(`^[A-Za-z0-9_./+@%:,-]+$`)
 	residentQuoted  = regexp.MustCompile(`'[^']*'`)
 )
 
