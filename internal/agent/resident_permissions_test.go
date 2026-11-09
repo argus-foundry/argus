@@ -1201,6 +1201,8 @@ func TestCheckClaudeResidentCommand(t *testing.T) {
 		{`"/opt/x/claude" --model x`, "plain path"},
 		{`/opt/[x]/claude`, "plain path"},
 		{`/opt/*/claude`, "plain path"},
+		{`/opt/?/claude`, "plain path"},
+		{`/opt/x/\claude`, "plain path"},
 		{`/opt/x\ y/claude`, "plain path"},
 		{`A=/opt/claude --model x`, "plain path"},
 		{"claude --model opus[1m]", "single-quote"},

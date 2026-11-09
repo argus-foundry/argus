@@ -923,7 +923,7 @@ func checkClaudeResidentCommand(command string) error {
 		text := raw(i)
 		if i == 0 {
 			if !residentSafeExe.MatchString(strings.TrimPrefix(text, "~/")) {
-				return fmt.Errorf("executable %q not allowed for the resident (the executable must be a plain path: no quotes, spaces or shell operators)", raw(i))
+				return fmt.Errorf("executable %q not allowed for the resident (the executable must be a plain path: no quotes, globs, escapes, `=`, spaces or shell operators)", raw(i))
 			}
 			return nil
 		}
