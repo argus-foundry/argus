@@ -49,7 +49,7 @@ A left click on the owed re-render notice SHALL run the same on-demand re-render
 
 ### Requirement: On-demand re-render hotkey
 
-The `agent.rerender` action SHALL run the size-drift kick (stop and resume at the current pane width, with keep-place and draft restore) for the focused agent. It SHALL bypass the debounce but SHALL NOT bypass the safety gates: a busy, prompt-blocked, scrolled-up, or draft-holding agent SHALL defer with a status-bar explanation and the existing "Re-render pending" status. With no drift it SHALL be a no-op with a status-bar notice. Each invocation SHALL be logged with its outcome.
+The `agent.rerender` action SHALL run the size-drift kick (stop and resume at the current pane width, with keep-place and draft restore) for the focused agent. It SHALL bypass the debounce but SHALL NOT bypass the safety gates: a busy, prompt-blocked, scrolled-up, or draft-holding agent SHALL defer with a status-bar explanation and the existing "Re-render pending" status. In the Tasks agent view a deferred hotkey re-render SHALL be retried through the existing keep-place retry (even with the automatic kick off) until it succeeds or 10 minutes pass; a deferral from a Hera pane SHALL NOT retry automatically (press the key again). With no drift it SHALL be a no-op with a status-bar notice. Each invocation SHALL be logged with its outcome.
 
 #### Scenario: Hotkey re-renders
 

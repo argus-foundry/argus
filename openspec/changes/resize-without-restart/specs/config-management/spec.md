@@ -2,7 +2,7 @@
 
 ### Requirement: Auto re-render on resize setting
 
-The UI configuration SHALL provide `auto_rerender_on_resize`, default false, stored as `ui.auto_rerender_on_resize`, with config.toml overriding the DB and an absent key retaining the default. It SHALL be readable live without restart, editable in Settings (local mode) and writable through the remote-settings path. With it true, the TUI's automatic size-drift kick SHALL behave exactly as before the `resize-without-restart` change. It SHALL govern the TUI only. The effective value SHALL be logged at TUI start and on every live change.
+The UI configuration SHALL provide `auto_rerender_on_resize`, default false, stored as `ui.auto_rerender_on_resize`, with config.toml overriding the DB and an absent key retaining the default. It SHALL be readable live without restart, editable in Settings (local mode) and writable through the remote-settings path. With it true, the TUI's automatic size-drift kick SHALL behave exactly as before the `resize-without-restart` change. It SHALL govern the TUI only (the web and macOS clients keep their daemon-side kick). The setting SHALL also be readable and writable through `GET/PUT /api/settings` (`ui.auto_rerender_on_resize`) so a remote TUI can manage it. The effective value SHALL be logged at TUI start and on every live change.
 
 #### Scenario: Default is off
 
