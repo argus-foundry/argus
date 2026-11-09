@@ -1,0 +1,7 @@
+- [x] `model.PRSource` and `Source` on `PRChangedPayload`
+- [x] `gitutil.ParsePRURL`, `FetchPRByURL`
+- [x] `task_pr_links` table, db accessors, guarded pr-meta writers, delete cleanup
+- [x] Poller excludes linked tasks; manual verification pass
+- [x] `GET|PUT|DELETE /api/tasks/{id}/pr`
+- [x] Tests: handlers, stored state, event frames, poller conflict, restart, auth
+- [x] Document in specs, README and gotchas

@@ -94,6 +94,9 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/tasks/{id}/unarchive", s.residentGate(s.handleUnarchiveTask, "unarchive"))
 	mux.HandleFunc("POST /api/tasks/{id}/rename", s.residentGate(s.handleRenameTask, "rename"))
 	mux.HandleFunc("POST /api/tasks/{id}/pin", s.residentGate(s.handlePinTask, "pin"))
+	mux.HandleFunc("GET /api/tasks/{id}/pr", s.handleGetTaskPR)
+	mux.HandleFunc("PUT /api/tasks/{id}/pr", s.handlePutTaskPR)
+	mux.HandleFunc("DELETE /api/tasks/{id}/pr", s.handleDeleteTaskPR)
 	mux.HandleFunc("POST /api/tasks/{id}/status", s.residentGate(s.handleSetStatus, "set the status of"))
 	mux.HandleFunc("POST /api/tasks/{id}/fork", s.residentGate(s.handleForkTask, "fork"))
 	// Claude session listing/switching (openspec add-mac-keybinding-parity

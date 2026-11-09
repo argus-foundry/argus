@@ -230,6 +230,8 @@ type Daemon struct {
 	// swap it for a fake so the poller never spawns a real gh process. A non-nil
 	// error means keep-stale for the whole group (Decision 4).
 	prBatchFetch func(ctx context.Context, repo string, branches map[string]string) (map[string]gitutil.PRResult, int, error)
+	// prURLFetch resolves one manually linked PR by url; tests swap it.
+	prURLFetch func(ctx context.Context, url string) (gitutil.PRResult, error)
 
 	// prResolveRepo resolves a worktree's default GitHub repo ("owner/name") the
 	// way gh would target it — the fallback when a task has no cached pr/url to
@@ -255,6 +257,9 @@ type Daemon struct {
 	// spreading each tier's tasks across the stride window instead of bunching
 	// them onto one cycle. Reset to 0 on restart (the schedule simply re-phases).
 	pollCycle uint64
+
+	// Track the one immediate attempt without writing retry state to storage.
+	prTerminalVerificationAttempted map[string]bool
 
 	// notifier is the reliable pane-delivery service. Created in Serve once
 	// the runner and focus tracker are ready. Nil until Serve runs.
@@ -344,6 +349,7 @@ func New(database *db.DB) *Daemon {
 		prFetch:   gitutil.FetchPRState,
 
 		prBatchFetch:      gitutil.FetchPRStatesBatch,
+		prURLFetch:        gitutil.FetchPRByURL,
 		prResolveRepo:     gitutil.ResolveDefaultRepo,
 		prAliasCap:        prDefaultAliasCap,
 		prDisableFlagPath: filepath.Join(db.DataDir(), prPollDisableFlag),
@@ -738,18 +744,26 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 	// task are dropped here and counted in `skipped` (everything eligible by base
 	// criteria but not queried this cycle), preserving len(eligible) == written +
 	// errored:
-	//   1. Terminal cached state (merged/closed) — skipped permanently; that
-	//      state can never change, so re-polling can never return anything new.
+	//   1. Terminal cached state with verified merged/closed lifecycle.
+	//      Unverified terminal entries get one immediate attempt before dormancy retries.
 	//   2. Dormancy cadence — an eligible task not due this cycle. GitHub's
 	//      GraphQL budget is cost-based (~1 unit per branch resolved), so querying
 	//      every dormant PR-less branch every cycle drains it; we poll them on a
 	//      stride instead (prPollCadenceStride). An open PR overrides the stride
 	//      and is always polled.
 	now := time.Now()
+	manualPRs, merr := d.db.ManualPRs()
+	if merr != nil {
+		uxlog.Log("[pr] poll: read manual links failed: %v", merr)
+	}
 	eligible := make([]*model.Task, 0, len(tasks))
+	terminalAtStart := make(map[string]bool, len(tasks))
 	var skipped int
 	for _, t := range tasks {
 		if !prPollEligible(t) {
+			continue
+		}
+		if _, manual := manualPRs[t.ID]; manual {
 			continue
 		}
 		// Parse the cached PR state once: it drives both the terminal skip and the
@@ -761,12 +775,9 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 				state = st
 			}
 		}
-		if state.IsTerminal() {
-			skipped++
-			uxlog.Log("[pr] poll: skip terminal %s (state=%s)", t.ID, state)
-			continue
-		}
-		if stride := prPollCadenceStride(t, state, now); !prCadenceSelects(d.pollCycle, t.ID, stride) {
+		terminalAtStart[t.ID] = state.IsTerminal()
+		lifecycle := model.ParsePRLifecycle(prMeta[t.ID]["lifecycle"])
+		if !d.shouldPollPR(t, state, lifecycle, now) {
 			skipped++
 			continue
 		}
@@ -878,17 +889,33 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 					// every TUI's Hera rail to rebuild (one commit per task per
 					// minute before this). The merge notifications below key off
 					// the fetched result, not off whether a write happened.
-					if _, werr := d.db.SetMetaBatchIfChanged(t.ID, "pr", map[string]string{
-						"state": res.State.String(),
-						"url":   res.URL,
-					}); werr != nil {
+					lifecycle := res.Lifecycle()
+					wrote, werr := d.db.SetAutoPRMetaIfChanged(t.ID, map[string]string{
+						"state":     res.State.String(),
+						"url":       res.URL,
+						"lifecycle": string(lifecycle),
+					})
+					if errors.Is(werr, db.ErrPRLinkChanged) {
+						uxlog.Log("[pr] poll: skip superseded association for %s", t.ID)
+						continue
+					}
+					if werr != nil {
 						uxlog.Log("[pr] poll: persist failed for %s: %v", t.ID, werr)
 						continue
 					}
 					written++
-					if res.Merged {
+					if wrote {
+						events.Emit(model.EventTypeTaskPRChanged, t.ID, model.PRChangedPayload{
+							URL: res.URL, State: res.State.String(), Lifecycle: lifecycle,
+							Source: model.PRSourceAutomatic,
+						})
+						uxlog.Log("[pr] poll: %s changed state=%s lifecycle=%s", t.ID, res.State, lifecycle)
+					}
+					if res.Merged && !terminalAtStart[t.ID] {
 						d.notifyCoordinatorOfMergedPR(t, res.URL)
 						d.notifyRoleOfMergedPR(t, res.URL)
+					} else if res.Merged {
+						uxlog.Log("[pr] poll: suppress historical merge notices for %s", t.ID)
 					}
 				}
 			}
@@ -1017,6 +1044,30 @@ func prPollEligible(t *model.Task) bool {
 	return t != nil && !t.Archived && !t.IsResident() && t.Branch != ""
 }
 
+// shouldPollPR shares terminal verification and dormancy eligibility across pollers.
+func (d *Daemon) shouldPollPR(t *model.Task, state model.PRState, lifecycle model.PRLifecycle, now time.Time) bool {
+	if state.IsTerminal() && (lifecycle == model.PRLifecycleMerged || lifecycle == model.PRLifecycleClosed) {
+		uxlog.Log("[pr] poll: skip terminal %s (state=%s)", t.ID, state)
+		return false
+	}
+	if state.IsTerminal() && !d.prTerminalVerificationAttempted[t.ID] {
+		if d.prTerminalVerificationAttempted == nil {
+			d.prTerminalVerificationAttempted = make(map[string]bool)
+		}
+		d.prTerminalVerificationAttempted[t.ID] = true
+		uxlog.Log("[pr] poll: first terminal verification %s (lifecycle=%s)", t.ID, lifecycle)
+		return true
+	}
+	stride := prPollCadenceStride(t, state, now)
+	if !prCadenceSelects(d.pollCycle, t.ID, stride) {
+		if state.IsTerminal() {
+			uxlog.Log("[pr] poll: defer terminal verification %s (stride=%d)", t.ID, stride)
+		}
+		return false
+	}
+	return true
+}
+
 // prPollCadenceStride returns how many poll cycles apart a task should be
 // queried, tiered by dormancy to bound the GitHub GraphQL budget (cost-based —
 // ~1 unit per branch resolved — so per-repo batching alone does not cap it). An
@@ -1109,6 +1160,7 @@ func (d *Daemon) runPRPoller() {
 		case <-ticker.C:
 			d.pollCycle++
 			d.pollPRStatesOnce(ctx)
+			d.pollManualPRsOnce(ctx)
 		}
 	}
 }

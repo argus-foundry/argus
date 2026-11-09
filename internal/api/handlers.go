@@ -122,6 +122,9 @@ type taskJSON struct {
 	// actionable values; the badge renderer ignores draft/merged-closed/
 	// unknown anyway.
 	PRState string `json:"pr_state,omitempty"`
+	// PRLifecycle is open/merged/closed/unknown from the cached GitHub result;
+	// unknown until verified. Not omitempty so clients can tell an old daemon.
+	PRLifecycle string `json:"pr_lifecycle"`
 	// Failure is the explicit agent-reported failure parsed from Result, or
 	// null. Not omitempty so clients can tell "no failure" from an old daemon.
 	Failure *model.TaskFailure `json:"failure"`
@@ -139,6 +142,9 @@ type taskRuntimeState struct {
 	// field via omitempty. Populated by the caller from a batch task_meta
 	// read — never by shelling out to gh.
 	PRState string
+	// PRLifecycle is the cached lifecycle string; resolved via
+	// model.ResolvePRLifecycle with PRState.
+	PRLifecycle string
 	// Failure is the projection of the task's Result; nil when not failed.
 	Failure *model.TaskFailure
 }
@@ -161,6 +167,7 @@ func taskToJSON(t *model.Task, rt taskRuntimeState) taskJSON {
 		WorktreePath: t.Worktree,
 		Prompt:       t.Prompt,
 		PRState:      prDTOValue(rt.PRState),
+		PRLifecycle:  string(model.ResolvePRLifecycle(rt.PRState, rt.PRLifecycle)),
 		Failure:      rt.Failure,
 	}
 }
@@ -272,6 +279,7 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		rt := s.runtimeState(t, runningSet, idleSet, needsInputSet)
 		if kv := prMeta[t.ID]; kv != nil {
 			rt.PRState = kv["state"]
+			rt.PRLifecycle = kv["lifecycle"]
 		}
 		rt.Failure = model.FailureFromResult(t.Result, t.ResultAt)
 		result = append(result, taskToJSON(t, rt))
@@ -295,9 +303,11 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	// Pure cache read of the daemon-written PR state; never shells out to gh.
 	if entries, merr := s.db.ListMeta(task.ID, "pr"); merr == nil {
 		for _, e := range entries {
-			if e.Key == "state" {
+			switch e.Key {
+			case "state":
 				rt.PRState = e.Value
-				break
+			case "lifecycle":
+				rt.PRLifecycle = e.Value
 			}
 		}
 	} else {

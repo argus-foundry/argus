@@ -284,9 +284,8 @@ func TestComputeNeedsInput_AltScreenFreeTextQuestion(t *testing.T) {
 // enter/leave transition with the payload bool distinguishing the edge.
 func TestDetectNeedsInputTick(t *testing.T) {
 	srv, _ := testServer(t)
-	// Stop the background idleWatcher goroutine so it can't race our manual
-	// ticks by clearing the runner's needs-input set on its own 5s cadence.
-	close(srv.stopCh)
+	// testServer already stopped the background idleWatcher, so it can't race
+	// our manual ticks.
 
 	sink := &recordingSink{}
 	prev := events.SetSink(sink)
@@ -340,7 +339,6 @@ func TestDetectNeedsInputTick(t *testing.T) {
 // flag until now.
 func TestDetectNeedsInputTick_SettledActivityClears(t *testing.T) {
 	srv, _ := testServer(t)
-	close(srv.stopCh)
 
 	tails := map[string][]byte{"a": blockedTail}
 	tailOf := func(id string) []byte { return tails[id] }
@@ -372,7 +370,6 @@ func TestDetectNeedsInputTick_SettledActivityClears(t *testing.T) {
 // by design, from the ordinary still-genuinely-blocked case.
 func TestDetectNeedsInputTick_StillBlockedIdleDoesNotSettle(t *testing.T) {
 	srv, _ := testServer(t)
-	close(srv.stopCh)
 
 	tailOf := func(string) []byte { return blockedTail }
 	state := newIdleWatcherState()
@@ -389,7 +386,6 @@ func TestDetectNeedsInputTick_StillBlockedIdleDoesNotSettle(t *testing.T) {
 // as the per-task needs_input field on GET /api/tasks, gated on in_progress.
 func TestHandleListTasks_NeedsInput(t *testing.T) {
 	srv, d := testServer(t)
-	close(srv.stopCh) // silence background watcher
 	mux := srv.routes()
 
 	blocked := &model.Task{ID: "blocked", Name: "blocked", Status: model.StatusInProgress, Project: "p"}
@@ -820,7 +816,6 @@ func TestDetectNeedsInputTick_SystemDeliveryDoesNotClear(t *testing.T) {
 	}
 	t.Setenv("HOME", t.TempDir())
 	srv, d := testServer(t)
-	close(srv.stopCh) // silence the background watcher so it can't race our ticks
 
 	rnr := srv.runner.(*agent.Runner)
 	// A real session that emits a little output then idles, so the Notifier's
@@ -888,7 +883,6 @@ func TestDetectNeedsInputTick_UserInputClears(t *testing.T) {
 	}
 	t.Setenv("HOME", t.TempDir())
 	srv, d := testServer(t)
-	close(srv.stopCh)
 
 	rnr := srv.runner.(*agent.Runner)
 	sess, err := agent.StartSession("w", exec.Command("sleep", "60"), 24, 80)

@@ -114,3 +114,21 @@ func TestEnsureBuiltinRouting_InertUnderGoTest(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, path, "")
 }
+
+func TestBuiltinContent_ContainsArtifactsSection(t *testing.T) {
+	content, err := BuiltinContent()
+	testutil.NoError(t, err)
+	s := string(content)
+	for _, want := range []string{
+		"## Claude.ai artifact publishing (argus sandboxes)",
+		"If `ARGUS_ARTIFACT_ACCOUNT` is unset, ignore this section.",
+		"artpush publish <path> --account \"$ARGUS_ARTIFACT_ACCOUNT\"",
+		"--update <url>",
+		"artpush login <account>",
+		"Do not fall back to the built-in artifact tool",
+	} {
+		t.Run(want, func(t *testing.T) {
+			testutil.Contains(t, s, want)
+		})
+	}
+}
