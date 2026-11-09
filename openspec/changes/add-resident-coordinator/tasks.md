@@ -10,6 +10,7 @@
 - [ ] 2.1 Require and validate `project` for resident-caller `hera_spawn_worker`; stamp `task_meta(hera, resident_worker)` in the spawn `AfterPersist` hook.
 - [ ] 2.2 Extract `mergesafety.ClassifyTask(ctx, task)` from `internal/api/cleanup_candidates.go` so cleanup and delete share candidate construction; add a local "empty work" check (no commits ahead, clean tree, fails closed).
 - [ ] 2.3 Implement `hera_delete_worker(role, force?)` over `hera.NukeSingleRole` with the three-layer guard (connection-bound caller only, own-orchestrator live worker only, never itself); hide it from non-resident tool listing; no REST/TUI entry point; compute the unmerged summary (branch, commits ahead with subjects, dirty count, PR state, `unknown (reason)` fallbacks) before any force nuke and return it in the result.
+- [ ] 2.5 Add `[resident] max_workers` (default 8; below 1 means default) counted over the standing orchestrator's live worker bindings; `hera_spawn_worker` refuses before creating anything with the cap and live count; Settings → Resident row and config.toml with the override marker; tests for at-cap refusal, freed slot (delete and graduation) reopens, configurable value, config.toml marker.
 - [ ] 2.4 Tests: non-resident coordinator/worker refused, self-reported cwd/id ignored, cross-orchestrator refused, self refused, merged/empty deleted, unmerged refused, force deletes, classifier failure refuses, force result carries the unmerged summary (including an `unknown` field case), delete and spawn raise no prompt, delete of a graduated role is rejected with the task untouched.
 
 ## 3. Hera tool policy and orientation
@@ -38,8 +39,8 @@
 ## 5b. Graduation
 
 - [ ] 5b.1 Add `db.GraduateHeraWorker` (one transaction: end worker binding with new end reason `graduated`, create top-level orchestrator named from the role and de-collided, create coordinator role with the worker's project and prompt, bind to the same task and worktree, clear dead-role mail; no orchestrator link); atomicity test with an injected failure at each step.
-- [ ] 5b.2 Implement `hera_graduate_worker(role)` with the `hera_delete_worker` guard shape, fail-closed preflights (coordinator-capable backend, resumable session id, idle session) and hidden listing; tests for non-resident, self-reported identity, cross-orchestrator, self, non-Claude, busy, no session id.
-- [ ] 5b.3 Post-commit restart in place: clear the resident-worker marker, write `graduated_from`, stop stray jobs, wait for idle (bounded), kill-and-resume via the existing primitive (not recycle), record a pending restart on timeout, then send the coordinator orientation message; tests for normal flags after relaunch, same session id/worktree/branch, no seed prompt, timeout path, crash between steps.
+- [ ] 5b.2 Implement `hera_graduate_worker(role)` with the `hera_delete_worker` guard shape, fail-closed preflights (coordinator-capable backend with a Codex refusal that the resident orientation turns into an offer to spawn a Claude replacement from a handoff, resumable session id, idle session) and hidden listing; tests for non-resident, self-reported identity, cross-orchestrator, self, non-Claude, busy, no session id.
+- [ ] 5b.3 Post-commit restart in place: clear the resident-worker marker, write `graduated_from`, stop stray jobs, retry until idle with NO deadline and never force (persisted `graduation_pending_restart` marker, resumed on daemon startup), kill-and-resume via the existing primitive (not recycle), clear the marker, then send the coordinator orientation message; tests for normal flags after relaunch, same session id/worktree/branch, no seed prompt, long-busy session not restarted and no job killed, retry resumes after a daemon bounce, crash between steps.
 - [ ] 5b.4 Reject `hera_new_orchestrator` for resident workers (fail-closed, before the scan) with the graduation hint; test ordinary workers unchanged.
 - [ ] 5b.5 Test that `hera_delete_worker` rejects a graduated role and the resident rail drops it; test the graduate appears in the normal rail and `/api/hera`, uses ordinary coordinator recycle, and is not hidden by the resident filters.
 
@@ -47,11 +48,12 @@
 
 - [ ] 6.1 Add a resident mode to `HeraPage` (single standing orchestrator, resident pane on the coordinator row, worker pane on worker rows, `i` inbox with unread count).
 - [ ] 6.2 Enforce the resident-mode key allowlist via the keymap (data, not literals): navigation plus nuke, hide, rename and role-status on worker rows only (inert on the resident row), every creation/structure key inert; help overlay and ctrl+k palette generated from it; update `help_test.go`.
+- [ ] 6.5 Show "graduation pending restart" for a role carrying the marker on the resident rail and the normal Hera rail; test it appears and clears.
 - [ ] 6.4 Daemon notice to the resident when a worker of the standing orchestrator is nuked, hidden or renamed by anyone but the resident's own delete (hook the shared reclaim/archive/rename choke points with the actor passed down, covering rail, REST and Tasks-list delete; include unmerged info for a nuke where cheap); no message for role-status steps; tests per action and for no echo of the resident's own delete.
 - [ ] 6.3 Smoke tests: each creation/structure key inert, each allowed key acts on worker rows only, focus stays put on click, team rail renders needs-input marker, resident-pane lifecycle unchanged (no size-drift kick).
 
 ## 7. Docs and parity
 
-- [ ] 7.1 README Reference: `hera_delete_worker`, `hera_graduate_worker`, `[resident] worker_accounts`, `[resident]` hera tiers; `gotchas/resident.md`, `gotchas/hera-view.md`, `backends.md` (unattended-worker row); knowledge index rows.
+- [ ] 7.1 README Reference: `hera_delete_worker`, `hera_graduate_worker`, `[resident] worker_accounts`, `[resident] max_workers`, `[resident]` hera tiers; `gotchas/resident.md`, `gotchas/hera-view.md`, `backends.md` (unattended-worker row); knowledge index rows.
 - [ ] 7.2 Record the named web and macOS follow-ups; if the roster exclusion changes any REST field, bump `SW_VERSION` only if static assets change.
 - [ ] 7.3 `make pre-pr` clean; archive the change into base specs in the same PR before merge.

@@ -31,7 +31,7 @@ The system SHALL give the resident exactly one Hera orchestrator, named `residen
 
 ### Requirement: The resident spawns workers into its orchestrator with an explicit project
 
-The resident SHALL spawn workers with `hera_spawn_worker`, which SHALL require `project` for a resident caller and SHALL reject an unregistered project, because the resident has no repository to default from. Spawned workers SHALL be born bound to the resident's orchestrator and SHALL exchange messages with the resident over the Hera bus and inbox. Spawn SHALL use the existing `agent.SpawnHeraWorker` path and branch namespacing under the orchestrator. Spawning SHALL NOT require a confirmation prompt.
+The resident SHALL spawn workers with `hera_spawn_worker`, which SHALL require `project` for a resident caller and SHALL reject an unregistered project, because the resident has no repository to default from. Spawned workers SHALL be born bound to the resident's orchestrator and SHALL exchange messages with the resident over the Hera bus and inbox. Spawn SHALL use the existing `agent.SpawnHeraWorker` path and branch namespacing under the orchestrator. Spawning SHALL NOT require a confirmation prompt. Spawning SHALL be bounded by `[resident] max_workers` (default 8, a value below 1 treated as the default), counted as the standing orchestrator's live worker bindings so that graduated, deleted and ended workers do not count; at the cap the call SHALL refuse before creating anything and the error SHALL state the cap and the current live count. The setting SHALL be editable in Settings → Resident and in `config.toml`, with `config.toml` values shown read-only with the override marker.
 
 #### Scenario: Project required
 
@@ -42,6 +42,21 @@ The resident SHALL spawn workers with `hera_spawn_worker`, which SHALL require `
 
 - **WHEN** the resident names a project that is not registered
 - **THEN** the call fails and no task, worktree or role is created
+
+#### Scenario: Cap reached
+
+- **WHEN** the resident has 8 live workers with the default cap and calls `hera_spawn_worker`
+- **THEN** the call is refused with the cap and the live count and no task is created
+
+#### Scenario: Freed slots reopen the cap
+
+- **WHEN** one worker is deleted or graduated at the cap
+- **THEN** the next spawn succeeds
+
+#### Scenario: Configurable cap
+
+- **WHEN** `max_workers` is set to 3 in Settings and three workers are live
+- **THEN** a fourth spawn is refused naming a cap of 3
 
 #### Scenario: Worker is on the team
 
@@ -329,6 +344,11 @@ The system SHALL provide an MCP tool `hera_graduate_worker(role)` usable only by
 - **WHEN** the resident graduates a live Claude worker
 - **THEN** a new top-level orchestrator with a coordinator role bound to the worker's task and worktree is visible in the normal Hera rail, the worker binding is ended with reason `graduated`, and no link to the resident's orchestrator exists
 
+#### Scenario: Naming and branch
+
+- **WHEN** a worker with role name `payments-rework` on branch `argus/resident/payments-rework` is graduated
+- **THEN** the new orchestrator is named from `payments-rework` (de-collided, never `resident`), the coordinator role keeps that name, the branch name is unchanged, and the existing rail rename can rename the orchestrator
+
 #### Scenario: Atomic
 
 - **WHEN** creating the coordinator role fails after the worker binding would have been ended
@@ -349,10 +369,10 @@ The system SHALL provide an MCP tool `hera_graduate_worker(role)` usable only by
 - **WHEN** the resident names a role in another orchestrator, or its own role
 - **THEN** the call fails and nothing changes
 
-#### Scenario: Non-Claude worker refused
+#### Scenario: Non-Claude worker refused with an offer
 
 - **WHEN** the target worker runs on a backend that is not coordinator-capable
-- **THEN** the call is refused before any change, saying only Claude workers can graduate
+- **THEN** the call is refused before any change, saying only Claude workers can graduate, and the resident's orientation directs it to tell Aaron and offer a fresh Claude worker seeded with a handoff from the worker, graduating that one only on Aaron's yes and never respawning automatically
 
 #### Scenario: Busy or unresumable worker refused
 
@@ -366,7 +386,7 @@ The system SHALL provide an MCP tool `hera_graduate_worker(role)` usable only by
 
 ### Requirement: Graduation restarts the worker in place with normal coordinator flags
 
-After a graduation commits, the system SHALL clear the task's resident-worker marker, record the origin in task meta, and restart the session in place with resume (same session, worktree, branch and conversation) using the existing kill-and-resume primitive, not a recycle, after the session is idle and stray background jobs are stopped. The restarted launch SHALL NOT carry the unattended-worker flags (bypass-active mode and disallowed question/plan tools) and SHALL use the normal permission mode and tool set, with the task's existing sandbox setting unchanged. After the restart the daemon SHALL send the new coordinator one orientation message stating it was graduated, is now a top-level coordinator, and is no longer reachable by the resident. If the idle wait times out the pending restart SHALL be recorded and the next launch SHALL use the normal flags.
+After a graduation commits, the system SHALL clear the task's resident-worker marker, record the origin in task meta, and restart the session in place with resume (same session, worktree, branch and conversation) using the existing kill-and-resume primitive, not a recycle, once the session is idle, never forcing it, with stray background jobs stopped immediately before the restart. The restarted launch SHALL NOT carry the unattended-worker flags (bypass-active mode and disallowed question/plan tools) and SHALL use the normal permission mode and tool set, with the task's existing sandbox setting unchanged. After the restart the daemon SHALL send the new coordinator one orientation message stating it was graduated, is now a top-level coordinator, and is no longer reachable by the resident. The daemon SHALL keep retrying until the session is idle with no deadline, SHALL mark the role as "graduation pending restart" (shown on the rail) for the whole wait, SHALL persist that state so a daemon restart resumes the retry, and SHALL clear the mark when the restart happens.
 
 #### Scenario: Resume keeps the work
 
@@ -383,15 +403,20 @@ After a graduation commits, the system SHALL clear the task's resident-worker ma
 - **WHEN** graduation restarts the session
 - **THEN** no empty-context seed prompt is used
 
-#### Scenario: Waits for idle
+#### Scenario: Waits for idle with no deadline
 
-- **WHEN** the worker session is mid-turn at graduation time
-- **THEN** the restart waits until it is idle, bounded by the idle timeout
+- **WHEN** the worker session stays busy for an hour after graduation
+- **THEN** it is not restarted, no background job is killed, and the daemon keeps retrying
 
-#### Scenario: Timeout recorded
+#### Scenario: Pending state is visible
 
-- **WHEN** the idle wait times out
-- **THEN** the pending restart is recorded, the coordinator binding already exists, and the next launch uses the normal flags
+- **WHEN** the restart is waiting for idle
+- **THEN** the role shows "graduation pending restart" on the rail and the marker clears once the restart happens
+
+#### Scenario: Retry survives a daemon restart
+
+- **WHEN** the daemon restarts while a graduation restart is pending
+- **THEN** the retry resumes on startup and the session still ends up with the normal flags
 
 #### Scenario: Coordinator oriented
 
