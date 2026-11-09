@@ -47,15 +47,19 @@ Who sets it: a per-tick evaluation (classic view in the existing tick path; Hera
 
 Alternative: show it in the status bar. Rejected by Aaron's decision (it must be on the pane frame, mirroring the title).
 
-### D3. Hotkey: `agent.rerender`, default `shift+home`
+### D3. Hotkey: `agent.rerender`, default `ctrl+n`; also clickable and in the palette
 
 New action `ActAgentRerender` in `CtxAgent` (`internal/tui/keymap/actions.go`, `defaultSpecs` + `actionLabels` + `contextOrder`). It must be a chord argus intercepts because agent panes forward keys to the PTY, and `bindingAllowed` already forces a modifier in `CtxAgent` (`keymap.go:238`).
 
-**Audit.** Argus already uses in the agent context/global: ctrl+l, r, t, p, z, y, d, f, o, k, g, b, j and cmd/shift navigation (`actions.go:140-190`); ctrl+c/ctrl+q are structural. Claude Code's composer owns, per the brief and its own defaults: ctrl+a/e (line start/end), u/w/k (kill), o (transcript), b (background), plus c, d, g, h, m, j, n/p (history/menu), s (stash), v (image paste), x (chord prefix: ctrl+x ctrl+k, ctrl+x ctrl+e), r, t, y, z, l. So **no free ctrl+letter exists** that does not steal a Claude chord; every letter is either Claude-owned or argus-owned. The remaining grammar the keymap accepts is modifier+navigation keys (`isModifiable`: arrows, pgup/pgdn, home, end). `shift+up/down/pgup/pgdn/end` are scrollback; `cmd+arrows` are pane/task nav. **`shift+home` is unbound in argus and Claude Code's composer does not use it**, so it steals nothing. It pairs naturally with `shift+end` (scroll to end) as "reset the view". Runner-up: `ctrl+n` (free in argus, but it steals Claude's history-next and menu navigation). Because the action is rebindable, a user whose terminal intercepts shift+home can rebind it; the notice and the palette row both show the live binding.
+**Requirement from Aaron: works for anyone with no terminal setup.** That rules out Cmd chords and ctrl+shift+letter: macOS terminals consume Cmd+letter as menu shortcuts, and without the kitty keyboard protocol ctrl+shift+z arrives as plain ctrl+z (the zoom toggle, which argus also deliberately guards). `shift+home` is `fn+shift+left` on a MacBook and some terminals scroll their own buffer on Home/End. Only a plain `ctrl+<letter>` is delivered identically everywhere, one-handed.
+
+**Audit.** Argus already uses in the agent context/global: ctrl+l, r, t, p, z, y, d, f, o, k, g, b, j (`actions.go:140-190`); ctrl+c/ctrl+q are structural. Claude Code's composer owns ctrl+a/e (line start/end), u/w/k (kill), o (transcript), b (background), plus c, d, g, h, m, j, s (stash), v (image paste), x (chord prefix: ctrl+x ctrl+k/e), r, t, y, z, l. `ctrl+n` is unused by argus. Claude uses it only for history-next / menu-down, which the Down arrow also does, so it is the cheapest chord to take. The loss is documented in the keybindings gotcha. Because the action is rebindable, a user who relies on ctrl+n in Claude can rebind it (the palette and click paths still work).
+
+**Three universal paths, no setup:** (1) `ctrl+n`; (2) **the owed notice is clickable**, and a left click on it runs the re-render (a `MouseHandler` branch on the top-border cell range, gated on the notice being visible; must keep the existing click-passthrough/focus rules, see `add-click-passthrough` and the `TaskPage.MouseHandler` guard); (3) the command palette row (ctrl+k, "re-render at this width"). The notice text shows the live key, e.g. `width changed · ctrl+n re-render`.
 
 Dispatch: add a `keymap.Resolve` case in `handleAgentKey` (classic) and in the Hera pane key handler, calling `App.rerenderNow(taskID, paneCols)`. Help overlay is generated (`modal.SectionsFromKeymap`), so the row appears from `contextOrder`; add the assertion in `help_test.go` (`TestHelpModal_Draw`) and a row in the README Reference keybinding table. **Command palette reach:** the palette's per-context registries are built from keymap metadata, so the row appears for CtxAgent focus (classic) and for Hera pane focus (extend the Hera pane literal/registry set if Hera panes do not route CtxAgent actions today; verify against `command-palette` requirement "Keymap metadata is the primary data source" and add a palette test).
 
-Behaviour: no owed re-render (width inside margin) → hotkey is a no-op with a status-bar notice "History already matches this width" (so the chord never silently does nothing). Otherwise it runs the kick; if the agent is busy/blocked/scrolled/has a draft, the keep-place and prompt gates still defer it and a status-bar notice says why ("agent busy — re-render pending"), setting the existing "Re-render pending" status and re-arming through the existing retry (`kickWait`/`onDeferred`). A forced re-render never kills a prompt-blocked agent.
+Behaviour: no owed re-render (width inside margin) -> no-op with a status-bar notice "History already matches this width" (the chord never silently does nothing). Otherwise it runs the kick; if the agent is busy/blocked/scrolled/has a draft, the keep-place and prompt gates still defer it and a status-bar notice says why, setting the existing "Re-render pending" status and re-arming through the existing retry (`kickWait`/`onDeferred`). A forced re-render never kills a prompt-blocked agent.
 
 ### D4. Spawn size for recycled/kick-restarted sessions
 
@@ -84,13 +88,13 @@ The REST surface is not touched, so the parity trigger (new/changed endpoint/fie
 ## Risks / Trade-offs
 
 - **Duplicate rows in scrollback (about 13 near each resize) and cropped old history when narrower** -> accepted limitation, named in the notice semantics; hotkey repairs on demand.
-- **`shift+home` swallowed by some terminals (Terminal.app scrolls its own buffer)** -> rebindable; the notice shows the live key; palette row always works. Same exposure as the existing `shift+end`.
+- **`ctrl+n` taken from Claude's composer (history-next / menu-down)** -> the arrow keys do the same; rebindable; click and palette paths unaffected.
 - **Mixed-client session**: a web/macOS viewer on the same task still triggers the daemon auto-kick at its own width, restarting the TUI's view too -> same as today; resolved by the client follow-up.
 - **Two code paths (auto on / off) in `maybeKickRerenderGated`** -> mitigated by gating at the entry points only, leaving the core shared and exercised by both the setting and the hotkey; tests assert on-state is behaviour-identical.
 - **Spawn-size report TTL expiry** -> falls back to live PTY size, then 24x80, as before.
 
 ## Open Questions
 
-- Confirm `shift+home` as the default (runner-up `ctrl+n`).
-- Notice wording: `width changed · shift+home re-render`.
+- Confirm `ctrl+n` as the default.
+- Notice wording: `width changed · ctrl+n re-render`.
 - Should the hotkey on a pane with no drift be a no-op (as specced) or force a re-render anyway (useful to repair other garbling)?

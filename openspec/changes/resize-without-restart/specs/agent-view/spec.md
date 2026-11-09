@@ -21,7 +21,7 @@ When the setting is off and the pane's width differs from the session's authored
 #### Scenario: Notice appears on drift
 
 - **WHEN** the pane is narrowed by at least the margin
-- **THEN** the top border's right side shows `width changed · shift+home re-render`
+- **THEN** the top border's right side shows `width changed · ctrl+n re-render`
 
 #### Scenario: Notice clears when width returns
 
@@ -32,6 +32,20 @@ When the setting is off and the pane's width differs from the session's authored
 
 - **WHEN** the pane is narrower than the notice plus the title
 - **THEN** the notice is truncated or omitted and the title and terminal content remain intact
+
+### Requirement: Owed notice is clickable
+
+A left click on the owed re-render notice SHALL run the same on-demand re-render as the hotkey, subject to the same safety gates. A click anywhere else on the border or pane SHALL keep its existing behaviour, and the click SHALL NOT be forwarded to the PTY.
+
+#### Scenario: Click re-renders
+
+- **WHEN** the notice is showing, the agent is idle and the user clicks the notice
+- **THEN** the session is re-rendered at the pane width and the notice clears
+
+#### Scenario: Click elsewhere is unchanged
+
+- **WHEN** the user clicks the pane body while the notice is showing
+- **THEN** no re-render runs and click handling is as before
 
 ### Requirement: On-demand re-render hotkey
 

@@ -22,4 +22,4 @@ The TUI SHALL display a small border indicator on the right side of a pane's top
 #### Scenario: Owed notice draws on the top border's right side
 
 - **WHEN** a SimulationScreen frame is drawn for a drifted pane with the setting off
-- **THEN** the top border row contains the pane title on the left and `width changed · shift+home re-render` right-aligned
+- **THEN** the top border row contains the pane title on the left and `width changed · ctrl+n re-render` right-aligned

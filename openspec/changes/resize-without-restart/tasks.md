@@ -29,7 +29,8 @@
 - [ ] 4.3 Test first: `TestHelpModal_Draw` asserts the generated row; `TestPalette_AgentRerenderRow` for classic agent focus and Hera pane focus
 - [ ] 4.4 Add the `keymap.Resolve` case in `handleAgentKey` and the Hera pane handler; implement `App.rerenderNow` (forced path: skips debounce/margin short-circuits, keeps idle/prompt/scroll/draft gates)
 - [ ] 4.5 Tests `TestRerenderNow_Idle_Kicks`, `_PromptBlocked_Defers`, `_NoDrift_NoopNotice`, `_ScrolledUp_Defers`; uxlog `[rerender] hotkey ... outcome=` asserted
-- [ ] 4.6 README Reference keybinding table row; `context/knowledge/gotchas/keybindings.md` note on the audit
+- [ ] 4.6 Test first: `TestSmoke_ClickOwedNotice_Rerenders` and `_ClickElsewhereUnchanged` (SimulationScreen; focus stays on the pane); add the `MouseHandler` branch over the notice's border cells in `TerminalPane`
+- [ ] 4.7 README Reference keybinding table row; `context/knowledge/gotchas/keybindings.md` note on the audit
 
 ## 5. Spawn size (agent-execution)
 
