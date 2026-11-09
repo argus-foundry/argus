@@ -102,6 +102,24 @@ func TestHelpModal_Draw(t *testing.T) {
 	testutil.False(t, strings.Contains(body, "task/role switcher"))
 	testutil.Contains(t, body, "ctrl+j")
 	testutil.Contains(t, body, "command palette")
+	// Resident toggle + tab (add-resident-agent): CtxGlobal actions generated
+	// from the keymap with no static rows — fail the build if either is dropped.
+	testutil.Contains(t, body, `ctrl+\`)
+	testutil.Contains(t, body, "toggle resident agent")
+	testutil.Contains(t, body, "switch to Resident tab")
+	residentRows := 0
+	for _, sec := range SectionsFromKeymap(keymap.DefaultKeymap()) {
+		if sec.Title != "Global" {
+			continue
+		}
+		for _, b := range sec.Bindings {
+			if (b.Key == `ctrl+\` && b.Action == "toggle resident agent") ||
+				(b.Key == "0" && b.Action == "switch to Resident tab") {
+				residentRows++
+			}
+		}
+	}
+	testutil.Equal(t, residentRows, 2)
 	// ctrl+g global jump-to-next-needs-input (add-hera-jump-question): a new
 	// CtxGlobal action generated straight from the keymap, same as the
 	// palette above — fail the build if it silently regresses.

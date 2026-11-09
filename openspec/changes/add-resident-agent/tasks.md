@@ -23,10 +23,10 @@ Every stage follows TDD (write the failing test first), adds `[resident]`-prefix
 
 **Depends on:** Stage 1
 
-- [ ] 3.1 Extend `keymap.Parse` and `String()` for `ctrl+\` (`tcell.KeyCtrlBackslash`) with a pinning test
-- [ ] 3.2 Add `global.resident` (`ctrl+\`) and `global.tab_resident` (`0`) to `defaultSpecs`, `actionLabels`, `contextOrder`; add `help_test.go` assertions (`TestHelpModal_Draw`); verify no default conflict
-- [ ] 3.3 Mirror both rows into the README Reference keybinding table and add the iTerm2/Ghostty Cmd+` recipe plus the macOS window-cycling note
-- [ ] 3.4 Update `gotchas/keybindings.md`
+- [x] 3.1 Extend `keymap.Parse` and `String()` for `ctrl+\` (`tcell.KeyCtrlBackslash`) with a pinning test
+- [x] 3.2 Add `global.resident` (`ctrl+\`) and `global.tab_resident` (`0`) to `defaultSpecs`, `actionLabels`, `contextOrder`; add `help_test.go` assertions (`TestHelpModal_Draw`); verify no default conflict
+- [x] 3.3 Mirror both rows into the README Reference keybinding table and add the iTerm2/Ghostty Cmd+` recipe plus the macOS window-cycling note
+- [x] 3.4 Update `gotchas/keybindings.md`
 
 ## 4. Config and daemon lifecycle
 

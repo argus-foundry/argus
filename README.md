@@ -200,13 +200,25 @@ below. The `?` overlay always shows your active bindings.
 | `ctrl+r`  | Prune completed tasks                                           |
 | `j` / `k` | Navigate up/down                                                |
 | `Cmd+→`   | Enter the Projects rail (Settings → Appearance → cross-tab arrow navigation) |
-| `1` / `2` / `3` | Switch tabs (Tasks / Projects / Settings) |
+| `1` / `2` / `3` | Switch tabs (Tasks / Projects / Settings); `0` selects the Resident tab |
 | `ctrl+l`  | Refresh screen (wipe ghost cells; works in every non-agent tab) |
 | `ctrl+j`  | Open the **jump switcher (tasks + projects)**: a two-column popup with the Tasks list on the left (Hera-managed tasks always hidden, archived excluded) and the Projects rail on the right. `↑`/`↓` move, `←`/`→` switch column, typing filters both columns at once, `ctrl+g` hops to the next `(?)` or coordinator with an unread board, `Enter` goes there (a Projects row lands on that exact rail row in the Projects tab), `Esc` clears the filter then closes. Opens on the first `(?)` or unread coordinator board, else on the task you're viewing. Global — works from every tab, the agent view (zoomed or not), and every Projects pane, never reaching a PTY. Rebind with `[keybindings.global] switcher` |
 | `ctrl+k`  | Open the **command palette** — type to filter the actions applicable right here (this tab/pane's own actions + the always-available globals), `↑`/`↓` to select, `Enter` runs it immediately. Works from every tab and pane, including inside the agent view and a live Projects-tab pane |
 | `ctrl+g`  | Jump directly to the next role needing input or coordinator with an unread board (when `ui.coordinator_board` is on; no popup, no typing) — Board targets focus the Board on its first unread item without expanding or marking it read; press again to cycle to the next one, wrapping around. The rail's fold/selection state is snapshotted the instant you're first interrupted; once every role and enabled board is clear, pressing `ctrl+g` again restores that snapshot instead of just saying there's nothing to do. Works from every tab and pane |
 | `ctrl+b`  | Restore the rail to its pre-interruption fold/selection snapshot, at any time — even with roles still needing input (unlike `ctrl+g` above, which only restores once they're all clear). No-op if nothing is snapshotted. Works from every tab and pane |
+| `ctrl+\`  | Toggle the **resident agent** tab and return to exactly where you were (tab, agent view, zoom, Projects focus, Settings pane). Global — works from every tab and pane, never reaching a PTY; ignored while a modal or text input is open. Rebind with `[keybindings.global] resident`. See [Resident hotkey recipe](#resident-hotkey-recipe) |
+| `0`       | Switch to the Resident tab (`[keybindings.global] tab_resident`) |
 | `q`       | Quit                                                            |
+
+#### Resident hotkey recipe
+
+A terminal UI cannot see Cmd, and macOS reserves Cmd+\` for cycling windows. So the default toggle is the control byte `0x1c` (`ctrl+\`), which reaches Argus in any terminal. To get a Cmd+\` feel, map it to that byte:
+
+- **iTerm2:** Settings → Profiles → Keys → Key Bindings → `+`, press Cmd+\`, action **Send Hex Code**, value `0x1c`.
+- **Ghostty:** add `keybind = super+grave_accent=text:\x1c` to your config.
+- **macOS:** turn off System Settings → Keyboard → Keyboard Shortcuts → Keyboard → **Move focus to next window** (or rebind it), otherwise the system consumes Cmd+\` before the terminal sees it.
+
+Rebind the action itself with `[keybindings.global] resident = "<keyspec>"`; any representable spec works.
 
 #### Agent View
 

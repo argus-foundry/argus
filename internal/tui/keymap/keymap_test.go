@@ -356,3 +356,47 @@ func TestGlobalSwitcher_ReplacesAgentSwitcher(t *testing.T) {
 		testutil.True(t, found)
 	})
 }
+
+// TestResidentActions covers keybindings delta: global.resident (ctrl+\) and
+// global.tab_resident (0) are CtxGlobal defaults, listed in help order, with
+// labels, and conflict-free.
+func TestResidentActions(t *testing.T) {
+	testutil.Equal(t, string(ActGlobalResident), "global.resident")
+	testutil.Equal(t, string(ActGlobalTabResident), "global.tab_resident")
+
+	km, warns := Build(config.Keybindings{})
+	testutil.Equal(t, len(warns), 0)
+
+	got, ok := km.Resolve(CtxGlobal, ev(tcell.KeyCtrlBackslash, 0, 0))
+	testutil.True(t, ok)
+	testutil.Equal(t, got, ActGlobalResident)
+	got, ok = km.Resolve(CtxGlobal, ev(tcell.KeyRune, '0', 0))
+	testutil.True(t, ok)
+	testutil.Equal(t, got, ActGlobalTabResident)
+
+	rb, ok := km.BindingFor(CtxGlobal, ActGlobalResident)
+	testutil.True(t, ok)
+	testutil.Equal(t, rb.String(), `ctrl+\`)
+	tb, ok := km.BindingFor(CtxGlobal, ActGlobalTabResident)
+	testutil.True(t, ok)
+	testutil.Equal(t, tb.String(), "0")
+	testutil.NotEqual(t, km.ActionLabel(ActGlobalResident), string(ActGlobalResident))
+	testutil.NotEqual(t, km.ActionLabel(ActGlobalTabResident), string(ActGlobalTabResident))
+
+	var inOrder int
+	for _, a := range ContextOrder(CtxGlobal) {
+		if a == ActGlobalResident || a == ActGlobalTabResident {
+			inOrder++
+		}
+	}
+	testutil.Equal(t, inOrder, 2)
+
+	// No other global default shares either binding.
+	for act, spec := range defaultSpecs[CtxGlobal] {
+		if act == ActGlobalResident || act == ActGlobalTabResident {
+			continue
+		}
+		testutil.NotEqual(t, spec, `ctrl+\`)
+		testutil.NotEqual(t, spec, "0")
+	}
+}

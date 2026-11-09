@@ -105,3 +105,36 @@ func TestCtrlKeyConstants(t *testing.T) {
 	testutil.Equal(t, ctrlKeys['z'], tcell.KeyCtrlZ)
 	testutil.Equal(t, ctrlLetters[tcell.KeyCtrlL], 'l')
 }
+
+// TestParse_CtrlBackslash covers the resident toggle's default keyspec
+// (add-resident-agent D9): 0x1c reaches the TUI in any terminal, and unlike the
+// ctrl+<letter> family it is not in ctrlKeys.
+func TestParse_CtrlBackslash(t *testing.T) {
+	b, err := Parse(`ctrl+\`)
+	testutil.NoError(t, err)
+	testutil.Equal(t, b, Binding{Key: tcell.KeyCtrlBackslash})
+	testutil.Equal(t, b.String(), `ctrl+\`)
+	rt, err := Parse(b.String())
+	testutil.NoError(t, err)
+	testutil.Equal(t, rt, b)
+	testutil.True(t, b.Matches(tcell.NewEventKey(tcell.KeyCtrlBackslash, 0, 0)))
+	testutil.Equal(t, b.Matches(tcell.NewEventKey(tcell.KeyCtrlJ, 0, 0)), false)
+	// Other ctrl+punctuation stays unsupported.
+	for _, bad := range []string{"ctrl+/", "ctrl+]", "ctrl+1"} {
+		_, err := Parse(bad)
+		testutil.Error(t, err)
+	}
+}
+
+// TestCtrlBackslashConstant pins that tcell's KeyCtrlBackslash is the key for
+// control byte 0x1c (tcell offsets ctrl keys by 64) and matches the event
+// tcell's input decoder posts for that byte (KeyCtrlSpace+0x1c with ModCtrl),
+// so the Cmd+` terminal recipe really reaches Resolve.
+func TestCtrlBackslashConstant(t *testing.T) {
+	testutil.Equal(t, int(tcell.KeyCtrlBackslash), int(tcell.KeyCtrlSpace)+0x1c)
+	decoded := tcell.NewEventKey(tcell.KeyCtrlSpace+tcell.Key(0x1c), 0, tcell.ModCtrl)
+	testutil.Equal(t, decoded.Key(), tcell.KeyCtrlBackslash)
+	b, err := Parse(`ctrl+\`)
+	testutil.NoError(t, err)
+	testutil.True(t, b.Matches(decoded))
+}
