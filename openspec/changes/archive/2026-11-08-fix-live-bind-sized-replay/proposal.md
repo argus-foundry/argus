@@ -11,6 +11,8 @@ Root cause, reproduced offline from the preserved 789,627-byte log and its `.siz
 
 ## Non-Goals
 
+- Sizing the ring-wrap exact catch-up and PreviewVT.Feed (no log offset available there; named follow-ups, see the gotcha audit).
+
 - Why a recycled coordinator spawns at the outgoing PTY size rather than the pane size (noted, not changed).
 - Any change to the size-drift kick.
 

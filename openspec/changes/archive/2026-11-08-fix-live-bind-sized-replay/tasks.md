@@ -2,6 +2,7 @@
 
 - [x] 1.1 Real-bytes fixture (last 20KB of the garbled coordinator log) through `Draw`: one footer, intact message; red without the fix
 - [x] 1.2 `readLiveRebuildHistoryAt` origin is the log offset, -1 for ring-only
+- [x] 1.3 Spliced log + ring remainder (lagging log) keeps log-space origin and a clean render
 
 ## 2. Implementation
 
