@@ -31,8 +31,8 @@ Browser drawers, DOM tooltips and their pixel geometry do not require literal na
 
 The numbered references retain the original backend tally identifiers and record remaining scope.
 
-1. `task-runtime-state-all-statuses` exposes live/idle state for every task with a session. Until then, activity outside in_progress is incomplete.
-2. `task-failure-state` exposes task failure independently of workflow status. Until then, only failed Hera roles support a failure indicator.
+1. `task-runtime-state-all-statuses` is adopted through authoritative live/idle flags and runtime event reconciliation.
+2. `task-failure-state` is adopted through task.failure, failure events and Info reasons alongside Hera failure.
 3. `distinct-pr-terminal-states` separates merged PRs from unmerged closure. The current indicator accurately combines them.
 4. `preserve-project-diligence-profile` preserves profile assignment on REST project edits. The current editor warns about the inherited loss.
 5. `rest-account-management` defines authenticated account CRUD. Existing account selection does not imply account management.
@@ -343,7 +343,7 @@ Task rows SHALL display a single compact line with a status icon, task name and 
 - **AND** failed bound Hera roles SHALL show red failure icons
 - **AND** reduced-motion preference SHALL stop all working indicator animation and retain the completed three lines and stationary nib as the static working frame
 - **AND** the combined REST `merged-closed` state SHALL use a purple terminal PR icon labeled PR merged or closed without claiming it can distinguish the two
-- **AND** task failures outside the Hera roster remain unavailable because the task REST payload has no failure field
+- **AND** explicit task.failure SHALL provide standalone failure icons and Info reasons independently of Hera role failure
 
 #### Scenario: Busy Hera worker already in review
 - **WHEN** a session is live and not idle, including a task in review or complete workflow status
@@ -1329,3 +1329,18 @@ Resume and restart SHALL offer explicit confirmation only for 409 hera_closeout 
 #### Scenario: Revival rejected or canceled
 - **WHEN** a closed-out task rejects an ordinary resume
 - **THEN** Cancel sends no forced request, and Confirm sends at most one forced request
+
+
+### Requirement: Runtime independent of workflow
+The workspace SHALL use authoritative live/idle flags for busy indication and input readiness regardless of workflow status. Archive and pending-archive guards SHALL remain authoritative. session.runtime_changed SHALL apply runtime fields and request a fresh task snapshot. Absent sessions SHALL not be labeled idle.
+
+#### Scenario: Busy task after completion
+- **WHEN** an in_review or complete task still has a busy live session
+- **THEN** its busy icon remains visible and input follows live state and archive guards
+
+### Requirement: Explicit standalone failure
+The workspace SHALL combine task.failure with Hera role failure, render a plain reason in Info, and clear stale failure on task.failure_changed. It SHALL NOT parse opaque raw Result text or infer reported failure from process exit.
+
+#### Scenario: Failure clears
+- **WHEN** task.failure_changed carries failure null
+- **THEN** the old standalone failure icon and reason disappear while any remaining Hera failure is preserved

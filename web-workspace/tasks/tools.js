@@ -155,7 +155,8 @@ export class TaskTools {
     }
     if(this.identity!==identity||identity.abort.signal.aborted||this.generation!==generationAtRead||this.task?.id!==task.id||this.tool!=='status'||!this.visible())return;
     const current=this.task, raw=identity.raw;
-    const rows=[['State', taskState(current)], ['Project', current.project || 'Unassigned'], ['Agent', current.backend || 'Not specified'], ['Model', raw ? raw.model || 'Default' : 'Not available'], ['Account', raw ? raw.account || 'default' : 'Not available'], ['Base branch', raw?.base_branch || 'Not available'], ['Branch', current.branch || 'Not available'], ['Worktree', current.worktree_path || 'Not available'], ['Session', current.live ? 'Live' : 'Offline'], ['Elapsed', current.elapsed || 'Not available'], ['Review', current.pr_state || 'No review state available'], ['Created', current.created_at || 'Not available'], ['Task ID', current.id]];
+    const rows=[['State', taskState(current)], ['Project', current.project || 'Unassigned'], ['Agent', current.backend || 'Not specified'], ['Model', raw ? raw.model || 'Default' : 'Not available'], ['Account', raw ? raw.account || 'default' : 'Not available'], ['Base branch', raw?.base_branch || 'Not available'], ['Branch', current.branch || 'Not available'], ['Worktree', current.worktree_path || 'Not available'], ['Session', current.live ? (current.idle ? 'Live, idle' : 'Live, busy') : 'Offline'], ['Elapsed', current.elapsed || 'Not available'], ['Review', current.pr_state || 'No review state available'], ['Created', current.created_at || 'Not available'], ['Task ID', current.id]];
+    if(current.failure)rows.push(['Failure',current.failure.reason || 'Task reported failure']);
     rows.push(...taskCostRows(current,this.roster));
     const fingerprint=JSON.stringify([rows,current.prompt,!!identity.error]);
     const panel=$('tool-panel');

@@ -75,7 +75,7 @@ export class SplitWorkspace {
     return JSON.stringify([coordinator?.id,coordinator?.name,this.task?.id,this.picker.value,
       this.rosterEntries(coordinator).map(({role,task})=>[
         role.role_id,role.name,role.kind,role.live,role.status,role.ready_to_close,role.archived,role.needs_input,
-        task?.id,task?.name,task?.status,task?.archived,task?.archive_pending,task?.needs_input,task?.live,task?.idle,task?.pr_state,
+        task?.id,task?.name,task?.status,task?.archived,task?.archive_pending,task?.needs_input,task?.live,task?.idle,task?.pr_state,task?.failure,
       ]),
     ]);
   }

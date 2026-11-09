@@ -11,7 +11,7 @@ export function compactTaskRow({ task, role, selected, needsInput, ownInput, fai
   if (role) row.dataset.roleId=String(role.role_id);
   if (task?.id === selected) row.setAttribute('aria-current', 'page');
   const own=ownInput ?? (!task?.archived && (!!task?.needs_input || !role?.archived && (!!role?.needs_input || role?.status==='blocked')));
-  row.append(taskStatusIcon({ ...task, needs_input: !!own }, { needsInput, failed }), node('span', 'task-name', name));
+  row.append(taskStatusIcon({ ...task, needs_input: !!own }, { needsInput, failed: !!task?.failure || !!failed }), node('span', 'task-name', name));
   if (task?.archive_pending) {
     const pending = node('span','task-archive-pending','·');
     pending.setAttribute('aria-label','Archive pending');pending.dataset.tooltip='Archive pending. Checking current task state.';row.append(pending);

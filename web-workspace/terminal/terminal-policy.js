@@ -1,6 +1,6 @@
 export function isInteractive(task) {
-  if (!task || task.status !== 'in_progress' || task.archived || task.archive_pending) return false;
-  return typeof task.live === 'boolean' ? task.live : !task.idle;
+  if (!task || task.archived || task.archive_pending) return false;
+  return typeof task.live === 'boolean' ? task.live : task.status === 'in_progress' && !task.idle;
 }
 
 export function isCtrlZ(event) {

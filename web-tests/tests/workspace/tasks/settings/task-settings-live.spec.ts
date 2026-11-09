@@ -1,4 +1,4 @@
-import { test } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { resetServer } from '../../../_helpers';
 import assert from 'node:assert/strict';
 let browser;
@@ -96,7 +96,7 @@ test('settings rename, workflow and session actions reach only an owned isolated
     exact: true
   }).click();
   await page.waitForFunction(() => !document.querySelector('#task-settings-panel fieldset').disabled);
-  assert.equal((await read(`/api/tasks/${task.id}`)).live, false);
+  await expect.poll(async () => (await read(`/api/tasks/${task.id}`)).live, {timeout:10000}).toBe(false);
   await panel.getByRole('button', {
     name: 'Resume agent',
     exact: true
