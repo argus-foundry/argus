@@ -1,0 +1,4 @@
+- [x] Approve spec and verify roster fields
+- [x] Add red-first unit and browser coverage
+- [x] Implement team Info and context pressure through shared roster
+- [x] Run unit suite and archive delta

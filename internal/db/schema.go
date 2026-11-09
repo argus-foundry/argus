@@ -482,6 +482,22 @@ func (d *DB) createTables() error {
 		return fmt.Errorf("creating plugin_views table: %w", err)
 	}
 
+	if _, err := d.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS task_delete_jobs (
+			id              TEXT PRIMARY KEY,
+			idempotency_key TEXT,
+			request_hash    TEXT NOT NULL,
+			status          TEXT NOT NULL,
+			results         TEXT NOT NULL,
+			created_at      TEXT NOT NULL,
+			updated_at      TEXT NOT NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_task_delete_jobs_key
+			ON task_delete_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+	`); err != nil {
+		return fmt.Errorf("creating task_delete_jobs table: %w", err)
+	}
+
 	if err := d.createHeraTables(); err != nil {
 		return err
 	}

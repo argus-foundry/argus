@@ -1,3 +1,4 @@
+import {reviveTask} from '../task-revival.js';
 import {captureFocus} from '../../shared/focus-recovery.js';
 import {accountList} from '../create/new-task-account.js';
 import { $, node, button } from '../../shared/dom.js';
@@ -75,11 +76,7 @@ export class TaskSettingsView {
     const generation = this.generation, task = { ...this.task }, signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(120000)]);
     this.message('Saving…');
     try {
-      const base = '/api/tasks/' + encodeURIComponent(task.id);
-      const result = await this.api.json(base + '/' + operation, {
-        method: 'POST', signal,
-        ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
-      });
+      const result = await reviveTask(this.api, task, operation, body, signal);
       if (!this.active || generation !== this.generation || this.abort.signal.aborted) return;
       log('task-settings', 'updated', { status: true });
       if (operation === 'fork') {

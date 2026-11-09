@@ -69,6 +69,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/tasks/{id}/account", s.residentGate(s.handleMoveTaskAccount, "move the account of"))
 	mux.HandleFunc("POST /api/tasks/{id}/resume", s.handleResumeTask)
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.residentGate(s.handleDeleteTask, "delete"))
+	mux.HandleFunc("POST /api/tasks/bulk-delete", s.handleBulkDeleteTasks)
+	mux.HandleFunc("GET /api/task-delete-jobs/{job_id}", s.handleGetTaskDeleteJob)
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/events", s.handleBridgeEvents)
 	mux.HandleFunc("POST /api/tasks/{id}/bridge/draft", s.handleBridgeDraft)
 	mux.HandleFunc("GET /api/tasks/{id}/bridge", s.handleBridgeState)

@@ -220,7 +220,9 @@ test('overflowing context region supports keyboard scroll, refresh and Escape',a
   await page.keyboard.press('Escape');
   assert.equal(await panel.isVisible(),false);
   assert.equal(await trigger.evaluate(element=>document.activeElement===element),true);
+  const usageReads=await page.evaluate(()=>window.paths.filter(path=>path.includes('/usage?')).length);
   await page.keyboard.press('Enter');
+  await page.waitForFunction(previous=>window.paths.filter(path=>path.includes('/usage?')).length>previous&&!window.composer.context.sessionUsage.busy,usageReads);
   await page.keyboard.press('Tab');
   assert.equal(await page.getByRole('button',{name:'Refresh usage'}).evaluate(element=>document.activeElement===element),true,'Tab enters the usage controls');
   await page.keyboard.press('Tab');

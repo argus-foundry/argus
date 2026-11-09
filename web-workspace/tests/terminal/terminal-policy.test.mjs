@@ -5,7 +5,7 @@ import { composePaste, decodeOutput, isCtrlZ, isInteractive, outputCursor, termi
 test('live PTY is authoritative even when waiting idle at a prompt', () => {
   assert.equal(isInteractive({ status: 'in_progress', live: true, idle: true }), true);
   assert.equal(isInteractive({ status: 'in_progress', live: false, idle: false }), false);
-  assert.equal(isInteractive({ status: 'in_review', live: true }), false);
+  assert.equal(isInteractive({ status: 'in_review', live: true }), true);
   assert.equal(isInteractive({ status: 'in_progress', live: true, archived: true }), false);
   assert.equal(isInteractive({ status: 'in_progress', idle: false }), true);
   assert.equal(isInteractive({ status: 'in_progress', live: true, archived: false, archive_pending: true }), false);

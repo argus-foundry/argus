@@ -1,4 +1,4 @@
-export function taskIconState(task, { needsInput = task.needs_input, failed = false } = {}) {
+export function taskIconState(task, { needsInput = task.needs_input, failed = !!task.failure } = {}) {
   if (task.archived) return { kind: 'neutral', label: 'Archived' };
   if (needsInput) return { kind: 'attention', label: task.needs_input ? 'Needs input' : 'Descendant needs input' };
   if (failed) return { kind: 'failed', label: 'Failed' };
