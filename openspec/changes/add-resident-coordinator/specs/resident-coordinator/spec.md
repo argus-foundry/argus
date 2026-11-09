@@ -31,7 +31,7 @@ The system SHALL give the resident exactly one Hera orchestrator, named `residen
 
 ### Requirement: The resident spawns workers into its orchestrator with an explicit project
 
-The resident SHALL spawn workers with `hera_spawn_worker`, which SHALL require `project` for a resident caller and SHALL reject an unregistered project, because the resident has no repository to default from. Spawned workers SHALL be born bound to the resident's orchestrator and SHALL exchange messages with the resident over the Hera bus and inbox. Spawn SHALL use the existing `agent.SpawnHeraWorker` path and branch namespacing under the orchestrator.
+The resident SHALL spawn workers with `hera_spawn_worker`, which SHALL require `project` for a resident caller and SHALL reject an unregistered project, because the resident has no repository to default from. Spawned workers SHALL be born bound to the resident's orchestrator and SHALL exchange messages with the resident over the Hera bus and inbox. Spawn SHALL use the existing `agent.SpawnHeraWorker` path and branch namespacing under the orchestrator. Spawning SHALL NOT require a confirmation prompt.
 
 #### Scenario: Project required
 
@@ -79,7 +79,7 @@ The system SHALL provide an MCP tool `hera_delete_worker(role, force?)` usable o
 
 ### Requirement: Deleting a worker is merge-safe by default and forceable
 
-Unless `force` is true, `hera_delete_worker` SHALL first classify the worker's work with the merge-safety classifier, built through one shared single-task helper that uses the same candidate construction as the cleanup pass, and SHALL proceed only when the verdict is safe or the work is empty. Empty SHALL mean no commits ahead of the worker's base ref and a clean working tree, determined locally and failing closed. Otherwise it SHALL refuse with a reason naming the verdict and SHALL change nothing. With `force` true it SHALL skip the check and the result SHALL state what was destroyed. A classification failure SHALL be treated as not safe.
+Unless `force` is true, `hera_delete_worker` SHALL first classify the worker's work with the merge-safety classifier, built through one shared single-task helper that uses the same candidate construction as the cleanup pass, and SHALL proceed only when the verdict is safe or the work is empty. Empty SHALL mean no commits ahead of the worker's base ref and a clean working tree, determined locally and failing closed. Otherwise it SHALL refuse with a reason naming the verdict and SHALL change nothing. With `force` true it SHALL skip the classification, but it SHALL still compute an unmerged summary BEFORE deleting (branch, commits ahead with subjects, dirty file count, last known PR state; any field it cannot determine SHALL read `unknown (reason)` and SHALL NOT block the delete) and the tool result SHALL carry that summary. The resident's orientation SHALL require it to report every force delete, naming the worker and what was unmerged, in its own conversation. A classification failure SHALL be treated as not safe. Deleting SHALL NOT require a confirmation prompt.
 
 #### Scenario: Merged work is deleted
 
@@ -100,6 +100,21 @@ Unless `force` is true, `hera_delete_worker` SHALL first classify the worker's w
 
 - **WHEN** `force` is true and the worker has unmerged commits
 - **THEN** the worker is deleted and the result reports the destroyed branch
+
+#### Scenario: Force result carries the unmerged summary
+
+- **WHEN** `force` is true and the worker has three unmerged commits and two dirty files
+- **THEN** the tool result names the worker and branch, lists the three commit subjects and the dirty-file count, and the worker is deleted
+
+#### Scenario: Summary failure does not block
+
+- **WHEN** `force` is true and the commit count cannot be computed
+- **THEN** the result shows `unknown (reason)` for it and the worker is still deleted
+
+#### Scenario: No prompt
+
+- **WHEN** the resident calls `hera_delete_worker`
+- **THEN** no confirmation is requested
 
 #### Scenario: Classifier failure fails closed
 
@@ -140,38 +155,68 @@ A worker spawned by the resident SHALL be marked as a resident worker in task me
 - **WHEN** a resident worker is flagged needs-input and the flag stays raised across several ticks
 - **THEN** the resident receives exactly one message for that episode, and a new one only after the flag clears and raises again
 
-### Requirement: Resident workers route only to families that close the stuck points
+### Requirement: Resident workers route only to enabled families that close the stuck points
 
-Each backend family SHALL declare in the family registry whether and how it closes the unattended stuck points. Resident-worker routing SHALL filter `[backend_routing]` tiers and project preferences to eligible backends, and an explicit `backend` naming an ineligible family SHALL be rejected with an actionable error. Claude SHALL be eligible. Codex SHALL be eligible only when the Argus sandbox gate applies (its default command disables Codex's own sandbox and approvals) and its structured user-input path is confirmed closed; until confirmed it SHALL be filtered out. Families without a verified mechanism SHALL be ineligible.
+Each backend family SHALL declare in the family registry whether and how it closes the unattended stuck points; a family that declares a mechanism is eligible. Claude SHALL be eligible. Codex SHALL be eligible once its unattended mechanism is implemented from the outcome of an early verification spike, with the Argus sandbox gate applying unchanged (its default command disables Codex's own sandbox and approvals); if the spike cannot close Codex's user-input path, Codex SHALL stay ineligible. Families without a verified mechanism SHALL be ineligible. Config `[resident] worker_backends` SHALL list the enabled families, defaulting to every eligible family (Claude and Codex), and Settings SHALL expose it as a Resident row that lists ONLY eligible families; an ineligible family SHALL never appear there, and an ineligible name in `config.toml` SHALL be ignored with a log line. Resident-worker routing SHALL filter `[backend_routing]` tiers and project preferences to the enabled set, and an explicit `backend` outside it SHALL be rejected with an actionable error naming the enabled families.
 
-#### Scenario: Routing skips ineligible tiers
+#### Scenario: Settings lists eligible families only
 
-- **WHEN** `[backend_routing]` ranks an ineligible backend first
-- **THEN** a resident worker spawn routes to the best eligible backend instead
+- **WHEN** the user opens the Resident worker-backends setting
+- **THEN** Claude and Codex are listed as toggles and no ineligible family appears
 
-#### Scenario: Explicit ineligible backend
+#### Scenario: Default enables both
 
-- **WHEN** the resident names an ineligible backend explicitly
-- **THEN** the spawn is rejected naming the backend and the eligible ones
+- **WHEN** `worker_backends` is unset
+- **THEN** Claude and Codex are both enabled
 
-#### Scenario: No eligible backend
+#### Scenario: Routing skips disabled and ineligible tiers
 
-- **WHEN** no configured backend is eligible
+- **WHEN** `[backend_routing]` ranks a disabled or ineligible backend first
+- **THEN** a resident worker spawn routes to the best enabled family instead
+
+#### Scenario: Explicit backend outside the enabled set
+
+- **WHEN** the resident names a backend that is disabled or ineligible
+- **THEN** the spawn is rejected naming the enabled families
+
+#### Scenario: Ineligible name in config.toml
+
+- **WHEN** `config.toml` lists an ineligible family in `worker_backends`
+- **THEN** it is ignored, a log line says so, and it is never routed to
+
+#### Scenario: Nothing enabled
+
+- **WHEN** the enabled set is empty
 - **THEN** the spawn is rejected with that reason and no task is created
+
+#### Scenario: Codex gated on the spike
+
+- **WHEN** the verification spike cannot close Codex's user-input path
+- **THEN** Codex is not eligible, is not listed in Settings and is never routed to
+
+#### Scenario: Codex worker is unattended-safe
+
+- **WHEN** Codex is eligible, enabled and the sandbox wraps the launch
+- **THEN** a Codex resident worker launches with its family's unattended launch switches, and without the sandbox the launch is refused
 
 ### Requirement: The resident's hera tools are tiered
 
-The `[resident]` defaults SHALL allow `hera_send`, `hera_inbox`, `hera_get_messages`, `hera_mark_read`, `hera_status`, `hera_tree_updates`, `hera_accept`, `hera_revive`, `hera_unblock` and the `hera_board_*` tools; SHALL put `hera_spawn_worker` and `hera_delete_worker` on the ask list; and SHALL deny `hera_new_orchestrator`, `hera_join`, `hera_move`, `hera_rebind`, `hera_plan`, `hera_plan_node`, `hera_plan_node_update`, `hera_plan_node_cancel` and `hera_block`. The resident's outward-connector allow, ask and deny tiers SHALL be unchanged. The inventory test SHALL classify every hera tool so a new one cannot enter the allow list unclassified.
+The `[resident]` defaults SHALL allow `hera_send`, `hera_inbox`, `hera_get_messages`, `hera_mark_read`, `hera_status`, `hera_tree_updates`, `hera_accept`, `hera_revive`, `hera_unblock`, the `hera_board_*` tools, `hera_spawn_worker` and `hera_delete_worker`; SHALL put `hera_graduate_worker` on the ask list as the only coordination tool that prompts; and SHALL deny `hera_new_orchestrator`, `hera_join`, `hera_move`, `hera_rebind`, `hera_plan`, `hera_plan_node`, `hera_plan_node_update`, `hera_plan_node_cancel` and `hera_block`. The resident's outward-connector allow, ask and deny tiers SHALL be unchanged. The inventory test SHALL classify every hera tool so a new one cannot enter the allow list unclassified.
 
 #### Scenario: Coordination does not prompt
 
-- **WHEN** the resident calls `hera_send` or `hera_inbox`
+- **WHEN** the resident calls `hera_send`, `hera_inbox` or `hera_accept`
 - **THEN** no confirmation is requested
 
-#### Scenario: Spawn and delete prompt
+#### Scenario: Spawn and delete do not prompt
 
-- **WHEN** the resident calls `hera_spawn_worker` or `hera_delete_worker`
-- **THEN** a confirmation is requested showing the arguments
+- **WHEN** the resident calls `hera_spawn_worker` or `hera_delete_worker`, with or without `force`
+- **THEN** no confirmation is requested
+
+#### Scenario: Graduation prompts
+
+- **WHEN** the resident calls `hera_graduate_worker`
+- **THEN** a confirmation is requested showing the worker, and nothing happens if it is declined
 
 #### Scenario: Plan and membership tools denied
 
@@ -220,3 +265,153 @@ The standing orchestrator, its coordinator role and its binding SHALL be exclude
 
 - **WHEN** a resident worker is running
 - **THEN** it appears in the Tasks list like any hera-managed task
+
+### Requirement: The human manages resident workers but never creates them, and the resident is told
+
+The resident tab's rail SHALL allow the human the existing nuke, hide, rename and role-status actions on worker rows and SHALL offer no creation action (spawn, new coordinator, move, join, detach); these actions SHALL be inert on the resident's own row. When a worker of the standing orchestrator is nuked, hidden or renamed by anything other than the resident's own `hera_delete_worker` (the resident rail, REST, or a Tasks-list delete), the daemon SHALL send the resident one Hera message naming the worker and the action, including what was unmerged for a nuke where cheaply known. The resident's own deletes SHALL NOT be echoed back. Role-status stepping SHALL send no message.
+
+#### Scenario: Human nukes a worker
+
+- **WHEN** the human nukes a resident worker from the rail
+- **THEN** the resident receives a message naming the worker and that it was nuked
+
+#### Scenario: Human hides a worker
+
+- **WHEN** the human hides a resident worker
+- **THEN** the resident receives a message saying it was hidden and its session stopped
+
+#### Scenario: Human renames a worker
+
+- **WHEN** the human renames a resident worker
+- **THEN** the resident receives a message with the old and new names
+
+#### Scenario: Tasks-list delete is covered
+
+- **WHEN** the human deletes a resident worker's task from the Tasks list
+- **THEN** the resident receives the same nuke message
+
+#### Scenario: Resident's own delete is not echoed
+
+- **WHEN** the resident deletes a worker with `hera_delete_worker`
+- **THEN** no human-action message is sent to it
+
+#### Scenario: Resident row is protected
+
+- **WHEN** the human presses nuke, hide or rename with the resident row selected
+- **THEN** nothing happens
+
+#### Scenario: Status stepping is silent
+
+- **WHEN** the human steps a worker's role status
+- **THEN** no message is sent to the resident
+
+### Requirement: hera_graduate_worker turns a resident worker into a stand-alone coordinator
+
+The system SHALL provide an MCP tool `hera_graduate_worker(role)` usable only by the resident, guarded exactly like `hera_delete_worker`: the caller SHALL be identified solely by the connection-bound `caller`, `cwd` and `id` SHALL be ignored, a non-resident or unbound caller SHALL fail before any lookup, the tool SHALL be hidden from non-resident tool listings and SHALL have no REST endpoint or TUI key. The target SHALL be a live worker of the resident's standing orchestrator whose task is not `IsResident()`. Before changing anything the tool SHALL refuse, fail-closed, when the worker's backend is not coordinator-capable, when it has no session id to resume, or when its session is not idle. The change SHALL be a single database transaction that ends the worker binding with end reason `graduated`, creates a new top-level orchestrator (named from the worker role name, de-collided, never `resident`), creates a `coordinator` role carrying the worker's project and prompt, and binds it to the same task and worktree; it SHALL create no orchestrator link and SHALL leave either all or none of those changes applied. The graduated coordinator SHALL appear in the normal Hera rail and `/api/hera`, SHALL NOT be nested under the resident, and SHALL use the ordinary coordinator recycle and budget.
+
+#### Scenario: Graduation produces a visible top-level coordinator
+
+- **WHEN** the resident graduates a live Claude worker
+- **THEN** a new top-level orchestrator with a coordinator role bound to the worker's task and worktree is visible in the normal Hera rail, the worker binding is ended with reason `graduated`, and no link to the resident's orchestrator exists
+
+#### Scenario: Atomic
+
+- **WHEN** creating the coordinator role fails after the worker binding would have been ended
+- **THEN** the worker binding is still live and no orchestrator, role or binding was created
+
+#### Scenario: Non-resident refused
+
+- **WHEN** a regular coordinator, a resident worker, or a connection passing the resident's `cwd` calls `hera_graduate_worker`
+- **THEN** the call fails with a resident-only error and nothing changes
+
+#### Scenario: Not listed to others
+
+- **WHEN** a non-resident connection lists tools
+- **THEN** `hera_graduate_worker` is absent
+
+#### Scenario: Other orchestrator's worker or the resident itself
+
+- **WHEN** the resident names a role in another orchestrator, or its own role
+- **THEN** the call fails and nothing changes
+
+#### Scenario: Non-Claude worker refused
+
+- **WHEN** the target worker runs on a backend that is not coordinator-capable
+- **THEN** the call is refused before any change, saying only Claude workers can graduate
+
+#### Scenario: Busy or unresumable worker refused
+
+- **WHEN** the worker's session is mid-turn, or the task has no session id
+- **THEN** the call is refused before any change with that reason
+
+#### Scenario: Prompt is the approval
+
+- **WHEN** the user declines the permission prompt for `hera_graduate_worker`
+- **THEN** the worker is unchanged
+
+### Requirement: Graduation restarts the worker in place with normal coordinator flags
+
+After a graduation commits, the system SHALL clear the task's resident-worker marker, record the origin in task meta, and restart the session in place with resume (same session, worktree, branch and conversation) using the existing kill-and-resume primitive, not a recycle, after the session is idle and stray background jobs are stopped. The restarted launch SHALL NOT carry the unattended-worker flags (bypass-active mode and disallowed question/plan tools) and SHALL use the normal permission mode and tool set, with the task's existing sandbox setting unchanged. After the restart the daemon SHALL send the new coordinator one orientation message stating it was graduated, is now a top-level coordinator, and is no longer reachable by the resident. If the idle wait times out the pending restart SHALL be recorded and the next launch SHALL use the normal flags.
+
+#### Scenario: Resume keeps the work
+
+- **WHEN** a graduated worker is restarted
+- **THEN** it resumes the same session in the same worktree and branch and its conversation history is intact
+
+#### Scenario: Normal flags after restart
+
+- **WHEN** the graduate relaunches
+- **THEN** its command line has no unattended bypass flags or disallowed question/plan tools and uses the configured permission mode
+
+#### Scenario: Not a recycle
+
+- **WHEN** graduation restarts the session
+- **THEN** no empty-context seed prompt is used
+
+#### Scenario: Waits for idle
+
+- **WHEN** the worker session is mid-turn at graduation time
+- **THEN** the restart waits until it is idle, bounded by the idle timeout
+
+#### Scenario: Timeout recorded
+
+- **WHEN** the idle wait times out
+- **THEN** the pending restart is recorded, the coordinator binding already exists, and the next launch uses the normal flags
+
+#### Scenario: Coordinator oriented
+
+- **WHEN** the graduate is running again
+- **THEN** it receives one orientation message explaining its new role
+
+### Requirement: Resident workers cannot self-promote and ask for graduation instead
+
+`hera_new_orchestrator` SHALL reject, fail-closed and before its other checks, any caller that holds a live worker binding in the standing orchestrator or whose task carries the resident-worker marker, with a message telling it to ask the resident to graduate it. The resident-worker orientation SHALL tell the worker when to ask for graduation (scope likely to need more than one PR or more than one worker, or a long-running program of work) and that it MUST ask the resident through `hera_send` rather than self-promote. The resident orientation SHALL tell it to ask Aaron in plain words before calling `hera_graduate_worker`, and to start the flow itself when Aaron asks to make a worker a stand-alone coordinator.
+
+#### Scenario: Worker tries to self-promote
+
+- **WHEN** a resident worker calls `hera_new_orchestrator`
+- **THEN** the call is rejected with the ask-the-resident hint and no orchestrator is created
+
+#### Scenario: Worker asks
+
+- **WHEN** a resident worker judges its job to be multi-PR
+- **THEN** its orientation directs it to `hera_send` the resident a graduation request
+
+#### Scenario: Aaron initiates
+
+- **WHEN** Aaron tells the resident to make a worker a stand-alone coordinator
+- **THEN** the resident calls `hera_graduate_worker` and the permission prompt confirms it
+
+### Requirement: A graduated worker is unreachable by the resident's delete
+
+`hera_delete_worker` SHALL resolve its target only among live workers of the resident's standing orchestrator, so that a graduated role, whose worker binding is ended and whose coordinator role lives in another orchestrator, SHALL be rejected and its task, worktree and branch SHALL be untouched.
+
+#### Scenario: Delete after graduation
+
+- **WHEN** the resident calls `hera_delete_worker` on a worker it already graduated
+- **THEN** the call is rejected as not a worker of its orchestrator and nothing is deleted
+
+#### Scenario: Roster drops the graduate
+
+- **WHEN** a worker is graduated
+- **THEN** it no longer appears on the resident's rail
