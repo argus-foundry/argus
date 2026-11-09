@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/drn/argus/internal/agent"
 	"github.com/drn/argus/internal/model"
 	"github.com/drn/argus/internal/testutil"
 )
@@ -107,4 +109,26 @@ func TestResident_NeedsInputSetExcludesResident(t *testing.T) {
 	testutil.DeepEqual(t, got, []string{"a", "b"})
 	testutil.DeepEqual(t, srv.withoutResident(nil), []string(nil))
 	testutil.DeepEqual(t, srv.withoutResident([]string{"a"}), []string{"a"})
+}
+
+// A pending outward-action confirmation is Claude's numbered permission prompt;
+// the existing detector must flag the resident's session for it, and the
+// resident-specific waiting signal must be derived from that flag
+// (add-resident-agent D6/D7).
+func TestResident_PendingConfirmationRaisesWaiting(t *testing.T) {
+	srv, d := testServer(t)
+	r, _, err := d.EnsureResidentTask(filepath.Join(t.TempDir(), "resident"))
+	testutil.NoError(t, err)
+
+	prompt := []byte("Allow create_event on Google Calendar?\n❯ 1. Yes\n  2. No\n")
+	tailOf := func(string) []byte { return prompt }
+	noInput := func(string) time.Time { return time.Time{} }
+	notArchived := func(string) bool { return false }
+	screen := &agent.ScreenRenderer{}
+	// Tick 1 records the fingerprint of the parked prompt; tick 2 flags it.
+	_, fp, _, _, _, _ := computeNeedsInput(nil, []string{r.ID}, nil, nil, nil, nil, nil, nil, tailOf, noInput, notArchived, screen, defaultSizeOf)
+	needs, _, _, _, _, _ := computeNeedsInput(nil, []string{r.ID}, nil, fp, nil, nil, nil, nil, tailOf, noInput, notArchived, screen, defaultSizeOf)
+	testutil.DeepEqual(t, needs, []string{r.ID})
+	testutil.Equal(t, srv.containsResident(needs), true)
+	testutil.Equal(t, len(srv.withoutResident(needs)), 0)
 }

@@ -874,6 +874,16 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		}
 	}
 
+	// The resident's three-tier tool policy (ask / deny lists from [resident])
+	// rides the family's own rules flag. Families without one (non-Claude)
+	// cannot be a resident backend, so nothing is silently dropped there.
+	if task.IsResident() && fam.PermissionRulesFlag != nil {
+		if flag := fam.PermissionRulesFlag(cfg.Resident.AskTools, cfg.Resident.DenyTools); flag != "" {
+			cmdStr += flag
+			uxlog.Log("[resident] permission rules delivered ask=%d deny=%d", len(cfg.Resident.AskTools), len(cfg.Resident.DenyTools))
+		}
+	}
+
 	// Inject the resolved model (task override > diligence profile > backend
 	// default) through the family's delivery: --model for ModelFlag families;
 	// OpenCode's v2 full TUI rejects that flag, so its model is delivered later

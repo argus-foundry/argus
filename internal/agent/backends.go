@@ -158,6 +158,10 @@ type Family struct {
 	// PermissionFlagTokens.
 	PermissionFlags      func(mode string) string
 	PermissionFlagTokens []string
+	// PermissionRulesFlag delivers per-tool ask/deny rules (the resident's
+	// three-tier policy, add-resident-agent D6) as a per-launch flag; nil means
+	// the family cannot enforce them. Returns "" when both lists are empty.
+	PermissionRulesFlag func(ask, deny []string) string
 
 	// Prelaunch runs before the fork (Pi's ollama warmup); nil skips.
 	Prelaunch func(ctx context.Context, task *model.Task, backend config.Backend) error
@@ -214,6 +218,24 @@ func claudeMCPFlag(url string) string {
 		"argus": map[string]any{"type": "http", "url": url, "timeout": mcplimits.ClientTimeoutMilliseconds},
 	}})
 	return " --mcp-config " + shellQuote(string(mcpConfig))
+}
+
+// claudePermissionRulesFlag delivers ask/deny tool rules as an inline
+// --settings JSON (permissions.ask / permissions.deny). Settings rules are
+// additive with the user's own settings files, and deny always wins.
+func claudePermissionRulesFlag(ask, deny []string) string {
+	if len(ask) == 0 && len(deny) == 0 {
+		return ""
+	}
+	perms := map[string]any{}
+	if len(ask) > 0 {
+		perms["ask"] = ask
+	}
+	if len(deny) > 0 {
+		perms["deny"] = deny
+	}
+	raw, _ := json.Marshal(map[string]any{"permissions": perms})
+	return " --settings " + shellQuote(string(raw))
 }
 
 func codexMCPFlag(url string) string {
@@ -395,21 +417,22 @@ func injectAntigravityGlobal(port int, launching bool) error {
 
 var families = []*Family{
 	{
-		Spec:               mustSpec(backendkind.Claude),
-		PinsSessionID:      true,
-		ResumeFlag:         "--resume",
-		Capture:            captureClaude,
-		ResumeAvailable:    claudeResumeAvailable,
-		RecaptureEveryExit: true,
-		SessionSwitcher:    true,
-		BridgeMod:          true,
-		CostSource:         CostSourceClaudeHook,
-		KnownModels:        []string{"opus", "sonnet", "haiku", "fable"},
-		ModelDelivery:      ModelFlag,
-		SkillDelivery:      SkillsAddDir,
-		RoutingDelivery:    RoutingSystemPromptFile,
-		MCPFlag:            claudeMCPFlag,
-		PermissionFlags:    config.PermissionModeFlags,
+		Spec:                mustSpec(backendkind.Claude),
+		PinsSessionID:       true,
+		ResumeFlag:          "--resume",
+		Capture:             captureClaude,
+		ResumeAvailable:     claudeResumeAvailable,
+		RecaptureEveryExit:  true,
+		SessionSwitcher:     true,
+		BridgeMod:           true,
+		CostSource:          CostSourceClaudeHook,
+		KnownModels:         []string{"opus", "sonnet", "haiku", "fable"},
+		ModelDelivery:       ModelFlag,
+		SkillDelivery:       SkillsAddDir,
+		RoutingDelivery:     RoutingSystemPromptFile,
+		MCPFlag:             claudeMCPFlag,
+		PermissionFlags:     config.PermissionModeFlags,
+		PermissionRulesFlag: claudePermissionRulesFlag,
 		PermissionFlagTokens: []string{
 			"--permission-mode", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
 		},

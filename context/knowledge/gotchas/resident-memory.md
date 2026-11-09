@@ -1,0 +1,7 @@
+# Resident memory, orientation and permissions
+
+- **`kb_ingest` write-back used to drop every frontmatter key but `title`/`tags`**, which would silently strip `dream: skip` from resident working files. `kb.Document.Extra` now preserves other top-level frontmatter lines verbatim through `ParseDocument` and `RenderMarkdown`; it is not stored in the index.
+- **Seeding goes through `kb.SeedVaultFile` (O_EXCL create, then `KBUpsert`), never an overwrite.** It runs on every resident start so a deleted working file reappears, but an agent-edited one is never touched. A seed failure is logged and non-fatal; the orientation prompt tells the agent to create a missing file.
+- **The memory folder comes only from `resident.memory_dir`** (`residentMemoryDir`), never from `resident.name`, so a rename cannot move memory. A `..` dir is rejected by `SeedVaultFile`.
+- **Ask/deny tool rules are delivered as inline `--settings` JSON (`permissions.ask`/`deny`)** through the new `Family.PermissionRulesFlag` (Claude only), gated on `task.IsResident()`. Not verified live: whether Claude honours `ask` rules when the configured permission mode is a bypass mode. Deny always wins; if asks are not prompting under bypass, force `default` mode for the resident.
+- **A pending confirmation is Claude's numbered permission prompt**, flagged by the ordinary needs-input detector; the API tick strips the resident from the generic set and exposes it as `ResidentWaiting` (`TestResident_PendingConfirmationRaisesWaiting`).
