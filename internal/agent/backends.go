@@ -121,6 +121,11 @@ type Family struct {
 	// enabled). Mods run only inside Claude Code; every other family keeps
 	// screen-reading as its only state source.
 	BridgeMod bool
+	// NativeArtifacts: the CLI has Claude Code's built-in claude.ai artifact
+	// tool, which publishes to the session's own login. Families without it
+	// always get ARGUS_ARTIFACT_ACCOUNT in a mapped project so they publish
+	// through artpush instead (add-artifact-home-account).
+	NativeArtifacts bool
 	// CostSource is where hera cost accrual for this family's sessions comes
 	// from (add-codex-cost-accrual). The daemon's Codex rollout sweeper reads
 	// only CostSourceCodexRollout families, so it never touches a binding the
@@ -408,6 +413,7 @@ var families = []*Family{
 		RecaptureEveryExit: true,
 		SessionSwitcher:    true,
 		BridgeMod:          true,
+		NativeArtifacts:    true,
 		CostSource:         CostSourceClaudeHook,
 		KnownModels:        []string{"opus", "sonnet", "haiku", "fable"},
 		ModelDelivery:      ModelFlag,

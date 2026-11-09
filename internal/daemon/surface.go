@@ -210,7 +210,13 @@ const (
 	//     the supervisor's BuildCmd (fix-recycle-session-id). A stale supervisor
 	//     recycles Claude sessions with no --session-id, leaving the task row
 	//     without a resumable ID (ctrl+n re-render refuses).
-	SupervisorSpawnSurface = 39
+	// 40: BuildCmd exports ARGUS_ARTIFACT_ACCOUNT (the project's artifact home
+	//     account) when the agent must publish claude.ai artifacts via artpush,
+	//     strips an inherited value, and the injected routing content gains the
+	//     argus-artifacts snippet (add-artifact-home-account). A stale
+	//     supervisor never exports it, so routed-away tasks keep publishing to
+	//     the wrong account.
+	SupervisorSpawnSurface = 40
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -514,7 +520,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "c083211b5e2420ffdfc7dbf812f02c6c2b44f1b16e4c32652e6558f3e063dfde"
+	SpawnSurfaceDigest  = "01d6e57914aeaeebfb03e6a732e9db4e208d95c96136c7af69682709eb152ac7"
 	StreamSurfaceDigest = "3119cb7016724a7989d50ec738bdaa9551ac6f16f8d50a48f04c908b2237405f"
 )
 

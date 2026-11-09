@@ -182,7 +182,9 @@ func spawnAuthStrip(claudeExplicit, codexExplicit bool) []string {
 // login). Backend env_vars and the op bootstrap are appended after this, so
 // explicit mappings still win. Only stripped NAMES are logged, never values.
 func spawnBaseEnv(environ []string, authStrip []string, taskID string) []string {
-	strip := map[string]bool{"CLAUDE_CONFIG_DIR": true}
+	// ARGUS_ARTIFACT_ACCOUNT is recomputed per task by BuildCmd; a value
+	// inherited from the parent must never reach a task that should not see it.
+	strip := map[string]bool{"CLAUDE_CONFIG_DIR": true, "ARGUS_ARTIFACT_ACCOUNT": true}
 	for _, k := range claudeenv.ParentSessionMarkers {
 		strip[k] = true
 	}
