@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -267,6 +268,13 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 			}(cleanups[i])
 		}
 	}
+
+	// Ownership is fenced before the worktree exists and through persistence/unwind.
+	unlockOwnership, err := LockTaskGitOwnership(context.Background(), projCfg.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer unlockOwnership()
 
 	// Step 1: create worktree. BaseBranch overrides projCfg.Branch when set —
 	// the new-task form lets the user pick a custom start point per task.

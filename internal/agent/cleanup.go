@@ -1,11 +1,13 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/uxlog"
@@ -60,13 +62,34 @@ var repoLocks sync.Map // map[string]*sync.Mutex
 // unlock function. A blank repoDir (no shared administrative area to
 // contend over) is a no-op.
 func lockRepo(repoDir string) (unlock func()) {
+	unlock, _ = lockRepoContext(context.Background(), repoDir)
+	return unlock
+}
+
+func lockRepoContext(ctx context.Context, repoDir string) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if repoDir == "" {
-		return func() {}
+		return func() {}, nil
 	}
 	v, _ := repoLocks.LoadOrStore(repoDir, &sync.Mutex{})
 	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if mu.TryLock() {
+			return mu.Unlock, nil
+		}
+		timer := time.NewTimer(20 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // RemoveWorktreeAndBranch removes a git worktree and deletes its local and

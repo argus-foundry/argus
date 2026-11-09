@@ -1,7 +1,11 @@
 package daemon
 
 import (
+	"fmt"
+	"net"
 	"testing"
+
+	"github.com/argus-foundry/argus/internal/api"
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
@@ -129,4 +133,40 @@ func TestCleanup_InProcessMode_StopsAgents(t *testing.T) {
 
 	testutil.Equal(t, fake.stopAllCalled, true)
 	testutil.Equal(t, fake.closeCalled, false)
+}
+
+type shutdownOrderClient struct {
+	fakeSupClient
+	closeFn func()
+}
+
+func (f *shutdownOrderClient) Close() error { f.closeFn(); return f.fakeSupClient.Close() }
+
+func TestCleanup_QuiescesAPIBeforeSupervisorClose(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d, _ := testDaemon(t)
+	fake := &shutdownOrderClient{}
+	d.UseSupervisorRunner(fake)
+	d.apiServer = api.New(d.db, fake, "test-token", nil, nil)
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	testutil.NoError(t, err)
+	requested := probe.Addr().(*net.TCPAddr).Port
+	testutil.NoError(t, probe.Close())
+	port, err := d.apiServer.ListenAndServe(requested)
+	testutil.NoError(t, err)
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	testutil.NoError(t, err)
+	if conn != nil {
+		testutil.NoError(t, conn.Close())
+	}
+	testutil.NoError(t, err)
+	fake.closeFn = func() {
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if conn != nil {
+			conn.Close()
+		}
+		testutil.True(t, err != nil)
+	}
+	d.cleanup()
+	testutil.True(t, fake.closeCalled)
 }

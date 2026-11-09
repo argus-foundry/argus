@@ -1811,6 +1811,28 @@ func (d *Daemon) Shutdown() {
 func (d *Daemon) cleanup() {
 	slog.Info("daemon shutting down")
 
+	// Shut down the API HTTP server if running.
+	if d.apiServer != nil {
+		if d.restoreBridgeUsage != nil {
+			d.restoreBridgeUsage()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := d.apiServer.Shutdown(ctx); err != nil {
+			slog.Error("api server shutdown", "err", err)
+		}
+		events.SetSink(nil)
+		// The port is about to be dead: stop advertising it so a session's
+		// argus-bridge mod doesn't keep sending the master token to whatever
+		// else binds that port. Only if the file is still ours (takeover).
+		d.mu.Lock()
+		port := d.apiPort
+		d.mu.Unlock()
+		if port != 0 && api.RemovePortFile(filepath.Join(db.DataDir(), api.PortFileName), port) {
+			slog.Info("api port file removed", "port", port)
+		}
+	}
+
 	if d.supClient != nil {
 		// Supervisor mode: the supervisor owns the agent PTYs and MUST survive
 		// this daemon's exit — that is the entire point (agents keep running
@@ -1849,31 +1871,6 @@ func (d *Daemon) cleanup() {
 	// Stop the KB indexer if running.
 	if d.kbIndexer != nil {
 		d.kbIndexer.Stop()
-	}
-
-	// Shut down the API HTTP server if running.
-	if d.apiServer != nil {
-		if d.restoreBridgeUsage != nil {
-			d.restoreBridgeUsage()
-		}
-		// Detach the events sink first so emission sites racing with
-		// shutdown (e.g. db.Update from the post-exit transition) don't
-		// hit a closed event bus.
-		events.SetSink(nil)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := d.apiServer.Shutdown(ctx); err != nil {
-			slog.Error("api server shutdown", "err", err)
-		}
-		// The port is about to be dead: stop advertising it so a session's
-		// argus-bridge mod doesn't keep sending the master token to whatever
-		// else binds that port. Only if the file is still ours (takeover).
-		d.mu.Lock()
-		port := d.apiPort
-		d.mu.Unlock()
-		if port != 0 && api.RemovePortFile(filepath.Join(db.DataDir(), api.PortFileName), port) {
-			slog.Info("api port file removed", "port", port)
-		}
 	}
 
 	// Shut down the MCP HTTP server if running.
