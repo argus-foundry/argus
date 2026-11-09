@@ -11,7 +11,7 @@ export class WorkspaceEvents {
  }
  recover(){return captureFocus(this.banner,()=>[document.querySelector('.settings-back'),document.getElementById('draft'),document.getElementById('active-filter'),document.getElementById('tab-agent')].find(control=>control&&!control.disabled&&!control.closest('[hidden],[inert]')&&control.getClientRects().length),{signal:this.lifetime.signal});}
  show(visible){const restore=!visible?this.recover():()=>{};this.banner.hidden=!visible;document.body.classList.toggle('events-warning',visible);restore();}
- async start(){this.stop();this.lifetime=new AbortController();this.running=true;this.buffering=true;this.fallback=setInterval(()=>{if(this.running&&!document.hidden)this.callbacks.refresh();else if(this.running)log('events','skipped hidden poll');},30000);await this.open();}
+ async start(){this.stop();this.lifetime=new AbortController();this.running=true;this.buffering=true;await this.open();}
  beginSnapshot(){this.buffering=true;this.snapshotArchives=new Map(this.archivePending);}
  snapshot(tasks,previousTasks=[]){
   let resnapshot=false;for(const event of this.pending){const result=patchEvent(tasks,event);tasks=result.tasks;resnapshot ||= result.resnapshot;}
@@ -26,7 +26,9 @@ export class WorkspaceEvents {
   this.pending=[];this.buffering=false;
   if(resnapshot||this.archivePending.size)this.scheduleSnapshot();return tasks;
  }
+ fallbackPoll(){clearInterval(this.fallback);this.seenTaskUpdates=false;this.fallback=setInterval(()=>{if(this.running&&!document.hidden)this.callbacks.refresh();},30000);}
  async open(){
+  this.fallbackPoll();
   const generation=++this.generation;this.abort?.abort();this.abort=new AbortController();const abort=this.abort,signal=abort.signal;
   this.buffering=true;const timeout=setTimeout(()=>abort.abort(),10000);
   try{
@@ -43,9 +45,11 @@ export class WorkspaceEvents {
    while(!signal.aborted&&generation===this.generation){const {done,value}=await reader.read();if(done)throw new Error('Event stream ended');
     for(const event of parser.feed(decoder.decode(value,{stream:true}))){
      if(Number.isSafeInteger(event.id)&&event.id>0){if(event.id<=this.cursor)continue;this.cursor=event.id;}
+     if(event.type==='task.updated'){this.seenTaskUpdates=true;clearInterval(this.fallback);this.fallback=null;this.callbacks.pin?.(event);}
      this.callbacks.suggestion?.(event);
      if(['session.started','session.exited'].includes(event.type))this.callbacks.context?.(event);
-     if(event.type==='task.context_changed'){
+     if(event.type==='hera.board_changed'){this.callbacks.board?.(event);
+     }else if(['task.context_changed','task.usage_changed'].includes(event.type)){
       this.callbacks.context?.(event);
      }else if(event.type==='task.archived'){
       this.archivePending.set(event.task_id,++this.archiveRevision);
@@ -62,9 +66,9 @@ export class WorkspaceEvents {
   this.message.textContent='Connection interrupted. Live updates are retrying; tasks and drafts are kept.';this.show(true);log('events','connection failed',{status:error.status||0});
   clearTimeout(this.timer);this.timer=setTimeout(()=>this.reconnect(),8000);
  }
- async reconnect(){if(!this.running)return;const restore=this.recover();clearTimeout(this.timer);this.timer=null;this.retry.disabled=true;try{await this.open();if(this.running)await this.callbacks.refresh();}finally{this.retry.disabled=false;restore();}}
+ async reconnect(){if(!this.running)return;const restore=this.recover();clearTimeout(this.timer);this.timer=null;this.retry.disabled=true;try{await this.open();if(this.running){await this.callbacks.refresh();this.callbacks.reconcile?.();}}finally{this.retry.disabled=false;restore();}}
  scheduleSnapshot(){clearTimeout(this.snapshotTimer);this.snapshotTimer=setTimeout(()=>{if(this.running)this.callbacks.refresh();},100);}
  problem(message){this.message.textContent=message;this.show(true);}
  healthy(){if(!this.timer)this.show(false);}
- stop(){this.lifetime.abort();this.running=false;clearInterval(this.fallback);this.generation++;this.abort?.abort();clearTimeout(this.timer);clearTimeout(this.snapshotTimer);this.timer=null;this.pending=[];this.cursor=0;this.archivePending.clear();this.snapshotArchives.clear();this.show(false);this.retry.disabled=false;}
+ stop(){this.lifetime.abort();this.running=false;clearInterval(this.fallback);this.fallback=null;this.generation++;this.abort?.abort();clearTimeout(this.timer);clearTimeout(this.snapshotTimer);this.timer=null;this.pending=[];this.cursor=0;this.archivePending.clear();this.snapshotArchives.clear();this.show(false);this.retry.disabled=false;}
 }

@@ -599,3 +599,59 @@ test('context stream invalidation refreshes the selected popover during a buffer
   assert.ok(contextReads.length>before);
   assert.ok(held.length,'Context updates must not await the buffered task snapshot');
 });
+
+test('task.updated refreshes external pin state from the task DTO and stops the fallback poll',async()=>{
+ const {page,tasks,held,reads}=await app();tasks[0].pinned=true;
+ await page.route('**/api/tasks/a',route=>route.fulfill({json:tasks[0]}));
+ await page.locator('#draft').fill('retained draft');
+ await page.evaluate(()=>window.emit({id:80,type:'task.updated',task_id:'a',payload:{changed_fields:['pinned']}}));
+ await page.locator('.task-row[data-task-id="a"] .task-pin').waitFor();
+ await page.clock.runFor(101);await waitHeld(held);await held.shift()(200);
+ assert.equal(tasks[0].pinned,true,'Task snapshots explicitly serialize pinned');
+ const before=reads.length;await page.clock.runFor(30000);assert.equal(reads.length,before,'task.updated disables the fallback');
+ tasks[0].pinned=false;await page.evaluate(()=>window.emit({id:81,type:'task.updated',task_id:'a',payload:{changed_fields:['pinned']}}));
+ await page.waitForFunction(()=>!document.querySelector('.task-row[data-task-id="a"] .task-pin'));
+ await page.clock.runFor(101);await waitHeld(held);await held.shift()(200);assert.equal(await page.locator('#draft').inputValue(),'retained draft');
+});
+
+test('a resync confirming the cached pin rejects an older false event DTO',async()=>{
+ const {page,tasks,held}=await app({autoReplay:false});tasks[0].pinned=true;
+ const pin=page.locator('.task-row[data-task-id="a"] .task-pin');
+ await page.evaluate(()=>window.emit({id:70,type:'resync'}));
+ await page.clock.runFor(101);await waitHeld(held);await held.shift()(200);await pin.waitFor();
+ await page.locator('#draft').fill('retained draft');
+ await page.evaluate(async()=>{
+   const {RailActions}=await import('/workspace/rail/rail-actions.js'),event=RailActions.prototype.event;
+   RailActions.prototype.event=async function(...args){try{return await event.apply(this,args);}finally{window.pinEventSettled=true;}};
+ });
+ let releaseDTO,capture;const dtoHeld=new Promise(resolve=>releaseDTO=resolve),captured=new Promise(resolve=>capture=resolve);
+ await page.route('**/api/tasks/a',async route=>{const snapshot={...tasks[0]};capture();await dtoHeld;await route.fulfill({json:snapshot});});
+ tasks[0].pinned=false;
+ await page.evaluate(()=>window.emit({id:80,type:'task.updated',task_id:'a',payload:{changed_fields:['pinned']}}));await captured;
+ tasks[0].pinned=true;
+ await page.clock.runFor(101);await waitHeld(held);await held.shift()(200);await pin.waitFor();
+ releaseDTO();await page.waitForFunction(()=>window.pinEventSettled);
+ assert.equal(await pin.count(),1,'A newer confirming snapshot must survive the older false DTO');
+ assert.equal(await page.locator('#draft').inputValue(),'retained draft');
+});
+
+test('a pending pin survives a precommit snapshot and failed followup read on the next rail render',async()=>{
+ const {page,tasks,held}=await app({autoReplay:false});tasks[0].pinned=false;
+ await page.evaluate(()=>window.emit({id:70,type:'resync'}));
+ await page.clock.runFor(101);await waitHeld(held);await held.shift()(200);
+ await page.evaluate(async()=>{
+   const {RailActions}=await import('/workspace/rail/rail-actions.js'),run=RailActions.prototype.run,reconcile=RailActions.prototype.reconcile;
+   RailActions.prototype.run=async function(...args){try{return await run.apply(this,args);}finally{window.pinPostSettled=true;}};
+   RailActions.prototype.reconcile=function(...args){const result=reconcile.apply(this,args);if(this.pending.has('a'))window.precommitReconciled=true;return result;};
+ });
+ let releasePOST,capture;const postHeld=new Promise(resolve=>releasePOST=resolve),captured=new Promise(resolve=>capture=resolve);
+ await page.route('**/api/tasks/a/pin',async route=>{assert.deepEqual(route.request().postDataJSON(),{pinned:true});capture();await postHeld;await route.fulfill({json:{task_id:'a',pinned:true,archived:false}});});
+ await page.locator('#draft').fill('retained draft');
+ await page.locator('.task-more[data-task-id="a"]').click();await page.getByRole('menuitem',{name:'Pin',exact:true}).click();await captured;
+ await page.evaluate(()=>window.emit({id:80,type:'resync'}));
+ await page.clock.runFor(101);await waitHeld(held);await held.shift()(200);await page.waitForFunction(()=>window.precommitReconciled);
+ releasePOST();await waitHeld(held);await held.shift()(503);await page.waitForFunction(()=>window.pinPostSettled);
+ await page.locator('#search').fill('Selected task');
+ assert.equal(await page.locator('.task-row[data-task-id="a"] .task-pin').count(),1,'The successful pin must survive failed followup recovery');
+ assert.equal(await page.locator('#draft').inputValue(),'retained draft');
+});

@@ -1,6 +1,6 @@
 # Theia
 
-A separate desktop web client using the existing Argus API. The original web UI, daemon, TUI and native app are unchanged. No daemon restart is required.
+A separate desktop web client using the existing Argus API. The original web UI, daemon, TUI and native app are unchanged. Older daemons retain task reconciliation polling. New pin, usage and mail features require a daemon rebuilt and restarted with their merged APIs.
 
 Start with Node 20 or newer from the repository root.
 
@@ -137,7 +137,7 @@ Split view is a separate button on the agent screen and starts off. It works for
 
 Theia uses the selected Spectrum eye for its 25px header mark, SVG favicon, 32px and 192px PNG fallbacks, 180px Apple touch icon and notification icon. These assets belong to the optional workspace; the original Argus SPA keeps its icons. Attention counts are composited over the Theia eye. The tab title and favicon show tasks needing input. The rail is the sole task list. Needs-input names and collapsed ancestors gain attention emphasis that clears with the signal. Needs-input page alerts start enabled; idle alerts start disabled. Settings > Notifications & devices owns in-page needs-input and idle preferences. The first three distinct tasks in five seconds alert immediately; later arrivals update one summary. Snapshot/reconnect replay updates badges silently. Desktop alerts is the single desktop delivery control and uses Web Push through this browser’s service worker. The page never creates a second desktop notification.
 
-Live daemon events update task state immediately. A persistent connection banner offers retry without disconnecting or losing drafts. Like the native app, a 30-second reconciliation snapshot covers existing REST mutations that emit no event. The shared roster refresh runs while role tags, nesting or split presentation need it.
+Live daemon events update task state immediately. A persistent connection banner offers retry without disconnecting or losing drafts. Task mutations invalidate an authoritative snapshot through SSE. Until the first task.updated on each stream connection, a visible 30 second fallback preserves older-daemon reconciliation. Reconnect, visibility return and Retry connection recover missed persisted events. The shared roster refresh runs while role tags, nesting or split presentation need it.
 
 The eight most recently used task terminals retain their scrollback when switching tasks, including the selected and split-visible terminals. Older terminals are disposed and load fresh bounded output history when revisited. Switching still cancels pending input, including a composed message's trailing submit. Missing tasks, disconnect and page close release the retained terminals. New task creation offers backend-compatible accounts when multiple choices are available and uses the project's default backend/account unless explicitly selected.
 
@@ -153,7 +153,7 @@ See `web-tests/tests/workspace/workspace/redundancy.spec.ts` for shared confirma
 
 Task settings groups Stop, Resume and Switch Claude session for the captured task. Split and Fit stay on the agent screen. Workflow status is edited only in task settings. Task menus offer Pin or Unpin, task settings and copies. Archive/restore stays on the rail, in task settings and on its shortcut.
 
-The events banner is the connection Retry surface. The footer shows connection status. Terminal Reconnect still recovers that task's output session. Periodic task snapshots continue revalidating the project roster.
+The events banner is the connection Retry surface. The footer shows connection status. Terminal Reconnect still recovers that task's output session. Task snapshots revalidate the project roster on task events, reconnect, visibility return and Retry connection. The 30 second fallback does so only until task.updated is first observed on each stream connection. Every task snapshot reconciles present boolean pinned fields; older daemons that omit pinned retain cached pins. Pin invalidations use the single-task DTO, with no extra selection, menu or raw pin reads. Newer local and event observations survive older snapshots.
 
 See `web-tests/tests/workspace/tasks/consolidated-controls.spec.ts` for these control boundaries and pin-read behavior. `mac-session.spec.ts` verifies switching a captured task while another task stays selected, and attention/push suites verify that only Web Push owns desktop delivery.
 

@@ -16,7 +16,7 @@ The optional web workspace is the client we converge on. This specification is t
 - `workspace-backend-management` evaluates existing master-only backend CRUD and permission defaults. Agents and accounts remain read-only in this change.
 - `workspace-bridge-controls` evaluates existing bridge configuration controls for workspace Settings.
 
-The native `add-web-hera-mutations` follow-up remains separate. Spawn, new coordinator, move, join, detach, inbox and merge-safety Cleanup retain their standing TUI-only disposition. The workspace rail supports coordinator kanban and orchestrator pin mutations through existing endpoints. One unified project rail replaces separate Tasks/Hera modes, the Hera visibility filter and a separate Freelance section. Task status remains editable in Settings rather than through quick workflow transitions. Archive/restore remains in the rail. Session selection remains beside Stop/Resume. Web Push is the desktop-alert channel; in-page attention preferences remain separate.
+The native `add-web-hera-mutations` follow-up remains separate. Spawn, new coordinator, move, join, detach, consuming agent inbox and merge-safety Cleanup retain their standing TUI-only disposition. The workspace rail supports coordinator kanban and orchestrator pin mutations through existing endpoints. One unified project rail replaces separate Tasks/Hera modes, the Hera visibility filter and a separate Freelance section. Task status remains editable in Settings rather than through quick workflow transitions. Archive/restore remains in the rail. Session selection remains beside Stop/Resume. Web Push is the desktop-alert channel; in-page attention preferences remain separate.
 
 Browser drawers, DOM tooltips and their pixel geometry do not require literal native or terminal copies. Path copy and encoded VS Code links replace native Finder/Xcode launching. Opt-out origin token storage replaces Keychain. Tab title/favicon attention and the unified rail replace Dock/menu-bar affordances. Native window controls remain platform-specific. These equivalents add no backend requirements.
 
@@ -37,12 +37,10 @@ The numbered references retain the original backend tally identifiers and record
 4. `preserve-project-diligence-profile` preserves profile assignment on REST project edits. The current editor warns about the inherited loss.
 5. `rest-account-management` defines authenticated account CRUD. Existing account selection does not imply account management.
 6. `safe-runtime-model-switch` defines model changes for running tasks. The composer model label remains read-only.
-7. `provider-context-usage-contract` exposes remaining provider identity, Codex quota/account details and per-session/turn telemetry beyond the measured Claude category endpoint. Unknown fields remain omitted and historical totals stay separate.
+7. `provider-context-usage-contract` exposes remaining provider identity, Codex quota/account details beyond measured context and session/turn usage. Unknown fields remain omitted and historical totals stay separate.
 9. `targeted-task-runtime-edits` defines safe backend, model, sandbox and prompt transitions. Generic full-record PUT is not a runtime editor.
 10. `cross-backend-account-move` defines account movement beyond Claude. Existing movement remains Claude-only.
 11. `durable-task-pr-association` defines manual PR links that coexist with the branch poller. This client reads existing PR links only.
-12. `targeted-task-pinning` replaces inherited full-record pin writes with a fenced operation preserving archive invariants.
-13. `complete-task-mutation-events` emits events for archive/restore and every task mutation. Reconciliation polling remains required.
 14. `multiplexed-terminal-output` provides continuous shared output across visited tasks. Hidden cached terminals currently suspend SSE and recover only the bounded existing replay window.
 15. `discard-worktree-file` defines a confirmed per-file discard operation. Changes omits Discard.
 16. `git-per-file-numstat` supplies numeric per-file counts. Visible rows currently fetch individual diffs with at most four concurrent reads.
@@ -266,6 +264,20 @@ Every task row SHALL offer a small outlined archive icon button, right-aligned a
 - **WHEN** the selected task is archived
 - **THEN** the same task SHALL remain selected in the main pane while its row is excluded from the current filter
 - **AND** its current terminal viewer SHALL remain attached, retain archived input restrictions and offer Restore through the rail, task settings or shortcut
+
+### Requirement: Task mutations invalidate the rail through SSE. Replace full raw pin writes with targeted POST /pin.
+
+Task invalidation events coalesce authoritative snapshots. Subscribe before snapshots, retain buffered events across failed reads, and resync on reconnect, unknown envelopes and visibility return. Keep the 30 second visible-document task poll until the first task.updated event, then stop it. Reconnect resets event-support observation and restores the fallback until another task.updated. Retry connection remains a recovery path for persisted-event failures. Pin posts only pinned and applies returned pinned/archived flags, including restoration. Task snapshots SHALL reconcile present boolean pinned fields on initial load, reconnect, resync and fallback polls, retaining cached pins when older daemons omit the field. Snapshots started before a newer local or SSE pin observation SHALL NOT regress that observation. Pin invalidations SHALL read the single-task DTO behind connection and per-task cancellation fences, without extra raw, selection or menu reads.
+
+#### Scenario: Obsolete responses
+
+- **WHEN** a task or connection changes while a request is pending
+- **THEN** late responses cannot overwrite the current view or draft
+
+#### Scenario: Unavailable API
+
+- **WHEN** a read or mutation fails
+- **THEN** the view shows actionable retry feedback without claiming success
 
 ### Requirement: Remember credentials on this device
 The loopback workspace SHALL offer Remember on this device, checked by default. Only a successful remembered connection SHALL store the API token in localStorage under `argus-workspace-token`, separate from the original UI's origin and key. This matches the original UI's localStorage security posture. All storage access SHALL be guarded against exceptions and fall back to memory-only operation. Drafts SHALL remain memory-only. Tokens SHALL never be logged or placed in URLs except through the existing EventSource streamUrl mechanism or explicitly generated credential-bearing share links.
@@ -615,7 +627,7 @@ Closing split SHALL return to the single view without disposing either retained 
 
 ### Requirement: Task rail quick actions
 
-The workspace SHALL expose task settings, explicit Pin/Unpin and copies through task row menus, reachable by context click and keyboard. Workflow status SHALL be edited only through the task settings select. Ordinary task Pin SHALL consume supplied boolean task state without another selection raw read, lazily resolve unknown menu state, preserve the fresh raw record when mutating and reject archived tasks. Coordinator Pin/Unpin SHALL instead use the orchestrator's pin state and targeted authenticated endpoints without full task-record writes. All live Hera-bound tasks, including freelance bindings, SHALL remain available without a separate visibility filter.
+The workspace SHALL expose task settings, explicit Pin/Unpin and copies through task row menus, reachable by context click and keyboard. Workflow status SHALL be edited only through the task settings select. Ordinary task Pin SHALL consume supplied boolean task state without another selection raw read, retain cached state when an older daemon omits pinned, POST only the desired pinned flag to the targeted pin endpoint and apply returned pinned/archived state, including restoration. Coordinator Pin/Unpin SHALL instead use the orchestrator's pin state and targeted authenticated endpoints without full task-record writes. All live Hera-bound tasks, including freelance bindings, SHALL remain available without a separate visibility filter.
 
 #### Scenario: Captured row action
 
@@ -640,7 +652,7 @@ Changes SHALL render one git-status path list in flat/tree modes, lazily expand 
 
 ### Requirement: Live workspace events and connection recovery
 
-The workspace SHALL subscribe to existing daemon events before reading its task baseline, buffer during snapshots and apply buffered events without notification replay. Named task/session events SHALL update the rail immediately without waiting for a task poll. Archive envelopes SHALL request authoritative reconciliation. Every archive envelope SHALL immediately mark its task archive pending and reject composer and raw terminal input in primary and split views, without changing the row's filter membership or position. The row SHALL show a subtle Archive pending indication. Only an authoritative task read started after that envelope SHALL clear pending and determine archived state; failed reads SHALL retain pending and retry on the normal reconciliation schedule. The client SHALL NOT infer a live/replay boundary from snapshot completion. A low-frequency reconciliation snapshot SHALL retain the native client fallback for REST mutations that emit no event. Unknown events and resync SHALL request a fresh snapshot. Stream failure SHALL show a persistent Retry connection banner, retry with a bounded delay and preserve current task and drafts. Footer status SHALL remain a plain label without retry instructions and the separate rail refresh control SHALL be removed. Terminal Reconnect SHALL retain its session-scoped purpose. Disconnect SHALL abort the stream and all retry work.
+The workspace SHALL subscribe to existing daemon events before reading its task baseline, buffer during snapshots and apply buffered events without notification replay. Named task/session events SHALL update the rail immediately without waiting for a task poll. Archive envelopes SHALL request authoritative reconciliation. Every archive envelope SHALL immediately mark its task archive pending and reject composer and raw terminal input in primary and split views, without changing the row's filter membership or position. The row SHALL show a subtle Archive pending indication. Only an authoritative task read started after that envelope SHALL clear pending and determine archived state; failed reads SHALL retain pending until reconnect, visibility return, Retry connection or another invalidation triggers a successful snapshot. The client SHALL NOT infer a live/replay boundary from snapshot completion. Task mutation invalidations SHALL coalesce authoritative snapshots with a 30 second visible-document fallback until the first task.updated event on the current stream. Reconnect SHALL reset that observation and restore the fallback until task.updated is seen again. Reconnect, visibility return and Retry connection SHALL recover missing persisted events. Unknown events and resync SHALL request a fresh snapshot. Stream failure SHALL show a persistent Retry connection banner, retry with a bounded delay and preserve current task and drafts. Footer status SHALL remain a plain label without retry instructions and the separate rail refresh control SHALL be removed. Terminal Reconnect SHALL retain its session-scoped purpose. Disconnect SHALL abort the stream and all retry work.
 
 #### Scenario: Snapshot fence and retry
 
@@ -1053,7 +1065,7 @@ The optional workspace SHALL skip rail replacement when its rendered inputs are 
 - **AND** a burst of changed events SHALL render the latest state in one animation frame
 
 ### Requirement: Visible document polling
-Periodic context and fallback task snapshot reads SHALL pause while the optional workspace document is hidden and SHALL refresh once on becoming visible. Foreground cadences SHALL remain unchanged and SSE SHALL remain connected.
+Periodic context and fallback task snapshot reads SHALL pause while the optional workspace document is hidden and SHALL refresh once on becoming visible. Context and session usage SHALL refresh on the foreground 15 second cadence. The 30 second task snapshot fallback SHALL run only until task.updated is observed on the current stream and SHALL restart on reconnect. SSE SHALL remain connected. Hidden usage events SHALL invalidate obsolete session state without starting reads, and visibility return SHALL reconcile once.
 
 #### Scenario: Hidden document returns
 - **WHEN** a connected workspace remains hidden for sixty seconds
