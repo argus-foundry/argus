@@ -61,6 +61,25 @@ type Task struct {
 	CreatedAt     time.Time `json:"created_at"`
 	StartedAt     time.Time `json:"started_at,omitempty"`
 	EndedAt       time.Time `json:"ended_at,omitempty"`
+	// Kind classifies the row (add-resident-agent): "" for every ordinary
+	// task, KindResident for the singleton resident agent. Immutable after
+	// creation; never accepted from a client. Ask via IsResident, never by
+	// comparing the string.
+	Kind string `json:"kind,omitempty"`
+}
+
+// KindResident is Task.Kind for the singleton resident agent.
+const KindResident = "resident"
+
+// ResidentTaskName is the fixed Name of the resident row. The user-facing
+// display name is config (resident.name), never this.
+const ResidentTaskName = "resident"
+
+// IsResident reports whether t is the resident agent row. It is the single
+// predicate every task enumeration, sweeper and lifecycle verb uses to
+// exclude the resident. Nil-safe.
+func (t *Task) IsResident() bool {
+	return t != nil && t.Kind == KindResident
 }
 
 // Elapsed returns the duration since the task was started.

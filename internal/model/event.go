@@ -70,6 +70,17 @@ const (
 	// Never carries item bodies; TaskID is the coordinator's bound task when known.
 	EventTypeHeraBoardChanged = "hera.board_changed"
 
+	// EventTypeResidentPrefix prefixes every event about the resident agent
+	// (add-resident-agent). The events bus rewrites any event whose task id is
+	// the resident's to "resident.<original type>" (e.g. resident.session.idle,
+	// resident.task.updated) so the resident never appears as a task.* or
+	// session.* event in the task SSE stream.
+	EventTypeResidentPrefix = "resident."
+
+	// EventTypeResidentCreated fires once when the daemon creates the
+	// resident row. Payload: {"name":"resident"}.
+	EventTypeResidentCreated = EventTypeResidentPrefix + "created"
+
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.
 	// It is never persisted in the events table — clients seeing it should

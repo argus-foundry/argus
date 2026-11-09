@@ -1527,7 +1527,7 @@ func (d *DB) HeraNukeReclaimCandidates() ([]*model.Task, error) {
 	rows, err := d.conn.Query(`SELECT DISTINCT `+qualifyColumns("t", taskColumns)+`
 		FROM tasks t
 		JOIN hera_bindings hb ON hb.argus_task_id = t.id
-		WHERE hb.end_reason = ?
+		WHERE t.kind = '' AND hb.end_reason = ?
 		AND NOT EXISTS (SELECT 1 FROM hera_bindings hb2 WHERE hb2.argus_task_id = t.id AND hb2.ended_at IS NULL)
 		ORDER BY t.created_at ASC`, HeraEndReasonUserDeleted)
 	if err != nil {

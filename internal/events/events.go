@@ -10,6 +10,8 @@ package events
 
 import (
 	"encoding/json"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -51,6 +53,20 @@ func SetSink(s Sink) Sink {
 	return prev
 }
 
+// residentIDs holds the task ids of resident-kind rows. IDs are random and
+// never reused, so the set is only ever added to; tests with in-memory DBs do
+// not interfere with each other.
+var residentIDs sync.Map
+
+// MarkResident registers taskID as the resident agent's task id. From then on
+// Emit rewrites every event for that id to the resident.* namespace, so the
+// resident never leaks into the task.* / session.* SSE stream.
+func MarkResident(taskID string) {
+	if taskID != "" {
+		residentIDs.Store(taskID, struct{}{})
+	}
+}
+
 // Emit constructs an Event and forwards it to the registered Sink. When no
 // Sink is registered the call is a silent no-op.
 //
@@ -66,6 +82,9 @@ func Emit(typ, taskID string, payload any) {
 		return
 	}
 	sink := *p
+	if _, ok := residentIDs.Load(taskID); ok && !strings.HasPrefix(typ, model.EventTypeResidentPrefix) {
+		typ = model.EventTypeResidentPrefix + typ
+	}
 	ev := model.Event{
 		Type:   typ,
 		At:     time.Now(),

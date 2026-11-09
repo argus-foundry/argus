@@ -145,6 +145,12 @@ func (d *DB) createTables() error {
 	// task_create children route too. Cleared by an account move.
 	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN account_routed INTEGER NOT NULL DEFAULT 0`) //nolint:errcheck
 
+	// kind (add-resident-agent): '' for every ordinary task, 'resident' for
+	// the singleton resident agent row. The partial unique index below is the
+	// last line of defence that there is never a second resident.
+	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT ''`)                                         //nolint:errcheck
+	d.conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_single_resident ON tasks(kind) WHERE kind = 'resident'`) //nolint:errcheck
+
 	// Index for FindByNameProject (task_create idempotency check inside
 	// createMu). The query filters by all three columns; SQLite uses a
 	// partial-prefix on (name, project) and tests archived in-memory if
