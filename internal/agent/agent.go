@@ -1253,7 +1253,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		}
 		export := !fam.NativeArtifacts || effectiveAccount != home
 		if export {
-			cmd.Env = append(cmd.Env, "ARGUS_ARTIFACT_ACCOUNT="+home)
+			cmd.Env = append(cmd.Env, artifactAccountEnv+"="+home)
 		}
 		uxlog.Log("[artifacts] task %q: home=%s account=%s native=%t exported=%t",
 			task.ID, home, effectiveAccount, fam.NativeArtifacts, export)

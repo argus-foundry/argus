@@ -215,7 +215,9 @@ const (
 	//     strips an inherited value, and the injected routing content gains the
 	//     argus-artifacts snippet (add-artifact-home-account). A stale
 	//     supervisor never exports it, so routed-away tasks keep publishing to
-	//     the wrong account.
+	//     the wrong account. The home account must be Claude-capable (a
+	//     codex_home-only entry is skipped), and a stripped inherited value is
+	//     logged under [artifacts].
 	SupervisorSpawnSurface = 40
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -520,7 +522,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "01d6e57914aeaeebfb03e6a732e9db4e208d95c96136c7af69682709eb152ac7"
+	SpawnSurfaceDigest  = "fccc5736d4caed567ce8280b1f0be6de164c9464952a33832bc5b98505b79244"
 	StreamSurfaceDigest = "3119cb7016724a7989d50ec738bdaa9551ac6f16f8d50a48f04c908b2237405f"
 )
 
