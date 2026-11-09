@@ -77,7 +77,7 @@ func ValidResidentName(s string) error {
 // advertised Slack-send denial and outward-action confirmation are never
 // silently skipped. Stage 5 flips this to true in the same change that
 // enforces the lists.
-var ResidentPermissionsEnforced = false
+var ResidentPermissionsEnforced = true
 
 // ResidentPrereq reports why the resident cannot start, or nil when it can: it
 // must be enabled, carry a valid name, and have the knowledge base available

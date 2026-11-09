@@ -207,8 +207,9 @@ const (
 	//     A stale supervisor's sessions never report drafts, so the TUI falls
 	//     back to its typed-since-submit signal and a kick restores nothing.
 	// 39: the resident agent's launch carries its ask/deny tool rules as an
-	//     inline --settings flag (add-resident-agent D6). A stale supervisor
-	//     spawns the resident without them, so outward actions would not prompt.
+	//     inline --settings flag and a non-bypass permission mode is forced
+	//     (add-resident-agent D6). A stale supervisor spawns the resident
+	//     without them, so outward actions would not prompt.
 	SupervisorSpawnSurface = 39
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -508,7 +509,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "1b991329b57c0e9d932ef6f9eed9dbeffe3bd59ad7e4e58961725ac1c05607c7"
+	SpawnSurfaceDigest  = "f06ed6dd02dc25868961724973e8cde96fa6040a87cb2e70ef3f4666a2887edc"
 	StreamSurfaceDigest = "11024ea57e1c40147b4c52d778af95da81fd73b07eccf004cf014df871efd1be"
 )
 

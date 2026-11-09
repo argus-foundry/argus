@@ -107,3 +107,44 @@ func TestBuildCmd_ResidentEmptyListsInjectNothing(t *testing.T) {
 		t.Fatalf("empty lists should inject no --settings: %v", cmd.Args)
 	}
 }
+
+// Ask rules only prompt outside bypass modes, so the resident must never run
+// under one, whatever the backend command or defaults.permission_mode say.
+func TestBuildCmd_ResidentForcesNonBypassPermissionMode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
+	cfg := residentCfg()
+	cfg.Defaults.PermissionMode = config.PermissionModeBypassActive
+	cfg.Backends["claude"] = config.Backend{Command: "claude --dangerously-skip-permissions --allow-dangerously-skip-permissions --permission-mode plan --model x"}
+	task := &model.Task{ID: "r", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir()}
+	cmd, cleanup, err := BuildCmd(task, cfg, false)
+	testutil.NoError(t, err)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+	line := strings.Join(cmd.Args, " ")
+	if strings.Contains(line, "skip-permissions") {
+		t.Fatalf("bypass flag survived for resident: %s", line)
+	}
+	testutil.Equal(t, strings.Count(line, "--permission-mode"), 1)
+	testutil.Contains(t, line, "--permission-mode default")
+	testutil.Contains(t, line, "--model x")
+}
+
+func TestBuildCmd_NonResidentKeepsConfiguredPermissionFlags(t *testing.T) {
+	cfg := residentCfg()
+	task := &model.Task{ID: "p", Name: "plain", Worktree: t.TempDir()}
+	cmd, cleanup, err := BuildCmd(task, cfg, false)
+	testutil.NoError(t, err)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+	testutil.Contains(t, strings.Join(cmd.Args, " "), "--dangerously-skip-permissions")
+}
+
+func TestStripClaudePermissionFlags(t *testing.T) {
+	testutil.Equal(t, stripClaudePermissionFlags("claude --dangerously-skip-permissions --permission-mode plan -x"), "claude -x")
+	testutil.Equal(t, stripClaudePermissionFlags("claude --permission-mode=acceptEdits"), "claude")
+	testutil.Equal(t, stripClaudePermissionFlags("claude --allow-dangerously-skip-permissions"), "claude")
+	testutil.Equal(t, stripClaudePermissionFlags("claude --model opus"), "claude --model opus")
+}

@@ -46,12 +46,19 @@ func TestResidentValidName(t *testing.T) {
 	}
 }
 
+func TestResidentPermissionsEnforcedShipsTrue(t *testing.T) {
+	testutil.Equal(t, ResidentPermissionsEnforced, true)
+}
+
 func TestResidentPrereq_RefusesWhilePermissionsUnenforced(t *testing.T) {
 	c := DefaultConfig()
 	c.Resident.Enabled = true
 	c.Resident.Name = "Solo"
 	c.KB.Enabled = true
 	c.KB.MetisVaultPath = t.TempDir()
+	old := ResidentPermissionsEnforced
+	ResidentPermissionsEnforced = false // the gate itself, now shipped true
+	t.Cleanup(func() { ResidentPermissionsEnforced = old })
 	if err := c.ResidentPrereq(); err == nil || !strings.Contains(err.Error(), "not enforced") {
 		t.Fatalf("ResidentPrereq() = %v, want not-enforced refusal", err)
 	}
