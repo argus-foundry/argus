@@ -57,7 +57,7 @@ func (r *slowStopRunner) Stop(taskID string) error {
 func TestHeraCascadeNuke_BulkDeleteDoesNotBlockCaller(t *testing.T) {
 	d := testDB(t)
 	t.Setenv("HOME", t.TempDir())
-	runner := &slowStopRunner{Runner: agent.NewRunner(nil), delay: 15 * time.Millisecond}
+	runner := &slowStopRunner{Runner: agent.NewRunner(nil), delay: 50 * time.Millisecond}
 	app := New(d, runner, false)
 
 	orch := seedHeraOrch(t, d, "bulk")
@@ -86,10 +86,10 @@ func TestHeraCascadeNuke_BulkDeleteDoesNotBlockCaller(t *testing.T) {
 	readUI(t, app.tapp, func() { app.heraConfirmDo() })
 	elapsed := time.Since(start)
 
-	// n workers + 1 coordinator = n+1 live sessions, each with a 15ms Stop().
-	// Sequential-on-caller would take >= (n+1)*15ms == 465ms; backgrounded,
+	// n workers + 1 coordinator = n+1 live sessions, each with a 50ms Stop().
+	// Sequential-on-caller would take >= (n+1)*50ms == 1.55s; backgrounded,
 	// the caller returns immediately regardless of N.
-	const sequentialFloor = (n + 1) * 15 * time.Millisecond
+	const sequentialFloor = (n + 1) * 50 * time.Millisecond
 	if elapsed >= sequentialFloor {
 		t.Fatalf("heraDoCascadeNuke blocked the caller for %v (>= the %v sequential-Stop floor) — "+
 			"bulk cascade Stop() calls must be backgrounded, not run synchronously on the tview goroutine",
