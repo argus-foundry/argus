@@ -46,7 +46,19 @@ func TestResidentValidName(t *testing.T) {
 	}
 }
 
+func TestResidentPrereq_RefusesWhilePermissionsUnenforced(t *testing.T) {
+	c := DefaultConfig()
+	c.Resident.Enabled = true
+	c.Resident.Name = "Solo"
+	c.KB.Enabled = true
+	c.KB.MetisVaultPath = t.TempDir()
+	if err := c.ResidentPrereq(); err == nil || !strings.Contains(err.Error(), "not enforced") {
+		t.Fatalf("ResidentPrereq() = %v, want not-enforced refusal", err)
+	}
+}
+
 func TestResidentPrereq(t *testing.T) {
+	enforceResidentPermissions(t)
 	vault := t.TempDir()
 	good := func() Config {
 		c := DefaultConfig()
@@ -113,4 +125,11 @@ deny_tools = ["b"]
 	testutil.Equal(t, r.Account, "work")
 	testutil.DeepEqual(t, r.AskTools, []string{"a"})
 	testutil.DeepEqual(t, r.DenyTools, []string{"b"})
+}
+
+func enforceResidentPermissions(t *testing.T) {
+	t.Helper()
+	old := ResidentPermissionsEnforced
+	ResidentPermissionsEnforced = true
+	t.Cleanup(func() { ResidentPermissionsEnforced = old })
 }
