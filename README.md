@@ -209,6 +209,10 @@ below. The `?` overlay always shows your active bindings.
 | `ctrl+\`  | Toggle the **resident agent** tab and return to exactly where you were (tab, agent view, zoom, Projects focus, Settings pane). Global — works from every tab and pane, never reaching a PTY; ignored while a modal or text input is open. Rebind with `[keybindings.global] resident`. See [Resident hotkey recipe](#resident-hotkey-recipe) |
 | `0`       | Switch to the Resident tab (`[keybindings.global] tab_resident`) |
 | `ctrl+q` (Resident tab) | Return to the previous screen, like the resident toggle |
+| `ctrl+alt+←` / `ctrl+alt+→` (Resident tab) | Move between the team rail and the resident / worker panes (the tab opens on the resident conversation) |
+| `j` / `k` / `Enter` / `Tab` (Resident rail) | Navigate the standing team; Enter revives a dead or suspended worker (the resident row only navigates) |
+| `i` (Resident rail) | Read-only inbox of the selected role; the rail shows an unread `✉N` per worker and the resident pane title shows the resident's own count |
+| `r` / `a` / `s` / `S` / `ctrl+d` (Resident rail) | Rename / hide / role status ± / nuke — **worker rows only**, inert on the resident row; the resident is told about a nuke, hide or rename. Spawn, new coordinator, move, join, detach, pin, kanban and bounce keys are inert and absent from `?` and `ctrl+k` on this tab |
 | `q`       | Quit                                                            |
 
 #### Resident hotkey recipe

@@ -19,6 +19,16 @@ When the resident is enabled the TUI header SHALL show the resident tab first, l
 - **WHEN** the TUI exits on the resident tab and is relaunched
 - **THEN** it lands on the Tasks tab
 
+#### Scenario: Opens on the resident conversation
+
+- **WHEN** the user opens the resident tab
+- **THEN** keyboard focus is on the resident conversation pane (input goes straight to its PTY), `ctrl+alt+←` reaches the team rail, and `ctrl+q` returns to the previous screen from either
+
+#### Scenario: Unread counts
+
+- **WHEN** a worker (or the resident) has unread Hera or task mail
+- **THEN** the worker's rail row shows `✉N` and the resident pane title shows the resident's own unread count
+
 #### Scenario: Rail lists the team
 
 - **WHEN** the resident has three workers, one flagged needs-input

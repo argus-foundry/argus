@@ -46,11 +46,11 @@
 
 ## 6. Resident view
 
-- [ ] 6.1 Add a resident mode to `HeraPage` (single standing orchestrator, resident pane on the coordinator row, worker pane on worker rows, `i` inbox with unread count).
-- [ ] 6.2 Enforce the resident-mode key allowlist via the keymap (data, not literals): navigation plus nuke, hide, rename and role-status on worker rows only (inert on the resident row), every creation/structure key inert; help overlay and ctrl+k palette generated from it; update `help_test.go`.
+- [x] 6.1 Add a resident mode to `HeraPage` (single standing orchestrator, resident pane on the coordinator row, worker pane on worker rows, `i` inbox with unread count).
+- [x] 6.2 Enforce the resident-mode key allowlist via the keymap (data, not literals): navigation plus nuke, hide, rename and role-status on worker rows only (inert on the resident row), every creation/structure key inert; help overlay and ctrl+k palette generated from it; update `help_test.go`.
 - [ ] 6.5 Show "graduation pending restart" for a role carrying the marker on the resident rail and the normal Hera rail; test it appears and clears.
-- [ ] 6.4 Daemon notice to the resident when a worker of the standing orchestrator is nuked, hidden or renamed by anyone but the resident's own delete (hook the shared reclaim/archive/rename choke points with the actor passed down, covering rail, REST and Tasks-list delete; include unmerged info for a nuke where cheap); no message for role-status steps; tests per action and for no echo of the resident's own delete.
-- [ ] 6.3 Smoke tests: each creation/structure key inert, each allowed key acts on worker rows only, focus stays put on click, team rail renders needs-input marker, resident-pane lifecycle unchanged (no size-drift kick).
+- [x] 6.4 Daemon notice to the resident when a worker of the standing orchestrator is nuked, hidden or renamed by anyone but the resident's own delete (hook the shared reclaim/archive/rename choke points with the actor passed down, covering rail, REST and Tasks-list delete; include unmerged info for a nuke where cheap); no message for role-status steps; tests per action and for no echo of the resident's own delete.
+- [x] 6.3 Smoke tests: each creation/structure key inert, each allowed key acts on worker rows only, focus stays put on click, team rail renders needs-input marker, resident-pane lifecycle unchanged (no size-drift kick).
 
 ## 7. Docs and parity
 
