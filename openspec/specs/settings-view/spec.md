@@ -379,7 +379,7 @@ way (one resolve-and-discard of `bootstrap_source`).
 
 ### Requirement: Cross-tab arrow navigation preference persists
 
-The Appearance category SHALL provide a boolean row for Cmd+Left/Right navigation across the whole tab and pane chain (Tasks, Projects rail and panes, Settings panes). The option SHALL default to disabled when no stored value exists, SHALL display its effective enabled state, and SHALL persist changes to config key `ui.cross_tab_arrows` immediately when toggled with Right or Enter. Its detail text SHALL describe the full chain. Left SHALL continue to return focus from the pane to the Settings rail without toggling the option.
+The Appearance category SHALL provide a boolean row for Cmd+Left/Right navigation across the whole tab and pane chain (resident rail and panes when visible, Tasks, Projects rail and panes, Settings panes). The option SHALL default to disabled when no stored value exists, SHALL display its effective enabled state, and SHALL persist changes to config key `ui.cross_tab_arrows` immediately when toggled with Right or Enter. Its detail text SHALL describe the full chain. Left SHALL continue to return focus from the pane to the Settings rail without toggling the option.
 
 #### Scenario: Preference defaults to disabled
 
@@ -395,6 +395,11 @@ The Appearance category SHALL provide a boolean row for Cmd+Left/Right navigatio
 
 - **WHEN** the cross-tab arrow row is selected in the focused Settings pane and the user presses Left
 - **THEN** focus returns to the Settings rail and the preference value does not change
+
+#### Scenario: Detail includes the resident
+
+- **WHEN** the cross-tab arrow option detail is shown
+- **THEN** its chain description includes the resident rail, conversation and worker panes before Tasks
 
 ### Requirement: Backend tier list is viewable and editable in Settings
 

@@ -4670,10 +4670,10 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 // handleCrossTabArrow consumes an enabled modified-arrow hop along the
 // continuous spatial chain
 //
-//	Tasks ⇄ Hera rail ⇄ coord pane ⇄ agent pane ⇄ Settings left ⇄ Settings right
+//	Resident rail ⇄ resident pane ⇄ worker pane ⇄ Tasks ⇄ Hera rail ⇄ coord pane ⇄ agent pane ⇄ Settings left ⇄ Settings right
 //
 // The Hera-internal rail ⇄ coord ⇄ agent steps stay with HeraPage's own focus
-// ladder; this handler owns only the hops that leave a view (Tasks→Hera,
+// ladder; this handler owns the resident ends, the hops that leave a view (Tasks→Hera,
 // Hera→Tasks, Hera→Settings, Settings→Hera) plus the Settings left ⇄ right
 // step. Entering from the left lands on the leftmost pane, entering from the
 // right lands on the rightmost. The loose modifier check matches Hera's ladder
@@ -4693,9 +4693,36 @@ func (a *App) handleCrossTabArrow(event *tcell.EventKey) bool {
 
 	switch a.header.ActiveTab() {
 	case widget.TabTasks:
+		if key == tcell.KeyLeft && !a.tasklist.Filtering() && a.header.TabLabel(widget.TabResident) != "" {
+			uxlog.Log("[tui] cross-tab arrow: tasks -> resident")
+			a.switchTab(widget.TabResident)
+			a.heraPage.Machine().ToRightmost()
+			a.statusbar.SetHeraFocus(int(a.heraPage.Machine().State()))
+			return true
+		}
 		if key == tcell.KeyRight && !a.tasklist.Filtering() {
 			uxlog.Log("[tui] cross-tab arrow: tasks -> hera")
 			a.switchTab(widget.TabHera)
+			return true
+		}
+	case widget.TabResident:
+		m := a.heraPage.Machine()
+		if a.heraPage.RailFiltering() {
+			// HeraPage's modified-arrow ladder runs before its filter handler.
+			// Consume here so a live filter cannot move focus into a PTY.
+			uxlog.Log("[tui] cross-tab arrow: resident filter holds keyboard")
+			return true
+		}
+		if m.Fullscreen() {
+			return false
+		}
+		if key == tcell.KeyLeft && m.State() == hera.FocusRail {
+			uxlog.Log("[tui] cross-tab arrow: resident rail -> (end of chain)")
+			return true
+		}
+		if key == tcell.KeyRight && m.AtRightmost() {
+			uxlog.Log("[tui] cross-tab arrow: resident -> tasks")
+			a.switchTab(widget.TabTasks)
 			return true
 		}
 	case widget.TabHera:
