@@ -128,6 +128,8 @@ type publishResultJSON struct {
 	URL               string   `json:"url"`
 	Slug              string   `json:"slug"`
 	Artifact          string   `json:"artifact"`
+	ArtifactPath      string   `json:"artifact_path"`
+	Update            string   `json:"update"`
 	AvailableAccounts []string `json:"available_accounts"`
 	Message           string   `json:"message"`
 }
@@ -222,6 +224,11 @@ func TestArtifactPublish_UnavailableRegistersAndListsAccounts(t *testing.T) {
 	testutil.Equal(t, r.Status, "unavailable")
 	testutil.Equal(t, r.Account, "default")
 	testutil.Equal(t, r.Artifact, "report.html")
+	testutil.Equal(t, r.ArtifactPath, filepath.Join(agent.ArtifactsDir("abc123"), "report.html"))
+	saved, err := os.ReadFile(r.ArtifactPath)
+	testutil.NoError(t, err)
+	testutil.Equal(t, string(saved), publishPage)
+	testutil.Equal(t, r.Update, "")
 	// "other" is also refused, so only "personal" is offered.
 	testutil.DeepEqual(t, r.AvailableAccounts, []string{"personal"})
 
@@ -407,6 +414,17 @@ func TestArtifactRegister_ConfinesFolder(t *testing.T) {
 		testutil.Contains(t, cr.Content[0].Text, notAllowed)
 		testutil.Equal(t, len(store.saved), 0)
 	})
+	t.Run("symlinked folder refused", func(t *testing.T) {
+		s, store, _ := testPublishServer(t, true)
+		f := confineTask(t, s, true)
+		writeAt(t, filepath.Join(f.tmpRoot, "shots", "a.png"), "png")
+		link := filepath.Join(f.worktree, "shots")
+		testutil.NoError(t, os.Symlink(filepath.Join(f.tmpRoot, "shots"), link))
+		cr := callArtifactRegister(t, s, map[string]any{"path": link, "id": "abc123"})
+		testutil.True(t, cr.IsError)
+		testutil.Contains(t, cr.Content[0].Text, notAllowed)
+		testutil.Equal(t, len(store.saved), 0)
+	})
 	t.Run("folder under deny-read refused", func(t *testing.T) {
 		s, store, _ := testPublishServer(t, true)
 		f := confineTask(t, s, true)
@@ -436,17 +454,17 @@ func TestConfinedRead(t *testing.T) {
 	task := s.taskDB.(*mockTaskDB).tasks[0]
 	p := writeAt(t, filepath.Join(f.worktree, "big.html"), "0123456789")
 	t.Run("within cap", func(t *testing.T) {
-		b, err := s.confinedRead(task, p, 10)
+		b, err := s.confinedRead(task, "", p, 10)
 		testutil.NoError(t, err)
 		testutil.Equal(t, string(b), "0123456789")
 	})
 	t.Run("over cap", func(t *testing.T) {
-		_, err := s.confinedRead(task, p, 9)
+		_, err := s.confinedRead(task, "", p, 9)
 		testutil.Error(t, err)
 		testutil.Contains(t, err.Error(), "larger than")
 	})
 	t.Run("directory", func(t *testing.T) {
-		_, err := s.confinedRead(task, f.worktree, 10)
+		_, err := s.confinedRead(task, "", f.worktree, 10)
 		testutil.ErrorIs(t, err, errNotAllowedSource)
 	})
 }
@@ -745,11 +763,18 @@ func TestConfine_NoExistenceOracle(t *testing.T) {
 	existing := writeAt(t, filepath.Join(f.outside, "real.html"), publishPage)
 	missing := filepath.Join(f.outside, "ghost.html")
 	denied := writeAt(t, filepath.Join(f.denied, "d.html"), publishPage)
+	existingDir := filepath.Join(f.outside, "shots")
+	writeAt(t, filepath.Join(existingDir, "a.png"), "png")
+	hiddenDir := filepath.Join(f.outside, ".hidden")
+	writeAt(t, filepath.Join(hiddenDir, "a.png"), "png")
+	missingDir := filepath.Join(f.outside, "nodir")
 	var texts []string
 	for _, p := range []string{existing, missing, denied} {
 		cr := callTool(t, s, "artifact_publish", map[string]any{"path": p, "account": "personal", "id": "abc123"})
 		testutil.True(t, cr.IsError)
 		texts = append(texts, cr.Content[0].Text)
+	}
+	for _, p := range []string{existing, missing, denied, existingDir, hiddenDir, missingDir} {
 		reg := callArtifactRegister(t, s, map[string]any{"path": p, "id": "abc123"})
 		testutil.True(t, reg.IsError)
 		texts = append(texts, strings.TrimPrefix(reg.Content[0].Text, "failed to register artifact: "))
@@ -797,4 +822,55 @@ func TestCanonicalPath(t *testing.T) {
 			testutil.Equal(t, canonicalPath(upper), real)
 		}
 	}
+}
+
+func TestArtifactPublish_UnavailableUpdateEchoesLink(t *testing.T) {
+	s, _, _ := testPublishServer(t, true)
+	cr := callTool(t, s, "artifact_publish", map[string]any{
+		"path": writeTempFile(t, "report.html", publishPage), "account": "default",
+		"update": "https://claude.ai/artifact/SLUG1", "id": "abc123",
+	})
+	r := decodePublishResult(t, cr)
+	testutil.Equal(t, r.Status, "unavailable")
+	testutil.Equal(t, r.Update, "https://claude.ai/artifact/SLUG1")
+	testutil.True(t, filepath.IsAbs(r.ArtifactPath))
+}
+
+// TestConfine_RelativePaths: a relative path resolves against the request's
+// cwd, else the task worktree, never the daemon's working directory.
+func TestConfine_RelativePaths(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cwd     func(f confineFixture) string
+		path    string
+		allowed bool
+	}{
+		{"against cwd", func(f confineFixture) string { return filepath.Join(f.worktree, "out") }, "report.html", true},
+		{"against worktree when no cwd", func(confineFixture) string { return "" }, "out/report.html", true},
+		{"escaping the worktree", func(confineFixture) string { return "" }, "../outside/report.html", false},
+		{"not the daemon cwd", func(confineFixture) string { return "" }, "report.html", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, store, n := testPublishServer(t, true)
+			f := confineTask(t, s, true)
+			writeAt(t, filepath.Join(f.worktree, "out", "report.html"), publishPage)
+			writeAt(t, filepath.Join(f.outside, "report.html"), publishPage)
+			t.Chdir(f.outside) // a daemon cwd holding a same-named file must not be used
+			args := map[string]any{"path": tc.path, "account": "personal", "id": "abc123"}
+			if c := tc.cwd(f); c != "" {
+				args["cwd"] = c
+			}
+			cr := callTool(t, s, "artifact_publish", args)
+			testutil.Equal(t, cr.IsError, !tc.allowed)
+			testutil.Equal(t, n.Load(), map[bool]int32{true: 1, false: 0}[tc.allowed])
+			reg := callArtifactRegister(t, s, args)
+			testutil.Equal(t, reg.IsError, !tc.allowed)
+			testutil.Equal(t, len(store.saved), map[bool]int{true: 1, false: 0}[tc.allowed])
+		})
+	}
+	t.Run("relative with nothing to resolve against", func(t *testing.T) {
+		s := testServer()
+		_, err := s.confinedRead(&model.Task{ID: "x"}, "", "report.html", 10)
+		testutil.ErrorIs(t, err, errNotAllowedSource)
+	})
 }

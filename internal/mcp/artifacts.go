@@ -97,13 +97,19 @@ func (s *Server) toolArtifactRegister(id interface{}, args json.RawMessage) *Res
 		return toolError(id, err.Error())
 	}
 
-	// The daemon is unsandboxed: every read below is confined to the task's
-	// own roots (confine.go) before anything is copied into servable storage.
-	if info, statErr := os.Stat(p.Path); statErr == nil && info.IsDir() {
-		return s.registerArtifactFolder(id, task, p.Path)
+	// The daemon is unsandboxed: the path is opened once and confined to the
+	// task's own roots (confine.go) before anything else, and file vs folder
+	// is decided from that descriptor, so a refused path reveals nothing.
+	src, info, real, err := s.confinedOpenAny(task, p.Cwd, p.Path)
+	if err != nil {
+		return toolError(id, "failed to register artifact: "+err.Error())
+	}
+	defer src.Close() //nolint:errcheck // read-only
+	if info.IsDir() {
+		return s.registerArtifactFolder(id, task, p.Path, real)
 	}
 
-	stored, err := s.registerArtifactFile(task, p.Path, p.Title, p.Type)
+	stored, err := s.registerArtifactFile(task, p.Path, p.Title, p.Type, src, info)
 	if err != nil {
 		return toolError(id, err.Error())
 	}
@@ -113,11 +119,11 @@ func (s *Server) toolArtifactRegister(id interface{}, args json.RawMessage) *Res
 	return toolResult(id, fmt.Sprintf("Registered artifact %q (%s, %d bytes) for task %s (%s). View it in Argus TUI → task Artifacts or Argus Web → task → Artifacts.", filename, stored.Type, size, task.ID, task.Name))
 }
 
-// registerArtifactFile copies one file into task's durable artifact dir and
-// records its manifest row: the single-file half of artifact_register, shared
-// with artifact_publish's unavailable-account path. Returned errors are
-// user-facing tool-error text.
-func (s *Server) registerArtifactFile(task *model.Task, path, title, typ string) (*model.Artifact, error) {
+// registerArtifactFile copies one already-confined file (src, opened from
+// path) into task's durable artifact dir and records its manifest row: the
+// single-file half of artifact_register. Returned errors are user-facing
+// tool-error text.
+func (s *Server) registerArtifactFile(task *model.Task, path, title, typ string, src *os.File, info os.FileInfo) (*model.Artifact, error) {
 	// Sanitize the destination basename from the source path. This strips any
 	// directory components and rejects degenerate names — the stored filename
 	// can never contain a path separator or "..".
@@ -138,12 +144,6 @@ func (s *Server) registerArtifactFile(task *model.Task, path, title, typ string)
 		return nil, fmt.Errorf("invalid type %q: must be html, markdown, pdf, image, text, audio, or video", typ)
 	}
 
-	src, info, err := s.confinedOpen(task, path)
-	if err != nil {
-		log.Printf("[mcp] artifact_register refused: id=%s path=%s err=%v", task.ID, path, err)
-		return nil, fmt.Errorf("failed to register artifact: %w", err)
-	}
-	defer src.Close() //nolint:errcheck // read-only
 	if maxBytes := model.MaxBytesForType(atype); info.Size() > maxBytes {
 		return nil, fmt.Errorf("failed to register artifact: artifact exceeds %d byte cap (got %d)", maxBytes, info.Size())
 	}
@@ -235,7 +235,7 @@ func (s *Server) copyArtifact(taskID string, src io.Reader, filename string, aty
 // copyConfined opens path through confinedOpen and copies from that same
 // descriptor.
 func (s *Server) copyConfined(task *model.Task, path, filename string, atype model.ArtifactType) (int64, error) {
-	src, info, err := s.confinedOpen(task, path)
+	src, info, err := s.confinedOpen(task, "", path)
 	if err != nil {
 		return 0, err
 	}
@@ -260,18 +260,17 @@ const maxFolderWalkEntries = 20000
 // could point outside the tree the agent meant to share). Rows for files that
 // were in a previous registration of the same folder but are gone from srcDir
 // are pruned so a re-register replaces the folder's contents.
-func (s *Server) registerArtifactFolder(id interface{}, task *model.Task, srcDir string) *Response {
+//
+// srcDir is the name the agent gave (it names the folder); walkRoot is the
+// confined, descriptor-derived location the caller already checked. Each
+// member is confined again as it is opened.
+func (s *Server) registerArtifactFolder(id interface{}, task *model.Task, srcDir, walkRoot string) *Response {
 	folderRegMu.Lock()
 	defer folderRegMu.Unlock()
 
 	folder, err := model.SanitizeArtifactFilename(srcDir)
 	if err != nil || folder == model.ArtifactThumbDir || strings.HasPrefix(folder, ".") {
 		return toolError(id, fmt.Sprintf("invalid folder path %q", srcDir))
-	}
-	// Confine the folder itself; each member is confined again as it is opened.
-	if err := s.confinedDir(task, srcDir); err != nil {
-		log.Printf("[mcp] artifact_register folder refused: id=%s err=%v", task.ID, err)
-		return toolError(id, err.Error())
 	}
 
 	type entry struct {
@@ -282,10 +281,6 @@ func (s *Server) registerArtifactFolder(id interface{}, task *model.Task, srcDir
 	var total int64
 	skipped := 0
 	visited := 0
-	walkRoot := srcDir
-	if real, err := filepath.EvalSymlinks(srcDir); err == nil {
-		walkRoot = real // WalkDir does not follow a symlinked root
-	}
 	walkErr := filepath.WalkDir(walkRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -439,7 +434,7 @@ Use it when ` + "`ARGUS_ARTIFACT_ACCOUNT`" + ` is set: pass ` + "`account`" + ` 
 
 The file must be .html or .htm, at most 16 MiB, start with <!DOCTYPE html> or <html>, and live in your worktree or a temp dir (not a symlink). Inline all CSS, JS and images.
 
-The result is JSON. ` + "`status`" + ` is "published" (with ` + "`url`" + `) or "unavailable": the account cannot publish right now. An unavailable result names the page's saved copy as ` + "`artifact`" + ` (a registered task artifact, when the calling task is known) and lists ` + "`available_accounts`" + ` that can publish instead. On an unavailable result ask the user what to do; do not publish elsewhere on your own.
+The result is JSON. ` + "`status`" + ` is "published" (with ` + "`url`" + `) or "unavailable": the account cannot publish right now. An unavailable result names the page's saved copy as ` + "`artifact`" + ` (a registered task artifact) and ` + "`artifact_path`" + ` (its absolute path) and lists ` + "`available_accounts`" + ` that can publish instead. On an unavailable result ask the user what to do; do not publish elsewhere on your own.
 
 Identify your task with ` + "`id`" + ` (the ` + "`ARGUS_TASK_ID`" + ` env var) or ` + "`cwd`" + `, so an unavailable page can be saved to it.`,
 		InputSchema: map[string]interface{}{
@@ -488,9 +483,14 @@ type artifactPublished struct {
 // artifactUnavailable is artifact_publish's result when the account cannot
 // publish. It is a result, not a tool error: the agent is meant to act on it.
 type artifactUnavailable struct {
-	Status            string   `json:"status"`
-	Account           string   `json:"account"`
-	Artifact          string   `json:"artifact,omitempty"`
+	Status   string `json:"status"`
+	Account  string `json:"account"`
+	Artifact string `json:"artifact,omitempty"`
+	// ArtifactPath is the saved copy's absolute path, so the page can be
+	// published later with `argus artifact publish <artifact_path>`.
+	ArtifactPath string `json:"artifact_path,omitempty"`
+	// Update echoes the call's update link, for that later command.
+	Update            string   `json:"update,omitempty"`
 	AvailableAccounts []string `json:"available_accounts"`
 	Message           string   `json:"message"`
 }
@@ -537,7 +537,7 @@ func (s *Server) toolArtifactPublish(id interface{}, args json.RawMessage) *Resp
 	if err := claudeartifacts.ValidateHTML(p.Path, []byte("<html>")); err != nil {
 		return toolError(id, err.Error())
 	}
-	content, err := s.confinedRead(task, p.Path, claudeartifacts.MaxContentBytes)
+	content, err := s.confinedRead(task, p.Cwd, p.Path, claudeartifacts.MaxContentBytes)
 	if err == nil {
 		err = claudeartifacts.ValidateHTML(p.Path, content)
 	}
@@ -558,7 +558,7 @@ func (s *Server) toolArtifactPublish(id interface{}, args json.RawMessage) *Resp
 			Status: "published", Account: p.Account, URL: res.URL, Slug: res.Slug, Version: res.Version, Title: res.Title,
 		})
 	case errors.Is(err, claudeartifacts.ErrAccountUnavailable):
-		return s.artifactPublishUnavailable(ctx, id, task, p.Account, p.Path, p.Title, content)
+		return s.artifactPublishUnavailable(ctx, id, task, p.Account, p.Path, p.Title, p.Update, content)
 	default:
 		log.Printf("[artifacts] publish failed: account=%s err=%v", p.Account, err)
 		return toolError(id, err.Error())
@@ -568,8 +568,8 @@ func (s *Server) toolArtifactPublish(id interface{}, args json.RawMessage) *Resp
 // artifactPublishUnavailable handles an unavailable account: it saves the
 // page as an artifact of the calling task (when one resolves), probes the
 // other configured accounts, and reports both.
-func (s *Server) artifactPublishUnavailable(ctx context.Context, id interface{}, task *model.Task, account, path, title string, content []byte) *Response {
-	result := artifactUnavailable{Status: "unavailable", Account: account}
+func (s *Server) artifactPublishUnavailable(ctx context.Context, id interface{}, task *model.Task, account, path, title, update string, content []byte) *Response {
+	result := artifactUnavailable{Status: "unavailable", Account: account, Update: update}
 	saved := ""
 	if s.artifacts != nil {
 		// Store the bytes already read through the confined descriptor; the
@@ -580,7 +580,8 @@ func (s *Server) artifactPublishUnavailable(ctx context.Context, id interface{},
 			saved = fmt.Sprintf(" Saving it as a task artifact failed (%v).", err)
 		} else {
 			result.Artifact = stored.Filename
-			saved = fmt.Sprintf(" The page is saved as task artifact %q.", stored.Filename)
+			result.ArtifactPath = filepath.Join(agent.ArtifactsDir(task.ID), filepath.FromSlash(stored.Filename))
+			saved = fmt.Sprintf(" The page is saved as task artifact %q at %s.", stored.Filename, result.ArtifactPath)
 		}
 	}
 	result.AvailableAccounts = s.publisher.AvailableAccounts(ctx, account)

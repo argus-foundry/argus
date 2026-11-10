@@ -290,7 +290,10 @@ func TestArtifactRegister_Folder(t *testing.T) {
 	testutil.Contains(t, cr.Content[0].Text, "3 files")
 }
 
-func TestArtifactRegister_FolderSymlinkedRoot(t *testing.T) {
+// TestArtifactRegister_FolderSymlinkedRootRefused: the path is opened without
+// following a final symlink (add-argus-artifact-publish confinement), so a
+// symlinked folder is refused like a symlinked file; register the real dir.
+func TestArtifactRegister_FolderSymlinkedRootRefused(t *testing.T) {
 	s, store := testServerWithArtifacts(t)
 	root := makeFolder(t, map[string]string{"a.png": "x"})
 	link := filepath.Join(t.TempDir(), "alias")
@@ -298,9 +301,11 @@ func TestArtifactRegister_FolderSymlinkedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	cr := callArtifactRegister(t, s, map[string]any{"path": link, "id": "abc123"})
-	testutil.True(t, !cr.IsError)
+	testutil.True(t, cr.IsError)
+	testutil.Equal(t, len(store.saved), 0)
+	cr = callArtifactRegister(t, s, map[string]any{"path": root, "id": "abc123"})
+	testutil.False(t, cr.IsError)
 	testutil.Equal(t, len(store.saved), 1)
-	testutil.Equal(t, store.saved[0].Folder, "alias")
 }
 
 func TestArtifactRegister_FolderReregisterPrunesStale(t *testing.T) {
@@ -376,7 +381,7 @@ func TestConfinedRead_RejectsNonRegular(t *testing.T) {
 		t.Skipf("mkfifo unsupported: %v", err)
 	}
 	task, _ := s.taskDB.Get("abc123")
-	_, err := s.confinedRead(task, fifo, 1024)
+	_, err := s.confinedRead(task, "", fifo, 1024)
 	testutil.Error(t, err)
 	testutil.ErrorIs(t, err, errNotAllowedSource)
 }

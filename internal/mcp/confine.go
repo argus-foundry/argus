@@ -24,10 +24,13 @@ import (
 //   - the caller's task is self-reported (id/cwd; the MCP endpoint is one
 //     shared URL with no per-task binding), so confinement is to THAT task's
 //     own roots: naming another task only reaches that task's worktree;
-//   - open with O_NOFOLLOW (a symlink as the final component is refused) and
-//     O_NONBLOCK (a FIFO can't hang the handler), then fstat the descriptor:
-//     a regular file with one link (a hard link could alias a file outside
-//     the roots);
+//   - make a relative path absolute against the request's cwd (else the task
+//     worktree), never the daemon's own working directory;
+//   - open ONCE with O_NOFOLLOW (a symlink as the final component is refused)
+//     and O_NONBLOCK (a FIFO can't hang the handler), then fstat the
+//     descriptor: a directory, or a regular file with one link (a hard link
+//     could alias a file outside the roots). Callers branch file vs directory
+//     on that fstat, so nothing is stat'ed by name before confinement;
 //   - take the file's location from the OPEN DESCRIPTOR (darwin F_GETPATH, in
 //     the filesystem's canonical case) and require it inside the task's
 //     writable roots (agent.SandboxWriteRoots) and outside its deny-read paths
@@ -119,10 +122,14 @@ func (s *Server) checkLocation(task *model.Task, path, real string) error {
 	return nil
 }
 
-// checkRegularSingle requires a regular file with exactly one hard link.
-func checkRegularSingle(task *model.Task, path string, info os.FileInfo) error {
+// checkKind requires a directory, or a regular file with exactly one hard
+// link (a hard link could alias a file outside the roots).
+func checkKind(task *model.Task, path string, info os.FileInfo) error {
+	if info.IsDir() {
+		return nil
+	}
 	if !info.Mode().IsRegular() {
-		return refuseSource(task, path, "not a regular file", nil)
+		return refuseSource(task, path, "not a regular file or directory", nil)
 	}
 	if linkCount(info) != 1 {
 		return refuseSource(task, path, fmt.Sprintf("%d hard links", linkCount(info)), nil)
@@ -130,82 +137,97 @@ func checkRegularSingle(task *model.Task, path string, info os.FileInfo) error {
 	return nil
 }
 
-// confinedOpen opens an agent-supplied file for reading on task's behalf,
-// enforcing the rules above. The caller reads from (and closes) the returned
-// descriptor only.
-func (s *Server) confinedOpen(task *model.Task, path string) (*os.File, os.FileInfo, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, nil, refuseSource(task, path, "resolve", err)
+// absAgentPath makes an agent-supplied path absolute against the agent's own
+// directory (the request's cwd, else the task worktree), never the daemon's
+// working directory.
+func absAgentPath(task *model.Task, cwd, path string) (string, bool) {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), true
+	}
+	base := cwd
+	if base == "" {
+		base = task.Worktree
+	}
+	if !filepath.IsAbs(base) {
+		return "", false
+	}
+	return filepath.Join(base, path), true
+}
+
+// confinedOpenAny opens an agent-supplied path (a file or a directory) on
+// task's behalf, enforcing the rules above, and returns the open descriptor,
+// its fstat and its descriptor-derived location. The caller branches on the
+// fstat and reads (or walks) only what was checked. Every failure is the one
+// generic errNotAllowedSource.
+func (s *Server) confinedOpenAny(task *model.Task, cwd, path string) (*os.File, os.FileInfo, string, error) {
+	abs, ok := absAgentPath(task, cwd, path)
+	if !ok {
+		return nil, nil, "", refuseSource(task, path, "relative path with no cwd or worktree to resolve it against", nil)
 	}
 	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: agent-supplied path, confined below before any byte is read.
 	if err != nil {
 		if errors.Is(err, syscall.ELOOP) {
-			return nil, nil, refuseSource(task, path, "final component is a symlink", nil)
+			return nil, nil, "", refuseSource(task, path, "final component is a symlink", nil)
 		}
-		return nil, nil, refuseSource(task, path, "open", err)
+		return nil, nil, "", refuseSource(task, path, "open", err)
 	}
-	ok := false
+	keep := false
 	defer func() {
-		if !ok {
+		if !keep {
 			f.Close() //nolint:errcheck,gosec // failure path
 		}
 	}()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, nil, refuseSource(task, path, "fstat", err)
+		return nil, nil, "", refuseSource(task, path, "fstat", err)
 	}
-	if err := checkRegularSingle(task, path, info); err != nil {
-		return nil, nil, err
+	if err := checkKind(task, path, info); err != nil {
+		return nil, nil, "", err
 	}
 	real, err := descriptorPath(f)
 	if err != nil {
-		return nil, nil, refuseSource(task, path, "descriptor path", err)
+		return nil, nil, "", refuseSource(task, path, "descriptor path", err)
 	}
 	real = filepath.Clean(real)
 	if err := s.checkLocation(task, path, real); err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	if resolved, err := os.Lstat(real); err != nil || !os.SameFile(info, resolved) {
-		return nil, nil, refuseSource(task, path, "changed while it was being checked", err)
+		return nil, nil, "", refuseSource(task, path, "changed while it was being checked", err)
 	}
 	// Re-check the same descriptor after the location check: a link added
 	// meanwhile must not slip through.
-	info, err = f.Stat()
+	again, err := f.Stat()
 	if err != nil {
-		return nil, nil, refuseSource(task, path, "fstat", err)
+		return nil, nil, "", refuseSource(task, path, "fstat", err)
 	}
-	if err := checkRegularSingle(task, path, info); err != nil {
-		return nil, nil, err
+	if again.IsDir() != info.IsDir() {
+		return nil, nil, "", refuseSource(task, path, "changed while it was being checked", nil)
 	}
-	ok = true
-	return f, info, nil
+	if err := checkKind(task, path, again); err != nil {
+		return nil, nil, "", err
+	}
+	keep = true
+	return f, again, real, nil
 }
 
-// confinedDir checks an agent-supplied directory (artifact_register's folder
-// form) the same way, from an opened descriptor. Each member is then opened
-// through confinedOpen.
-func (s *Server) confinedDir(task *model.Task, path string) error {
-	f, err := os.Open(path) //nolint:gosec // G304: agent-supplied dir, confined below before it is walked.
+// confinedOpen is confinedOpenAny for a regular file only.
+func (s *Server) confinedOpen(task *model.Task, cwd, path string) (*os.File, os.FileInfo, error) {
+	f, info, _, err := s.confinedOpenAny(task, cwd, path)
 	if err != nil {
-		return refuseSource(task, path, "open", err)
+		return nil, nil, err
 	}
-	defer f.Close() //nolint:errcheck // read-only
-	info, err := f.Stat()
-	if err != nil || !info.IsDir() {
-		return refuseSource(task, path, "not a directory", err)
+	if info.IsDir() {
+		f.Close() //nolint:errcheck,gosec // refused
+		return nil, nil, refuseSource(task, path, "a directory, not a file", nil)
 	}
-	real, err := descriptorPath(f)
-	if err != nil {
-		return refuseSource(task, path, "descriptor path", err)
-	}
-	return s.checkLocation(task, path, filepath.Clean(real))
+	return f, info, nil
 }
 
 // confinedRead reads an agent-supplied file of at most maxBytes through
 // confinedOpen, from the same descriptor that was checked.
-func (s *Server) confinedRead(task *model.Task, path string, maxBytes int64) ([]byte, error) {
-	f, info, err := s.confinedOpen(task, path)
+func (s *Server) confinedRead(task *model.Task, cwd, path string, maxBytes int64) ([]byte, error) {
+	f, info, err := s.confinedOpen(task, cwd, path)
 	if err != nil {
 		return nil, err
 	}
