@@ -130,3 +130,15 @@ func TestTryLockRepo(t *testing.T) {
 	testutil.True(t, ok)
 	unlock3()
 }
+
+// remoteBranchExists distinguishes "origin has no such branch" (false, nil)
+// from "origin could not be asked" (false, err): an unreachable origin must
+// never be logged as "already gone".
+func TestRemoteBranchExists_UnreachableOrigin(t *testing.T) {
+	repo := t.TempDir()
+	residentCleanupGit(t, repo, "init", "-q")
+	residentCleanupGit(t, repo, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	present, err := remoteBranchExists(context.Background(), repo, "refs/heads/argus/x")
+	testutil.False(t, present)
+	testutil.Error(t, err)
+}

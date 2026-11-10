@@ -135,6 +135,9 @@ func DeleteRemoteBranchContext(ctx context.Context, repoDir, branch, expectTip s
 			return fmt.Errorf("git push origin --delete %s: %w", branch, ctxErr)
 		}
 		msg := strings.TrimSpace(string(out))
+		// Current git reports a lease mismatch, including a branch already gone
+		// from origin, as "stale info"; some versions report the gone case as
+		// "remote ref does not exist". Either way ls-remote classifies it.
 		if strings.Contains(msg, "stale info") || strings.Contains(msg, "remote ref does not exist") {
 			present, lsErr := remoteBranchExists(ctx, repoDir, ref)
 			switch {
