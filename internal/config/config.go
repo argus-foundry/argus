@@ -529,6 +529,7 @@ func DefaultConfig() Config {
 			"pi": {
 				Command:    "pi",
 				PromptFlag: "",
+				Model:      "gpt-sol-6.1",
 			},
 			"opencode": {
 				// opencode is a capture-style backend (no start-time

@@ -17,6 +17,9 @@ func TestDefaultConfig(t *testing.T) {
 	if _, ok := cfg.Backends["claude"]; !ok {
 		t.Error("claude backend should exist")
 	}
+	if got := cfg.Backends["pi"].Model; got != "gpt-sol-6.1" {
+		t.Errorf("Pi default model = %q, want gpt-sol-6.1", got)
+	}
 	if cfg.Projects == nil {
 		t.Error("projects map should be initialized")
 	}
