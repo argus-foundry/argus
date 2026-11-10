@@ -133,6 +133,83 @@ type CreateInput struct {
 	AfterStart func()
 }
 
+// TaskRouting is the concrete backend/account decision made for a new task.
+// A reserved choice contributes to the burst ledger until its spawn succeeds
+// or the caller releases it after a failure.
+type TaskRouting struct {
+	Backend         string
+	Account         string
+	AccountRouted   bool
+	Step            string
+	Reason          string
+	ReservedBackend string
+	ReservedAccount string
+}
+
+// ResolveTaskRouting resolves a new task's concrete backend and account before
+// persistence. It refreshes configured usage readings and optionally reserves
+// the resulting backend/account pair in the burst ledger. Call from a worker
+// goroutine: usage refresh may perform process and filesystem I/O.
+func ResolveTaskRouting(input CreateInput, cfg config.Config, reserve bool) (TaskRouting, error) {
+	if len(cfg.BackendRouting.Tiers) > 0 {
+		backendtier.FreshenBeforeSpawn()
+	}
+	explicitDefault := input.Account == config.DefaultAccountName && !input.AccountRouted
+	projectAccount := cfg.ProjectAccounts[input.Project]
+	unpinned := input.AccountRouted || (input.Account == "" && (projectAccount == "" || cfg.ValidateAccount(projectAccount) != nil))
+	choice := resolveTaskChoice(input.Backend, input.Project, cfg, input.Account, reserve)
+	if choice.Backend == "" {
+		return TaskRouting{}, fmt.Errorf("no backend configured")
+	}
+	routing := TaskRouting{
+		Backend:       choice.Backend,
+		AccountRouted: unpinned,
+		Step:          choice.Step,
+		Reason:        choice.Reason,
+	}
+	reserved := reserve && choice.Backend != ""
+	if reserved {
+		routing.ReservedBackend = choice.Backend
+		routing.ReservedAccount = choice.Account
+	}
+	resolved := false
+	defer func() {
+		if reserved && !resolved {
+			backendtier.ReleaseSpawn(choice.Backend, choice.Account)
+		}
+	}()
+	if err := ValidateExplicitModel(choice.Backend, cfg.Backends[choice.Backend], input.Model); err != nil {
+		uxlog.Log("[model] create rejected backend=%q model=%q", choice.Backend, input.Model)
+		return TaskRouting{}, err
+	}
+	if unpinned && choice.Account != "" && cfg.AccountSupports(choice.Account, cfg.Backends[choice.Backend].Command) {
+		input.Account = choice.Account
+	}
+	account, err := resolveTaskAccount(cfg, input, choice.Backend)
+	if err != nil {
+		return TaskRouting{}, err
+	}
+	if account == config.DefaultAccountName && !explicitDefault {
+		account = ""
+	}
+	if reserved && !strings.EqualFold(accountLedgerName(account), accountLedgerName(routing.ReservedAccount)) {
+		backendtier.ReleaseSpawn(routing.ReservedBackend, routing.ReservedAccount)
+		backendtier.RecordSpawn(routing.ReservedBackend, account)
+		routing.ReservedAccount = account
+	}
+	routing.Account = account
+	resolved = true
+	return routing, nil
+}
+
+// ReleaseTaskRouting rolls back a reserved routing choice after persistence or
+// session startup fails.
+func ReleaseTaskRouting(routing TaskRouting) {
+	if routing.ReservedBackend != "" {
+		backendtier.ReleaseSpawn(routing.ReservedBackend, routing.ReservedAccount)
+	}
+}
+
 // ErrAccount marks a task-creation failure caused by the requested account
 // (unknown, misconfigured, or unable to run the backend), so API callers can
 // answer 400 instead of 500.
@@ -203,59 +280,34 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	}
 
 	// Resolve the backend and account before any side effect so a bad account
-	// never leaves a worktree behind. An explicit account (named or "default")
-	// is a pin. Anything else is unpinned: routing chooses, the task is stored
-	// account_routed (blank when routing lands on default) so children route too.
-	explicitDefault := input.Account == config.DefaultAccountName && !input.AccountRouted
-	projectAccount := cfg.ProjectAccounts[input.Project]
-	unpinned := input.AccountRouted || (input.Account == "" && (projectAccount == "" || cfg.ValidateAccount(projectAccount) != nil))
-	if len(cfg.BackendRouting.Tiers) > 0 {
-		// Fresh read before spawn: never route on a snapshot older than the burst.
-		backendtier.FreshenBeforeSpawn()
-	}
-	choice := resolveTaskChoice(input.Backend, input.Project, cfg, input.Account, true)
-	backend := choice.Backend
-	if backend == "" {
-		return nil, nil, fmt.Errorf("no backend configured")
-	}
-	// The burst ledger was charged to choice.Account; roll it back if the spawn
-	// fails, and move it if the task ends up running on a different account.
-	reservedAccount := choice.Account
-	reserved := choice.Backend != ""
-	spawned := false
-	defer func() {
-		if reserved && !spawned {
-			backendtier.ReleaseSpawn(backend, reservedAccount)
-			uxlog.Log("[routing] spawn failed; rolled back reservation backend=%q account=%q", backend, reservedAccount)
-		}
-	}()
-	if unpinned && choice.Account != "" && cfg.AccountSupports(choice.Account, cfg.Backends[backend].Command) {
-		input.Account = choice.Account
-	}
-	if err := ValidateExplicitModel(backend, cfg.Backends[backend], input.Model); err != nil {
-		uxlog.Log("[model] create rejected backend=%q model=%q", backend, input.Model)
-		return nil, nil, err
-	}
-	account, err := resolveTaskAccount(cfg, input, backend)
+	// never leaves a worktree behind. The shared resolver also supplies the
+	// inline no-worktree path with this same concrete pair.
+	routing, err := ResolveTaskRouting(input, cfg, true)
 	if err != nil {
 		return nil, nil, err
 	}
-	if account == config.DefaultAccountName && !explicitDefault {
-		account = ""
-	}
+	backend, account, routed := routing.Backend, routing.Account, routing.AccountRouted
+	reservedAccount := routing.ReservedAccount
+	reserved := routing.ReservedBackend != ""
+	spawned := false
+	defer func() {
+		if reserved && !spawned {
+			ReleaseTaskRouting(TaskRouting{ReservedBackend: backend, ReservedAccount: reservedAccount})
+			uxlog.Log("[routing] spawn failed; rolled back reservation backend=%q account=%q", backend, reservedAccount)
+		}
+	}()
 	if reserved && !strings.EqualFold(accountLedgerName(account), accountLedgerName(reservedAccount)) {
 		uxlog.Log("[routing] reservation moved backend=%q %q→%q (task runs on %q)", backend, reservedAccount, account, account)
 		backendtier.ReleaseSpawn(backend, reservedAccount)
 		backendtier.RecordSpawn(backend, account)
 		reservedAccount = account
 	}
-	routed := unpinned
 	mode := "pinned"
 	if routed {
 		mode = "auto"
 	}
-	uxlog.Log("[routing] account decision mode=%s step=%s backend=%q account=%q routed=%t reason=%s", mode, choice.Step, backend, account, routed, choice.Reason)
-	slog.Info("[routing] account decision", "mode", mode, "step", choice.Step, "backend", backend, "account", account, "routed", routed, "reason", choice.Reason)
+	uxlog.Log("[routing] account decision mode=%s step=%s backend=%q account=%q routed=%t reason=%s", mode, routing.Step, backend, account, routed, routing.Reason)
+	slog.Info("[routing] account decision", "mode", mode, "step", routing.Step, "backend", backend, "account", account, "routed", routed, "reason", routing.Reason)
 
 	// Compensating-action stack: each successful side effect appends an undo
 	// closure. unwind runs them LIFO. We run cleanups outside any critical

@@ -107,13 +107,22 @@ func resolveCoordinatorBackend(explicit, project string, cfg config.Config, acco
 	if choice := backendtier.ResolveChoice(filtered, preferred, pin); choice.Backend != "" {
 		return choice.Backend
 	}
-	name := resolveDefaultBackendName("", project, filtered, accounts...)
+	name := ""
+	if explicit == config.DynamicBackend {
+		name = resolveDynamicBackendName(filtered, pin, project)
+	} else {
+		name = resolveDefaultBackendName("", project, filtered, accounts...)
+	}
 	effectiveAccount := pin
 	if effectiveAccount == "" {
 		effectiveAccount = cfg.ResolveAccount("", project)
 	}
 	if b, ok := cfg.Backends[name]; ok && IsClaudeBackend(b.Command) && cfg.AccountSupports(effectiveAccount, b.Command) {
 		return name
+	}
+	if explicit == config.DynamicBackend {
+		warnCoordinatorBackend("dynamic selection resolved to %q, which is not a compatible Claude backend", name)
+		return ""
 	}
 
 	if b, ok := cfg.Backends[claudeFallback]; ok && IsClaudeBackend(b.Command) && cfg.AccountSupports(effectiveAccount, b.Command) {
@@ -555,7 +564,11 @@ func MaterializeHeraSubCoordinator(database *db.DB, runner SessionProvider, in H
 	if aerr != nil {
 		return nil, aerr
 	}
-	backend := resolveCoordinatorBackend(in.Backend, in.Project, database.Config(), inheritedAccount)
+	cfg := database.Config()
+	if len(cfg.BackendRouting.Tiers) > 0 {
+		backendtier.FreshenBeforeSpawn()
+	}
+	backend := resolveCoordinatorBackend(in.Backend, in.Project, cfg, inheritedAccount)
 	if backend == "" {
 		return nil, fmt.Errorf("no Claude-capable backend supports account %q", inheritedAccount)
 	}
@@ -746,7 +759,11 @@ type HeraCoordinatorSpawnResult struct {
 // (hera_new_orchestrator) keeps its own task-resolution path because it binds an
 // EXISTING task rather than creating one.
 func SpawnHeraCoordinator(database *db.DB, runner SessionProvider, in HeraCoordinatorSpawnInput) (*HeraCoordinatorSpawnResult, error) {
-	backend := resolveCoordinatorBackend(in.Backend, in.Project, database.Config(), in.Account)
+	cfg := database.Config()
+	if len(cfg.BackendRouting.Tiers) > 0 {
+		backendtier.FreshenBeforeSpawn()
+	}
+	backend := resolveCoordinatorBackend(in.Backend, in.Project, cfg, in.Account)
 	if backend == "" {
 		return nil, fmt.Errorf("no Claude-capable backend supports account %q", in.Account)
 	}
