@@ -511,7 +511,7 @@ After a graduation commits, the system SHALL clear the task's resident-worker ma
 
 ### Requirement: A graduate cannot be archived or deleted while its restart is pending
 
-While a task carries the graduation-pending-restart state, archiving or deleting that task SHALL be refused at the database choke point, so every surface that can archive or delete it (the Tasks list and Projects rail in the TUI, REST, MCP, cascade nuke and cleanup) SHALL refuse and SHALL show or return a notice that the graduation restart is still pending. The refusal SHALL change nothing; a cascade nuke over a subtree containing a pending graduate SHALL refuse as a whole before any side effect. Once the restart has happened and the state is cleared, archive and delete SHALL work normally. While the state is set, `hera_join`, `hera_move` and adoption SHALL be refused for that task, the restart watcher SHALL track the graduated coordinator binding recorded at graduation, and the state SHALL be cleared (with a log line) if that binding has ended. The only other way to clear it SHALL be a human-only escape: deleting or archiving a pending graduate from the TUI SHALL offer, behind an explicit second confirmation, to abandon the pending restart, which clears the state, logs it, and then proceeds. That escape SHALL NOT be reachable through MCP; REST SHALL keep refusing.
+While a task carries the graduation-pending-restart state, archiving or deleting that task SHALL be refused at the database choke point, so every surface that can archive or delete it (the Tasks list and Projects rail in the TUI, REST, MCP, cascade nuke and cleanup) SHALL refuse and SHALL show or return a notice that the graduation restart is still pending. The refusal SHALL change nothing; a cascade nuke over a subtree containing a pending graduate SHALL refuse as a whole before any side effect. Once the restart has happened and the state is cleared, archive and delete SHALL work normally. While the state is set, `hera_join`, `hera_move` and adoption SHALL be refused for that task, the restart watcher SHALL track the graduated coordinator binding recorded at graduation, and the state SHALL be cleared (with a log line) if that binding has ended. The only other way to clear it SHALL be a human-only escape: deleting or archiving a pending graduate from the TUI SHALL offer, behind an explicit second confirmation, to abandon the pending restart, which clears the state, logs it, and then proceeds. That escape SHALL NOT be reachable through MCP; REST SHALL keep refusing. While the state is set, no surface other than the restart watcher SHALL kill and resume the graduate's session: TUI forced re-renders and size-drift kicks (Projects, resident and Tasks views) and the REST resize kick SHALL skip it.
 
 #### Scenario: Archive refused while pending
 
@@ -537,6 +537,11 @@ While a task carries the graduation-pending-restart state, archiving or deleting
 
 - **WHEN** the graduated coordinator binding recorded at graduation has ended before the restart ran
 - **THEN** the watcher clears the pending state with a log line instead of retrying forever
+
+#### Scenario: Only the watcher restarts a pending graduate
+
+- **WHEN** the human presses the re-render key on, resizes, or a web client resizes the view of a pending graduate's session
+- **THEN** no kill-and-resume happens and the graduation watcher remains the only restart path
 
 #### Scenario: Human abandon escape
 

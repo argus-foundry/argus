@@ -37,9 +37,11 @@ func NukeResidentWorker(d *db.DB, runner NukeRunner, r *heramodel.RoleView) (fol
 	if t.IsResident() {
 		return noop, errors.New("resident delete must never target itself")
 	}
-	if d.GraduationPending(t.ID) {
-		uxlog.Log("[resident] delete role %d skipped task=%s: graduation pending", r.RoleID, t.ID)
-		return noop, db.ErrGraduationPending
+	// CheckNukeTask surfaces the real error for an unreadable marker instead of
+	// reporting it as a pending graduation.
+	if err := CheckNukeTask(d, t.ID); err != nil {
+		uxlog.Log("[resident] delete role %d skipped task=%s: %v", r.RoleID, t.ID, err)
+		return noop, err
 	}
 	reclaim := false
 	if r.Live {

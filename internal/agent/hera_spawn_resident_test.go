@@ -6,6 +6,7 @@ import (
 
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
 
@@ -100,6 +101,36 @@ func TestSpawnHeraWorkerAccountPinOrdinaryOrch(t *testing.T) {
 		testutil.NoError(t, err)
 		testutil.Equal(t, stored.Account, "work")
 		testutil.Equal(t, stored.AccountRouted, false)
+	})
+
+	// An explicit pin outranks the account inherited from a pinned
+	// coordinator; without one the worker inherits the coordinator's pin.
+	t.Run("explicit pin outranks coordinator account", func(t *testing.T) {
+		testutil.NoError(t, d.SetAccount("personal", config.Account{ClaudeConfigDir: t.TempDir()}))
+		pinned, err := d.CreateHeraOrchestrator("coord-pinned", "")
+		testutil.NoError(t, err)
+		coord := &model.Task{ID: "coord-personal", Name: "coord", Project: "proj", Account: "personal", AccountRouted: false, Status: model.StatusInProgress}
+		testutil.NoError(t, d.Add(coord))
+		_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
+			OrchestratorID: pinned.ID, Name: "coord", Kind: db.HeraKindCoordinator, ArgusProject: "proj", Prompt: "x",
+		}, coord.ID, "")
+		testutil.NoError(t, err)
+
+		for _, tc := range []struct{ name, account, want string }{
+			{"inherits", "", "personal"},
+			{"explicit", "work", "work"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				spawned, err := SpawnHeraWorker(d, &fakeRunner{}, HeraWorkerSpawnInput{
+					OrchestratorID: pinned.ID, BaseName: "w-" + tc.name, Project: "proj", TaskPrompt: "x", Account: tc.account, Backend: "claude",
+				})
+				testutil.NoError(t, err)
+				stored, err := d.Get(spawned.Task.ID)
+				testutil.NoError(t, err)
+				testutil.Equal(t, stored.Account, tc.want)
+				testutil.Equal(t, stored.AccountRouted, false)
+			})
+		}
 	})
 
 	t.Run("unknown account fails with no side effects", func(t *testing.T) {

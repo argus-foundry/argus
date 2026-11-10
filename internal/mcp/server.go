@@ -1389,7 +1389,9 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 // ^[a-z0-9_]+$ names (TestBuiltinToolSchemasUseCanonicalKeys), so any other
 // key is refused outright. Plugin tools own their schemas, which may use
 // other spellings, and receive no Argus identity: for them only keys that
-// fold onto each other (an ambiguous decode) are refused.
+// fold onto each other (an ambiguous decode) are refused here, and
+// residentIdentityArg folds keys itself so a plugin's case-insensitive decode
+// cannot carry the resident's id or cwd.
 func (s *Server) canonicalArgKeysGuard(req *Request, name string, raw json.RawMessage) *Response {
 	var args map[string]json.RawMessage
 	if json.Unmarshal(raw, &args) != nil || len(args) == 0 {
@@ -1476,7 +1478,9 @@ var residentTaskIDArgs = []string{"id", "task_id", "caller_id"}
 //   - Impersonation (EVERY tool): resolveTask falls back to the resident for
 //     its working directory, so a connection other than the verified resident
 //     naming the resident's cwd, or naming the resident's task id in ANY
-//     task-id argument (residentTaskIDArgs), would otherwise act as or on the
+//     task-id argument (residentTaskIDArgs; keys case-folded and values
+//     trimmed, plugin tools included — see residentIdentityArg), would
+//     otherwise act as or on the
 //     resident (spawn unattended workers, forge a recycle handoff, read its
 //     inbox, send or set results as it, stop, archive, rename or complete it).
 //     There is deliberately no read-only allowlist: task_get already hides
@@ -1490,7 +1494,8 @@ func (s *Server) residentHeraCallGuard(req *Request, name string, raw json.RawMe
 		return nil // the tool reports its own decode error
 	}
 	if field := s.residentIdentityArg(req.caller, args); field != "" {
-		log.Printf("[resident] %s refused: caller=%q named the resident's %s", name, req.caller, field)
+		uxlog.Log("[resident] %s refused: caller=%q named the resident's identity via %q", name, req.caller, field)
+		slog.Warn("[resident] resident identity refused", "tool", name, "caller", req.caller, "field", field) //nolint:gosec // G706: slog encodes attributes, escaping control characters
 		return residentToolError(req.ID, name+": resident identity requires the resident's own bound connection")
 	}
 	if !strings.HasPrefix(name, "hera_") {
@@ -1524,32 +1529,145 @@ func (s *Server) residentHeraCallGuard(req *Request, name string, raw json.RawMe
 	return nil
 }
 
-// residentIdentityArg returns the argument ("cwd" or one of
-// residentTaskIDArgs) by which a call on a connection that is not the
-// verified resident identifies the resident, or "" when it does not. Keys are
-// exact: canonicalArgKeysGuard has already refused every folded spelling.
+// residentIdentityArg returns the argument (as spelled by the caller) by
+// which a call on a connection that is not the verified resident identifies
+// the resident, or "" when it does not. It must match what every receiver
+// could make of the arguments, not just the exact built-in spelling:
+//
+//   - Keys fold: plugin tools keep their own (non-canonical) schemas and their
+//     decoders may match case-insensitively, so {"Task_ID": ...} or
+//     {"CWD": ...} reaches a plugin's task_id/cwd. Every key that
+//     strings.EqualFold-matches "cwd" or one of residentTaskIDArgs is checked,
+//     not just the first (built-ins have already had every non-canonical key
+//     refused by canonicalArgKeysGuard).
+//   - Values are normalized: receivers trim (task_move_account's
+//     task_id/caller_id, profile_resolve's cwd), so ids are compared after
+//     strings.TrimSpace (and case-insensitively against the resident's id);
+//     a cwd is compared after trimming, ~ expansion and filepath.Clean, both
+//     through resolveTask and directly against the resident's working
+//     directory (case-insensitively, symlinks resolved, since the default
+//     macOS filesystem and plugins see through both).
 func (s *Server) residentIdentityArg(caller string, args map[string]interface{}) string {
 	if s.taskDB == nil || s.boundResident(caller) {
 		return ""
 	}
-	isResident := func(id string) bool {
-		if id == "" {
-			return false
-		}
-		t, err := s.taskDB.Get(id)
-		return err == nil && t != nil && t.IsResident()
-	}
-	if cwd, _ := args["cwd"].(string); cwd != "" {
-		if t, err := s.resolveTask("", cwd); err == nil && t != nil && t.IsResident() {
-			return "cwd"
+	var resident *model.Task
+	if rl, ok := s.taskDB.(residentLookup); ok {
+		if r, err := rl.ResidentTask(); err == nil && r != nil {
+			resident = r
 		}
 	}
-	for _, key := range residentTaskIDArgs {
-		if v, _ := args[key].(string); isResident(v) {
-			return key
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic refusal field
+	for _, key := range keys {
+		v, ok := args[key].(string)
+		if !ok {
+			continue
+		}
+		switch {
+		case strings.EqualFold(key, "cwd"):
+			if s.cwdIdentifiesResident(v, resident) {
+				return key
+			}
+		case residentTaskIDKey(key):
+			if s.idIdentifiesResident(v, resident) {
+				return key
+			}
 		}
 	}
 	return ""
+}
+
+// residentTaskIDKey reports whether key folds onto one of residentTaskIDArgs.
+func residentTaskIDKey(key string) bool {
+	for _, k := range residentTaskIDArgs {
+		if strings.EqualFold(key, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// idIdentifiesResident reports whether raw, trimmed, names the resident task.
+func (s *Server) idIdentifiesResident(raw string, resident *model.Task) bool {
+	id := strings.TrimSpace(raw)
+	if id == "" {
+		return false
+	}
+	if resident != nil && strings.EqualFold(id, resident.ID) {
+		return true
+	}
+	t, err := s.taskDB.Get(id)
+	return err == nil && t != nil && t.IsResident()
+}
+
+// cwdIdentifiesResident reports whether raw, normalized the way any receiver
+// might normalize it, resolves to or lies inside the resident's working
+// directory.
+func (s *Server) cwdIdentifiesResident(raw string, resident *model.Task) bool {
+	cwd := normalizeIdentityCwd(raw)
+	if cwd == "" {
+		return false
+	}
+	if t, err := s.resolveTask("", cwd); err == nil && t != nil && t.IsResident() {
+		return true
+	}
+	if resident == nil || resident.Worktree == "" {
+		return false
+	}
+	cands := pathForms(cwd)
+	for _, wt := range pathForms(filepath.Clean(resident.Worktree)) {
+		for _, c := range cands {
+			if pathWithinFold(c, wt) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// normalizeIdentityCwd trims raw, expands a leading ~ to $HOME, and cleans it.
+// Returns "" for a blank value.
+func normalizeIdentityCwd(raw string) string {
+	cwd := strings.TrimSpace(raw)
+	if cwd == "" {
+		return ""
+	}
+	if cwd == "~" || strings.HasPrefix(cwd, "~/") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			cwd = filepath.Join(home, cwd[1:])
+		}
+	}
+	return filepath.Clean(cwd)
+}
+
+// pathForms returns p and, when it differs and resolves, its symlink-free form.
+func pathForms(p string) []string {
+	out := []string{p}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil && resolved != p {
+		out = append(out, resolved)
+	}
+	return out
+}
+
+// pathWithinFold reports whether the cleaned path p equals the cleaned dir or
+// lies beneath it, comparing component by component case-insensitively
+// (component-wise because a fold can change a rune's byte length).
+func pathWithinFold(p, dir string) bool {
+	sep := string(filepath.Separator)
+	pc, dc := strings.Split(p, sep), strings.Split(dir, sep)
+	if len(pc) < len(dc) {
+		return false
+	}
+	for i := range dc {
+		if !strings.EqualFold(pc[i], dc[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) toolKBSearch(id interface{}, args json.RawMessage) *Response {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
@@ -248,7 +249,9 @@ func TestResidentTaskIDGuard_EveryTool(t *testing.T) {
 		"argus_clipboard_set", "sandbox_propose_write_paths", "task_message_send", "task_inbox", "task_message_ack",
 		"task_ask", "artifact_register", "artifact_publish", "artifact_open", "task_move_account", "task_create",
 	}
-	for _, key := range residentTaskIDArgs {
+	// A literal list, not the production residentTaskIDArgs slice: dropping a
+	// key there must fail this test rather than silently shrink it.
+	for _, key := range []string{"id", "task_id", "caller_id"} {
 		for _, name := range tools {
 			for _, conn := range []string{"unbound", "forged caller", "other task"} {
 				t.Run(key+"/"+name+"/"+conn, func(t *testing.T) {
@@ -306,4 +309,150 @@ func TestResidentTaskIDGuard_LegitimateCallsStillWork(t *testing.T) {
 			t.Fatalf("integer board id tripped the resident guard: %s", text)
 		}
 	})
+}
+
+const residentIdentityRefusal = "resident identity requires the resident's own bound connection"
+
+// task_move_account names its target by task_id: pinned independently of the
+// key loop above so the most damaging target stays covered.
+func TestResidentTaskIDGuard_TaskMoveAccountTaskID(t *testing.T) {
+	s, _ := residentServer(t)
+	moved := 0
+	s.SetAccountMover(func(agent.AccountMoveInput) (agent.AccountMoveResult, error) {
+		moved++
+		return agent.AccountMoveResult{}, nil
+	})
+	text, isErr := postTool(t, s, "/mcp", "task_move_account", `{"task_id":"res-1","account":"other"}`)
+	testutil.True(t, isErr)
+	testutil.Contains(t, text, "task_move_account: "+residentIdentityRefusal)
+	testutil.Equal(t, moved, 0)
+}
+
+// Built-in receivers trim id and cwd values (task_move_account's
+// task_id/caller_id, profile_resolve's cwd), so the guard compares trimmed,
+// cleaned values too: a padded resident identity is refused before dispatch.
+func TestResidentIdentityGuard_BuiltinValueNormalization(t *testing.T) {
+	t.Setenv("HOME", "/home/x")
+	for _, tc := range []struct{ name, tool, args string }{
+		{"move padded task_id", "task_move_account", `{"task_id":"res-1 ","account":"other"}`},
+		{"move tab task_id", "task_move_account", `{"task_id":"\tres-1","account":"other"}`},
+		{"move padded caller_id", "task_move_account", `{"task_id":"abc123","caller_id":" res-1","account":"other"}`},
+		{"move upper task_id", "task_move_account", `{"task_id":"RES-1","account":"other"}`},
+		{"profile padded cwd", "profile_resolve", `{"cwd":" /home/x/.argus/resident"}`},
+		{"profile trailing slash cwd", "profile_resolve", `{"cwd":"/home/x/.argus/resident/ "}`},
+		{"profile tilde cwd", "profile_resolve", `{"cwd":"~/.argus/resident"}`},
+		{"profile dotted cwd", "profile_resolve", `{"cwd":"/home/x/.argus/./resident/sub/.."}`},
+		{"stop padded id", "task_stop", `{"id":" res-1 "}`},
+		{"inbox case-folded cwd", "task_inbox", `{"cwd":"/HOME/X/.argus/Resident/sub"}`},
+	} {
+		for _, conn := range []string{"unbound", "forged caller"} {
+			t.Run(tc.name+"/"+conn, func(t *testing.T) {
+				s, rdb := residentServer(t)
+				store := &countingStore{mockMessageStore: &mockMessageStore{}}
+				s.SetMessageManager(store, &mockNudger{})
+				moved := 0
+				s.SetAccountMover(func(agent.AccountMoveInput) (agent.AccountMoveResult, error) {
+					moved++
+					return agent.AccountMoveResult{}, nil
+				})
+				path := "/mcp"
+				if conn == "forged caller" {
+					path = "/mcp?caller=res-1"
+				}
+				cr := callResult(t, postRaw(t, s, path, "", "tools/call", ToolCallParams{Name: tc.tool, Arguments: json.RawMessage(tc.args)}))
+				testutil.True(t, cr.IsError)
+				testutil.Contains(t, cr.Content[0].Text, tc.tool+": "+residentIdentityRefusal)
+				testutil.Equal(t, moved, 0)
+				testutil.Equal(t, store.inboxReads, 0)
+				testutil.Equal(t, len(s.taskStopper.(*mockStopper).stopped), 0)
+				testutil.Equal(t, rdb.resident.Status, model.StatusInProgress)
+			})
+		}
+	}
+}
+
+// Plugin tools keep their own schemas and may decode keys
+// case-insensitively (iris reads task_id, plannotator cwd), so the identity
+// guard folds keys for them: a folded or padded resident identity never
+// reaches the plugin from a non-resident connection.
+func TestResidentIdentityGuard_PluginTools(t *testing.T) {
+	t.Setenv("HOME", "/home/x")
+	calls := 0
+	plugin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"isError":false}`))
+	}))
+	t.Cleanup(plugin.Close)
+	newSrv := func(t *testing.T) *Server {
+		s, _ := residentServer(t)
+		d, err := db.OpenInMemory()
+		testutil.NoError(t, err)
+		t.Cleanup(func() { _ = d.Close() })
+		reg := NewRegistry(d)
+		s.SetPluginRegistry(reg)
+		testutil.NoError(t, reg.Register("iris", ToolRegistration{Name: "iris_push", InputSchema: json.RawMessage(`{}`), CallbackURL: plugin.URL}))
+		testutil.NoError(t, reg.Register("plannotator", ToolRegistration{Name: "plannotator_annotate", InputSchema: json.RawMessage(`{}`), CallbackURL: plugin.URL}))
+		return s
+	}
+	for _, tc := range []struct{ name, tool, args string }{
+		{"iris Task_ID", "iris_push", `{"Task_ID":"res-1"}`},
+		{"iris TASK_ID padded", "iris_push", `{"TASK_ID":" res-1 "}`},
+		{"iris exact task_id", "iris_push", `{"task_id":"res-1"}`},
+		{"iris ID", "iris_push", `{"ID":"res-1"}`},
+		{"iris Caller_Id", "iris_push", `{"Caller_Id":"res-1"}`},
+		{"iris Kelvin tasK_id", "iris_push", `{"tasK_id":"res-1"}`},
+		{"iris second identity key", "iris_push", `{"id":"abc123","Task_ID":"res-1"}`},
+		{"plannotator CWD tilde", "plannotator_annotate", `{"CWD":"~/.argus/resident"}`},
+		{"plannotator Cwd padded", "plannotator_annotate", `{"Cwd":" /home/x/.argus/resident/notes "}`},
+		{"plannotator cwd case-folded", "plannotator_annotate", `{"cwd":"/home/x/.ARGUS/resident"}`},
+	} {
+		for _, conn := range []string{"unbound", "forged caller"} {
+			t.Run(tc.name+"/"+conn, func(t *testing.T) {
+				s := newSrv(t)
+				path := "/mcp"
+				if conn == "forged caller" {
+					path = "/mcp?caller=res-1"
+				}
+				before := calls
+				cr := callResult(t, postRaw(t, s, path, "", "tools/call", ToolCallParams{Name: tc.tool, Arguments: json.RawMessage(tc.args)}))
+				testutil.True(t, cr.IsError)
+				testutil.Contains(t, cr.Content[0].Text, tc.tool+": "+residentIdentityRefusal)
+				testutil.Equal(t, calls, before)
+			})
+		}
+	}
+	for _, tc := range []struct{ name, path, args string }{
+		{"ordinary task id", "/mcp", `{"Task_ID":"abc123","cwd":"/wt/elsewhere"}`},
+		{"ordinary camelCase args", "/mcp", `{"sessionId":"s1","Text":"hello"}`},
+		{"sibling of resident dir", "/mcp", `{"CWD":"/home/x/.argus/resident-notes"}`},
+		{"verified resident names itself", "/mcp?caller=res-1", `{"Task_ID":"res-1","CWD":"/home/x/.argus/resident"}`},
+	} {
+		t.Run("allowed/"+tc.name, func(t *testing.T) {
+			s := newSrv(t)
+			before := calls
+			text, isErr := postTool(t, s, tc.path, "iris_push", tc.args)
+			testutil.False(t, isErr)
+			testutil.Equal(t, text, "ok")
+			testutil.Equal(t, calls, before+1)
+		})
+	}
+}
+
+func TestPathWithinFold(t *testing.T) {
+	for _, tc := range []struct {
+		p, dir string
+		want   bool
+	}{
+		{"/home/x/.argus/resident", "/home/x/.argus/resident", true},
+		{"/home/x/.argus/resident/a/b", "/home/x/.argus/resident", true},
+		{"/HOME/X/.ARGUS/RESIDENT", "/home/x/.argus/resident", true},
+		{"/home/x/.argus/residentx", "/home/x/.argus/resident", false},
+		{"/home/x/.argus", "/home/x/.argus/resident", false},
+		{"/other/resident", "/home/x/.argus/resident", false},
+	} {
+		t.Run(tc.p, func(t *testing.T) {
+			testutil.Equal(t, pathWithinFold(tc.p, tc.dir), tc.want)
+		})
+	}
 }

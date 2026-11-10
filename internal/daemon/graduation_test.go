@@ -344,10 +344,10 @@ func TestGraduationRecordedBindingSurvivesSecondLiveBinding(t *testing.T) {
 }
 
 func TestGraduationEndedBindingAbandonsState(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		t.Run(fmt.Sprint("legacy=", legacy), func(t *testing.T) {
+	for _, noID := range []bool{false, true} {
+		t.Run(fmt.Sprint("noID=", noID), func(t *testing.T) {
 			d, w, res := graduatedFixture(t)
-			if legacy {
+			if noID {
 				testutil.NoError(t, d.SetMeta(w.ID, db.HeraMetaNamespace, db.HeraMetaKeyGraduationBindingID, ""))
 			} else {
 				testutil.NoError(t, d.EndHeraBinding(res.NewBinding.ID, db.HeraEndReasonUserDeleted))
@@ -357,11 +357,7 @@ func TestGraduationEndedBindingAbandonsState(t *testing.T) {
 			g.resumable = func(*model.Task, config.Config) (bool, error) { return true, nil }
 			g.stopJobs = func(*model.Task, config.Config, string) error { return nil }
 			g.sweep()
-			if legacy {
-				testutil.Equal(t, r.kicks, 1) // old lookup still drives the restart
-				testutil.True(t, d.GraduationPending(w.ID))
-				return
-			}
+			// A pending row without a recorded id is cleared, never guessed.
 			testutil.Equal(t, r.kicks, 0)
 			testutil.False(t, d.GraduationPending(w.ID))
 			meta, err := d.ListMetaByNamespace(db.HeraMetaNamespace)
@@ -369,4 +365,64 @@ func TestGraduationEndedBindingAbandonsState(t *testing.T) {
 			testutil.Equal(t, meta[w.ID][db.HeraMetaKeyGraduationBindingID], "")
 		})
 	}
+}
+
+// A human abandon landing between the sweep's meta snapshot and advance must
+// not be undone: no kick and the marker stays cleared. (Old code fell back to
+// the by-task lookup and re-upserted "restart:<pid>".)
+func TestGraduationAbandonBetweenSnapshotAndAdvance(t *testing.T) {
+	d, w, _ := graduatedFixture(t)
+	r := &graduationRunner{sess: &graduationSession{idle: true, pid: 11}}
+	g := newGraduationWatcher(d, r, d.Config, nil)
+	g.resumable = func(*model.Task, config.Config) (bool, error) { return true, nil }
+	g.stopJobs = func(*model.Task, config.Config, string) error { return nil }
+	testutil.NoError(t, d.AbandonGraduationPending(w.ID))
+	testutil.NoError(t, g.advance(w.ID, "true")) // stale phase from the snapshot
+	testutil.Equal(t, r.kicks, 0)
+	testutil.False(t, d.GraduationPending(w.ID))
+}
+
+// Abandon after resolveGraduate but before the phase write: the CAS refuses.
+func TestGraduationAbandonDuringJobCleanup(t *testing.T) {
+	d, w, _ := graduatedFixture(t)
+	r := &graduationRunner{sess: &graduationSession{idle: true, pid: 11}}
+	g := newGraduationWatcher(d, r, d.Config, nil)
+	g.resumable = func(*model.Task, config.Config) (bool, error) { return true, nil }
+	g.stopJobs = func(*model.Task, config.Config, string) error {
+		return d.AbandonGraduationPending(w.ID)
+	}
+	g.sweep()
+	testutil.Equal(t, r.kicks, 0)
+	testutil.False(t, d.GraduationPending(w.ID))
+}
+
+func TestGraduationPersistentPreflightFailureIsBackedOffAndLoggedOnce(t *testing.T) {
+	d, w, _ := graduatedFixture(t)
+	r := &graduationRunner{sess: &graduationSession{idle: true, pid: 11}}
+	g := newGraduationWatcher(d, r, d.Config, nil)
+	probes := 0
+	g.resumable = func(*model.Task, config.Config) (bool, error) { probes++; return false, nil }
+	g.stopJobs = func(*model.Task, config.Config, string) error { return nil }
+	var logs []string
+	g.logf = func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	clock := time.Unix(1000, 0)
+	g.now = func() time.Time { return clock }
+	for range 25 { // 25s of 1s ticks = 3 backoff windows
+		g.sweep()
+		clock = clock.Add(time.Second)
+	}
+	testutil.Equal(t, probes, 3)
+	testutil.Equal(t, len(logs), 1)
+	testutil.True(t, d.GraduationPending(w.ID)) // still no deadline
+	// A different reason logs again.
+	g.resumable = func(*model.Task, config.Config) (bool, error) { probes++; return false, fmt.Errorf("boom") }
+	clock = clock.Add(graduationResumeBackoff)
+	g.sweep()
+	g.sweep()
+	testutil.Equal(t, len(logs), 2)
+	// Recovery resumes immediately after the window.
+	g.resumable = func(*model.Task, config.Config) (bool, error) { return true, nil }
+	clock = clock.Add(graduationResumeBackoff)
+	g.sweep()
+	testutil.Equal(t, r.kicks, 1)
 }

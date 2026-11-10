@@ -138,6 +138,9 @@ func (s *Server) handlePatchTaskRuntime(w http.ResponseWriter, r *http.Request) 
 		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
 		return
 	}
+	if s.refuseGraduationPending(w, id, "runtime") {
+		return
+	}
 
 	if req.Apply != applyNextResume && req.Apply != applyRestart {
 		writeCodedErrCause(w, http.StatusBadRequest, `apply must be "next_resume" or "restart"`, "invalid_apply", nil)

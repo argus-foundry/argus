@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -976,7 +975,7 @@ func (a *App) buildUI() {
 		// orphan messages in remote mode because apistore can't expose the
 		// DeleteMessagesForTask endpoint and PUT /api/tasks/{id}/raw doesn't
 		// trigger server-side cleanup.
-		if err := a.db.SetArchived(t.ID, t.Archived); errors.Is(err, db.ErrGraduationPending) {
+		if err := a.db.SetArchived(t.ID, t.Archived); graduationPendingErr(err) {
 			uxlog.Log("[resident] tui archive refused task=%s: graduation pending", t.ID)
 			a.flashNotice(db.ErrGraduationPending.Error())
 			if t.Archived {
@@ -5936,6 +5935,10 @@ func (a *App) maybeKickRerender(task *model.Task, sess agent.SessionHandle) {
 	if !a.autoRerenderOn() {
 		return // resize-without-restart: the owed notice + hotkey replace the automatic kick
 	}
+	if task != nil && a.graduationPendingQuiet(task.ID) {
+		uxlog.Log("[resident] size-drift kick skipped task=%s: graduation restart pending", task.ID)
+		return
+	}
 	_, panelCols := a.computePTYSize() // safe: GetInnerRect on the main goroutine
 	a.maybeKickRerenderGated(task, sess, panelCols, nil, func() bool { return a.agentPane.ScrollOffset() > 0 })
 }
@@ -6259,6 +6262,9 @@ func (a *App) rerenderHotkeyClassic() {
 	a.mu.Unlock()
 	if taskID == "" {
 		return
+	}
+	if a.graduationPendingBlocked(taskID, "rerender") {
+		return // the daemon owns a pending graduate's restart
 	}
 	_, cols := a.computePTYSize()
 	a.rerenderNow(taskID, cols, func() bool { return a.agentPane.ScrollOffset() > 0 }, nil)
@@ -8712,6 +8718,9 @@ func (a *App) closeConfirmDeleteProject() {
 	a.tapp.SetFocus(a.settingsPage)
 }
 
+// removeWorktreeAndBranch is a test seam over agent.RemoveWorktreeAndBranch.
+var removeWorktreeAndBranch = agent.RemoveWorktreeAndBranch
+
 // deleteTask stops the agent, cleans up the worktree/branch, and removes the task from DB.
 // Worktree/branch cleanup runs in a background goroutine to avoid blocking the UI.
 func (a *App) deleteTask(t *model.Task) {
@@ -8719,6 +8728,20 @@ func (a *App) deleteTask(t *model.Task) {
 		return
 	}
 	uxlog.Log("[tui] deleting task %s (%s)", t.ID, t.Name)
+
+	// The refusal-capable DB delete runs FIRST: a refused delete (graduation
+	// pending — locally or as the daemon's 409 in remote mode) or any other
+	// failure must leave the session, log, artifacts and worktree untouched.
+	if err := a.db.Delete(t.ID); err != nil {
+		if graduationPendingErr(err) {
+			uxlog.Log("[resident] tui delete refused task=%s: graduation pending", t.ID)
+			a.flashNotice(db.ErrGraduationPending.Error())
+		} else {
+			uxlog.Log("[tui] failed to delete task %s: %v", t.ID, err)
+			a.statusbar.SetError("Delete failed: " + err.Error())
+		}
+		return
+	}
 
 	// Stop the agent if running.
 	if a.runner.HasSession(t.ID) {
@@ -8741,10 +8764,6 @@ func (a *App) deleteTask(t *model.Task) {
 	}
 	os.RemoveAll(agent.ArtifactsDir(t.ID)) //nolint:errcheck
 
-	// Delete from database first so the UI updates immediately.
-	if err := a.db.Delete(t.ID); err != nil {
-		uxlog.Log("[tui] failed to delete task %s: %v", t.ID, err)
-	}
 	// Drop any per-task cache entries so deleted tasks don't accumulate
 	// in long-lived TUI sessions. Matches the cleanup pattern for
 	// pendingRerenderRestart (in handleSessionExitUI).
@@ -8761,7 +8780,7 @@ func (a *App) deleteTask(t *model.Task) {
 	go func() {
 		repoDir := agent.ResolveDir(t, cfg)
 		if worktree != "" {
-			agent.RemoveWorktreeAndBranch(worktree, branch, repoDir)
+			removeWorktreeAndBranch(worktree, branch, repoDir)
 		} else if branch != "" && repoDir != "" {
 			agent.DeleteBranch(repoDir, branch)
 			agent.DeleteRemoteBranch(repoDir, branch)

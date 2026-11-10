@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
@@ -89,4 +90,23 @@ func (d *DB) HeraBindingByID(id int64) (*HeraBinding, error) {
 		`SELECT id, role_id, orchestrator_id, argus_task_id, worktree_path, started_at, ended_at, end_reason
 		 FROM hera_bindings WHERE id=?`, id)
 	return scanHeraBinding(row)
+}
+
+// AdvanceGraduationPhase compare-and-sets the pending-restart phase from->to in
+// one statement. It reports false (writing nothing) when the key is gone or no
+// longer holds from, so the daemon watcher can never re-create a marker that a
+// human abandon just cleared.
+func (d *DB) AdvanceGraduationPhase(taskID, from, to string) (bool, error) {
+	changed := false
+	err := d.WithTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`UPDATE task_meta SET value=?, updated_at=? WHERE task_id=? AND namespace='hera' AND key=? AND value=?`,
+			to, formatTime(time.Now()), taskID, HeraMetaKeyGraduationPendingRestart, from)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		changed = n > 0
+		return err
+	})
+	return changed && err == nil, err
 }

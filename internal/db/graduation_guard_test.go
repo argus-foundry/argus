@@ -114,3 +114,39 @@ func TestCompleteHeraGraduationClearsBindingID(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, meta[b.ArgusTaskID][HeraMetaKeyGraduationBindingID], "")
 }
+
+func TestAdvanceGraduationPhase_CAS(t *testing.T) {
+	d, err := OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	read := func() string {
+		meta, err := d.ListMetaByNamespace(HeraMetaNamespace)
+		testutil.NoError(t, err)
+		return meta["t1"][HeraMetaKeyGraduationPendingRestart]
+	}
+	// Key absent: refuses and does NOT create it.
+	ok, err := d.AdvanceGraduationPhase("t1", "true", "restart:5")
+	testutil.NoError(t, err)
+	testutil.False(t, ok)
+	testutil.Equal(t, read(), "")
+	testutil.NoError(t, d.SetMeta("t1", HeraMetaNamespace, HeraMetaKeyGraduationPendingRestart, "true"))
+	// Stale expected phase refuses.
+	ok, err = d.AdvanceGraduationPhase("t1", "restart:1", "restart:5")
+	testutil.NoError(t, err)
+	testutil.False(t, ok)
+	testutil.Equal(t, read(), "true")
+	ok, err = d.AdvanceGraduationPhase("t1", "true", "restart:5")
+	testutil.NoError(t, err)
+	testutil.True(t, ok)
+	testutil.Equal(t, read(), "restart:5")
+	// Same-value retry still reports success.
+	ok, err = d.AdvanceGraduationPhase("t1", "restart:5", "restart:5")
+	testutil.NoError(t, err)
+	testutil.True(t, ok)
+	// Abandon then advance: stays cleared.
+	testutil.NoError(t, d.AbandonGraduationPending("t1"))
+	ok, err = d.AdvanceGraduationPhase("t1", "restart:5", "restart:6")
+	testutil.NoError(t, err)
+	testutil.False(t, ok)
+	testutil.Equal(t, read(), "")
+}

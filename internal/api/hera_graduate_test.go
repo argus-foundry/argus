@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -178,4 +179,31 @@ func TestDeleteTaskPendingGraduateNoSideEffects(t *testing.T) {
 	got, err := d.Get("g2")
 	testutil.NoError(t, err)
 	testutil.Equal(t, got.ID, "g2")
+}
+
+// writeNukeRefusal's 500 branch: an unreadable pending-marker check refuses
+// (fail closed) with "graduation check failed" and nothing is nuked.
+func TestHeraNukeRefusedWith500WhenPendingCheckUnreadable(t *testing.T) {
+	srv, d := testServer(t)
+	orch, roles, tasks := seedOrch(t, d, "o1", db.HeraKindCoordinator, db.HeraKindWorker)
+	// Only the pending-marker read can fail: the hera model build and every
+	// other table stay readable.
+	testutil.NoError(t, d.WithTx(func(tx *sql.Tx) error { _, err := tx.Exec(`DROP TABLE task_meta`); return err }))
+
+	for name, path := range map[string]string{
+		"role": idp("roles", roles[1].ID, "nuke"),
+		"orch": idp("orchestrators", orch.ID, "nuke"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := heraPost(srv, path, "", "master")
+			testutil.Equal(t, w.Code, http.StatusInternalServerError)
+			testutil.Contains(t, w.Body.String(), "graduation check failed")
+			r, err := d.HeraRole(roles[1].ID)
+			testutil.NoError(t, err)
+			testutil.True(t, r.NukedAt == nil)
+			got, err := d.Get(tasks[1].ID)
+			testutil.NoError(t, err)
+			testutil.False(t, got.Archived)
+		})
+	}
 }

@@ -164,6 +164,9 @@ func (s *Server) handleSwitchClaudeSession(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusNotFound, "task not found", nil)
 		return
 	}
+	if s.refuseGraduationPending(w, id, "session switch") {
+		return
+	}
 
 	cfg := s.db.Config()
 	if err := claudeOnlyGuard(task, cfg); err != nil {

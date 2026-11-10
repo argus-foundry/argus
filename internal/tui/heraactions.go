@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"runtime/debug"
 	"strings"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/apiclient"
 	"github.com/argus-foundry/argus/internal/app/agentview"
 	"github.com/argus-foundry/argus/internal/daemon"
 	"github.com/argus-foundry/argus/internal/db"
@@ -1775,6 +1777,21 @@ func (a *App) graduationPendingBlocked(taskID, what string) bool {
 	uxlog.Log("[resident] tui %s refused task=%s: graduation pending", what, taskID)
 	a.flashNotice(db.ErrGraduationPending.Error())
 	return true
+}
+
+// graduationPendingErr reports whether err is the graduation-pending refusal,
+// from either store: the local db sentinel, or (remote mode) the daemon's 409
+// carrying the sentinel's text — the apiclient error never wraps the sentinel.
+func graduationPendingErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, db.ErrGraduationPending) {
+		return true
+	}
+	var ae *apiclient.Error
+	return errors.As(err, &ae) && ae.Status == http.StatusConflict &&
+		strings.Contains(ae.Message, "graduation restart pending")
 }
 
 // graduationPendingQuiet is graduationPendingBlocked without the notice/log

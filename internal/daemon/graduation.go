@@ -35,7 +35,17 @@ type graduationWatcher struct {
 	now        func() time.Time
 	lastResume map[string]time.Time
 	backoffLog map[string]bool
+	// lastReason and preflightFail dedupe the deferral log line per distinct
+	// reason and rate-limit the preflight itself (ResolveBackend plus the
+	// transcript probe) to once per backoff window while it keeps failing.
+	lastReason    map[string]string
+	preflightFail map[string]time.Time
+	logf          func(string, ...any)
 }
+
+// errGraduationBackoff is the silent "preflight failed recently, not yet"
+// outcome: the sweep neither logs nor re-runs the preflight for it.
+var errGraduationBackoff = errors.New("graduation preflight backoff")
 
 const graduationResumeBackoff = 10 * time.Second
 
@@ -45,7 +55,7 @@ type graduationNotifier interface {
 }
 
 func newGraduationWatcher(d *db.DB, r agent.SessionRunner, cfg func() config.Config, n graduationNotifier) *graduationWatcher {
-	return &graduationWatcher{db: d, runner: r, cfgFn: cfg, notifier: n, resumable: agent.ResumableSessionAvailable, stopJobs: agent.StopStrayJobs, stop: make(chan struct{}), done: make(chan struct{}), deferred: make(map[string]string), now: time.Now, lastResume: make(map[string]time.Time), backoffLog: make(map[string]bool)}
+	return &graduationWatcher{db: d, runner: r, cfgFn: cfg, notifier: n, resumable: agent.ResumableSessionAvailable, stopJobs: agent.StopStrayJobs, stop: make(chan struct{}), done: make(chan struct{}), deferred: make(map[string]string), now: time.Now, lastResume: make(map[string]time.Time), backoffLog: make(map[string]bool), lastReason: make(map[string]string), preflightFail: make(map[string]time.Time), logf: uxlog.Log}
 }
 
 func (g *graduationWatcher) start() {
@@ -97,9 +107,16 @@ func (g *graduationWatcher) sweep() {
 	}
 	for taskID, kv := range meta {
 		if phase := kv[db.HeraMetaKeyGraduationPendingRestart]; phase != "" {
-			if err := g.advance(taskID, phase); err != nil {
-				uxlog.Log("[resident] graduation task=%s deferred: %v", taskID, err)
+			switch err := g.advance(taskID, phase); {
+			case err == nil:
+				delete(g.lastReason, taskID)
+			case errors.Is(err, errGraduationBackoff):
+			case g.lastReason[taskID] != err.Error():
+				g.lastReason[taskID] = err.Error()
+				g.logf("[resident] graduation task=%s deferred: %v", taskID, err)
 			}
+		} else if kv["graduation_orientation"] == "" {
+			g.forget(taskID)
 		}
 		if body := kv["graduation_orientation"]; body != "" && g.notifier != nil {
 			id := "graduation:" + taskID
@@ -113,11 +130,22 @@ func (g *graduationWatcher) sweep() {
 	}
 }
 
+// forget drops every per-task memo once the pending marker is gone.
+func (g *graduationWatcher) forget(taskID string) {
+	delete(g.lastReason, taskID)
+	delete(g.preflightFail, taskID)
+	delete(g.deferred, taskID)
+	delete(g.lastResume, taskID)
+	delete(g.backoffLog, taskID)
+}
+
 // resolveGraduate finds the graduate's coordinator binding via the binding id
 // recorded at graduation (a task holding a second live binding would make the
 // by-task lookup ambiguous forever). A recorded binding that has ended, or no
 // longer exists, abandons the pending state instead of retrying forever. A
-// legacy pending row without a recorded id falls back to the by-task lookup.
+// pending row WITHOUT a recorded id is never guessed at (graduation always
+// records one): it is cleared with a log line, which also keeps a human
+// abandon from being resurrected by a sweep that read its snapshot earlier.
 func (g *graduationWatcher) resolveGraduate(taskID string) (b *db.HeraBinding, abandoned bool, err error) {
 	meta, err := g.db.ListMetaByNamespace(db.HeraMetaNamespace)
 	if err != nil {
@@ -125,8 +153,12 @@ func (g *graduationWatcher) resolveGraduate(taskID string) (b *db.HeraBinding, a
 	}
 	raw := meta[taskID][db.HeraMetaKeyGraduationBindingID]
 	if raw == "" {
-		b, err = g.db.HeraLiveBindingByTask(taskID)
-		return b, false, err
+		if aerr := g.db.ClearGraduationState(taskID); aerr != nil {
+			return nil, false, aerr
+		}
+		uxlog.Log("[resident] graduation cleared: pending state has no recorded binding id task=%s", taskID)
+		g.forget(taskID)
+		return nil, true, nil
 	}
 	id, perr := strconv.ParseInt(raw, 10, 64)
 	if perr != nil {
@@ -213,18 +245,35 @@ func (g *graduationWatcher) advance(taskID, phase string) error {
 			return nil
 		}
 	}
+	if last, ok := g.preflightFail[taskID]; ok && g.now().Sub(last) < graduationResumeBackoff {
+		return errGraduationBackoff
+	}
 	if err := g.preflight(t); err != nil {
+		g.preflightFail[taskID] = g.now()
 		return err
 	}
+	delete(g.preflightFail, taskID)
 	pid := 0
 	if alive {
 		pid = sess.PID()
 	}
-	if err := g.db.SetMeta(taskID, db.HeraMetaNamespace, db.HeraMetaKeyGraduationPendingRestart, fmt.Sprintf("restart:%d", pid)); err != nil {
+	// Compare-and-set: a human abandon between the sweep's snapshot and this
+	// write removed the marker; never re-create it.
+	ok, err := g.db.AdvanceGraduationPhase(taskID, phase, fmt.Sprintf("restart:%d", pid))
+	if err != nil {
 		return err
+	}
+	if !ok {
+		uxlog.Log("[resident] graduation task=%s advance skipped: pending marker changed or cleared", taskID)
+		g.forget(taskID)
+		return nil
 	}
 	if err := g.stopJobs(t, g.cfgFn(), t.SessionID); err != nil {
 		return err
+	}
+	if still, perr := g.db.GraduationPendingErr(taskID); perr != nil || !still {
+		uxlog.Log("[resident] graduation task=%s kick skipped: pending cleared during job cleanup (err=%v)", taskID, perr)
+		return perr
 	}
 	// Recheck after external cleanup. KickRerender preserves this exact session
 	// ID and refuses missing transcripts; KickRevive could silently start fresh.

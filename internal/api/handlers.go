@@ -1566,6 +1566,15 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 	if !agent.MarginExceedsRerenderThreshold(initCols, int(cols)) {
 		return false, ""
 	}
+	// A pending graduate's restart belongs to the daemon graduation watcher
+	// (stray-job stop first, one restart). A width kick here would race it, so
+	// skip — fail closed: an unreadable marker counts as pending. The cols
+	// cache is invalidated so a resize after the graduation settles retries.
+	if pending, perr := s.db.GraduationPendingErr(taskID); perr != nil || pending {
+		uxlog.Log("[resident] kick skipped: graduation pending task=%s (err=%v)", taskID, perr)
+		s.invalidateColsCache(taskID)
+		return false, ""
+	}
 	// Now the expensive lookups. Re-check IsIdle here so the idle gate
 	// reflects state at-the-moment-of-stop, not earlier.
 	if !sess.IsIdle() {

@@ -6070,6 +6070,11 @@ func pressEnter(t *testing.T, app *App) {
 	})
 }
 
+func assertHeraConfirmMode(t *testing.T, app *App) {
+	t.Helper()
+	readUI(t, app.tapp, func() { testutil.Equal(t, app.mode, modeHeraConfirm) })
+}
+
 func pressEsc(t *testing.T, app *App) {
 	t.Helper()
 	readUI(t, app.tapp, func() {
@@ -6131,6 +6136,7 @@ func TestPendingGraduate_AbandonEscape(t *testing.T) {
 		defer stop()
 		readUI(t, app.tapp, func() { app.deleteTask(task) })
 		readUI(t, app.tapp, func() { testutil.True(t, app.heraConfirmModal != nil) })
+		assertHeraConfirmMode(t, app)
 		pressEnter(t, app) // first confirm -> second modal
 		readUI(t, app.tapp, func() {
 			testutil.True(t, app.heraConfirmModal != nil)
@@ -6155,7 +6161,9 @@ func TestPendingGraduate_AbandonEscape(t *testing.T) {
 		_, stop := wireApp(t, app)
 		defer stop()
 		readUI(t, app.tapp, func() { app.deleteTask(task) })
+		assertHeraConfirmMode(t, app)
 		pressEnter(t, app)
+		assertHeraConfirmMode(t, app)
 		pressEnter(t, app)
 		testutil.False(t, d.GraduationPending(task.ID))
 		got, err := d.Get(task.ID)
@@ -6168,7 +6176,9 @@ func TestPendingGraduate_AbandonEscape(t *testing.T) {
 		toggled := *task
 		toggled.Archived = true
 		readUI(t, app.tapp, func() { app.tasklist.OnArchive(&toggled) })
+		assertHeraConfirmMode(t, app)
 		pressEnter(t, app)
+		assertHeraConfirmMode(t, app)
 		pressEnter(t, app)
 		testutil.False(t, d.GraduationPending(task.ID))
 		got, err := d.Get(task.ID)
@@ -6182,9 +6192,24 @@ func TestPendingGraduate_AbandonEscape(t *testing.T) {
 		readUI(t, app.tapp, func() {
 			app.heraNukeRole(&hera.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})
 		})
+		assertHeraConfirmMode(t, app)
 		pressEnter(t, app)
+		assertHeraConfirmMode(t, app)
 		pressEnter(t, app)
 		testutil.False(t, d.GraduationPending(task.ID))
+		// The nuke actually ran: role nuked, graduate's live binding ended.
+		// (the nuke may hard-delete the role row or just stamp NukedAt).
+		got, err := d.HeraRole(role.ID)
+		if err == nil {
+			testutil.True(t, got.NukedAt != nil)
+		} else {
+			testutil.ErrorIs(t, err, db.ErrHeraNotFound)
+		}
+		live, err := d.HeraLiveBindingByTask(task.ID)
+		if err != nil {
+			testutil.ErrorIs(t, err, db.ErrHeraNotFound)
+		}
+		testutil.True(t, live == nil)
 	})
 	t.Run("remote mode offers no escape", func(t *testing.T) {
 		app, d, task, _ := pendingGraduateFixture(t)

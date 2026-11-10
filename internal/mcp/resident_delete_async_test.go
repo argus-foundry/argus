@@ -15,9 +15,18 @@ func TestResidentDelete_SummaryDoesNotWaitOnFleetReconcile(t *testing.T) {
 	s, d, res, o := residentHeraFixture(t)
 	worker, role, _ := residentTestWorker(t, d, o.ID, "worker")
 	started, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	// The sweep must never run under the shared worker-mutation lock (it would
+	// serialize every spawn/delete/graduate behind a fleet-wide scan). The
+	// stub probes the lock only after release, i.e. after the tool handler
+	// returned and dropped its own hold.
+	sweepHeldMutationLock := true
 	s.residentFleetReconcile = func(*db.DB, hera.SessionChecker) (hera.Summary, error) {
 		close(started)
 		<-release
+		if residentWorkerMutationMu.TryLock() {
+			sweepHeldMutationLock = false
+			residentWorkerMutationMu.Unlock()
+		}
 		close(finished)
 		return hera.Summary{}, nil
 	}
@@ -64,6 +73,7 @@ func TestResidentDelete_SummaryDoesNotWaitOnFleetReconcile(t *testing.T) {
 		t.Fatal("fleet-wide reclaim sweep never finished")
 	}
 	s.residentBackground.Wait()
+	testutil.False(t, sweepHeldMutationLock)
 }
 
 func TestResidentDelete_AsyncSweepPanicRecovered(t *testing.T) {
