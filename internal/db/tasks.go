@@ -944,39 +944,6 @@ func (d *DB) WorktreePaths() (map[string]bool, error) {
 	return paths, nil
 }
 
-// SetTaskAccount writes only a task's account and routed flag, so an account
-// move never reverts a concurrent edit to any other column.
-func (d *DB) SetTaskAccount(id, account string, routed bool) error {
-	changed, err := d.setTaskAccountLocked(id, account, routed)
-	if err != nil {
-		return err
-	}
-	if changed {
-		events.EmitTaskUpdated(id, model.TaskFieldAccount)
-	}
-	return nil
-}
-
-func (d *DB) setTaskAccountLocked(id, account string, routed bool) (bool, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if gerr := residentGuard(d.conn, id); gerr != nil {
-		return false, gerr
-	}
-	var oldAccount string
-	var oldRouted int
-	if err := d.conn.QueryRow(`SELECT account, account_routed FROM tasks WHERE id=?`, id).Scan(&oldAccount, &oldRouted); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
-		}
-		return false, err
-	}
-	if _, err := d.conn.Exec(`UPDATE tasks SET account=?, account_routed=? WHERE id=?`, account, boolToInt(routed), id); err != nil {
-		return false, err
-	}
-	return oldAccount != account || (oldRouted != 0) != routed, nil
-}
-
 // TaskBackendMove is the set of task columns a move to another agent CLI
 // rewrites together. It is also the shape returned for rollback.
 type TaskBackendMove struct {

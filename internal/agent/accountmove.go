@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/argus-foundry/argus/internal/backendkind"
 	"github.com/argus-foundry/argus/internal/claudesession"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
@@ -49,6 +48,21 @@ func releaseAccountMove(id string) {
 	accountMovesInFlight.Lock()
 	delete(accountMovesInFlight.ids, id)
 	accountMovesInFlight.Unlock()
+}
+
+// ErrAccountMoveRestartUnknown means the persisted move may still start.
+var ErrAccountMoveRestartUnknown = errors.New("account move restart outcome unknown")
+
+// SessionTransfer copies a task's saved conversation from the from-account's
+// storage into the to-account's (copies of the task that differ only in
+// Account) and reports whether a conversation was carried over. It validates
+// the target, sets the destination conversation identity, and leaves the source untouched.
+type SessionTransfer func(from, to *model.Task, cfg config.Config) (resumed bool, err error)
+
+// AccountMoveSupported reports whether the backend command's family can move
+// accounts while preserving the conversation.
+func AccountMoveSupported(command string) bool {
+	return FamilyOf(command).TransferSession != nil
 }
 
 // AutoMoveTarget asks a move to pick the other account with the lowest usage.
@@ -95,8 +109,8 @@ type accountMoveRunner interface {
 	HasPendingRestart(taskID string) bool
 }
 
-// MoveTaskAccount moves a Claude task to another account without any model
-// turn: it copies the task's newest transcript into the target account,
+// MoveTaskAccount moves a task to another account without any model
+// turn: it copies the task's saved conversation into the target account,
 // switches and persists the task's account (a named target pins it, "auto" keeps it routable),
 // and restarts a live session in place under the target with --resume. The
 // task row, worktree, branch and hera bindings are untouched.
@@ -122,8 +136,9 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	if err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: %w", ErrAccount, err)
 	}
-	if backendkind.Of(backend.Command) != backendkind.Claude {
-		return nil, AccountMoveResult{}, fmt.Errorf("%w: only Claude tasks can move accounts (backend %q)", ErrAccount, task.Backend)
+	transfer := FamilyOf(backend.Command).TransferSession
+	if transfer == nil {
+		return nil, AccountMoveResult{}, fmt.Errorf("%w: backend %q cannot move accounts", ErrAccount, task.Backend)
 	}
 	from := NormalizeAccount(task.Account)
 	to, err := resolveMoveTarget(cfg, backend.Command, from, in.Account)
@@ -140,43 +155,39 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	}
 
 	RefreshResumeSessionID(database, task)
-	srcDir, err := ClaudeConfigDirForTask(task, cfg)
-	if err != nil {
-		return nil, AccountMoveResult{}, fmt.Errorf("%w: source account %q: %w", ErrAccount, from, err)
-	}
 	moved := *task
 	moved.Account = storedAccount(to)
 	// An auto move leaves the task routable like one created unpinned; a move
 	// to a named account (or explicit "default") is a pin.
 	routed := strings.TrimSpace(in.Account) == AutoMoveTarget
 	moved.AccountRouted = routed
-	if _, err := resolveSpawnClaudeConfigDir(&moved, cfg, true); err != nil {
-		return nil, AccountMoveResult{}, fmt.Errorf("%w: %w", ErrAccount, err)
-	}
-	dstDir, err := ClaudeConfigDirForTask(&moved, cfg)
+	resumed, err := transfer(task, &moved, cfg)
 	if err != nil {
-		return nil, AccountMoveResult{}, fmt.Errorf("%w: target account %q: %w", ErrAccount, to, err)
-	}
-	same := to == from
-	if !same && filepath.Clean(srcDir) == filepath.Clean(dstDir) {
-		// e.g. the backend pins CLAUDE_CONFIG_DIR through env_vars: switching
-		// the stored account would not change the login at all.
-		return nil, AccountMoveResult{}, fmt.Errorf("%w: accounts %q and %q resolve to the same Claude config dir for this backend", ErrAccount, from, to)
-	}
-	var resumed bool
-	if same {
-		// Re-picking the current account is a plain in-place restart: the
-		// transcript is already in this account's dir, nothing to copy.
-		resumed, _ = claudeResumeAvailable(task, cfg)
-	} else if resumed, err = copyClaudeTranscript(srcDir, dstDir, task.Worktree, task.SessionID); err != nil {
-		return nil, AccountMoveResult{}, fmt.Errorf("copy transcript to account %q: %w", to, err)
+		return nil, AccountMoveResult{}, err
 	}
 
-	prevAccount, prevRouted := task.Account, task.AccountRouted
-	if err := database.SetTaskAccount(task.ID, moved.Account, routed); err != nil {
+	if !resumed && sess != nil && task.SessionID == "" && !FamilyOf(backend.Command).PinsSessionID {
+		return nil, AccountMoveResult{}, fmt.Errorf("%w: cannot identify the running conversation; stop the task before moving it", ErrAccount)
+	}
+
+	var recycler backendMoveRunner
+	if !resumed && sess != nil {
+		var ok bool
+		recycler, ok = runner.(backendMoveRunner)
+		if !ok {
+			return nil, AccountMoveResult{}, fmt.Errorf("%w: runner cannot start a fresh conversation", ErrAccount)
+		}
+	}
+	if !resumed {
+		moved.SessionID = ""
+		if FamilyOf(backend.Command).PinsSessionID {
+			moved.SessionID = model.GenerateSessionID()
+		}
+	}
+	if err := database.SetTaskAccountMove(task.ID, moved.Account, routed, moved.SessionID); err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("persist account move: %w", err)
 	}
-	task.Account, task.AccountRouted = moved.Account, routed
+	task.Account, task.AccountRouted, task.SessionID = moved.Account, routed, moved.SessionID
 	res := AccountMoveResult{From: from, To: to, Resumed: resumed}
 	logAccountMove(task.ID, res, "persisted")
 
@@ -194,29 +205,13 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	restart := *task
 	if resumed {
 		err = runner.KickRerender(&restart, cfg, rows, cols)
-	} else if reviver, ok := runner.(interface {
-		Revive(*model.Task, config.Config, uint16, uint16) error
-	}); ok {
-		err = reviver.Revive(&restart, cfg, rows, cols)
 	} else {
-		err = runner.KickRerender(&restart, cfg, rows, cols)
+		err = recycler.Recycle(&restart, cfg, rows, cols)
 	}
+
 	if err != nil {
-		if liveSession(runner, task.ID) == nil {
-			// The session exited between the liveness check and the kick (the
-			// daemon client flattens ErrSessionNotFound to a string, so check
-			// liveness rather than the error value).
-			logAccountMove(task.ID, res, fmt.Sprintf("session gone before restart (%v); caller starts it", err))
-			return task, res, nil
-		}
-		// The old session is still running on the source account: put the
-		// stored account back so the row never disagrees with the live agent.
-		if rbErr := database.SetTaskAccount(task.ID, prevAccount, prevRouted); rbErr != nil {
-			slog.Error("[account] move rollback failed", "task", task.ID, "err", rbErr)
-		}
-		uxlog.Log("[account] move task=%s %s→%s restart failed, account rolled back: %v", task.ID, from, to, err)
-		slog.Warn("[account] move restart failed; rolled back", "task", task.ID, "from", from, "to", to, "err", err)
-		return nil, AccountMoveResult{}, fmt.Errorf("restart on account %q failed, task left on %q: %w", to, from, err)
+		logAccountMove(task.ID, res, fmt.Sprintf("restart outcome unknown; keeping account: %v", err))
+		return task, res, fmt.Errorf("%w: %w", ErrAccountMoveRestartUnknown, err)
 	}
 	res.Started = true
 	logAccountMove(task.ID, res, "restarted in place")
@@ -355,4 +350,35 @@ func copyTree(src, dst string) error {
 		}
 		return nil
 	})
+}
+
+func claudeTransferSession(from, to *model.Task, cfg config.Config) (bool, error) {
+	fromName, toName := NormalizeAccount(from.Account), NormalizeAccount(to.Account)
+	if fromName == toName {
+		// Re-picking the current account is a plain in-place restart: the
+		// transcript is already in this account's dir, nothing to copy.
+		resumed, _ := claudeResumeAvailable(from, cfg)
+		return resumed, nil
+	}
+	srcDir, err := ClaudeConfigDirForTask(from, cfg)
+	if err != nil {
+		return false, fmt.Errorf("%w: source account %q: %w", ErrAccount, fromName, err)
+	}
+	if _, err := resolveSpawnClaudeConfigDir(to, cfg, true); err != nil {
+		return false, fmt.Errorf("%w: %w", ErrAccount, err)
+	}
+	dstDir, err := ClaudeConfigDirForTask(to, cfg)
+	if err != nil {
+		return false, fmt.Errorf("%w: target account %q: %w", ErrAccount, toName, err)
+	}
+	if filepath.Clean(srcDir) == filepath.Clean(dstDir) {
+		// e.g. the backend pins CLAUDE_CONFIG_DIR through env_vars: switching
+		// the stored account would not change the login at all.
+		return false, fmt.Errorf("%w: accounts %q and %q resolve to the same Claude config dir for this backend", ErrAccount, fromName, toName)
+	}
+	resumed, err := copyClaudeTranscript(srcDir, dstDir, from.Worktree, from.SessionID)
+	if err != nil {
+		return false, fmt.Errorf("copy transcript to account %q: %w", toName, err)
+	}
+	return resumed, nil
 }

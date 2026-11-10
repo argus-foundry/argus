@@ -26,11 +26,17 @@ func (*moveTestSession) PTYSize() (int, int) { return 120, 40 }
 
 type moveTestRunner struct {
 	agent.SessionRunner
-	live     *moveTestSession
-	kicked   *model.Task
-	started  *model.Task
-	recycled *model.Task
-	startErr error
+	live         *moveTestSession
+	kicked       *model.Task
+	started      *model.Task
+	recycled     *model.Task
+	startErr     error
+	startResume  bool
+	kickErr      error
+	probeErr     error
+	probeDead    bool
+	probeCalls   int
+	probePending bool
 }
 
 func (r *moveTestRunner) Get(string) agent.SessionHandle {
@@ -41,12 +47,18 @@ func (r *moveTestRunner) Get(string) agent.SessionHandle {
 }
 
 func (r *moveTestRunner) KickRerender(task *model.Task, _ config.Config, _, _ uint16) error {
+	if r.kickErr != nil {
+		return r.kickErr
+	}
 	cp := *task
 	r.kicked = &cp
 	return nil
 }
 
 func (r *moveTestRunner) Recycle(task *model.Task, _ config.Config, _, _ uint16) error {
+	if r.kickErr != nil {
+		return r.kickErr
+	}
 	cp := *task
 	r.recycled = &cp
 	return nil
@@ -56,7 +68,8 @@ func (r *moveTestRunner) Revive(task *model.Task, cfg config.Config, rows, cols 
 	return r.KickRerender(task, cfg, rows, cols)
 }
 
-func (r *moveTestRunner) StartOrReattach(task *model.Task, _ config.Config, _, _ uint16, _ bool) (agent.SessionHandle, bool, error) {
+func (r *moveTestRunner) StartOrReattach(task *model.Task, _ config.Config, _, _ uint16, resume bool) (agent.SessionHandle, bool, error) {
+	r.startResume = resume
 	if r.startErr != nil {
 		return nil, false, r.startErr
 	}
@@ -95,17 +108,24 @@ func TestHandleMoveTaskAccount(t *testing.T) {
 		testutil.Equal(t, res.From, "default")
 		testutil.Equal(t, res.To, "work")
 		testutil.True(t, res.Started)
-		testutil.Equal(t, r.kicked.Account, "work")
+		testutil.False(t, res.Resumed)
+		testutil.NotNil(t, r.recycled)
+		if r.recycled == nil {
+			return
+		}
+		testutil.Equal(t, r.recycled.Account, "work")
+		testutil.True(t, r.recycled.SessionID != "" && r.recycled.SessionID != task.SessionID)
 		testutil.Nil(t, r.started)
 	})
 
-	t.Run("exited session is resumed through the restart path", func(t *testing.T) {
+	t.Run("exited session starts fresh without a transcript", func(t *testing.T) {
 		r := &moveTestRunner{}
 		s, task := moveServer(t, r)
 		w := postMove(s, task.ID, `{"account":"work"}`)
 		testutil.Equal(t, w.Code, http.StatusOK)
 		testutil.NotNil(t, r.started)
 		testutil.Equal(t, r.started.Account, "work")
+		testutil.False(t, r.startResume)
 		got, err := s.db.Get(task.ID)
 		testutil.NoError(t, err)
 		testutil.Equal(t, got.Status, model.StatusInProgress)
@@ -178,4 +198,9 @@ func TestHandleMoveTaskAccount_BackendHandoff(t *testing.T) {
 		testutil.NoError(t, s.db.SetBackend("cl2", config.Backend{Command: "claude"}))
 		testutil.Equal(t, postMove(s, task.ID, `{"backend":"cl2"}`).Code, http.StatusBadRequest)
 	})
+}
+
+func (r *moveTestRunner) ProbeRestart(string) (bool, bool, error) {
+	r.probeCalls++
+	return !r.probeDead && r.live != nil, r.probePending, r.probeErr
 }

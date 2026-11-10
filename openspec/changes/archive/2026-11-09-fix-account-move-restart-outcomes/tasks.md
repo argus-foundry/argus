@@ -1,0 +1,6 @@
+- [x] Reproduce done/failed closeout rollback on definite and ambiguous starts.
+- [x] Preserve the target account after a kick error and report restart_unknown.
+- [x] Settle accepted kicks through the existing checked restart probe.
+- [x] Verify the account route retains residentGate.
+- [x] Run focused race tests and the complete pre-pr gate.
+- [x] Archive the delta with its base specifications in the fix commit.

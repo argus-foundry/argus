@@ -63,8 +63,13 @@ func LatestForThread(home, cwd string, thread Thread, additionalHomes ...string)
 	return r, started, ok, err
 }
 
-// ValidateThreadRollout checks the bounded session header on the opened descriptor.
+// ValidateThreadRollout checks the opened session header with a 64 KiB budget.
 func ValidateThreadRollout(f *os.File, cwd string, thread Thread) (time.Time, error) {
+	return ValidateThreadRolloutWithLimit(f, cwd, thread, 64<<10)
+}
+
+// ValidateThreadRolloutWithLimit applies the caller's byte budget to session metadata.
+func ValidateThreadRolloutWithLimit(f *os.File, cwd string, thread Thread, maxBytes int64) (time.Time, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return time.Time{}, err
@@ -73,7 +78,7 @@ func ValidateThreadRollout(f *os.File, cwd string, thread Thread) (time.Time, er
 		return time.Time{}, fmt.Errorf("codexctx: rollout is not a regular file")
 	}
 	// Session metadata is the first record. Bound it independently of the tail.
-	raw, err := bufio.NewReader(io.LimitReader(f, 64<<10)).ReadBytes('\n')
+	raw, err := bufio.NewReader(io.LimitReader(f, maxBytes)).ReadBytes('\n')
 	if err != nil {
 		return time.Time{}, fmt.Errorf("codexctx: missing session metadata")
 	}
