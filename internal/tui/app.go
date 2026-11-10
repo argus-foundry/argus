@@ -7722,6 +7722,40 @@ func (a *App) jumpToNextNeedsInput() {
 		a.flashNotice("No role needs input")
 		return
 	}
+	fromResident := false
+	if a.heraPage.ResidentMode() {
+		// The resident tab re-points the single HeraPage at the standing team,
+		// so its rail holds ONLY that team. Resolve the jump there first: a
+		// resident worker needing input is reached in place (no tab switch;
+		// ctrl+g arms no excursion for in-tab resident jumps, and a
+		// resident-tab ctrl+b restores that team rail's own layout).
+		// Otherwise switch to Projects FIRST so the count and the excursion
+		// snapshot are evaluated on the rebuilt Projects rail, never the
+		// team rail.
+		if a.heraPage.Rail().NeedsInputCount() >= 1 {
+			if !a.heraPage.JumpToNextNeedsInput() {
+				a.flashNotice("No role needs input")
+			}
+			return
+		}
+		if a.header.ActiveTab() != widget.TabResident {
+			a.flashNotice("No role needs input")
+			return
+		}
+		// Discard the team rail's excursion (restoring that rail's own
+		// layout) so it can't leak a resident-team ref into Projects.
+		a.heraPage.Rail().RestoreExcursion()
+		if a.mode == modeAgent {
+			a.exitAgentView()
+		}
+		uxlog.Log("[resident-view] ctrl+g: no team role needs input; evaluating the Projects rail")
+		a.switchTab(widget.TabHera)
+		if a.heraPage.ResidentMode() {
+			a.flashNotice("No role needs input")
+			return
+		}
+		fromResident = true
+	}
 	rail := a.heraPage.Rail()
 	if rail.NeedsInputCount() >= 1 {
 		rail.EnsureExcursionArmed() // belt-and-suspenders; normally already armed
@@ -7739,7 +7773,13 @@ func (a *App) jumpToNextNeedsInput() {
 		}
 		return
 	}
-	if rail.RestoreExcursion() {
+	restored := rail.RestoreExcursion()
+	if fromResident {
+		// Nothing needed input anywhere; the operator pressed ctrl+g on the
+		// resident tab, so put them back there.
+		a.switchTab(widget.TabResident)
+	}
+	if restored {
 		a.flashNotice("Rail restored")
 		return
 	}

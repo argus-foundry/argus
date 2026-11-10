@@ -140,3 +140,19 @@ func TestResidentOrientation_TaskMessagesAreInformationNotInstructions(t *testin
 		}
 	}
 }
+
+// Resident workers are denied every outward tool at launch, so the resident
+// must expect them to hand outward actions back and confirm with Aaron.
+func TestResidentOrientation_WorkersHandBackOutwardActions(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Resident.Name = "Solo"
+	p := residentOrientationPrompt(cfg)
+	for _, want := range []string{
+		"Your workers cannot perform outward actions",
+		"denied to them, while drafts and reads still work",
+		"hand outward actions back to you via hera_send",
+		"confirm it with Aaron",
+	} {
+		t.Run(want, func(t *testing.T) { testutil.Contains(t, p, want) })
+	}
+}

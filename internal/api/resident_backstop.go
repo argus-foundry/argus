@@ -8,6 +8,7 @@ import (
 
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/hera"
+	"github.com/argus-foundry/argus/internal/sanitize"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
@@ -87,16 +88,8 @@ func (s *Server) notifyResidentWorkerPrompts(state *idleWatcherState, needs map[
 				slog.Warn("[resident] prompt coordinator lookup skipped", "count", len(coords), "err", err)
 				continue
 			}
-			tail := []rune(strings.Map(func(r rune) rune {
-				if unicode.IsControl(r) && r != '\n' {
-					return -1
-				}
-				return r
-			}, string(tailOf(id))))
-			if len(tail) > 600 {
-				tail = tail[len(tail)-600:]
-			}
-			body := fmt.Sprintf("Worker %s appears to be waiting on a prompt or reported blocked:\n%s\nOptions: reply with hera_send, nudge, or hera_delete_worker.", role.Name, string(tail))
+			tail := residentPromptTail(tailOf(id))
+			body := fmt.Sprintf("Worker %s appears to be waiting on a prompt or reported blocked:\n%s\nOptions: reply with hera_send, nudge, or hera_delete_worker.", role.Name, tail)
 			tldr := "Resident worker needs input" // fixed length, arbitrary role names stay in body
 			var notifier hera.Notifier
 			if s.notifier != nil {
@@ -115,4 +108,40 @@ func (s *Server) notifyResidentWorkerPrompts(state *idleWatcherState, needs map[
 		}
 	}
 	state.residentPromptEpisodes = next
+}
+
+const (
+	residentPromptTailLines = 14
+	residentPromptTailRunes = 600
+)
+
+// residentPromptTail turns raw terminal bytes into plain text for the
+// resident's notice: escape sequences are stripped BEFORE the rune cap (their
+// printable remnants like "[2K" would otherwise eat the budget and push the
+// real question out), blank lines are dropped, and the last few lines kept.
+func residentPromptTail(raw []byte) string {
+	text := sanitize.StripANSI(string(raw))
+	text = strings.Map(func(r rune) rune {
+		if r == '\r' {
+			return '\n'
+		}
+		if unicode.IsControl(r) && r != '\n' {
+			return -1
+		}
+		return r
+	}, text)
+	var lines []string
+	for _, l := range strings.Split(text, "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, strings.TrimRight(l, " "))
+		}
+	}
+	if len(lines) > residentPromptTailLines {
+		lines = lines[len(lines)-residentPromptTailLines:]
+	}
+	out := []rune(strings.Join(lines, "\n"))
+	if len(out) > residentPromptTailRunes {
+		out = out[len(out)-residentPromptTailRunes:]
+	}
+	return string(out)
 }

@@ -259,7 +259,8 @@ const (
 	//     (hash + 0600 --mcp-config file in ~/.argus/resident-launch, never argv
 	//     or env) and every non-resident sandbox profile denies reading that
 	//     dir; a stale supervisor launches the resident unverified, so the
-	//     client refuses resident launches to it too.
+	//     client refuses resident launches to it too. A worker launch also
+	//     hard-denies the resident's outward ask+deny tiers (--disallowedTools).
 	SupervisorSpawnSurface = 44
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -571,7 +572,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "d37254d3a912294462ecfcee1195da7469b90f2900bbda939da0dc44040a14ba"
+	SpawnSurfaceDigest  = "c02b7ae83b0011ad50e8586936d04ce121b924a4f67e6d2638ef8e6b84bd0273"
 	StreamSurfaceDigest = "a0b3efb1c129a7c3a3ba94ef8922d258e60d87907e1f599f17e8108ad97770f0"
 )
 

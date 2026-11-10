@@ -200,7 +200,17 @@ Unless `force` is true, `hera_delete_worker` SHALL first classify the worker's w
 
 ### Requirement: Resident workers never block on a prompt
 
-A worker spawned by the resident SHALL be marked as a resident worker in task meta before its session launches, and SHALL be launched so that no permission prompt, `AskUserQuestion`, `EnterPlanMode` or `ExitPlanMode` approval can block it. (a) The launch SHALL apply the family's bypass-active permission mode, and ONLY when the Argus sandbox actually wraps the launch; otherwise the spawn SHALL be refused with an error returned to the resident, and a later resume or restart that cannot be wrapped SHALL be refused likewise. (b) Where the family supports it the launch SHALL disallow `AskUserQuestion`, `EnterPlanMode` and `ExitPlanMode`, and the worker's orientation SHALL tell it to ask the resident through `hera_send(status=blocked)` instead of asking the user. (c) When a resident worker is flagged needs-input by the detector or reports `blocked`, the daemon SHALL send the resident one message per flag episode naming the worker and the available actions.
+A worker spawned by the resident SHALL be marked as a resident worker in task meta before its session launches, and SHALL be launched so that no permission prompt, `AskUserQuestion`, `EnterPlanMode` or `ExitPlanMode` approval can block it. (a) The launch SHALL apply the family's bypass-active permission mode, and ONLY when the Argus sandbox actually wraps the launch; otherwise the spawn SHALL be refused with an error returned to the resident, and a later resume or restart that cannot be wrapped SHALL be refused likewise. (b) Where the family supports it the launch SHALL disallow `AskUserQuestion`, `EnterPlanMode` and `ExitPlanMode`, and the worker's orientation SHALL tell it to ask the resident through `hera_send(status=blocked)` instead of asking the user. (c) When a resident worker is flagged needs-input by the detector or reports `blocked`, the daemon SHALL send the resident one message per flag episode naming the worker and the available actions. The message SHALL carry the worker's visible prompt as plain screen text (no terminal escape remnants), keeping the question and its options within its size cap. (d) Because a worker cannot ask, every tool on the resident's outward ASK or DENY list SHALL be denied to an unattended resident worker at launch, derived from the same source as the resident's own tiers (drafts and read-only connector calls stay allowed, as for the resident), so an outward action has to come back through the resident, which asks Aaron. A backend or account move of a resident worker SHALL be refused unless the target is an enabled worker account whose family supports unattended workers, the same rule spawn applies.
+
+#### Scenario: Outward actions come back through the resident
+
+- **WHEN** a resident worker tries to send mail, post to Slack, edit a calendar or call any other tool on the resident's outward ask or deny list
+- **THEN** the tool is denied at the worker's launch and the worker must ask the resident, while drafts and read-only connector calls still work
+
+#### Scenario: Ineligible move refused
+
+- **WHEN** a stopped resident worker is moved to a backend family that cannot run unattended, or to an account not enabled for resident workers
+- **THEN** the move is refused and the worker's backend and account are unchanged
 
 #### Scenario: Sandbox gate on spawn
 

@@ -866,10 +866,23 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 
 	fam := FamilyOf(backend.Command)
 	if unattended {
+		// Fail closed: an unattended worker that cannot be denied the
+		// resident's outward tools must never launch with them reachable.
+		if fam.UnattendedDenyFlag == nil {
+			uxlog.Log("[resident] worker launch refused task=%s: backend cannot deny outward tools", task.ID)
+			slog.Warn("[resident] worker launch refused: backend cannot deny outward tools", "task", task.ID)
+			return nil, nil, fmt.Errorf("backend %q cannot deny the resident's outward tools to an unattended worker", task.Backend)
+		}
 		backend.Command, err = fam.UnattendedWorker(backend.Command)
 		if err != nil {
 			return nil, nil, err
 		}
+		// A worker cannot ask, so the resident's ask AND deny tiers are both
+		// hard-denied: outward actions must come back through the resident.
+		deny := ResidentWorkerDenyRules(cfg)
+		backend.Command += fam.UnattendedDenyFlag(deny)
+		uxlog.Log("[resident] unattended worker outward deny task=%s rules=%d", task.ID, len(deny))
+		slog.Info("[resident] unattended worker outward deny", "task", task.ID, "rules", len(deny))
 		cmdStr = backend.Command
 		uxlog.Log("[resident] unattended worker launch task=%s mode=bypass-active", task.ID)
 		slog.Info("[resident] unattended worker launch", "task", task.ID, "mode", "bypass-active")
@@ -1015,10 +1028,11 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 		// through unsandboxed with neither sandbox applied.
 		residentArgusWrap = argusWrapsSandbox(task, cfg)
 		us := readResidentUserSettings(task, cfg, residentArgusWrap)
+		ask, deny := ResidentOutwardTiers(cfg)
 		policy := ResidentPolicy{
 			Allow:       cfg.Resident.AllowTools,
-			Ask:         mergeRules(cfg.Resident.AskTools, us.Ask),
-			Deny:        mergeRules(cfg.Resident.DenyTools, us.Deny),
+			Ask:         mergeRules(ask, us.Ask),
+			Deny:        mergeRules(deny, us.Deny),
 			HookCommand: residentStopHookCommand(),
 			Effort:      us.Effort,
 			Sandbox:     us.Sandbox,

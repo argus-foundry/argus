@@ -1,7 +1,11 @@
 package db
 
 import (
+	"time"
+
 	"testing"
+
+	"github.com/argus-foundry/argus/internal/model"
 
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -121,4 +125,28 @@ func TestListResidentOrchestratorsIsBindingBased(t *testing.T) {
 	for _, x := range all {
 		testutil.False(t, x.ID == o.ID)
 	}
+}
+
+// A legacy user orchestrator named "resident" that the resident task is NOT
+// bound to is a name collision, not the standing team: its workers are not
+// resident workers and do not count toward the cap.
+func TestResidentWorkerLegacyNameCollisionNotCounted(t *testing.T) {
+	d := testDB(t)
+	_, _, err := d.EnsureResidentTask(t.TempDir())
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.Add(&model.Task{ID: "legacy-worker", Name: "legacy-worker", Status: model.StatusInProgress, CreatedAt: time.Now()}))
+	for _, q := range []string{
+		`INSERT INTO hera_orchestrators(id,name,created_at) VALUES (77,'resident','2026-11-09')`,
+		`INSERT INTO hera_roles(id,orchestrator_id,name,kind,argus_project,created_at) VALUES (770,77,'lw','worker','p','2026-11-09')`,
+		`INSERT INTO hera_bindings(role_id,orchestrator_id,argus_task_id,worktree_path,started_at) VALUES (770,77,'legacy-worker','/tmp/x','2026-11-09')`,
+	} {
+		_, err := d.conn.Exec(q)
+		testutil.NoError(t, err)
+	}
+	is, err := d.IsResidentWorker("legacy-worker")
+	testutil.NoError(t, err)
+	testutil.False(t, is)
+	n, err := d.ResidentWorkerCount()
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 0)
 }

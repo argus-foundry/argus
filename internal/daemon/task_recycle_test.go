@@ -85,12 +85,13 @@ type residentRecycleCaptureRunner struct {
 	startResume bool
 	recycled    *model.Task
 	rows, cols  uint16 // size of the last Start/Recycle launch
+	needs       []string
 }
 
 type residentRecycleHandle struct{ agent.SessionHandle }
 
 func (r *residentRecycleCaptureRunner) HasPendingRestart(string) bool { return false }
-func (r *residentRecycleCaptureRunner) NeedsInputIDs() []string       { return nil }
+func (r *residentRecycleCaptureRunner) NeedsInputIDs() []string       { return r.needs }
 
 func (residentRecycleHandle) PTYSize() (int, int) { return 24, 80 }
 

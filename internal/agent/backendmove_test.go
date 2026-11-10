@@ -229,3 +229,63 @@ func TestMoveTaskBackend_ResidentRejected(t *testing.T) {
 	testutil.Equal(t, after.Backend, res.Backend)
 	testutil.Equal(t, after.Prompt, res.Prompt)
 }
+
+// A STOPPED resident worker is never preflighted by a restart, so a move to a
+// backend or account the launch gate refuses would strand it forever. The move
+// must refuse up front and leave the row untouched.
+func TestMoveTask_ResidentWorkerEligibility(t *testing.T) {
+	setup := func(t *testing.T, disabled string) *moveFixture {
+		t.Helper()
+		sandboxAvailabilityForSignalTest(t, true)
+		f := newMoveFixture(t, true)
+		testutil.NoError(t, f.d.SetSandboxEnabled(true))
+		testutil.NoError(t, f.d.SetMeta("mv", db.HeraMetaNamespace, db.HeraMetaKeyResidentWorker, "true"))
+		if disabled != "" {
+			testutil.NoError(t, f.d.SetConfigValue("resident.worker_accounts", `{"`+disabled+`":false}`))
+		}
+		return f
+	}
+	unchanged := func(t *testing.T, f *moveFixture) {
+		t.Helper()
+		got, err := f.d.Get("mv")
+		testutil.NoError(t, err)
+		testutil.Equal(t, got.Backend, "test")
+		testutil.Equal(t, got.Account, "")
+		testutil.Equal(t, got.SessionID, "sid-1")
+	}
+	t.Run("ineligible backend refused", func(t *testing.T) {
+		f := setup(t, "")
+		_, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Backend: "codex", Account: "cx"})
+		if err == nil {
+			t.Fatal("move to an ineligible backend must be refused")
+		}
+		testutil.True(t, errors.Is(err, ErrAccount))
+		testutil.Contains(t, err.Error(), "resident workers can only move")
+		unchanged(t, f)
+	})
+	t.Run("disabled account refused", func(t *testing.T) {
+		f := setup(t, "work")
+		_, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Account: "work"})
+		if err == nil {
+			t.Fatal("move to a disabled account must be refused")
+		}
+		testutil.Contains(t, err.Error(), "resident workers can only move")
+		unchanged(t, f)
+	})
+	t.Run("enabled account still moves", func(t *testing.T) {
+		f := setup(t, "default")
+		task, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Account: "work"})
+		testutil.NoError(t, err)
+		testutil.Equal(t, task.Account, "work")
+	})
+	t.Run("non-resident unaffected", func(t *testing.T) {
+		sandboxAvailabilityForSignalTest(t, true)
+		f := newMoveFixture(t, true)
+		testutil.NoError(t, f.d.SetConfigValue("resident.worker_accounts", `{"work":false}`))
+		task, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Account: "work"})
+		testutil.NoError(t, err)
+		testutil.Equal(t, task.Account, "work")
+		_, _, err = MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Backend: "codex", Account: "cx"})
+		testutil.NoError(t, err)
+	})
+}

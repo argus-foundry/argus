@@ -40,6 +40,13 @@ func TestSpawnResidentWorkerMarkerAndCap(t *testing.T) {
 	testutil.NoError(t, d.EndHeraBinding(spawned.Binding.ID, "graduated"))
 	_, err = SpawnHeraWorker(d, &fakeRunner{}, in)
 	testutil.NoError(t, err)
+
+	// max_workers below 1 falls back to the default cap of 8 rather than
+	// refusing every spawn.
+	testutil.NoError(t, d.SetConfigValue("resident.max_workers", "0"))
+	in.BaseName = "zero-cap"
+	_, err = SpawnHeraWorker(d, &fakeRunner{}, in)
+	testutil.NoError(t, err)
 }
 
 func TestResidentWorkerOrientation(t *testing.T) {

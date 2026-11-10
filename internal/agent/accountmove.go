@@ -161,6 +161,9 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	if err != nil {
 		return nil, AccountMoveResult{}, err
 	}
+	if err := refuseIneligibleResidentWorkerMove(database, task, cfg, task.Backend, to); err != nil {
+		return nil, AccountMoveResult{}, err
+	}
 
 	if runner != nil && runner.HasPendingRestart(task.ID) {
 		return nil, AccountMoveResult{}, errAccountMovePending

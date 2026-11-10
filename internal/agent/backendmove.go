@@ -95,6 +95,9 @@ func MoveTaskBackend(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: account %q does not support backend %q", ErrAccount, account, toName)
 	}
 	account = NormalizeAccount(account)
+	if err := refuseIneligibleResidentWorkerMove(database, task, cfg, toName, account); err != nil {
+		return nil, AccountMoveResult{}, err
+	}
 
 	if runner != nil && runner.HasPendingRestart(task.ID) {
 		return nil, AccountMoveResult{}, errAccountMovePending
@@ -177,6 +180,41 @@ func MoveTaskBackend(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	res.Started = true
 	logBackendMove(task.ID, res, "restarted in place with handoff")
 	return task, res, nil
+}
+
+// refuseIneligibleResidentWorkerMove keeps a resident worker launchable: a move
+// persists backend/account before any restart, and a STOPPED worker is never
+// preflighted, so an ineligible target would strand it behind the launch gate
+// on every later start/revive. The target must be an account enabled for
+// resident workers and the moved task must pass the same unattended preflight
+// the launch gate applies. Identity lookup errors fail closed. Non-resident
+// tasks are untouched. backendName "" keeps the task's current backend.
+func refuseIneligibleResidentWorkerMove(database *db.DB, task *model.Task, cfg config.Config, backendName, account string) error {
+	worker, err := database.IsResidentWorker(task.ID)
+	if err != nil {
+		uxlog.Log("[resident] move refused task=%s: worker identity lookup failed: %v", task.ID, err)
+		return fmt.Errorf("%w: resident worker identity: %w", ErrAccount, err)
+	}
+	if !worker {
+		return nil
+	}
+	refuse := func(cause error) error {
+		uxlog.Log("[resident] move refused task=%s backend=%q account=%q: %v", task.ID, backendName, account, cause)
+		slog.Warn("[resident] move refused", "task", task.ID, "backend", backendName, "account", account, "err", cause)
+		return fmt.Errorf("%w: resident workers can only move to an enabled account whose backend family supports unattended workers: %w", ErrAccount, cause)
+	}
+	target := *task
+	if backendName != "" {
+		target.Backend, target.Model = backendName, ""
+	}
+	target.Account = storedAccount(account)
+	if _, err := ResolveResidentWorker(cfg, task.Project, target.Backend, NormalizeAccount(account)); err != nil {
+		return refuse(err)
+	}
+	if err := preflightUnattended(&target, cfg); err != nil {
+		return refuse(err)
+	}
+	return nil
 }
 
 // prevBackendName is the backend the task was on: the stored name, or the
