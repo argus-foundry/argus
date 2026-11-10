@@ -3,15 +3,12 @@ package tui
 import (
 	"time"
 
-	"github.com/argus-foundry/argus/internal/agent"
-	"github.com/argus-foundry/argus/internal/app/agentview"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/daemon"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/tui/hera"
 	"github.com/argus-foundry/argus/internal/tui/widget"
 	"github.com/argus-foundry/argus/internal/uxlog"
-	"github.com/gdamore/tcell/v2"
 )
 
 // residentReturn generalizes the agent-view cross-tab hop. Snapshots are UI
@@ -33,9 +30,12 @@ type residentReturn struct {
 }
 
 // refreshResidentTab runs on the UI goroutine alongside keymap/config refresh.
-// The resident is local-only until add-resident-web exposes a REST surface.
+// The resident is local-only until add-resident-web exposes a REST surface. It
+// only maintains the header label and bounces a viewer back to Tasks when the
+// resident is disabled: the resident session itself is bound by the shared
+// HeraPage in resident mode (enterResidentView), never by this function.
 func (a *App) refreshResidentTab() {
-	d, local := a.db.(*db.DB)
+	_, local := a.db.(*db.DB)
 	cfg := a.db.Config().Resident
 	label := residentTabLabel(local, cfg)
 	// The marker is folded into this single label write so the tick can never
@@ -47,74 +47,30 @@ func (a *App) refreshResidentTab() {
 	if label == "" {
 		uxlog.Log("[resident] disabled while viewed; returning to Tasks")
 		a.switchTab(widget.TabTasks)
-		return
-	}
-	row, err := d.ResidentTask()
-	if err != nil {
-		uxlog.Log("[resident] task lookup failed: %v", err)
-		return
-	}
-	if row == nil {
-		uxlog.Log("[resident] session attachment skipped: singleton not created yet")
-		return // daemon creates the singleton; the TUI never does
-	}
-	if a.residentPane.TaskID() != row.ID {
-		a.residentPane.SetTaskID(row.ID)
-		a.residentPane.ResetVT()
-	}
-	a.residentPane.SetBorderTitle(cfg.Name)
-	if a.daemonClient == nil {
-		a.attachResidentSession(a.runner.Get(row.ID))
-		return
-	}
-	if a.residentAttachPending {
-		return
-	}
-	a.residentAttachPending = true
-	runner, taskID := a.runner, row.ID
-	go func() {
-		sess := runner.Get(taskID) // can probe the daemon; never on the UI goroutine
-		a.tapp.QueueUpdateDraw(func() {
-			a.residentAttachPending = false
-			if a.header.ActiveTab() != widget.TabResident || a.residentPane.TaskID() != taskID || a.runner != runner {
-				uxlog.Log("[resident] skipped stale session attachment task=%s", taskID)
-				return
-			}
-			a.attachResidentSession(sess)
-			uxlog.Log("[resident] session attachment task=%s available=%v", taskID, sess != nil)
-		})
-	}()
-}
-
-// attachResidentSession binds sess to the resident pane. A newly bound live
-// session gets a one-shot forced PTY resync so it is resized to the pane on its
-// first attach instead of waiting for a width delta (the delta check cannot
-// fire when the pane's tracked size already matches but the fresh PTY started
-// elsewhere). UI goroutine only.
-func (a *App) attachResidentSession(sess agent.SessionHandle) {
-	fresh := sess != nil && a.residentPane.Session() != agentview.TerminalAdapter(sess)
-	a.residentPane.SetSession(sess)
-	if fresh {
-		a.residentPane.ForceResyncPTY()
-		uxlog.Log("[resident] first attach: forced PTY resync to pane size")
 	}
 }
 
-func (a *App) forwardResidentKey(event *tcell.EventKey) {
-	// Match the agent and Hera SIGTSTP safety net.
-	if event.Key() == tcell.KeyCtrlZ {
+// enterResidentView points the shared HeraPage at the standing team and shows
+// it: resident row = the resident conversation pane, worker rows = the worker
+// pane, `i` = the resident's inbox. The tab always opens with the rail focused.
+// UI goroutine only.
+func (a *App) enterResidentView() {
+	a.heraPage.SetResidentMode(true)
+	if !a.heraPage.ResidentMode() {
+		// No resident reader (remote/bare page): never show the Projects view
+		// under the resident tab's name.
+		uxlog.Log("[resident] resident view unavailable; returning to Tasks")
+		a.switchTab(widget.TabTasks)
 		return
 	}
-	sess := a.residentPane.Session()
-	if sess == nil || !sess.Alive() {
-		return
-	}
-	if b := tcellKeyToBytes(event); len(b) > 0 {
-		a.residentPane.ResetScroll()
-		if _, err := sess.WriteInput(b, agentview.OriginUser); err != nil {
-			uxlog.Log("[resident] PTY input failed: %v", err)
-		}
-	}
+	// Open on the resident conversation (typing goes straight to its PTY, as
+	// the tab always did); ctrl+alt+← reaches the team rail.
+	a.heraPage.Machine().SetRegion(hera.FocusCoord)
+	a.statusbar.SetHeraFocus(int(hera.FocusCoord))
+	a.heraPage.CoordPane().SetBorderTitle(a.db.Config().Resident.Name)
+	a.heraPage.CoordPane().SetPlaceholderNote(a.residentSt.reason)
+	a.pages.SwitchToPage("hera")
+	a.tapp.SetFocus(a.heraPage)
 }
 
 func (a *App) residentInputBlocked() bool {
@@ -136,7 +92,7 @@ func (a *App) residentTextInputBlocked() bool {
 		return a.tasklist.Filtering()
 	case widget.TabSettings:
 		return a.settings.IsEditing()
-	case widget.TabHera:
+	case widget.TabHera, widget.TabResident:
 		return a.heraPage.RailFiltering()
 	default:
 		return false
@@ -325,7 +281,9 @@ func (a *App) applyResidentState(resp daemon.ResidentStateResp) {
 	}
 	a.residentSt = next
 	a.settings.SetResidentReason(next.reason)
-	a.residentPane.SetPlaceholderNote(next.reason)
+	if a.heraPage.ResidentMode() {
+		a.heraPage.CoordPane().SetPlaceholderNote(next.reason)
+	}
 	a.refreshResidentTab()
 	a.syncResidentBox()
 }

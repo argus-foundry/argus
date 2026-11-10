@@ -684,6 +684,12 @@ func (d *DB) Delete(id string) error {
 		// hera_bindings.argus_task_id to tasks (argus_task_id is plain TEXT), so
 		// this app-level cleanup is what severs the link. Bindings are ended
 		// (ended_at stamped), not deleted, so the role's binding history survives.
+		// Deleting a resident worker's task from the Tasks list is a human
+		// nuke the resident must hear about; record it before the binding ends
+		// (the role must still resolve as a live resident worker).
+		if err := queueResidentTaskDeleteNotices(tx, id); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(
 			`UPDATE hera_bindings SET ended_at=?, end_reason=? WHERE argus_task_id=? AND ended_at IS NULL`,
 			formatTime(time.Now()), heraEndReasonTaskDeleted, id,

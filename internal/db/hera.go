@@ -625,8 +625,20 @@ func (d *DB) ListHeraRolesByKind(orchID int64, kind HeraRoleKind) ([]*HeraRole, 
 // ArchiveHeraRole stamps archived_at and clears pinned_at. Idempotent. Returns
 // ErrHeraNotFound if no row matches id.
 func (d *DB) ArchiveHeraRole(id int64) error {
-	return d.heraSetFlag(`UPDATE hera_roles SET archived_at=?, pinned_at=NULL WHERE id=? AND archived_at IS NULL`,
-		heraRoleExistsProbe, id, formatTime(time.Now()))
+	return d.ArchiveHeraRoleAs(id, HeraActorHuman)
+}
+
+// ArchiveHeraRoleAs is ArchiveHeraRole with the acting party named, so a
+// resident worker's hide by anyone but the resident itself queues the resident
+// a notice (see resident_notice.go).
+func (d *DB) ArchiveHeraRoleAs(id int64, actor HeraActor) error {
+	notice := d.residentNoticeCandidate(id, actor, ResidentNoticeHidden)
+	if err := d.heraSetFlag(`UPDATE hera_roles SET archived_at=?, pinned_at=NULL WHERE id=? AND archived_at IS NULL`,
+		heraRoleExistsProbe, id, formatTime(time.Now())); err != nil {
+		return err
+	}
+	d.enqueueResidentNotice(notice)
+	return nil
 }
 
 // UnarchiveHeraRole clears archived_at. Idempotent. Returns ErrHeraNotFound if
@@ -657,44 +669,67 @@ func (d *DB) UnpinHeraRole(id int64) error {
 // status, inbox messages, and bound argus task are all retained — recovery is
 // via the DB only. NEVER a hard delete. Returns ErrHeraNotFound if no row matches.
 func (d *DB) NukeHeraRole(id int64) error {
+	return d.NukeHeraRoleAs(id, HeraActorHuman)
+}
+
+// NukeHeraRoleAs is NukeHeraRole with the acting party named: a resident
+// worker's nuke by anyone but the resident (HeraActorResident, its own
+// hera_delete_worker) queues the resident a notice.
+func (d *DB) NukeHeraRoleAs(id int64, actor HeraActor) error {
+	notice := d.residentNoticeCandidate(id, actor, ResidentNoticeNuked)
 	now := formatTime(time.Now())
-	return d.heraSetFlag(
+	if err := d.heraSetFlag(
 		`UPDATE hera_roles SET nuked_at=COALESCE(nuked_at, ?), archived_at=COALESCE(archived_at, ?), pinned_at=NULL WHERE id=?`,
-		heraRoleExistsProbe, id, now, now)
+		heraRoleExistsProbe, id, now, now); err != nil {
+		return err
+	}
+	d.enqueueResidentNotice(notice)
+	return nil
 }
 
 // RenameHeraRole updates a role's name. The new name must be free among active
 // roles under the SAME orchestrator; archived siblings and roles in other
 // orchestrators do not block. Returns ErrHeraNotFound or ErrHeraNameConflict.
 func (d *DB) RenameHeraRole(id int64, newName string) error {
+	notice, err := d.renameHeraRole(id, newName)
+	if err != nil {
+		return err
+	}
+	d.enqueueResidentNotice(notice)
+	return nil
+}
+
+// renameHeraRole performs the rename and returns the resident notice to queue
+// (nil unless a resident worker was actually renamed).
+func (d *DB) renameHeraRole(id int64, newName string) (*pendingResidentNotice, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err := d.residentHeraGuard("role", id); err != nil {
-		return err
+		return nil, err
 	}
 
 	cur, err := d.heraRoleByID(id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if cur.Name == newName {
-		return nil
+		return nil, nil
 	}
 	var existsID int64
 	err = d.conn.QueryRow(
 		`SELECT id FROM hera_roles WHERE orchestrator_id=? AND name=? AND archived_at IS NULL AND id!=?`,
 		cur.OrchestratorID, newName, id).Scan(&existsID)
 	if err == nil {
-		return fmt.Errorf("%w: %q held by role id=%d under orchestrator %d",
+		return nil, fmt.Errorf("%w: %q held by role id=%d under orchestrator %d",
 			ErrHeraNameConflict, newName, existsID, cur.OrchestratorID)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("rename hera role: %w", err)
+		return nil, fmt.Errorf("rename hera role: %w", err)
 	}
 	if _, err := d.conn.Exec(`UPDATE hera_roles SET name=? WHERE id=?`, newName, id); err != nil {
-		return fmt.Errorf("rename hera role: %w", err)
+		return nil, fmt.Errorf("rename hera role: %w", err)
 	}
-	return nil
+	return d.residentNoticeLocked(cur, HeraActorHuman, ResidentNoticeRenamed, cur.Name+" → "+newName), nil
 }
 
 // DeleteHeraRole permanently removes a role. Its bindings and role_status row

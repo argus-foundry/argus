@@ -411,6 +411,7 @@ func (p *HeraPage) SetResidentMode(on bool) {
 		p.reader = p.genericReader
 	}
 	p.residentMode = on
+	p.lastPristine = nil // the equal-model drop must never compare across modes
 	uxlog.Log("[resident-view] mode=%v: rebuilding model and rebinding panes", on)
 	p.rail.ClearFilter()
 	p.focus.ToRail()
@@ -420,6 +421,25 @@ func (p *HeraPage) SetResidentMode(on bool) {
 	p.bindPane(p.coordPane, &p.coordBound, &p.coordKickedFor, &p.coordKickPending, "", "coord")
 	p.bindPane(p.agentPane, &p.agentBound, &p.agentKickedFor, &p.agentKickPending, "", "agent")
 	p.Refresh()
+}
+
+// ProjectsModel returns the Projects-view model. Outside resident mode that is
+// the rail's current model; in resident mode (where the rail holds only the
+// standing team) it is built synchronously from the page's normal reader, so
+// callers that need the fleet — the jump switcher — never see the team-only
+// model. tview goroutine only.
+func (p *HeraPage) ProjectsModel() heramodel.Model {
+	if !p.residentMode || p.genericReader == nil {
+		return p.rail.Model()
+	}
+	s := p.takeSnapshot()
+	s.reader = p.genericReader
+	res := p.buildFromSnapshot(s)
+	if res.err != nil {
+		uxlog.Log("[resident-view] projects model build for switcher failed: %v", res.err)
+		return heramodel.Model{}
+	}
+	return res.model
 }
 
 // coordKickBound is the task the coordinator pane's size-drift kick may act
@@ -977,7 +997,13 @@ func (p *HeraPage) Draw(screen tcell.Screen) {
 	// drawn above the rail and shrinking it by the box height. On a terminal too
 	// short to keep the rail usable the box yields its rows back. Pure Draw math —
 	// no flex/ResizeItem and no Sync; the box and rail each paint their full rect.
-	p.summary.SetCount(p.rail.Model().UnmanagedNeedsInputCount(p.needsInput))
+	if p.residentMode {
+		// The resident view is one team, not the fleet: no heads-up about
+		// plain tasks blocked elsewhere.
+		p.summary.SetCount(0)
+	} else {
+		p.summary.SetCount(p.rail.Model().UnmanagedNeedsInputCount(p.needsInput))
+	}
 	barH := p.summary.DesiredHeight()
 	if barH > 0 && h-barH < minRailHeight {
 		barH = 0
@@ -1542,7 +1568,7 @@ func (p *HeraPage) handleRailMutation(event *tcell.EventKey) bool {
 		}
 	}
 	if act, ok := p.keys().Resolve(keymap.CtxHeraRail, event); ok {
-		if p.residentMode && !residentRailAllows(act, sel) {
+		if p.residentMode && !ResidentRailAllows(act, sel) {
 			uxlog.Log("[resident-view] key %s inert (worker-only or structure action)", act)
 			return true // consumed: never falls through to rail navigation
 		}
@@ -1611,10 +1637,10 @@ func (p *HeraPage) handleRailMutation(event *tcell.EventKey) bool {
 	return false
 }
 
-// residentRailAllows applies the resident tab's key policy (keymap data, not
+// ResidentRailAllows applies the resident tab's key policy (keymap data, not
 // literals): structure keys are inert, worker-only keys need a worker row, and
 // the resident's own row is protected from them.
-func residentRailAllows(act keymap.Action, sel heramodel.Selection) bool {
+func ResidentRailAllows(act keymap.Action, sel heramodel.Selection) bool {
 	switch keymap.ResidentRailAccess(act) {
 	case keymap.ResidentAnywhere:
 		return true
