@@ -324,6 +324,11 @@ type SupervisorClient interface {
 // captures the client. The in-process runner created in New is left unused; its
 // onFinish never fires because it never starts a session.
 func (d *Daemon) UseSupervisorRunner(c SupervisorClient) {
+	if guarded, ok := c.(interface {
+		SetResidentWorkerIdentity(agent.ResidentWorkerIdentity)
+	}); ok {
+		guarded.SetResidentWorkerIdentity(d.db.IsResidentWorker)
+	}
 	d.runner = c
 	d.supClient = c
 	// Prefer the owned form: the client drops the exiting session from its map
@@ -401,7 +406,7 @@ func New(database *db.DB) *Daemon {
 			LastOutput:     lastOutput,
 			PendingRestart: d.runner.HasPendingRestart(taskID),
 		}, d.runner.Get(taskID))
-	})
+	}, database.IsResidentWorker)
 
 	// Mount the session-serving substrate. The daemon owns the runner (and thus
 	// the onFinish wiring above); the core owns the stream registry, exit cache,
@@ -615,6 +620,7 @@ func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
 // adapter that translates the MCP payload to/from the shared types.
 func (d *Daemon) heraSpawnWorker(in mcp.HeraSpawnInput) (*mcp.HeraSpawnResult, error) {
 	res, err := agent.SpawnHeraWorker(d.db, d.runner, agent.HeraWorkerSpawnInput{
+		Account:        in.Account,
 		OrchestratorID: in.OrchestratorID,
 		BaseName:       in.BaseName,
 		TaskPrompt:     in.TaskPrompt,

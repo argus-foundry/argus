@@ -848,7 +848,11 @@ const ResidentEnvMarker = "ARGUS_RESIDENT"
 // If resume is false and SessionID is set, it uses --session-id for a new session with a known ID.
 // When sandbox is enabled and available, the command is wrapped with sandbox-exec.
 // The returned cleanup function removes the sandbox config temp file (nil if no sandbox).
-func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func(), error) {
+func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...ResidentWorkerIdentity) (*exec.Cmd, func(), error) {
+	unattended, err := residentWorkerPreflight(task, cfg, identity...)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := cfg.Git.Validate(); err != nil {
 		uxlog.Log("[agent-git] task %q: invalid signing policy", task.ID)
 		return nil, nil, err
@@ -861,6 +865,15 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	cmdStr := backend.Command
 
 	fam := FamilyOf(backend.Command)
+	if unattended {
+		backend.Command, err = fam.UnattendedWorker(backend.Command)
+		if err != nil {
+			return nil, nil, err
+		}
+		cmdStr = backend.Command
+		uxlog.Log("[resident] unattended worker launch task=%s mode=bypass-active", task.ID)
+		slog.Info("[resident] unattended worker launch", "task", task.ID, "mode", "bypass-active")
+	}
 	// residentArgusWrap records that the resident policy dropped the user's
 	// Claude sandbox `enabled` because Argus will wrap this launch itself.
 	residentArgusWrap := false
@@ -1201,7 +1214,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		if serr == nil {
 			cmdStr = WrapWithSandbox(cmdStr, profilePath, params)
 			sandboxCleanup = cleanup
-		} else if residentArgusWrap {
+		} else if residentArgusWrap || unattended {
 			// The resident's own Claude sandbox `enabled` was dropped on the
 			// promise of this wrap: never fall through with neither applied.
 			return nil, nil, fmt.Errorf("resident sandbox profile: %w", serr)

@@ -37,6 +37,7 @@ type pendingRestart struct {
 
 // Runner manages multiple agent sessions keyed by task ID.
 type Runner struct {
+	residentWorker ResidentWorkerIdentity
 	mu             sync.Mutex
 	mcpPort        int
 	sessions       map[string]*Session
@@ -68,9 +69,9 @@ func (r *Runner) SetMCPPort(port int) {
 // NewRunner creates a Runner. The onFinish callback is called (in a goroutine)
 // when any managed session's process exits. lastOutput contains the final ring
 // buffer contents so callers can display error messages after the session is gone.
-func NewRunner(onFinish func(taskID string, err error, stopped bool, lastOutput []byte)) *Runner {
+func NewRunner(onFinish func(taskID string, err error, stopped bool, lastOutput []byte), identity ...ResidentWorkerIdentity) *Runner {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Runner{
+	r := &Runner{
 		sessions:       make(map[string]*Session),
 		stopped:        make(map[string]bool),
 		pendingRestart: make(map[string]*pendingRestart),
@@ -79,6 +80,10 @@ func NewRunner(onFinish func(taskID string, err error, stopped bool, lastOutput 
 		shutdownCtx:    ctx,
 		shutdownCancel: cancel,
 	}
+	if len(identity) > 0 {
+		r.residentWorker = identity[0]
+	}
+	return r
 }
 
 // Start launches a new agent session for the given task.
@@ -86,6 +91,9 @@ func NewRunner(onFinish func(taskID string, err error, stopped bool, lastOutput 
 // If resume is true, the agent reconnects to an existing conversation via --resume.
 // Returns an error if a session already exists for this task.
 func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (SessionHandle, error) {
+	if _, err := residentWorkerPreflight(task, cfg, r.residentWorker); err != nil {
+		return nil, err
+	}
 	// Reserve the slot under the lock to prevent TOCTOU races: two concurrent
 	// Start() calls for the same task ID could both pass an exists-check and
 	// overwrite each other, leaking PTY fds and sandbox cleanup closures.
@@ -136,7 +144,7 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		return nil, err
 	}
 
-	cmd, sandboxCleanup, err := BuildCmd(task, cfg, resume)
+	cmd, sandboxCleanup, err := BuildCmd(task, cfg, resume, r.residentWorker)
 	if err != nil {
 		slog.Error("runner.Start: BuildCmd failed", "task", task.ID, "err", err)
 		cleanup()
@@ -367,6 +375,9 @@ func (r *Runner) kickRerender(task *model.Task, cfg config.Config, rows, cols ui
 	if task == nil {
 		return fmt.Errorf("nil task")
 	}
+	if _, err := residentWorkerPreflight(task, cfg, r.residentWorker); err != nil {
+		return err
+	}
 	if r.Get(task.ID) == nil {
 		return ErrSessionNotFound
 	}
@@ -436,6 +447,9 @@ func (r *Runner) kickRerender(task *model.Task, cfg config.Config, rows, cols ui
 func (r *Runner) Recycle(task *model.Task, cfg config.Config, rows, cols uint16) error {
 	if task == nil {
 		return fmt.Errorf("nil task")
+	}
+	if _, err := residentWorkerPreflight(task, cfg, r.residentWorker); err != nil {
+		return err
 	}
 	r.mu.Lock()
 	sess := r.sessions[task.ID]

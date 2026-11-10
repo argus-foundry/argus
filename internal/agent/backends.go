@@ -163,6 +163,11 @@ type Family struct {
 	// LaunchFlag is inserted right after the binary unless already present
 	// before any `--` separator (OpenCode's --auto).
 	LaunchFlag string
+	// UnattendedWorker closes permission, question and plan prompts. Nil
+	// excludes this family from resident-worker routing. Requires Argus confinement.
+	UnattendedWorker func(command string) (string, error)
+	// UnattendedUsageProbe ranks untiered eligible account pairs.
+	UnattendedUsageProbe string
 	// MCPFlag returns the per-launch flag wiring Argus's MCP server, or nil
 	// when the CLI only reads MCP servers from global config (see InjectGlobal).
 	MCPFlag func(url string) string
@@ -634,6 +639,14 @@ var families = []*Family{
 		PermissionFlags:      config.PermissionModeFlags,
 		PermissionRulesFlag:  claudePermissionRulesFlag,
 		StripPermissionFlags: stripClaudePermissionFlags,
+		UnattendedUsageProbe: config.ProbeClaudeUsage,
+		UnattendedWorker: func(command string) (string, error) {
+			command, err := stripClaudePermissionFlags(command)
+			if err != nil {
+				return "", err
+			}
+			return command + " --dangerously-skip-permissions --disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode", nil
+		},
 		ResidentCommandCheck: checkClaudeResidentCommand,
 		PermissionFlagTokens: []string{
 			"--permission-mode", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",

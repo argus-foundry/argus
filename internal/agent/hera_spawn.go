@@ -33,6 +33,7 @@ type HeraWorkerSpawnInput struct {
 	Project        string // resolved argus project
 	Branch         string // optional base branch
 	Backend        string // optional backend override
+	Account        string // optional account pin; resident routing otherwise spans enabled accounts
 	Model          string // optional per-worker model override (empty = backend default)
 	Archetype      string // optional diligence archetype; defaults to code_slice when empty
 	Profile        string // optional per-spawn profile override; empty = use project binding
@@ -295,6 +296,30 @@ func SpawnHeraWorker(database *db.DB, runner SessionProvider, in HeraWorkerSpawn
 	if aerr != nil {
 		return nil, aerr
 	}
+	if in.Account != "" {
+		inheritedAccount = in.Account
+	}
+	if residentWorker {
+		cfg := database.Config()
+		if !argusWrapsSandbox(&model.Task{Project: in.Project, Worktree: cfg.Projects[in.Project].Path}, cfg) {
+			uxlog.Log("[resident] worker spawn refused: Argus sandbox unavailable project=%s", in.Project)
+			slog.Warn("[resident] worker spawn refused: Argus sandbox unavailable", "project", in.Project)
+			return nil, fmt.Errorf("resident worker requires the Argus sandbox")
+		}
+		backendtier.FreshenBeforeSpawn()
+		choice, err := ResolveResidentWorker(cfg, in.Project, in.Backend, in.Account)
+		if err != nil {
+			uxlog.Log("[resident] worker routing refused: %v", err)
+			slog.Warn("[resident] worker routing refused", "err", err)
+			return nil, err
+		}
+		in.Backend, inheritedAccount = choice.Backend, choice.Account
+		if err := preflightUnattended(&model.Task{Project: in.Project, Backend: in.Backend, Account: inheritedAccount, Worktree: cfg.Projects[in.Project].Path}, cfg); err != nil {
+			uxlog.Log("[resident] worker spawn refused: %v", err)
+			slog.Warn("[resident] worker spawn refused", "err", err)
+			return nil, err
+		}
+	}
 	task, _, err := CreateAndStart(database, runner, CreateInput{
 		Name:             uniqueName,
 		PTYRole:          db.HeraKindWorker,
@@ -307,6 +332,7 @@ func SpawnHeraWorker(database *db.DB, runner SessionProvider, in HeraWorkerSpawn
 		BaseBranch:       in.Branch,
 		BranchNamespace:  resolveOrchestratorBranchNamespace(database, in.OrchestratorID, in.Project),
 		Account:          inheritedAccount,
+		AccountRouted:    residentWorker && in.Account == "",
 		InheritedAccount: true,
 		AutoName:         false, // name is the meaningful role slug — no Haiku rename
 		AfterPersist: func(t *model.Task) (func(), error) {

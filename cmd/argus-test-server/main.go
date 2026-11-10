@@ -101,7 +101,7 @@ func main() {
 		log.Fatalf("db add: %v", err)
 	}
 
-	runner := agent.NewRunner(nil)
+	runner := agent.NewRunner(nil, d.IsResidentWorker)
 	if _, err := runner.Start(task, d.Config(), 24, 80, false); err != nil {
 		log.Fatalf("runner.Start: %v", err)
 	}

@@ -90,16 +90,17 @@ func (d *DB) seedDefaults() error {
 	d.conn.QueryRow(`SELECT COUNT(*) FROM config`).Scan(&configCount)
 	if configCount == 0 {
 		defaults := map[string]string{
-			"defaults.backend":      cfg.Defaults.Backend,
-			"ui.theme":              cfg.UI.Theme,
-			"ui.show_elapsed":       fmt.Sprintf("%t", cfg.UI.ShowElapsed),
-			"ui.show_icons":         fmt.Sprintf("%t", cfg.UI.ShowIcons),
-			"ui.default_agent_zoom": fmt.Sprintf("%t", cfg.UI.DefaultAgentZoom),
-			"ui.cross_tab_arrows":   fmt.Sprintf("%t", cfg.UI.CrossTabArrows),
-			"ui.tasks_rail":         fmt.Sprintf("%t", cfg.UI.TasksRail),
-			"kb.http_port":          fmt.Sprintf("%d", cfg.KB.HTTPPort),
-			"kb.metis_vault_path":   config.DefaultMetisVaultPath(),
-			"api.http_port":         fmt.Sprintf("%d", cfg.API.HTTPPort),
+			"defaults.backend":         cfg.Defaults.Backend,
+			"ui.theme":                 cfg.UI.Theme,
+			"ui.show_elapsed":          fmt.Sprintf("%t", cfg.UI.ShowElapsed),
+			"ui.show_icons":            fmt.Sprintf("%t", cfg.UI.ShowIcons),
+			"ui.default_agent_zoom":    fmt.Sprintf("%t", cfg.UI.DefaultAgentZoom),
+			"ui.cross_tab_arrows":      fmt.Sprintf("%t", cfg.UI.CrossTabArrows),
+			"ui.tasks_rail":            fmt.Sprintf("%t", cfg.UI.TasksRail),
+			"kb.http_port":             fmt.Sprintf("%d", cfg.KB.HTTPPort),
+			"kb.metis_vault_path":      config.DefaultMetisVaultPath(),
+			"api.http_port":            fmt.Sprintf("%d", cfg.API.HTTPPort),
+			"resident.worker_accounts": "{}",
 		}
 		for k, v := range defaults {
 			if _, err := d.conn.Exec(`INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)`, k, v); err != nil {

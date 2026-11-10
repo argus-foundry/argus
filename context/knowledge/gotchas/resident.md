@@ -39,6 +39,11 @@ Memory, orientation and tool permissions are in [resident-memory.md](resident-me
 
 ## Codex unattended-worker spike
 
+- **Worker identity must be queried at launch, not serialized from task meta.** Production runners and supervisor clients receive `db.IsResidentWorker`; Start/BuildCmd and kick/recycle preflight query it again, covering marker loss after hide/unhide. Graduation must end membership AND clear the marker; the next query then restores normal flags without the worker sandbox gate (including supervisor-owned pending restarts).
+- **Worker-account toggles affect only new resident spawns and merge per key.** Settings writes only the raw DB map, never a copy of the config.toml overlay; copying the overlay would leave deleted file overrides frozen in Settings. Account eligibility is the intersection of `AccountSupports` and non-nil `Family.UnattendedWorker`, so Codex-only accounts stay invisible.
+- **The prompt backstop treats detector needs-input and role `blocked` as one episode.** Switching between the two must not re-notify; only clearing both arms another message. Notices use the durable Hera store and its existing notifier delivery ID, so an idle-gated doorbell retry never creates another message.
+- **Unattended workers require supervisor spawn surface 42 (stream 17 for restart preflight).** An older supervisor cannot enforce the new launch flags; the daemon refuses worker launches and restart requests to it before stopping a running session.
+
 - **Codex 0.167.0 bypass closes command approvals, not question tools: keep resident-worker eligibility nil.** A real resumed session still displayed an async question with both candidate feature overrides false, and `/plan` still enabled a blocking question (`collaboration_modes` is a removed flag); no verified launch/resume closure was found. — `add-resident-coordinator` task 4.0, 2026-11-09; [commands, sanitized rollout excerpts and limits](../../spikes/2026-11-09-codex-unattended-worker.md).
 
 Observed excerpts (same session, bypass active):

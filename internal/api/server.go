@@ -55,9 +55,6 @@ type Server struct {
 	deleteJobCtx       context.Context
 	deleteJobCancel    context.CancelFunc
 	deleteJobsStopping bool
-	// residentWaiting mirrors whether the resident is flagged needs-input
-	// (set by the needs-input tick, read by ResidentWaiting).
-	residentWaiting atomic.Bool
 	// runner is the session backend, typed as agent.SessionRunner so the daemon
 	// can hand it either an in-process *agent.Runner (supervisor OFF) or a
 	// supervisor-client (supervisor ON) — the API server drives both identically.

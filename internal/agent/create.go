@@ -59,6 +59,10 @@ type CreateInput struct {
 	// project/global-default-derived account that does not support it falls
 	// back to the default account with a log line.
 	Account string
+	// AccountRouted preserves provenance when a caller has already selected
+	// a validated account through a restricted routing policy. It remains
+	// validated as a pin here, but children may route instead of inheriting it.
+	AccountRouted bool
 
 	// InheritedAccount marks Account as copied from a parent task (hera
 	// coordinator, MCP caller) so an unsupported backend error names it.
@@ -202,9 +206,9 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	// never leaves a worktree behind. An explicit account (named or "default")
 	// is a pin. Anything else is unpinned: routing chooses, the task is stored
 	// account_routed (blank when routing lands on default) so children route too.
-	explicitDefault := input.Account == config.DefaultAccountName
+	explicitDefault := input.Account == config.DefaultAccountName && !input.AccountRouted
 	projectAccount := cfg.ProjectAccounts[input.Project]
-	unpinned := input.Account == "" && (projectAccount == "" || cfg.ValidateAccount(projectAccount) != nil)
+	unpinned := input.AccountRouted || (input.Account == "" && (projectAccount == "" || cfg.ValidateAccount(projectAccount) != nil))
 	if len(cfg.BackendRouting.Tiers) > 0 {
 		// Fresh read before spawn: never route on a snapshot older than the burst.
 		backendtier.FreshenBeforeSpawn()

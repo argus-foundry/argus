@@ -275,6 +275,7 @@ var heraToolDefs = []Tool{
 				"prompt":       map[string]interface{}{"type": "string", "description": "The worker's MISSION/task only. An orientation prefix naming the coordinator is prepended automatically; the verbatim prompt is stored on the role row and shown as the node's description in the plan-DAG view. Do NOT prepend organization or security policy: every spawned worker session receives its org instructions independently (harness-injected), so a prepended copy is redundant and pollutes the stored prompt and the plan-DAG view"},
 				"project":      map[string]interface{}{"type": "string", "description": "(optional) Override the argus project. Defaults to the coordinator's own project"},
 				"branch":       map[string]interface{}{"type": "string", "description": "(optional) Branch passed to argus CreateTask. Defaults to project default"},
+				"account":      map[string]interface{}{"type": "string", "description": "(optional) Account pin. Resident spawns accept only enabled accounts supporting an eligible unattended family; omit to route across enabled accounts by usage headroom."},
 				"backend":      map[string]interface{}{"type": "string", "description": "(optional) Omit by default: with no backend, argus picks one per spawn from the project override and [backend_routing] usage headroom, spreading work across Claude and Codex quota. Set it only for a concrete backend-specific need (it must promote itself via hera_new_orchestrator, it needs a connector or MCP signed in on only one backend, or it runs an in-session Claude review panel). \"The task is important\" is not such a need. The spawn result reports the backend the worker got and whether it was routed or explicit"},
 				"model":        map[string]interface{}{"type": "string", "description": "(optional) Per-worker model override. Prefer `archetype` instead: the backend is usually picked by [backend_routing] at spawn, so a backend-specific model (e.g. opus) is silently dropped when the worker lands on another backend, while an archetype resolves to the right model for whichever backend it gets. Must be valid for the worker's resolved backend (claude: opus/sonnet/haiku/fable; codex: e.g. gpt-6-sol; pi: its model ids; opencode: a provider-qualified provider/model id, e.g. opencode/space-bunny-free; antigravity: an agy model id; cursor: a cursor-agent model id; omp: an omp model id or fuzzy name). Empty = backend default. Delivered through the backend's supported mechanism (--model for claude/codex/pi/antigravity/cursor/omp, child-only OPENCODE_CONFIG_CONTENT for opencode); ignored if the backend command already hard-codes a model"},
 				"archetype":    map[string]interface{}{"type": "string", "description": "(optional) Diligence archetype for the worker (e.g. code_slice, bug_fix, big_build, review, ci_loop). Selects the per-archetype model from the project's bound profile and is exported as ARGUS_ARCHETYPE to the worker. Defaults to code_slice when omitted"},
@@ -1822,6 +1823,7 @@ func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Resp
 		Project      string `json:"project"`
 		Branch       string `json:"branch"`
 		Backend      string `json:"backend"`
+		Account      string `json:"account"`
 		Model        string `json:"model"`
 		Archetype    string `json:"archetype"`
 	}
@@ -1898,6 +1900,7 @@ func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Resp
 	taskPrompt := agent.HeraWorkerOrientation(caller.orch.Name, caller.role.Name, caller.task.IsResident()) + "\n\n---\n\n" + prompt
 
 	res, err := s.heraSpawn(HeraSpawnInput{
+		Account:        strings.TrimSpace(p.Account),
 		Project:        project,
 		BaseName:       baseName,
 		TaskPrompt:     taskPrompt,
