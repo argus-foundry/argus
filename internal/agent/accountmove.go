@@ -63,9 +63,10 @@ func AccountMoveInFlight(id string) bool {
 }
 
 // refuseMoveOfPendingGraduate fails closed for a pending graduate: it restarts
-// only through the daemon watcher, and an account move would kill+resume it
-// alongside (account) or clear its session ID so the watcher's resume
-// preflight fails forever (backend). Called after claimAccountMove so a
+// only through the daemon watcher, and any account or backend move would
+// restart it alongside the watcher (a kill+resume) or clear/re-mint its
+// session ID (no transferable transcript, or a backend move), so the watcher's
+// resume preflight fails forever. Called after claimAccountMove so a
 // concurrent graduation preflight sees the move as in flight.
 func refuseMoveOfPendingGraduateImpl(database *db.DB, taskID string) error {
 	if pending, perr := database.GraduationPendingErr(taskID); perr != nil || pending {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/argus-foundry/argus/internal/backendtier"
 	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/argus-foundry/argus/internal/usagebudget"
 )
@@ -105,4 +106,24 @@ func TestResidentRoutingOrderedOverBudgetKeepsEligibleSet(t *testing.T) {
 	choice, err := ResolveResidentWorker(cfg, "proj", "", "")
 	testutil.NoError(t, err)
 	testutil.Equal(t, choice.Backend, "claude")
+}
+
+// A deleted then re-created account is enabled for resident workers again:
+// the stale "disabled" toggle is dropped with the delete, matching the spec's
+// "a new account added later is enabled".
+func TestResidentWorkerRoutingRecreatedAccountEnabled(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	testutil.NoError(t, d.SetAccount("alt", config.Account{ClaudeConfigDir: t.TempDir()}))
+	testutil.NoError(t, d.SetConfigValue("resident.worker_accounts", `{"alt":false}`))
+	_, err = ResolveResidentWorker(d.Config(), "proj", "claude", "alt")
+	testutil.True(t, err != nil)
+
+	testutil.NoError(t, d.DeleteAccount("alt"))
+	testutil.NoError(t, d.SetAccount("alt", config.Account{ClaudeConfigDir: t.TempDir()}))
+	choice, err := ResolveResidentWorker(d.Config(), "proj", "claude", "alt")
+	testutil.NoError(t, err)
+	testutil.Equal(t, choice.Account, "alt")
 }
