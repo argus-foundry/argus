@@ -40,7 +40,8 @@ func TestSupervisorWorkerIdentity(t *testing.T) {
 	var recycled StatusResp
 	testutil.NoError(t, s.Recycle(&RecycleReq{TaskID: w.ID, Backend: w.Backend, Worktree: w.Worktree}, &recycled))
 	testutil.Contains(t, recycled.Error, "requires the Argus sandbox")
-	testutil.NoError(t, d.EndHeraBinding(binding.ID, "graduated"))
+	_, err = d.GraduateHeraWorker(binding.ID)
+	testutil.NoError(t, err)
 	// No live session: the ordinary kick path now reports session-not-found,
 	// proving it no longer fails the unattended sandbox preflight.
 	var normal StatusResp

@@ -14,7 +14,7 @@ Memory, orientation and tool permissions are in [resident-memory.md](resident-me
 - **`config.toml` `[resident]` silently wins over Settings edits.** Settings writes DB keys; a key present in config.toml masks it with no warning. `allow_tools`/`ask_tools`/`deny_tools` are config.toml-only.
 - **Settings' enable gate calls `ResidentPrereq()`**, which also refuses while `config.ResidentPermissionsEnforced` is false. It ships true; a branch built before the permissions stage landed would refuse every enable.
 - **`residentOrientationPrompt(cfg)` is the single seam** for both the fresh-start prompt and the recycle seed; never build orientation text elsewhere.
-- **Spawn surface 41, protocol v13:** the resident's spawn flags (`--settings` rules, forced permission mode, `?caller=` MCP URL) live in supervisor-resident `BuildCmd`, gated on `Task.Kind` riding the Start/Kick/Recycle request. Restart the supervisor after installing; the client refuses to launch the resident on a pre-v13 supervisor.
+- **Spawn surface 43, protocol v13:** the resident's spawn flags (`--settings` rules, forced permission mode, `?caller=` MCP URL) live in supervisor-resident `BuildCmd`, gated on `Task.Kind` riding the Start/Kick/Recycle request. Restart the supervisor after installing; the client refuses to launch the resident on a pre-v13 supervisor.
 - **Not yet fenced:** the ai-ron `airon-dream` skip rule for `resident/**` and `dream: skip` is a separate-repo follow-up; the memory folder is unprotected from the nightly pass until it lands.
 - **`BuildCmd` refuses a non-resident task whose worktree is the resident working directory.** An older TUI binary that doesn't send `Task.Kind` would otherwise relaunch the resident without its permission policy; the paths are compared after `filepath.Clean`.
 - **A recycle seed is one-shot:** `restartSessionWithSeedPrompt` persists it as the row's `Prompt`, so the ensure loop's `start()` always resets `Prompt` to the orientation. Otherwise a later fresh launch (for example after `resident.account` changes and the old transcript can't be resumed) replays a stale handoff and relay directive.
@@ -43,12 +43,20 @@ Memory, orientation and tool permissions are in [resident-memory.md](resident-me
 - **The local empty-work check requires both zero commits ahead of the worker base ref and a clean tree.** Missing refs, missing worktrees and git errors fail closed; `git status -z` counts newline-containing filenames and rename pairs correctly. A classifier error also refuses default deletion.
 - **A resident-bound Hera call pins cwd and orchestrator to the standing team.** Otherwise an allowed spawn or accept could bypass team scope by naming another coordinator's cwd. The resident and marked/live resident workers cannot bootstrap an orchestrator; workers request graduation instead.
 
+## Graduation
+
+- **Graduation commits membership, worker-marker removal and `graduation_pending_restart` together.** Splitting those writes strands a coordinator with unattended flags after a crash; preserve `AccountRouted` so graduation never turns an automatically routed account into a human pin.
+
+- **The daemon graduation watcher resumes with `KickRerender`, never `KickRevive` or recycle.** `KickRevive` can silently start fresh without a transcript; graduation must preserve the exact conversation and uses a persisted outgoing PID to recover before/after the asynchronous kill-and-resume gap. Busy sessions are retried indefinitely without stray-job cleanup; ordinary coordinator recycle is deferred until the marker clears.
+
+- **Graduation orientation is a durable system-message outbox, separate from restart intent.** Message insertion and marker removal commit together, then notifier delivery retries from `graduation_orientation`; the `[argus]` prefix keeps the injected orientation out of user-exchange capture.
+
 ## Codex unattended-worker spike
 
 - **Worker identity must be queried at launch, not serialized from task meta.** Production runners and supervisor clients receive `db.IsResidentWorker`; Start/BuildCmd and kick/recycle preflight query it again, covering marker loss after hide/unhide. Graduation must end membership AND clear the marker; the next query then restores normal flags without the worker sandbox gate (including supervisor-owned pending restarts).
 - **Worker-account toggles affect only new resident spawns and merge per key.** Settings writes only the raw DB map, never a copy of the config.toml overlay; copying the overlay would leave deleted file overrides frozen in Settings. Account eligibility is the intersection of `AccountSupports` and non-nil `Family.UnattendedWorker`, so Codex-only accounts stay invisible.
 - **The prompt backstop treats detector needs-input and role `blocked` as one episode.** Switching between the two must not re-notify; only clearing both arms another message. Notices use the durable Hera store and its existing notifier delivery ID, so an idle-gated doorbell retry never creates another message.
-- **Unattended workers require supervisor spawn surface 42 (stream 17 for restart preflight).** An older supervisor cannot enforce the new launch flags; the daemon refuses worker launches and restart requests to it before stopping a running session.
+- **Unattended workers require supervisor spawn surface 43 (stream 17 for restart preflight).** An older supervisor cannot enforce the new launch flags; the daemon refuses worker launches and restart requests to it before stopping a running session.
 
 - **Codex 0.167.0 bypass closes command approvals, not question tools: keep resident-worker eligibility nil.** A real resumed session still displayed an async question with both candidate feature overrides false, and `/plan` still enabled a blocking question (`collaboration_modes` is a removed flag); no verified launch/resume closure was found. — `add-resident-coordinator` task 4.0, 2026-11-09; [commands, sanitized rollout excerpts and limits](../../spikes/2026-11-09-codex-unattended-worker.md).
 

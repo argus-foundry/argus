@@ -11,7 +11,7 @@ import (
 )
 
 func TestResidentWorkerPreflightBeforeRPC(t *testing.T) {
-	c := &Client{peerProtocol: 13, peerSpawnSurface: 41}
+	c := &Client{peerProtocol: 13, peerSpawnSurface: 42}
 	c.SetResidentWorkerIdentity(func(string) (bool, error) { return true, nil })
 	cfg := config.DefaultConfig()
 	cfg.Sandbox.Enabled = false
@@ -41,7 +41,7 @@ func TestResidentWorkerPreflightBeforeRPC(t *testing.T) {
 		cfg.Sandbox.Enabled = true
 		c.SetResidentWorkerIdentity(func(string) (bool, error) { return true, nil })
 		testutil.Contains(t, c.checkResidentWorkerSupported(task, cfg).Error(), "restart the supervisor")
-		c.peerSpawnSurface = 42
+		c.peerSpawnSurface = 43
 		testutil.NoError(t, c.checkResidentWorkerSupported(task, cfg))
 	}
 }

@@ -24,8 +24,8 @@ func (c *Client) checkResidentWorkerSupported(task *model.Task, cfg config.Confi
 	if err != nil {
 		return err
 	}
-	if worker && peer != 0 && surface < 42 {
-		uxlog.Log("[resident] refusing worker task=%s: supervisor spawn surface %d < 42", task.ID, surface)
+	if worker && peer != 0 && surface < 43 {
+		uxlog.Log("[resident] refusing worker task=%s: supervisor spawn surface %d < 43", task.ID, surface)
 		return fmt.Errorf("resident worker requires a supervisor with unattended-worker support; restart the supervisor and retry")
 	}
 	return nil

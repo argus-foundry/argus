@@ -2412,6 +2412,9 @@ func (r *Rail) drawOrchRow(screen tcell.Screen, x, y, w int, row railRow, select
 	}
 	agents := r.model.SubtreeAgentCount(o.ID)
 	label := o.Name
+	if coord := o.CoordRole(); coord != nil && coord.GraduationPendingRestart {
+		label = "graduation pending restart · " + label
+	}
 	count := fmt.Sprintf(" %d", agents)
 	// Subtree cost figure (add-coordinator-cost-estimate, design.md Decision
 	// 5/7): appended alongside the existing agent-count badge, omitted
@@ -2506,6 +2509,11 @@ func (r *Rail) drawRoleRow(screen tcell.Screen, x, y, w int, row railRow, select
 		tagStyle = theme.StyleDimmed
 	}
 	var tags []string
+	if role.GraduationPendingRestart {
+		widget.DrawText(screen, col, y, remaining, "graduation pending restart · "+role.Name, theme.StyleInReview)
+		drawInd()
+		return
+	}
 	if n := r.unread[role.TaskID]; n > 0 && role.TaskID != "" {
 		tags = append(tags, fmt.Sprintf("✉%d", n))
 	}

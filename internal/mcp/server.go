@@ -214,29 +214,30 @@ const maxTaskNameRunes = 200
 
 // Server is the MCP HTTP server.
 type Server struct {
-	db               KBQuerier
-	port             int
-	vaultPath        string // Metis vault path for write-back to Obsidian
-	httpSrv          *http.Server
-	createTask       TaskCreator
-	taskDB           TaskStore
-	taskStopper      TaskStopper
-	taskRecycle      TaskRecycler    // optional; set via SetTaskRecycler
-	clipboard        ClipboardSetter // optional; set via SetClipboard
-	sandboxProp      SandboxProposer // optional; set via SetSandboxProposer
-	schedDB          ScheduleStore   // optional; set via SetScheduleManager
-	schedRunner      ScheduleRunner  // optional; set via SetScheduleManager
-	messages         MessageStore    // optional; set via SetMessageManager
-	nudger           MessageNudger   // optional; set via SetMessageManager (best-effort)
-	artifacts        ArtifactStore   // optional; set via SetArtifactManager
-	heraSvc          *hera.Service   // optional; set via SetHeraService
-	heraStore        HeraStore       // optional; set via SetHeraService
-	residentClassify func(context.Context, *model.Task) (mergesafety.Verdict, error)
-	heraSpawn        HeraSpawner  // optional; set via SetHeraService (born-bound spawn)
-	heraRevive       HeraReviver  // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
-	profileCfg       ConfigStore  // optional; set via SetProfileResolver
-	apiGetMu         sync.RWMutex // guards apiGet (set after the listener is serving)
-	apiGet           APIGetter    // optional; set via SetAPIGetter (argus_api_get)
+	db                      KBQuerier
+	port                    int
+	vaultPath               string // Metis vault path for write-back to Obsidian
+	httpSrv                 *http.Server
+	createTask              TaskCreator
+	taskDB                  TaskStore
+	taskStopper             TaskStopper
+	taskRecycle             TaskRecycler    // optional; set via SetTaskRecycler
+	clipboard               ClipboardSetter // optional; set via SetClipboard
+	sandboxProp             SandboxProposer // optional; set via SetSandboxProposer
+	schedDB                 ScheduleStore   // optional; set via SetScheduleManager
+	schedRunner             ScheduleRunner  // optional; set via SetScheduleManager
+	messages                MessageStore    // optional; set via SetMessageManager
+	nudger                  MessageNudger   // optional; set via SetMessageManager (best-effort)
+	artifacts               ArtifactStore   // optional; set via SetArtifactManager
+	heraSvc                 *hera.Service   // optional; set via SetHeraService
+	heraStore               HeraStore       // optional; set via SetHeraService
+	residentClassify        func(context.Context, *model.Task) (mergesafety.Verdict, error)
+	heraSpawn               HeraSpawner // optional; set via SetHeraService (born-bound spawn)
+	heraRevive              HeraReviver // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
+	heraGraduationPreflight func(*model.Task) error
+	profileCfg              ConfigStore  // optional; set via SetProfileResolver
+	apiGetMu                sync.RWMutex // guards apiGet (set after the listener is serving)
+	apiGet                  APIGetter    // optional; set via SetAPIGetter (argus_api_get)
 	// accountMover backs task_move_account; set via SetAccountMover.
 	accountMover accountMoverSlot
 	createMu     sync.Mutex
@@ -1133,7 +1134,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if s.heraEnabled() {
 		tools = append(tools, heraToolDefs...)
 		if s.boundResident(req.caller) {
-			tools = append(tools, residentDeleteTool)
+			tools = append(tools, residentDeleteTool, residentGraduateTool)
 		}
 	}
 	if s.profileResolveEnabled() {
@@ -1259,6 +1260,8 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		return s.toolHeraNewOrchestratorAs(req.ID, params.Arguments, req.caller)
 	case "hera_delete_worker":
 		return s.toolHeraDeleteWorker(req.ID, params.Arguments, req.caller)
+	case "hera_graduate_worker":
+		return s.toolHeraGraduateWorker(req.ID, params.Arguments, req.caller)
 	case "hera_join":
 		return s.toolHeraJoin(req.ID, params.Arguments)
 	case "hera_board_post", "hera_board_update", "hera_board_resolve", "hera_board_list":

@@ -62,7 +62,7 @@ const (
 // operator-teardown link (reparented / user_deleted) that must not bridge its
 // child orchestrator. Every other reason leaves the structural link intact.
 func HeraEndReasonIsTeardown(reason string) bool {
-	return reason == HeraEndReasonReparented || reason == HeraEndReasonUserDeleted
+	return reason == HeraEndReasonReparented || reason == HeraEndReasonUserDeleted || reason == HeraEndReasonGraduated
 }
 
 // Task-meta mirror keys (namespace "hera"). The role layer mirrors a small
@@ -1577,7 +1577,13 @@ func (d *DB) UniqueHeraOrchestratorName(base string) (string, error) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, err := d.conn.Query(`SELECT name FROM hera_orchestrators WHERE archived_at IS NULL`)
+	return uniqueHeraOrchestratorName(d.conn, base)
+}
+
+func uniqueHeraOrchestratorName(q interface {
+	Query(string, ...any) (*sql.Rows, error)
+}, base string) (string, error) {
+	rows, err := q.Query(`SELECT name FROM hera_orchestrators WHERE archived_at IS NULL`)
 	if err != nil {
 		return "", fmt.Errorf("unique hera orchestrator name: %w", err)
 	}

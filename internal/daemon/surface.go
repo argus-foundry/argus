@@ -234,10 +234,9 @@ const (
 	//     (--allowedTools is refused by that allowlist, not stripped). The
 	//     backend command must also be a single line (an unescaped newline
 	//     would split off every appended flag in sh).
-	// v41: resident's launch policy allows standing-team coordination and
-	// spawn/delete, asks for graduation, and denies membership/plan surgery.
 	// 42: Pi launches register the native Argus MCP server.
-	// 43: sandbox-gated unattended workers, authoritative standing-team identity.
+	// 43: standing-team coordination policy and sandbox-gated unattended workers;
+	// authoritative worker identity is re-evaluated for each launch/restart.
 	SupervisorSpawnSurface = 43
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -548,7 +547,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "b5ef82063a03b1fc69ff6d34ce3bfda828ce5449ba3d5d74b91f2397db8b4d01"
+	SpawnSurfaceDigest  = "4c85f5b593f6fcb892bdc6600cb21a6afb1223a406f19e23b0b04f1eaf01613b"
 	StreamSurfaceDigest = "a0b3efb1c129a7c3a3ba94ef8922d258e60d87907e1f599f17e8108ad97770f0"
 )
 

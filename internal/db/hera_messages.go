@@ -466,7 +466,7 @@ type sqlExecer interface {
 // failures) keep mail unread: role-addressed mail waits for a later binding.
 func isTerminalHeraEndReason(reason string) bool {
 	switch reason {
-	case HeraEndReasonUserDeleted, heraEndReasonTaskDeleted, HeraEndReasonTaskMissing, HeraEndReasonMoved:
+	case HeraEndReasonUserDeleted, heraEndReasonTaskDeleted, HeraEndReasonTaskMissing, HeraEndReasonMoved, HeraEndReasonGraduated:
 		return true
 	}
 	return false
@@ -483,10 +483,10 @@ func clearDeadRoleMail(x sqlExecer) (int, error) {
 			SELECT r.id FROM hera_roles r
 			WHERE NOT EXISTS (SELECT 1 FROM hera_bindings b WHERE b.role_id=r.id AND b.ended_at IS NULL)
 			  AND ((r.nuked_at IS NOT NULL AND r.nuked_at<>'')
-			       OR (SELECT b.end_reason FROM hera_bindings b WHERE b.role_id=r.id ORDER BY b.id DESC LIMIT 1) IN (?,?,?,?))
+			       OR (SELECT b.end_reason FROM hera_bindings b WHERE b.role_id=r.id ORDER BY b.id DESC LIMIT 1) IN (?,?,?,?,?))
 		)`,
 		formatTime(time.Now()),
-		HeraEndReasonUserDeleted, heraEndReasonTaskDeleted, HeraEndReasonTaskMissing, HeraEndReasonMoved)
+		HeraEndReasonUserDeleted, heraEndReasonTaskDeleted, HeraEndReasonTaskMissing, HeraEndReasonMoved, HeraEndReasonGraduated)
 	if err != nil {
 		return 0, fmt.Errorf("clear dead-role hera mail: %w", err)
 	}

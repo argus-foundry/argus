@@ -92,7 +92,7 @@ func TestResidentDeleteGitWorktree(t *testing.T) {
 
 func TestResidentHeraInventory(t *testing.T) {
 	r := config.DefaultResidentConfig(100)
-	defs := append(append([]Tool{}, heraToolDefs...), residentDeleteTool)
+	defs := append(append([]Tool{}, heraToolDefs...), residentDeleteTool, residentGraduateTool)
 	for _, tool := range defs {
 		t.Run(tool.Name, func(t *testing.T) {
 			name := "mcp__argus__" + tool.Name
@@ -275,12 +275,17 @@ func TestResidentDeleteListing(t *testing.T) {
 			resp := s.handleToolsList(&Request{ID: 1, caller: caller})
 			result := resp.Result.(ToolsListResult)
 			found := false
+			graduateFound := false
 			for _, tool := range result.Tools {
 				if tool.Name == "hera_delete_worker" {
 					found = true
 				}
+				if tool.Name == "hera_graduate_worker" {
+					graduateFound = true
+				}
 			}
 			testutil.Equal(t, found, caller == res.ID)
+			testutil.Equal(t, graduateFound, caller == res.ID)
 		})
 	}
 }

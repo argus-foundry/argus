@@ -581,6 +581,7 @@ func TestHeraMail_ClearedOnTerminalBindingEnd(t *testing.T) {
 		{heraEndReasonTaskDeleted, 0},
 		{HeraEndReasonTaskMissing, 0},
 		{HeraEndReasonMoved, 0},
+		{HeraEndReasonGraduated, 0},
 		{"hera_rebind", 2},
 		{HeraEndReasonReparented, 2},
 		{"materialize_failed", 2},

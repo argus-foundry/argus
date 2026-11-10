@@ -54,7 +54,8 @@ func TestUnattendedHideRestart(t *testing.T) {
 	}
 	// Graduation ends membership and clears the marker; a supervisor-owned
 	// relaunch must query again and restore normal flags even without a sandbox.
-	testutil.NoError(t, d.EndHeraBinding(binding.ID, "graduated"))
+	_, err = d.GraduateHeraWorker(binding.ID)
+	testutil.NoError(t, err)
 	cfg := config.DefaultConfig()
 	cfg.Sandbox.Enabled = false
 	cfg.Defaults.PermissionMode = "plan"

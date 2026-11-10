@@ -98,6 +98,15 @@ func (r *HeraRecycleRunner) Restart(taskID string, roleID int64) error {
 		}
 		return r.residentRecycler.restartResident(taskID, note)
 	}
+	meta, err := r.database.ListMeta(taskID, db.HeraMetaNamespace)
+	if err != nil {
+		return err
+	}
+	for _, kv := range meta {
+		if kv.Key == db.HeraMetaKeyGraduationPendingRestart && kv.Value != "" {
+			return fmt.Errorf("graduation pending restart; recycle deferred")
+		}
+	}
 
 	binding, err := r.database.HeraLiveBindingByRole(roleID)
 	if err != nil {

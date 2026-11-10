@@ -197,6 +197,7 @@ type Daemon struct {
 	// polls for coordinators with a pending recycle request and restarts
 	// each once its session goes idle.
 	heraRecycleWatcher *hera.RecycleWatcher
+	graduation         *graduationWatcher
 
 	// taskRecycler is the one task_recycle runner (nil until MCP wiring); the
 	// resident manager consults it so its restart never races a recycle.
@@ -1646,6 +1647,8 @@ func (d *Daemon) Serve(sockPath string) error {
 		// meaning when hera is off.
 		d.heraRecycleWatcher = hera.NewRecycleWatcher(d.db, d.heraRecycleRunner())
 		go d.heraRecycleWatcher.Start()
+		d.graduation = newGraduationWatcher(d.db, d.runner, d.cfgFn, d.notifier)
+		go d.graduation.start()
 	}
 
 	// Remove Argus-owned user-wide entries from older builds. Task launches now
@@ -1690,6 +1693,7 @@ func (d *Daemon) Serve(sockPath string) error {
 		if cfg.Hera.Enabled {
 			mcpSrv.SetHeraService(hera.New(d.db, d.notifier), d.db, d.heraSpawnWorker)
 			mcpSrv.SetHeraReviver(d.heraReviveRole)
+			mcpSrv.SetHeraGraduationPreflight(d.graduation.preflight)
 		}
 		mcpSrv.SetArtifactManager(d.db)
 		mcpSrv.SetProfileResolver(d.db)
@@ -1920,6 +1924,10 @@ func (d *Daemon) cleanup() {
 		}
 	}
 
+	if d.graduation != nil {
+		close(d.graduation.stop)
+		<-d.graduation.done
+	}
 	if d.supClient != nil {
 		// Supervisor mode: the supervisor owns the agent PTYs and MUST survive
 		// this daemon's exit — that is the entire point (agents keep running
