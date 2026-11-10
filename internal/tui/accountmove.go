@@ -101,8 +101,11 @@ func (a *App) accountMoveChoices(t *model.Task) ([]modal.AccountChoice, string) 
 			all = append(all, accountChoice(n, n == current, windowPct(five), windowPct(week)))
 		}
 		auto := modal.AccountChoice{Name: agent.AutoMoveTarget, Detail: autoDetail}
-		if picked, _, ok := agent.PickMoveTarget(cfg, usage, "claude", current); ok {
-			auto.Detail = autoDetail + " (now " + picked + ")"
+		d, ok := a.db.(*db.DB)
+		if ok {
+			if picked, found := agent.PreviewMoveTarget(d, t, cfg, usage, "claude", current); found {
+				auto.Detail = autoDetail + " (now " + picked + ")"
+			}
 		}
 		rows = append([]modal.AccountChoice{auto}, all...)
 	}

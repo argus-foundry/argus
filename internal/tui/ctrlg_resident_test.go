@@ -160,3 +160,92 @@ func TestSmoke_CtrlGResidentTabNoopStaysPut(t *testing.T) {
 		testutil.Equal(t, f.a.header.Notice(), "No role needs input")
 	})
 }
+
+// A team worker interrupting while the resident tab shows must not leak into
+// Projects as a fake excursion on an ordinary leave.
+func TestSmoke_ResidentTeamInterruptionDoesNotLeakIntoProjects(t *testing.T) {
+	f := newResidentViewFixture(t)
+	defer f.stop()
+	seedNeedsInputWorker(t, f.d, "orch", "pw")
+	readUI(t, f.a.tapp, func() {
+		f.a.switchTab(widget.TabHera)
+		f.a.heraPage.SetNeedsInput(nil)
+		f.a.heraPage.Refresh()
+		f.a.switchTab(widget.TabResident)
+		f.a.heraPage.SetNeedsInput(nil)
+		f.a.heraPage.Refresh()
+		f.a.heraPage.SetNeedsInput([]string{f.workers[1]})
+		f.a.heraPage.Refresh()
+		f.a.switchTab(widget.TabHera)
+		testutil.False(t, f.a.heraPage.ResidentMode())
+		testutil.False(t, f.a.heraPage.HeldProjectsExcursion())
+		testutil.False(t, f.a.heraPage.Rail().HasExcursionSnapshot())
+		f.a.heraPage.SetNeedsInput(nil)
+		f.a.heraPage.Refresh()
+	})
+	var before string
+	readUI(t, f.a.tapp, func() { before = f.a.heraPage.SelectionContext().TaskID() })
+	f.press(t, tcell.NewEventKey(tcell.KeyCtrlG, 0, 0))
+	readUI(t, f.a.tapp, func() {
+		testutil.Equal(t, f.a.header.Notice(), "No role needs input")
+		testutil.Equal(t, f.a.heraPage.SelectionContext().TaskID(), before)
+		testutil.False(t, f.a.heraPage.Rail().HasExcursionSnapshot())
+	})
+}
+
+// A Projects excursion held across a resident round trip comes back.
+func TestSmoke_ResidentRoundTripRestoresProjectsExcursion(t *testing.T) {
+	f := newResidentViewFixture(t)
+	defer f.stop()
+	enterResidentFromProjects(t, f, true)
+	readUI(t, f.a.tapp, func() {
+		f.a.switchTab(widget.TabHera)
+		testutil.True(t, f.a.heraPage.JumpToTask("pw"))
+		f.a.switchTab(widget.TabResident)
+		f.a.switchTab(widget.TabHera)
+		testutil.True(t, f.a.heraPage.Rail().HasExcursionSnapshot())
+	})
+	f.press(t, tcell.NewEventKey(tcell.KeyCtrlB, 0, 0))
+	readUI(t, f.a.tapp, func() {
+		testutil.Equal(t, f.a.header.Notice(), "Rail restored")
+		sel := f.a.heraPage.Rail().Selected()
+		testutil.True(t, sel != nil)
+		testutil.Equal(t, sel.TaskID, "ow")
+	})
+}
+
+// Entering the resident tab parks the Projects excursion off the shared rail:
+// ctrl+b there must not restore it onto the team rail.
+func TestSmoke_ResidentEntryParksProjectsExcursion(t *testing.T) {
+	f := newResidentViewFixture(t)
+	defer f.stop()
+	enterResidentFromProjects(t, f, true)
+	readUI(t, f.a.tapp, func() {
+		testutil.False(t, f.a.heraPage.Rail().HasExcursionSnapshot())
+		testutil.True(t, f.a.heraPage.HeldProjectsExcursion())
+	})
+	f.press(t, tcell.NewEventKey(tcell.KeyCtrlB, 0, 0))
+	readUI(t, f.a.tapp, func() {
+		testutil.True(t, f.a.header.Notice() != "Rail restored")
+		testutil.Equal(t, f.a.heraPage.SelectionContext().TaskID(), f.workers[1])
+	})
+}
+
+// The needs-input baseline is restored on leaving resident mode so the team's
+// empty set is not read as a fresh Projects interruption.
+func TestSmoke_ResidentLeaveRestoresNeedsInputBaseline(t *testing.T) {
+	f := newResidentViewFixture(t)
+	defer f.stop()
+	seedNeedsInputWorker(t, f.d, "orch", "pw")
+	readUI(t, f.a.tapp, func() {
+		f.a.switchTab(widget.TabHera)
+		f.a.heraPage.SetNeedsInput(nil)
+		f.a.heraPage.Refresh()
+		f.a.heraPage.SetNeedsInput([]string{"pw"})
+		f.a.heraPage.Refresh()
+		f.a.heraPage.Rail().RestoreExcursion()
+		f.a.switchTab(widget.TabResident)
+		f.a.switchTab(widget.TabHera)
+		testutil.False(t, f.a.heraPage.Rail().HasExcursionSnapshot())
+	})
+}

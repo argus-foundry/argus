@@ -405,3 +405,23 @@ func (s backendMoveStore) MoveTaskBackend(_ context.Context, id, backend, accoun
 	s.moved <- id + "→" + backend + "/" + account
 	return &apiclient.MoveAccountResp{ToBackend: backend, Handoff: true, Started: true}, nil
 }
+
+// The picker's auto label must name the account MoveTaskAccount would pick,
+// which for a resident worker excludes accounts disabled for workers.
+func TestAccountMoveChoices_AutoLabelResidentWorker(t *testing.T) {
+	stubTUIAccountUsage(t, map[string]usagebudget.Reading{"work": {Percentage: 1}, "personal": {Percentage: 60}, "default": {Percentage: 90}})
+	toml := moveTestTOML + "[accounts.personal]\nclaude_config_dir = \"~/personal-claude\"\n"
+	auto := func(t *testing.T, resident bool) string {
+		d, task := moveTestDB(t, toml)
+		if resident {
+			testutil.NoError(t, d.SetMeta(task.ID, db.HeraMetaNamespace, db.HeraMetaKeyResidentWorker, "true"))
+			testutil.NoError(t, d.SetConfigValue("resident.worker_accounts", `{"work":false}`))
+			testutil.NoError(t, d.SetSandboxEnabled(true))
+		}
+		choices, notice := New(d, agent.NewRunner(nil), false).accountMoveChoices(task)
+		testutil.Equal(t, notice, "")
+		return choices[0].Detail
+	}
+	testutil.Contains(t, auto(t, false), "now work")
+	testutil.Contains(t, auto(t, true), "now personal")
+}

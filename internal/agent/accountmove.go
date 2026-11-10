@@ -16,6 +16,7 @@ import (
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
@@ -407,4 +408,24 @@ func copyTree(src, dst string) error {
 		}
 		return nil
 	})
+}
+
+// PreviewMoveTarget is the account an "auto" move of task would pick right now
+// (the picker's "now X" label), applying the same resident-worker eligibility
+// filter MoveTaskAccount does. Fail-closed: when worker identity cannot be
+// determined, ok is false rather than naming an account the move might refuse.
+func PreviewMoveTarget(database *db.DB, task *model.Task, cfg config.Config, usage map[string]usagebudget.Reading, backendCommand, exclude string) (string, bool) {
+	var keep func(string) bool
+	if database != nil && task != nil {
+		worker, err := database.IsResidentWorker(task.ID)
+		if err != nil {
+			uxlog.Log("[resident] move preview: worker identity lookup failed task=%s: %v", task.ID, err)
+			return "", false
+		}
+		if worker {
+			keep = func(name string) bool { return residentWorkerMoveCause(task, cfg, task.Backend, name) == nil }
+		}
+	}
+	picked, _, ok := pickMoveTargetWhere(cfg, usage, backendCommand, exclude, keep)
+	return picked, ok
 }

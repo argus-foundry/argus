@@ -428,6 +428,11 @@ func (p *HeraPage) SetResidentMode(on bool) {
 		// Back to the Projects baseline so the rebuild below does not read the
 		// team's (empty) set as a fresh 0->1 interruption.
 		p.rail.armedNeedsInputIDs = p.projectsArmed
+		// The shared rail ran excursion logic on the TEAM model while the
+		// resident tab was showing; a team interruption must not turn into a
+		// fake Projects excursion. After the rebuild below a non-nil
+		// excursion then only means a leave-rebuild capture.
+		p.rail.excursion = nil
 	}
 	p.residentMode = on
 	p.rail.SetNeverCollapse(on)

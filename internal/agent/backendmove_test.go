@@ -285,6 +285,14 @@ func TestMoveTask_ResidentWorkerEligibility(t *testing.T) {
 		testutil.Contains(t, err.Error(), "resident workers can only move")
 		unchanged(t, f)
 	})
+	t.Run("sandbox disabled refused", func(t *testing.T) {
+		f := setup(t, "")
+		testutil.NoError(t, f.d.SetSandboxEnabled(false))
+		_, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Account: "work"})
+		testutil.ErrorIs(t, err, ErrAccount)
+		testutil.Contains(t, err.Error(), "requires the Argus sandbox")
+		unchanged(t, f)
+	})
 	t.Run("enabled account still moves", func(t *testing.T) {
 		f := setup(t, "default")
 		task, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Account: "work"})
@@ -347,4 +355,32 @@ func TestMoveTask_ResidentWorkerAutoPicksEligibleAccount(t *testing.T) {
 		}
 		testutil.Contains(t, err.Error(), "resident workers can only move")
 	})
+}
+
+// The picker's "now X" label must agree with what an auto move would pick.
+func TestPreviewMoveTarget(t *testing.T) {
+	sandboxAvailabilityForSignalTest(t, true)
+	t.Setenv("HOME", t.TempDir())
+	usage := map[string]usagebudget.Reading{"work": {Percentage: 1}, "personal": {Percentage: 60}, "default": {Percentage: 90}}
+	extra := "[accounts.personal]\nclaude_config_dir = \"" + filepath.Join(t.TempDir(), "personal") + "\""
+	d := accountFileDB(t, t.TempDir(), extra)
+	testutil.NoError(t, d.SetSandboxEnabled(true))
+	testutil.NoError(t, d.Add(&model.Task{ID: "mv", Name: "mover", Project: "proj", Backend: "test", Worktree: t.TempDir(), SessionID: "sid-1", Status: model.StatusInProgress}))
+	task, err := d.Get("mv")
+	testutil.NoError(t, err)
+	cfg := d.Config()
+
+	picked, ok := PreviewMoveTarget(d, task, cfg, usage, "claude", "default")
+	testutil.True(t, ok)
+	testutil.Equal(t, picked, "work")
+
+	testutil.NoError(t, d.SetMeta("mv", db.HeraMetaNamespace, db.HeraMetaKeyResidentWorker, "true"))
+	testutil.NoError(t, d.SetConfigValue("resident.worker_accounts", `{"work":false}`))
+	picked, ok = PreviewMoveTarget(d, task, d.Config(), usage, "claude", "default")
+	testutil.True(t, ok)
+	testutil.Equal(t, picked, "personal")
+
+	testutil.NoError(t, d.SetConfigValue("resident.worker_accounts", `{"work":false,"personal":false}`))
+	_, ok = PreviewMoveTarget(d, task, d.Config(), usage, "claude", "default")
+	testutil.False(t, ok)
 }
