@@ -53,6 +53,14 @@ const (
 // An explicit non-Claude backend remains an operator override with a warning.
 func resolveCoordinatorBackend(explicit, project string, cfg config.Config, accounts ...string) string {
 	const claudeFallback = "claude"
+	dynamicSelected := explicit == config.DynamicBackend
+	if explicit == "" {
+		selected := cfg.Projects[project].Backend
+		if selected == "" {
+			selected = cfg.Defaults.Backend
+		}
+		dynamicSelected = selected == config.DynamicBackend
+	}
 
 	if explicit != "" && explicit != config.DynamicBackend {
 		if b, ok := cfg.Backends[explicit]; ok && IsClaudeBackend(b.Command) {
@@ -72,7 +80,7 @@ func resolveCoordinatorBackend(explicit, project string, cfg config.Config, acco
 		}
 	}
 	preferred := cfg.Projects[project].Backend
-	if explicit == config.DynamicBackend {
+	if dynamicSelected {
 		// An explicit dynamic choice asks the coordinator to consider every
 		// Claude-capable tier, not only the project's concrete backend tier.
 		preferred = ""
@@ -108,7 +116,7 @@ func resolveCoordinatorBackend(explicit, project string, cfg config.Config, acco
 		return choice.Backend
 	}
 	name := ""
-	if explicit == config.DynamicBackend {
+	if dynamicSelected {
 		name = resolveDynamicBackendName(filtered, pin, project)
 	} else {
 		name = resolveDefaultBackendName("", project, filtered, accounts...)
@@ -120,7 +128,7 @@ func resolveCoordinatorBackend(explicit, project string, cfg config.Config, acco
 	if b, ok := cfg.Backends[name]; ok && IsClaudeBackend(b.Command) && cfg.AccountSupports(effectiveAccount, b.Command) {
 		return name
 	}
-	if explicit == config.DynamicBackend {
+	if dynamicSelected {
 		warnCoordinatorBackend("dynamic selection resolved to %q, which is not a compatible Claude backend", name)
 		return ""
 	}

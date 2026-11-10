@@ -196,6 +196,21 @@ func TestCoordinatorDynamicDoesNotFallbackToProjectBackendWhenTierIsUnavailable(
 	testutil.Equal(t, resolveCoordinatorBackend(config.DynamicBackend, "", cfg), "")
 }
 
+func TestCoordinatorInheritedDynamicDoesNotUseImplicitClaudeFallback(t *testing.T) {
+	cfg := config.Config{
+		Defaults: config.Defaults{Backend: "codex"},
+		Projects: map[string]config.Project{"p": {Backend: config.DynamicBackend}},
+		Backends: map[string]config.Backend{
+			"claude": {Command: "claude"},
+			"codex":  {Command: "codex"},
+		},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "claude", Probe: "unknown"},
+		}},
+	}
+	testutil.Equal(t, resolveCoordinatorBackend("", "p", cfg), "")
+}
+
 func TestCoordinatorSpawnRoutesAccount(t *testing.T) {
 	for _, backend := range []string{"", "test"} {
 		t.Run(backend, func(t *testing.T) {
