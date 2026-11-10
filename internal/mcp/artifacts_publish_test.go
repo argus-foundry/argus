@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -259,30 +260,33 @@ func TestArtifactPublish_RequiresCallingTask(t *testing.T) {
 	}
 }
 
-// sandboxFixture makes the calling task (abc123) sandboxed, with a worktree
-// and a temp-style root as its only writable roots, and an "outside" dir the
-// sandbox cannot write.
-type sandboxFixture struct {
-	worktree, tmpRoot, outside string
+// confineFixture gives the calling task (abc123) a worktree and a temp-style
+// root as its only writable roots, a deny-read dir inside the worktree, and
+// an "outside" dir no root covers.
+type confineFixture struct {
+	worktree, tmpRoot, outside, denied string
 }
 
-func sandboxTask(t *testing.T, s *Server) sandboxFixture {
+func confineTask(t *testing.T, s *Server, sandboxed bool) confineFixture {
 	t.Helper()
 	base := t.TempDir()
-	f := sandboxFixture{
+	f := confineFixture{
 		worktree: filepath.Join(base, "wt"),
 		tmpRoot:  filepath.Join(base, "tmp"),
 		outside:  filepath.Join(base, "outside"),
 	}
-	for _, d := range []string{f.worktree, f.tmpRoot, f.outside} {
+	f.denied = filepath.Join(f.worktree, "secrets")
+	for _, d := range []string{f.worktree, f.tmpRoot, f.outside, f.denied} {
 		testutil.NoError(t, os.MkdirAll(d, 0o700))
 	}
-	task := s.taskDB.(*mockTaskDB).tasks[0]
-	task.Sandboxed = true
-	task.Worktree = f.worktree
-	s.sandboxRoots = func(got *model.Task) []string {
-		testutil.Equal(t, got.ID, "abc123")
-		return []string{f.worktree, f.tmpRoot}
+	tasks := s.taskDB.(*mockTaskDB).tasks
+	tasks[0].Sandboxed = sandboxed
+	tasks[0].Worktree = f.worktree
+	s.pathPolicy = func(got *model.Task) (write, deny []string) {
+		if got.ID != "abc123" {
+			return []string{got.Worktree}, nil
+		}
+		return []string{f.worktree, f.tmpRoot}, []string{f.denied}
 	}
 	return f
 }
@@ -294,93 +298,155 @@ func writeAt(t *testing.T, path, content string) string {
 	return path
 }
 
-func TestArtifactPublish_SandboxedTaskConfinesPath(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		path    func(f sandboxFixture) string
-		allowed bool
-		want    string
+// confineCases are the path shapes every agent-path tool must handle the
+// same way. An empty want means allowed.
+func confineCases(t *testing.T, name string) []struct {
+	name string
+	path func(f confineFixture) string
+	want string
+} {
+	return []struct {
+		name string
+		path func(f confineFixture) string
+		want string
 	}{
-		{"inside worktree", func(f sandboxFixture) string {
-			return writeAt(t, filepath.Join(f.worktree, "out", "report.html"), publishPage)
-		}, true, ""},
-		{"temp root", func(f sandboxFixture) string { return writeAt(t, filepath.Join(f.tmpRoot, "report.html"), publishPage) }, true, ""},
-		{"outside the roots", func(f sandboxFixture) string { return writeAt(t, filepath.Join(f.outside, "report.html"), publishPage) }, false, "outside"},
-		{"symlink in worktree pointing outside", func(f sandboxFixture) string {
-			target := writeAt(t, filepath.Join(f.outside, "id_ed25519.html"), publishPage)
-			link := filepath.Join(f.worktree, "report.html")
+		{"inside worktree", func(f confineFixture) string { return writeAt(t, filepath.Join(f.worktree, "out", name), publishPage) }, ""},
+		{"temp root", func(f confineFixture) string { return writeAt(t, filepath.Join(f.tmpRoot, name), publishPage) }, ""},
+		{"outside the roots", func(f confineFixture) string { return writeAt(t, filepath.Join(f.outside, name), publishPage) }, "outside task abc123"},
+		{"symlink final component", func(f confineFixture) string {
+			target := writeAt(t, filepath.Join(f.outside, "id_ed25519"+filepath.Ext(name)), publishPage)
+			link := filepath.Join(f.worktree, name)
 			testutil.NoError(t, os.Symlink(target, link))
 			return link
-		}, false, "outside"},
-		{"dot-dot escape", func(f sandboxFixture) string {
-			writeAt(t, filepath.Join(f.outside, "report.html"), publishPage)
-			return filepath.Join(f.worktree, "..", "outside", "report.html")
-		}, false, "outside"},
-		{"missing file", func(f sandboxFixture) string { return filepath.Join(f.worktree, "nope.html") }, false, "nope.html"},
-	} {
+		}, "is a symlink;"},
+		{"symlinked parent pointing outside", func(f confineFixture) string {
+			writeAt(t, filepath.Join(f.outside, name), publishPage)
+			testutil.NoError(t, os.Symlink(f.outside, filepath.Join(f.worktree, "sub")))
+			return filepath.Join(f.worktree, "sub", name)
+		}, "outside task abc123"},
+		{"dot-dot escape", func(f confineFixture) string {
+			writeAt(t, filepath.Join(f.outside, name), publishPage)
+			return filepath.Join(f.worktree, "..", "outside", name)
+		}, "outside task abc123"},
+		{"hard-linked file", func(f confineFixture) string {
+			target := writeAt(t, filepath.Join(f.outside, name), publishPage)
+			link := filepath.Join(f.worktree, name)
+			testutil.NoError(t, os.Link(target, link))
+			return link
+		}, "more than one hard link"},
+		{"under a deny-read path", func(f confineFixture) string { return writeAt(t, filepath.Join(f.denied, name), publishPage) }, "will not read it"},
+		{"missing file", func(f confineFixture) string { return filepath.Join(f.worktree, "nope"+filepath.Ext(name)) }, "no such file"},
+	}
+}
+
+func TestArtifactPublish_ConfinesPath(t *testing.T) {
+	for _, sandboxed := range []bool{true, false} {
+		for _, tc := range confineCases(t, "report.html") {
+			t.Run(fmt.Sprintf("sandboxed=%t/%s", sandboxed, tc.name), func(t *testing.T) {
+				s, store, n := testPublishServer(t, true)
+				f := confineTask(t, s, sandboxed)
+				cr := callTool(t, s, "artifact_publish", map[string]any{"path": tc.path(f), "account": "personal", "id": "abc123"})
+				if tc.want == "" {
+					testutil.False(t, cr.IsError)
+					testutil.Equal(t, decodePublishResult(t, cr).Status, "published")
+					testutil.Equal(t, n.Load(), int32(1))
+					return
+				}
+				testutil.True(t, cr.IsError)
+				testutil.Contains(t, cr.Content[0].Text, tc.want)
+				testutil.Equal(t, n.Load(), int32(0))
+				testutil.Equal(t, len(store.saved), 0)
+			})
+		}
+	}
+}
+
+// TestArtifactPublish_SpoofedTaskConfinedToItsRoots: the caller's id is
+// self-reported, so naming another task only ever widens the read to THAT
+// task's own roots, never to an arbitrary path.
+func TestArtifactPublish_SpoofedTaskConfinedToItsRoots(t *testing.T) {
+	s, _, n := testPublishServer(t, true)
+	f := confineTask(t, s, true)
+	other := filepath.Join(t.TempDir(), "otherwt")
+	s.taskDB.(*mockTaskDB).tasks[1].Worktree = other // def456, unsandboxed
+
+	cr := callTool(t, s, "artifact_publish", map[string]any{"path": writeAt(t, filepath.Join(f.outside, "r.html"), publishPage), "account": "personal", "id": "def456"})
+	testutil.True(t, cr.IsError)
+	testutil.Contains(t, cr.Content[0].Text, "outside task def456")
+	testutil.Equal(t, n.Load(), int32(0))
+}
+
+func TestArtifactRegister_ConfinesPath(t *testing.T) {
+	for _, tc := range confineCases(t, "notes.txt") {
 		t.Run(tc.name, func(t *testing.T) {
-			s, store, n := testPublishServer(t, true)
-			f := sandboxTask(t, s)
-			cr := callTool(t, s, "artifact_publish", map[string]any{"path": tc.path(f), "account": "personal", "id": "abc123"})
-			if tc.allowed {
+			s, store, _ := testPublishServer(t, true)
+			f := confineTask(t, s, true)
+			cr := callArtifactRegister(t, s, map[string]any{"path": tc.path(f), "id": "abc123"})
+			if tc.want == "" {
 				testutil.False(t, cr.IsError)
-				testutil.Equal(t, decodePublishResult(t, cr).Status, "published")
-				testutil.Equal(t, n.Load(), int32(1))
+				testutil.Equal(t, len(store.saved), 1)
 				return
 			}
 			testutil.True(t, cr.IsError)
 			testutil.Contains(t, cr.Content[0].Text, tc.want)
-			testutil.Equal(t, n.Load(), int32(0))
 			testutil.Equal(t, len(store.saved), 0)
 		})
 	}
 }
 
-func TestArtifactPublish_UnsandboxedTaskReadsAnywhere(t *testing.T) {
-	s, _, n := testPublishServer(t, true)
-	s.sandboxRoots = func(*model.Task) []string { t.Error("roots consulted for an unsandboxed task"); return nil }
-	cr := callTool(t, s, "artifact_publish", map[string]any{"path": writeTempFile(t, "report.html", publishPage), "account": "personal", "id": "abc123"})
-	testutil.False(t, cr.IsError)
-	testutil.Equal(t, n.Load(), int32(1))
+func TestArtifactRegister_ConfinesFolder(t *testing.T) {
+	t.Run("folder outside refused", func(t *testing.T) {
+		s, store, _ := testPublishServer(t, true)
+		f := confineTask(t, s, false)
+		writeAt(t, filepath.Join(f.outside, "shots", "a.png"), "png")
+		cr := callArtifactRegister(t, s, map[string]any{"path": filepath.Join(f.outside, "shots"), "id": "abc123"})
+		testutil.True(t, cr.IsError)
+		testutil.Contains(t, cr.Content[0].Text, "outside task abc123")
+		testutil.Equal(t, len(store.saved), 0)
+	})
+	t.Run("folder under deny-read refused", func(t *testing.T) {
+		s, store, _ := testPublishServer(t, true)
+		f := confineTask(t, s, true)
+		writeAt(t, filepath.Join(f.denied, "shots", "a.png"), "png")
+		cr := callArtifactRegister(t, s, map[string]any{"path": filepath.Join(f.denied, "shots"), "id": "abc123"})
+		testutil.True(t, cr.IsError)
+		testutil.Contains(t, cr.Content[0].Text, "will not read it")
+		testutil.Equal(t, len(store.saved), 0)
+	})
+	t.Run("hard-linked member skipped", func(t *testing.T) {
+		s, store, _ := testPublishServer(t, true)
+		f := confineTask(t, s, true)
+		dir := filepath.Join(f.tmpRoot, "shots")
+		writeAt(t, filepath.Join(dir, "a.png"), "png")
+		secret := writeAt(t, filepath.Join(f.outside, "secret.png"), "secret")
+		testutil.NoError(t, os.Link(secret, filepath.Join(dir, "b.png")))
+		cr := callArtifactRegister(t, s, map[string]any{"path": dir, "id": "abc123"})
+		testutil.False(t, cr.IsError)
+		testutil.Equal(t, len(store.saved), 1)
+		testutil.Equal(t, store.saved[0].Filename, "shots/a.png")
+	})
 }
 
-func TestArtifactRegister_SandboxedTaskConfinesPath(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		path    func(f sandboxFixture) string
-		allowed bool
-	}{
-		{"file inside worktree", func(f sandboxFixture) string { return writeAt(t, filepath.Join(f.worktree, "r.html"), publishPage) }, true},
-		{"folder in temp root", func(f sandboxFixture) string {
-			writeAt(t, filepath.Join(f.tmpRoot, "shots", "a.png"), "png")
-			return filepath.Join(f.tmpRoot, "shots")
-		}, true},
-		{"file outside", func(f sandboxFixture) string { return writeAt(t, filepath.Join(f.outside, "r.html"), publishPage) }, false},
-		{"folder outside", func(f sandboxFixture) string {
-			writeAt(t, filepath.Join(f.outside, "shots", "a.png"), "png")
-			return filepath.Join(f.outside, "shots")
-		}, false},
-		{"symlink pointing outside", func(f sandboxFixture) string {
-			target := writeAt(t, filepath.Join(f.outside, "secret.txt"), "secret")
-			link := filepath.Join(f.worktree, "notes.txt")
-			testutil.NoError(t, os.Symlink(target, link))
-			return link
-		}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s, store, _ := testPublishServer(t, true)
-			f := sandboxTask(t, s)
-			cr := callArtifactRegister(t, s, map[string]any{"path": tc.path(f), "id": "abc123"})
-			if tc.allowed {
-				testutil.False(t, cr.IsError)
-				testutil.True(t, len(store.saved) > 0)
-				return
-			}
-			testutil.True(t, cr.IsError)
-			testutil.Contains(t, cr.Content[0].Text, "outside")
-			testutil.Equal(t, len(store.saved), 0)
-		})
-	}
+func TestConfinedRead(t *testing.T) {
+	s, _, _ := testPublishServer(t, true)
+	f := confineTask(t, s, true)
+	task := s.taskDB.(*mockTaskDB).tasks[0]
+	p := writeAt(t, filepath.Join(f.worktree, "big.html"), "0123456789")
+	t.Run("within cap", func(t *testing.T) {
+		b, err := s.confinedRead(task, p, 10)
+		testutil.NoError(t, err)
+		testutil.Equal(t, string(b), "0123456789")
+	})
+	t.Run("over cap", func(t *testing.T) {
+		_, err := s.confinedRead(task, p, 9)
+		testutil.Error(t, err)
+		testutil.Contains(t, err.Error(), "larger than")
+	})
+	t.Run("directory", func(t *testing.T) {
+		_, err := s.confinedRead(task, f.worktree, 10)
+		testutil.Error(t, err)
+		testutil.Contains(t, err.Error(), "not a regular file")
+	})
 }
 
 func TestArtifactPublish_NotConfigured(t *testing.T) {
@@ -640,4 +706,30 @@ func TestArtifactOpen_MissingBytes(t *testing.T) {
 	testutil.True(t, cr.IsError)
 	testutil.Contains(t, cr.Content[0].Text, "no bytes on disk")
 	testutil.Equal(t, len(op.calls), 0)
+}
+
+func TestSetPathPolicy(t *testing.T) {
+	s := testServer()
+	task := &model.Task{ID: "x", Worktree: "/wt"}
+	w, d := s.taskPathPolicy(task)
+	testutil.True(t, len(w) > 1) // worktree + temp roots by default
+	testutil.True(t, len(d) > 0) // built-in deny-read paths
+	s.SetPathPolicy(func(*model.Task) ([]string, []string) { return []string{"/only"}, nil })
+	w, d = s.taskPathPolicy(task)
+	testutil.DeepEqual(t, w, []string{"/only"})
+	testutil.Equal(t, len(d), 0)
+}
+
+// zeros is an endless reader.
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) { clear(p); return len(p), nil }
+
+func TestCopyArtifact_StreamOverCap(t *testing.T) {
+	s, _ := testServerWithArtifacts(t)
+	_, err := s.copyArtifact("abc123", zeros{}, "big.txt", model.ArtifactText)
+	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "byte cap")
+	_, statErr := os.Stat(filepath.Join(agent.ArtifactsDir("abc123"), "big.txt"))
+	testutil.True(t, os.IsNotExist(statErr))
 }

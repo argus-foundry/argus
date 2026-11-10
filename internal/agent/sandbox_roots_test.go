@@ -52,3 +52,33 @@ func TestSandboxWriteRoots(t *testing.T) {
 		}
 	})
 }
+
+// TestSandboxBuiltinDenyRead_MatchProfile keeps the built-in deny-read list in
+// step with the SBPL base profile.
+func TestSandboxBuiltinDenyRead_MatchProfile(t *testing.T) {
+	for _, rel := range sandboxBuiltinDenyRead {
+		t.Run(rel, func(t *testing.T) {
+			testutil.Contains(t, sandboxProfileBase, `(deny file-read* (subpath (string-append (param "HOME") "/`+rel+`")))`)
+		})
+	}
+}
+
+func TestSandboxDenyReadPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	rhome, err := filepath.EvalSymlinks(home)
+	testutil.NoError(t, err)
+	cfg := config.Config{
+		Sandbox: config.SandboxConfig{DenyRead: []string{"~/private", " "}},
+		Projects: map[string]config.Project{
+			"p": {Sandbox: config.ProjectSandboxConfig{DenyRead: []string{"/opt/secret"}}},
+		},
+	}
+	got := SandboxDenyReadPaths(&model.Task{Project: "p"}, cfg)
+	var want []string
+	for _, rel := range sandboxBuiltinDenyRead {
+		want = append(want, filepath.Join(rhome, rel))
+	}
+	want = append(want, filepath.Join(rhome, "private"), "/opt/secret")
+	testutil.DeepEqual(t, got, want)
+}

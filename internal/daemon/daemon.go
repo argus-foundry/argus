@@ -1673,10 +1673,11 @@ func (d *Daemon) Serve(sockPath string) error {
 		mcpSrv.SetArtifactManager(d.db)
 		mcpSrv.SetArtifactPublisher(artifactPublisher)
 		// The daemon reads agent-supplied paths unsandboxed (artifact_register,
-		// artifact_publish); a sandboxed task's paths are confined to the
-		// directories its own sandbox can write, per the live config.
-		mcpSrv.SetSandboxRoots(func(t *model.Task) []string {
-			return agent.SandboxWriteRoots(t, d.cfgFn())
+		// artifact_publish); every task's paths are confined to the directories
+		// its sandbox could write, minus its deny-read paths, per live config.
+		mcpSrv.SetPathPolicy(func(t *model.Task) (write, deny []string) {
+			cfg := d.cfgFn()
+			return agent.SandboxWriteRoots(t, cfg), agent.SandboxDenyReadPaths(t, cfg)
 		})
 		mcpSrv.SetProfileResolver(d.db)
 		// d.db.Config() is read live on every tools/list/tools/call (see

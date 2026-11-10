@@ -47,6 +47,7 @@
 - [x] 3.4 Test 1.4 passes
 - [x] 3.5 Security review: `artifact_open` opens only allowlisted types with matching extensions (others reveal-only); directories and bundles are refused even for reveal
 - [x] 3.6 Security review: `artifact_publish` requires a calling task; for a sandboxed task, `artifact_publish` and `artifact_register` confine the path's real location to the task's writable roots (`agent.SandboxWriteRoots`) before reading
+- [x] 3.7 Security review 2: always confine (not just sandboxed tasks) through one `confinedOpen`/`confinedRead` helper: `O_NOFOLLOW`, fstat regular + single link, roots and deny-read check on the resolved path, same-file check, read from the checked descriptor; per-member for folders; self-reported caller identity documented
 
 ## 4. REST and CLI
 

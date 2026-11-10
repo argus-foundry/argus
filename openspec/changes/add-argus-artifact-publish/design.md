@@ -93,7 +93,13 @@ The snippet tells the agent:
 
 `artifact_publish` and `artifact_open` resolve the calling task the same way `artifact_register` does, and both fail when none resolves. (An earlier draft let `artifact_publish` publish without a task; the security review below removed that.)
 
-The daemon reads the file an agent names, outside the agent's sandbox, so a sandboxed agent could have it read and upload (or register and serve) a file its sandbox can't read, such as `~/.ssh/id_ed25519` behind a `.html` symlink (security review). For a sandboxed task, `artifact_publish` and `artifact_register` resolve the path's real location with `EvalSymlinks` before reading and require it to lie inside the task's writable roots: its worktree, the profile's temp roots and its `extra_write` paths (`agent.SandboxWriteRoots`, kept in step with the SBPL profile by a test). The file is then read from the resolved path. Unsandboxed tasks can read anything themselves and are not restricted. The REST endpoint and CLI send content, not a path, so they are unaffected.
+The daemon reads the file an agent names, outside the agent's sandbox, so an agent could have it read and upload (or register and serve) a file it should not reach, such as `~/.ssh/id_ed25519` behind a `.html` symlink (security reviews 1 and 2). Every agent-supplied read goes through one helper, `confinedOpen`/`confinedRead` (`internal/mcp/confine.go`), for every task, sandboxed or not:
+
+- open with `O_NOFOLLOW|O_NONBLOCK` (a final-component symlink is refused; a FIFO can't hang the handler), then `fstat`: a regular file with link count 1 (a hard link could alias a file outside the roots);
+- resolve the real path and require it inside the task's writable roots (`agent.SandboxWriteRoots`: worktree, SBPL temp roots, `extra_write`) and outside its deny-read paths (`agent.SandboxDenyReadPaths`: the profile's built-in HOME denials plus configured `deny_read`); tests keep both lists in step with the SBPL profile;
+- require the descriptor and the resolved path to be the same file (`os.SameFile`, dev/inode), so a parent directory swapped mid-check is caught, and read only from that descriptor with the cap enforced while reading. darwin's `F_GETPATH` would name the descriptor's path directly, but x/sys has no wrapper and a raw-pointer `fcntl` is unsafe; for a single-linked file the dev/inode match gives the same guarantee.
+
+Folder registration confines the folder, then opens and checks each member the same way. The unavailable-account save stores the bytes already read; it never reopens the path. Unsandboxed tasks are confined too: publishing from their own worktree or a temp dir loses nothing. The REST endpoint and CLI send content, not a path, so they are unaffected.
 
 ## Risks / Trade-offs
 
@@ -101,6 +107,7 @@ The daemon reads the file an agent names, outside the agent's sandbox, so a sand
 - **Work-account block has another cause** (plan type, not budget) → the spike's re-probe after the reset settles it. If the plan is the cause, work publishing never works with setup-tokens, and the four-option question still covers it.
 - **Token leakage** → the token lives only inside the client's request. Tests assert it is absent from tool results, logs, REST bodies and errors.
 - **Setup-token expiry (one year)** → a 401 maps to an error that says to re-run `claude setup-token` for that account and update the 1Password entry.
+- **Caller identity is self-reported** → `artifact_publish`/`artifact_register`/`artifact_open` trust the `id`/`cwd` an agent passes: the MCP endpoint (`http://localhost:<port>/mcp`) is one shared URL injected per launch with no per-task binding. With always-confine, a spoofed id only reaches the named task's own worktree, temp dirs and `extra_write` paths. That residual (one task reading another task's worktree) is accepted; a per-task MCP URL or token is the follow-up that would close it.
 - **Probing costs** → one `list_artifacts` per other account, only on the unavailable path. That's negligible.
 
 ## Migration Plan
@@ -145,7 +152,7 @@ The routing snippet change reaches new agent sessions. No data migration is need
 **Path confinement**
 
 - It should refuse `artifact_publish` without a resolvable calling task.
-- It should refuse a sandboxed task's path that resolves outside its worktree, temp roots and `extra_write` paths, for both `artifact_publish` and `artifact_register`, before reading it.
+- It should refuse, for any task and for both `artifact_publish` and `artifact_register`, a path that resolves outside the task's worktree, temp roots and `extra_write` paths, a deny-read path, a final-component symlink or a hard-linked file, before reading it, and read only from the checked descriptor.
 
 **CLI and REST**
 

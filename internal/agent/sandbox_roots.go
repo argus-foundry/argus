@@ -2,6 +2,7 @@ package agent
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/argus-foundry/argus/internal/config"
@@ -13,13 +14,13 @@ import (
 // the SBPL text in step.
 var sandboxTempWriteRoots = []string{"/private/tmp", "/tmp", "/private/var/folders", "/var/folders"}
 
-// SandboxWriteRoots returns the directories a sandboxed agent of task can
-// write: its worktree, the profile's temp roots and the resolved ExtraWrite
+// SandboxWriteRoots returns the directories an agent of task can write when
+// sandboxed: its worktree, the profile's temp roots and the resolved ExtraWrite
 // entries (global + project), each symlink-resolved the way the kernel
-// resolves sandbox rules. The unsandboxed daemon uses it to confine a path an
-// agent hands it to files that agent could have produced itself
-// (add-argus-artifact-publish): the profile's broad read grant is not used,
-// so the daemon never reads a file on an agent's behalf from outside these.
+// resolves sandbox rules. The unsandboxed daemon confines every path an agent
+// hands it to these roots, sandboxed task or not (add-argus-artifact-publish):
+// the profile's broad read grant is not used, so the daemon never reads a
+// file on an agent's behalf from outside them.
 func SandboxWriteRoots(task *model.Task, cfg config.Config) []string {
 	var roots []string
 	if task.Worktree != "" {
@@ -37,4 +38,30 @@ func SandboxWriteRoots(task *model.Task, cfg config.Config) []string {
 		}
 	}
 	return roots
+}
+
+// sandboxBuiltinDenyRead are the HOME-relative directories sandboxProfileBase
+// denies file-read on. TestSandboxBuiltinDenyRead_MatchProfile keeps this
+// list and the SBPL text in step.
+var sandboxBuiltinDenyRead = []string{".gnupg", ".aws", ".kube", ".config/gcloud"}
+
+// SandboxDenyReadPaths returns the directories a sandboxed agent of task may
+// not read: the profile's built-in HOME-relative denials plus the resolved
+// DenyRead entries (global + project), expanded and symlink-resolved the way
+// GenerateSandboxConfig renders them. The daemon refuses an agent-supplied
+// path under any of them even when it lies inside a writable root.
+func SandboxDenyReadPaths(task *model.Task, cfg config.Config) []string {
+	homeDir, _ := os.UserHomeDir()
+	homeDir = evalSymlinksOrKeep(homeDir)
+	var out []string
+	for _, rel := range sandboxBuiltinDenyRead {
+		out = append(out, evalSymlinksOrKeep(filepath.Join(homeDir, rel)))
+	}
+	for _, p := range ResolveSandboxConfig(task, cfg).DenyRead {
+		p = evalSymlinksOrKeep(expandHomePath(strings.TrimSpace(p), homeDir))
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

@@ -369,14 +369,16 @@ func TestArtifactRegister_ReservedStandaloneName(t *testing.T) {
 	testutil.Equal(t, len(store.saved), 0)
 }
 
-func TestCopyArtifact_RejectsNonRegular(t *testing.T) {
+func TestConfinedRead_RejectsNonRegular(t *testing.T) {
 	s, _ := testServerWithArtifacts(t)
 	fifo := filepath.Join(t.TempDir(), "pipe")
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 		t.Skipf("mkfifo unsupported: %v", err)
 	}
-	_, err := s.copyArtifact("abc123", fifo, "g/pipe.txt", model.ArtifactText)
-	testutil.True(t, err != nil)
+	task, _ := s.taskDB.Get("abc123")
+	_, err := s.confinedRead(task, fifo, 1024)
+	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "not a regular file")
 }
 
 func TestArtifactRegister_FolderReportsReplaced(t *testing.T) {

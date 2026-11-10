@@ -59,32 +59,54 @@ The system SHALL treat an HTTP 404 response to a tool call whose body says the a
 
 ### Requirement: Confine agent-supplied paths
 
-The daemon runs outside the agent sandbox, so it SHALL NOT read a file on an agent's behalf that the agent's own sandbox could not have written. `artifact_publish` SHALL require a resolvable calling task and SHALL fail, before reading any file or making any request, when none resolves. When the calling task is sandboxed, `artifact_publish` and `artifact_register` SHALL resolve the given path's real location (symlinks followed) and SHALL refuse it, before reading it, unless it lies inside the task's worktree, the sandbox profile's writable temp directories, or the task's configured `extra_write` paths. The file SHALL then be read from that resolved location. An unsandboxed task's paths SHALL NOT be restricted. The REST endpoint and CLI carry the page's content in the request body, never a server-side path.
+The daemon runs outside the agent sandbox, so it SHALL NOT read a file on an agent's behalf from outside that agent's own task. `artifact_publish` SHALL require a resolvable calling task and SHALL fail, before reading any file or making any request, when none resolves. For every task, sandboxed or not, `artifact_publish` and `artifact_register` (single files and every member of a folder) SHALL:
+
+- open the file without following a symlink in its final component, and refuse a symlink;
+- require, from the open descriptor, a regular file with exactly one hard link;
+- resolve the path's real location and refuse it unless it lies inside the task's worktree, the sandbox profile's writable temp directories or the task's configured `extra_write` paths, and outside the sandbox's built-in and configured deny-read paths;
+- require the open descriptor and the resolved path to be the same file, and read only from that descriptor, enforcing the size cap while reading.
+
+The calling task is self-reported (`id` or `cwd`): the MCP endpoint is shared and binds no connection to a task. Naming another task SHALL therefore confine the read to that task's roots, never widen it further. The REST endpoint and CLI carry the page's content in the request body, never a server-side path.
 
 #### Scenario: No calling task
 
 - **WHEN** `artifact_publish` is called with neither a resolvable task `id` nor a `cwd` inside a task's worktree
 - **THEN** the call fails, nothing is read or registered, and no network request is made
 
-#### Scenario: Sandboxed task publishes from its worktree
+#### Scenario: Publishing from the task's own roots
 
-- **WHEN** a sandboxed task calls `artifact_publish` with a file inside its worktree or a temp directory its sandbox can write
+- **WHEN** a task calls `artifact_publish` with a file inside its worktree or a writable temp directory
 - **THEN** the file is published
 
-#### Scenario: Path outside the sandbox roots refused
+#### Scenario: Path outside the roots refused
 
-- **WHEN** a sandboxed task calls `artifact_publish` or `artifact_register` with a path that resolves outside its writable directories
+- **WHEN** a task, sandboxed or not, calls `artifact_publish` or `artifact_register` with a path that resolves outside its writable directories
 - **THEN** the call fails with an error saying the path is outside the task's writable directories, and the file is not read
 
-#### Scenario: Symlink escaping the worktree refused
+#### Scenario: Symlink final component refused
 
-- **WHEN** a sandboxed task passes a path inside its worktree that is a symlink to a file outside its writable directories
-- **THEN** the call fails and the target file is not read
+- **WHEN** the given path is itself a symlink
+- **THEN** the call fails and the symlink's target is not read
 
-#### Scenario: Unsandboxed task not restricted
+#### Scenario: Symlinked parent pointing outside refused
 
-- **WHEN** an unsandboxed task calls `artifact_publish` with a readable HTML file anywhere on disk
-- **THEN** the file is published
+- **WHEN** a directory component of the given path is a symlink to a directory outside the task's writable directories
+- **THEN** the call fails and the file is not read
+
+#### Scenario: Hard-linked file refused
+
+- **WHEN** the given file has more than one hard link
+- **THEN** the call fails and the file is not read; a hard-linked member of a registered folder is skipped
+
+#### Scenario: Deny-read path refused
+
+- **WHEN** the given path lies inside a writable root but under a built-in or configured sandbox deny-read path
+- **THEN** the call fails and the file is not read
+
+#### Scenario: Spoofed task id confined to that task
+
+- **WHEN** an agent passes another task's `id` and a path outside that task's writable directories
+- **THEN** the call fails and the file is not read
 
 ### Requirement: Open or reveal a registered artifact
 

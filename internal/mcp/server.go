@@ -231,16 +231,16 @@ type Server struct {
 	// openArtifact opens (or, with reveal, reveals) a verified artifact path;
 	// nil means defaultArtifactOpener. A seam so tests never launch Finder.
 	openArtifact func(path string, reveal bool) error
-	// sandboxRoots lists a sandboxed task's writable roots for
-	// confineAgentPath; set via SetSandboxRoots (nil = config-free default).
-	sandboxRoots func(task *model.Task) []string
-	heraSvc      *hera.Service // optional; set via SetHeraService
-	heraStore    HeraStore     // optional; set via SetHeraService
-	heraSpawn    HeraSpawner   // optional; set via SetHeraService (born-bound spawn)
-	heraRevive   HeraReviver   // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
-	profileCfg   ConfigStore   // optional; set via SetProfileResolver
-	apiGetMu     sync.RWMutex  // guards apiGet (set after the listener is serving)
-	apiGet       APIGetter     // optional; set via SetAPIGetter (argus_api_get)
+	// pathPolicy gives a task's writable roots and deny-read paths for
+	// confinedOpen; set via SetPathPolicy (nil = config-free default).
+	pathPolicy func(task *model.Task) (write, deny []string)
+	heraSvc    *hera.Service // optional; set via SetHeraService
+	heraStore  HeraStore     // optional; set via SetHeraService
+	heraSpawn  HeraSpawner   // optional; set via SetHeraService (born-bound spawn)
+	heraRevive HeraReviver   // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
+	profileCfg ConfigStore   // optional; set via SetProfileResolver
+	apiGetMu   sync.RWMutex  // guards apiGet (set after the listener is serving)
+	apiGet     APIGetter     // optional; set via SetAPIGetter (argus_api_get)
 	// accountMover backs task_move_account; set via SetAccountMover.
 	accountMover accountMoverSlot
 	createMu     sync.Mutex
