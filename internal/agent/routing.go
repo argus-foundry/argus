@@ -85,10 +85,7 @@ func resolveTaskChoiceLocked(explicit, project string, cfg config.Config, accoun
 }
 
 func resolveDynamicBackendName(cfg config.Config, account string) string {
-	if backend := backendtier.ResolveBackend(cfg, account); backend != "" {
-		return backend
-	}
-	return dynamicFallbackBackend(cfg, account)
+	return resolveTaskChoiceLocked(config.DynamicBackend, "", cfg, account).Backend
 }
 
 func dynamicFallbackBackend(cfg config.Config, account string) string {

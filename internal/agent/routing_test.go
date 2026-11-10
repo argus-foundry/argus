@@ -126,6 +126,21 @@ func TestCoordinatorFiltersToClaudeAccountTiers(t *testing.T) {
 	testutil.Equal(t, resolveCoordinatorBackend("", "proj", cfg), "other-claude")
 }
 
+func TestCoordinatorDynamicBackendSelectsOnlyClaudeTier(t *testing.T) {
+	cfg := config.Config{
+		Defaults: config.Defaults{Backend: config.DynamicBackend},
+		Backends: map[string]config.Backend{
+			"codex":  {Command: "codex"},
+			"claude": {Command: "claude"},
+		},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "codex", Probe: config.ProbeNone},
+			{Backend: "claude", Probe: config.ProbeNone},
+		}},
+	}
+	testutil.Equal(t, resolveCoordinatorBackend(config.DynamicBackend, "", cfg), "claude")
+}
+
 func TestCoordinatorSpawnRoutesAccount(t *testing.T) {
 	for _, backend := range []string{"", "test"} {
 		t.Run(backend, func(t *testing.T) {
@@ -305,6 +320,11 @@ func TestDynamicBackendRoutingSkipsTiersUnsupportedByPinnedAccount(t *testing.T)
 			choice := resolveTaskChoice(config.DynamicBackend, "p", cfg, tc.explicitAccount, false)
 			testutil.Equal(t, choice.Backend, "claude")
 			testutil.Equal(t, choice.Account, "work")
+			if tc.explicitAccount != "" {
+				backend, err := ResolveBackend(&model.Task{Backend: config.DynamicBackend, Account: "work"}, cfg)
+				testutil.NoError(t, err)
+				testutil.Equal(t, backend.Command, "claude")
+			}
 		})
 	}
 }

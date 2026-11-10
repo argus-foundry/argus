@@ -39,6 +39,11 @@ The system SHALL recognize the reserved backend name `dynamic` in default, proje
 - **WHEN** no dynamic tier resolves for a pinned account and the concrete default backend is unsupported by that account
 - **THEN** routing fails with the existing no-backend-configured error instead of pairing the account with an incompatible backend
 
+#### Scenario: Dynamic coordinator selection stays Claude-capable
+
+- **WHEN** a Hera coordinator selects `dynamic` and configured tiers include Claude-capable and non-Claude backends
+- **THEN** coordinator routing considers only Claude-capable tiers
+
 #### Scenario: Real backend pins remain pinned
 
 - **WHEN** a task or project selects a concrete backend other than `dynamic`

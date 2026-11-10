@@ -54,7 +54,7 @@ const (
 func resolveCoordinatorBackend(explicit, project string, cfg config.Config, accounts ...string) string {
 	const claudeFallback = "claude"
 
-	if explicit != "" {
+	if explicit != "" && explicit != config.DynamicBackend {
 		if b, ok := cfg.Backends[explicit]; ok && IsClaudeBackend(b.Command) {
 			return explicit
 		}
