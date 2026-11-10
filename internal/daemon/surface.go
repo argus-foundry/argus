@@ -236,7 +236,8 @@ const (
 	//     would split off every appended flag in sh).
 	// v41: resident's launch policy allows standing-team coordination and
 	// spawn/delete, asks for graduation, and denies membership/plan surgery.
-	SupervisorSpawnSurface = 41
+	// v42: sandbox-gated unattended workers, authoritative standing-team identity.
+	SupervisorSpawnSurface = 42
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -301,7 +302,8 @@ const (
 	//     the log is truncated together with it at session start
 	//     (add-session-width-index). A supervisor that predates this writes no
 	//     index and the replay falls back to a single width. No wire change.
-	SupervisorStreamSurface = 16
+	// v17: restart/kick preflight consults authoritative resident-worker identity.
+	SupervisorStreamSurface = 17
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -455,6 +457,8 @@ func CompareSupervisorSurface(reported SurfaceVersion) SurfaceSkew {
 // omission from this list is exactly the silent false-negative the surface
 // version is guarded against.
 var SupervisorSpawnPaths = []string{
+	"internal/agent/unattended.go",                                   // authoritative resident-worker launch gate
+	"internal/db/resident_hera.go",                                   // worker identity includes live standing-team membership
 	"internal/agent/agent.go",                                        // BuildCmd: argv, env, dir, cache-dir redirection
 	"internal/agent/routing.go",                                      // shared backend/account routing used by ResolveBackend
 	"internal/backendtier/choice.go",                                 // account-aware tier choice
@@ -543,8 +547,8 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "2f23a27c4aa8fd360c4c4b0e3ee08daf7e4ec34f83cc11b3e4bc47c1dba1ede4"
-	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
+	SpawnSurfaceDigest  = "b5ef82063a03b1fc69ff6d34ce3bfda828ce5449ba3d5d74b91f2397db8b4d01"
+	StreamSurfaceDigest = "a0b3efb1c129a7c3a3ba94ef8922d258e60d87907e1f599f17e8108ad97770f0"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

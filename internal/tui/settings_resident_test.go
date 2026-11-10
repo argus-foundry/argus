@@ -38,7 +38,7 @@ func TestSettingsResident_CategoryAndRows(t *testing.T) {
 	sv := testSettingsView(t)
 	testutil.Equal(t, catResident.Label(), "Resident")
 	sv.setCategory(catResident)
-	testutil.Equal(t, len(sv.rows), 8)
+	testutil.Equal(t, len(sv.rows), 9)
 	selectRowInCategory(t, sv, catResident, srResident, resKeyName)
 	testutil.Contains(t, sv.SelectedRow().label, "(required)")
 	selectRowInCategory(t, sv, catResident, srResident, resKeyTools)

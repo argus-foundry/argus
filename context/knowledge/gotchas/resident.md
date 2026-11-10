@@ -42,3 +42,23 @@ Memory, orientation and tool permissions are in [resident-memory.md](resident-me
 - **Resident delete identity comes exclusively from the transport caller, never cwd/id; live membership is checked before nuke.** `residentWorkerMutationMu` serializes deletion against graduation (graduation must take the same lock through its transaction, never through a restart wait); reclaim requires the sole live binding to match the selected role. A force summary is captured before reclaim, and an unreadable git field stays `unknown (reason)`.
 - **The local empty-work check requires both zero commits ahead of the worker base ref and a clean tree.** Missing refs, missing worktrees and git errors fail closed; `git status -z` counts newline-containing filenames and rename pairs correctly. A classifier error also refuses default deletion.
 - **A resident-bound Hera call pins cwd and orchestrator to the standing team.** Otherwise an allowed spawn or accept could bypass team scope by naming another coordinator's cwd. The resident and marked/live resident workers cannot bootstrap an orchestrator; workers request graduation instead.
+
+## Codex unattended-worker spike
+
+- **Worker identity must be queried at launch, not serialized from task meta.** Production runners and supervisor clients receive `db.IsResidentWorker`; Start/BuildCmd and kick/recycle preflight query it again, covering marker loss after hide/unhide. Graduation must end membership AND clear the marker; the next query then restores normal flags without the worker sandbox gate (including supervisor-owned pending restarts).
+- **Worker-account toggles affect only new resident spawns and merge per key.** Settings writes only the raw DB map, never a copy of the config.toml overlay; copying the overlay would leave deleted file overrides frozen in Settings. Account eligibility is the intersection of `AccountSupports` and non-nil `Family.UnattendedWorker`, so Codex-only accounts stay invisible.
+- **The prompt backstop treats detector needs-input and role `blocked` as one episode.** Switching between the two must not re-notify; only clearing both arms another message. Notices use the durable Hera store and its existing notifier delivery ID, so an idle-gated doorbell retry never creates another message.
+- **Unattended workers require supervisor spawn surface 42 (stream 17 for restart preflight).** An older supervisor cannot enforce the new launch flags; the daemon refuses worker launches and restart requests to it before stopping a running session.
+
+- **Codex 0.167.0 bypass closes command approvals, not question tools: keep resident-worker eligibility nil.** A real resumed session still displayed an async question with both candidate feature overrides false, and `/plan` still enabled a blocking question (`collaboration_modes` is a removed flag); no verified launch/resume closure was found. — `add-resident-coordinator` task 4.0, 2026-11-09; [commands, sanitized rollout excerpts and limits](../../spikes/2026-11-09-codex-unattended-worker.md).
+
+Observed excerpts (same session, bypass active):
+
+```text
+fresh:   approval_policy=never, collaboration_mode=default
+         request_user_input_async -> {"accepted":true}; UI: Choose red or blue.
+resume:  -c features.collaboration_modes=false -c features.default_mode_request_user_input=false
+         request_user_input_async -> {"accepted":true}; UI: Choose red or blue.
+/plan:   approval_policy=never, collaboration_mode=plan
+         request_user_input -> no output while unanswered; interrupted after >60s
+```

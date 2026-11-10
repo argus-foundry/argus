@@ -14,7 +14,8 @@ const ResidentNameMaxRunes = 12
 // ResidentConfig is the [resident] block (add-resident-agent). The resident has
 // no default name: choosing one is the act of opting in.
 type ResidentConfig struct {
-	MaxWorkers int `toml:"max_workers"`
+	WorkerAccounts map[string]bool `toml:"worker_accounts"`
+	MaxWorkers     int             `toml:"max_workers"`
 	// Enabled defaults to false. It only takes effect with a valid Name and the
 	// KB prerequisite (see Config.ResidentPrereq).
 	Enabled bool `toml:"enabled"`

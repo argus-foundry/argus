@@ -172,17 +172,32 @@ A worker spawned by the resident SHALL be marked as a resident worker in task me
 
 ### Requirement: Resident workers spawn only on enabled accounts whose family closes the stuck points
 
-Each backend family SHALL declare in the family registry whether and how it closes the unattended stuck points; a family that declares a mechanism is eligible. Claude SHALL be eligible. Codex SHALL be eligible once its unattended mechanism is implemented from the outcome of an early verification spike, with the Argus sandbox gate applying unchanged (its default command disables Codex's own sandbox and approvals); if the spike cannot close Codex's user-input path, Codex SHALL stay ineligible. Families without a verified mechanism SHALL be ineligible. Config `[resident] worker_accounts` SHALL map an agent account name to an enabled flag; an account absent from the map SHALL be enabled. Settings SHALL expose it as a Resident list of per-account toggles that lists ONLY accounts supporting at least one eligible family; an account that supports only ineligible families SHALL never appear, and an unknown or ineligible name in `config.toml` SHALL be ignored with a log line. Resident-worker spawning SHALL choose among (family, account) pairs whose family is eligible, whose account is enabled and supports the family, ranking them with the `[backend_routing]` tiers and per-account usage headroom so work spreads across accounts. An explicit `backend` or `account` outside that set SHALL be rejected naming what is enabled, and an empty set SHALL fail the spawn with a reason. Disabling or removing an account SHALL affect only new spawns and SHALL NOT alter, stop or re-account any running worker or the account its resume uses. The Settings row SHALL be a local-only edit, and keys defined in `config.toml` SHALL be shown read-only with the config.toml override marker.
+Each backend family SHALL declare in the family registry whether and how it closes the unattended stuck points; a family that declares a mechanism is eligible. Claude SHALL be eligible. Codex 0.167.0 SHALL remain ineligible because the verification spike could not close its question and plan prompts across resume; its `UnattendedWorker` SHALL remain nil. Families without a verified mechanism SHALL be ineligible. Config `[resident] worker_accounts` SHALL map an agent account name to an enabled flag; an account absent from the map SHALL be enabled. Settings SHALL expose it as a Resident list of per-account toggles that lists ONLY accounts supporting at least one eligible family; an account that supports only ineligible families SHALL never appear, and an unknown or ineligible name in `config.toml` SHALL be ignored with a log line. Resident-worker spawning SHALL choose among (family, account) pairs whose family is eligible, whose account is enabled and supports the family, ranking them with the `[backend_routing]` tiers and per-account usage headroom so work spreads across accounts. An explicit `backend` or `account` outside that set SHALL be rejected naming what is enabled, and an empty set SHALL fail the spawn with a reason. Disabling or removing an account SHALL affect only new spawns and SHALL NOT alter, stop or re-account any running worker or the account its resume uses. The Settings row SHALL be a local-only edit, and keys defined in `config.toml` SHALL be shown read-only with the config.toml override marker.
 
 #### Scenario: Settings lists eligible accounts only
 
-- **WHEN** the user opens the Resident worker-accounts setting with accounts `work` (Claude), `personal` (Codex) and `legacy` (only an ineligible family)
-- **THEN** `work` and `personal` are listed as toggles and `legacy` does not appear
+- **WHEN** the user opens the Resident worker-accounts setting with accounts `work` (Claude), `personal` (Codex only) and `legacy` (only an ineligible family)
+- **THEN** `work` is listed as a toggle and `personal` and `legacy` do not appear (Codex 0.167.0 failed the unattended spike)
+
+#### Scenario: Hidden then unhidden worker restarts safely
+
+- **WHEN** a resident worker is hidden and unhidden, clearing its task meta, then restarted
+- **THEN** live standing-team membership still enforces unattended flags and the sandbox gate through `db.IsResidentWorker`
 
 #### Scenario: Default enables every eligible account
 
 - **WHEN** `worker_accounts` is unset, or a new account is added later
 - **THEN** every eligible account, including the new one, is enabled
+
+#### Scenario: Tiers rank pairs without disabling accounts
+
+- **WHEN** a backend's configured tiers name only one account but another enabled account supports that eligible family
+- **THEN** the other account remains a candidate and may be selected explicitly; only `worker_accounts` disables it
+
+#### Scenario: Automatic choices retain routing provenance
+
+- **WHEN** resident routing selects the worker's account automatically rather than through an explicit account argument
+- **THEN** task creation preserves routed-account provenance, so later graduation does not turn that automatic choice into a human account pin
 
 #### Scenario: Spawn spreads across enabled accounts
 

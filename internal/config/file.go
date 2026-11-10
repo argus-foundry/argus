@@ -59,6 +59,7 @@ type FileLoader struct {
 	// account settings the file defines (see AccountSources).
 	accountSources            AccountSources
 	residentMaxWorkersDefined bool
+	residentSources           ResidentSources
 }
 
 // NewFileLoader returns a loader for the given path. An empty path makes Apply a
@@ -101,6 +102,7 @@ func (l *FileLoader) Apply(base Config) Config {
 		l.backendRoutingTierDefined = false
 		l.accountSources = AccountSources{}
 		l.residentMaxWorkersDefined = false
+		l.residentSources = ResidentSources{}
 		if l.err != nil && prevErr == nil {
 			slog.Warn("argus config: cannot read config.toml, keeping current config", "path", l.path, "err", l.err)
 		}
@@ -113,6 +115,7 @@ func (l *FileLoader) Apply(base Config) Config {
 	merged.Accounts = maps.Clone(base.Accounts)
 	merged.ProjectAccounts = maps.Clone(base.ProjectAccounts)
 	merged.ProjectArtifactAccounts = maps.Clone(base.ProjectArtifactAccounts)
+	merged.Resident.WorkerAccounts = maps.Clone(base.Resident.WorkerAccounts)
 
 	// The returned MetaData (which keys decoded) is intentionally discarded:
 	// unknown/misspelled keys are silently ignored so the file stays
@@ -127,6 +130,7 @@ func (l *FileLoader) Apply(base Config) Config {
 		l.backendRoutingTierDefined = false
 		l.accountSources = AccountSources{}
 		l.residentMaxWorkersDefined = false
+		l.residentSources = ResidentSources{}
 		if prevErr == nil {
 			slog.Warn("argus config: ignoring config.toml (parse error)", "path", l.path, "err", derr)
 		}
@@ -135,6 +139,12 @@ func (l *FileLoader) Apply(base Config) Config {
 	l.backendRoutingTierDefined = meta.IsDefined("backend_routing", "tier") && len(merged.BackendRouting.Tiers) > 0
 	l.accountSources = accountSourcesFrom(meta)
 	l.residentMaxWorkersDefined = meta.IsDefined("resident", "max_workers")
+	l.residentSources = ResidentSources{WorkerAccounts: map[string]bool{}}
+	for _, key := range meta.Keys() {
+		if len(key) == 3 && key[0] == "resident" && key[1] == "worker_accounts" {
+			l.residentSources.WorkerAccounts[key[2]] = true
+		}
+	}
 	if changed {
 		slog.Info("argus config: applied config.toml overrides", "path", l.path)
 	}

@@ -23,6 +23,7 @@ commands get `customFamily`. To add one, follow `.agents/skills/add-backend/SKIL
 | Sandbox grant | `~/.claude.json*`, `~/.claude` | `~/.codex`, codex-home | `~/.pi` | (base `~/.local`) | `~/.gemini/{antigravity-cli,config,jetski}` (pre-created) | `~/.cursor/{chats,projects,statsig-cache.json}` (launch-only, pre-created; mcp.json/cli-config.json read-only) | `~/.omp` (launch-only) | — |
 | Accounts | `claude_config_dir` | `codex_home` | — | — | — | — | — | — |
 | Launch flag | — | — | — | `--auto` | — | `--trust` | — | — |
+| Unattended worker | eligible: bypass-active + disallow question/plan tools; Argus sandbox required | **ineligible on 0.167.0**: question tools survive bypass and candidate disable flags ([evidence](../spikes/2026-11-09-codex-unattended-worker.md)) | unverified | unverified | unverified | unverified | unverified | unverified |
 | Session switcher | yes | — | — | — | — | — | — | yes |
 | Bridge mod | `--plugin-dir` | — | — | — | — | — | — | — |
 | Native artifacts | built-in claude.ai artifact tool | `ARGUS_ARTIFACT_ACCOUNT` (artpush) | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` |
@@ -39,6 +40,8 @@ Skills → `SkillDelivery`, Routing → `RoutingDelivery`, Sandbox grant → `Sa
 Prelaunch → `Prelaunch`/`StartTimeout`, Bridge mod → `BridgeMod`, Native artifacts → `NativeArtifacts`, Cost source → `CostSource`, Context source → `ContextReader`/`ContextProvider`/`ContextSource`.
 
 ## Why the non-obvious cells are what they are
+
+- **`Family.UnattendedWorker` is the unattended eligibility gate; only Claude implements it.** The `add-resident-coordinator` task 4.0 probe used real Codex 0.167.0 PTY turns: bypass yielded `approval_policy=never`, but `request_user_input_async` returned `{"accepted":true}` and displayed a question; after resume with `features.collaboration_modes=false` and `features.default_mode_request_user_input=false`, it did so again. `/plan` still worked and a Plan `request_user_input` call remained unanswered until interrupted. No verified question-tool removal switch exists in this probe; keep Codex's `UnattendedWorker` nil. See [resident gotcha](gotchas/resident.md#codex-unattended-worker-spike) and the linked transcript for commands, limits and approval-path distinctions.
 
 - **Codex cost comes from the daemon, not the session.** Codex runs neither the Claude Stop hook nor the bridge mod, so `internal/codexcost` (a 60s daemon sweeper) reads the task's Codex rollout files via `state_5.sqlite` `threads.cwd` and prices each call into the hera binding. Pi/opencode/agy/cursor have no cost source yet — their roles show "n/a" (named follow-up in `add-codex-cost-accrual`).
 

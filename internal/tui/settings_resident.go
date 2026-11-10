@@ -9,6 +9,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/tui/theme"
 	"github.com/argus-foundry/argus/internal/tui/widget"
@@ -19,13 +20,14 @@ import (
 // DB config keys the daemon's ensure-running loop and db.Config() read; the
 // category only ever writes those keys, the daemon picks the change up.
 const (
-	resKeyEnabled    = "resident.enabled"
-	resKeyName       = "resident.name"
-	resKeyMaxWorkers = "resident.max_workers"
-	resKeyBudget     = "resident.context_budget"
-	resKeyMemory     = "resident.memory_dir"
-	resKeyModel      = "resident.model"
-	resKeyAccount    = "resident.account"
+	resWorkerAccountPrefix = "resident.worker_accounts."
+	resKeyEnabled          = "resident.enabled"
+	resKeyName             = "resident.name"
+	resKeyMaxWorkers       = "resident.max_workers"
+	resKeyBudget           = "resident.context_budget"
+	resKeyMemory           = "resident.memory_dir"
+	resKeyModel            = "resident.model"
+	resKeyAccount          = "resident.account"
 	// resKeyTools is the read-only pointer row (allow_tools/ask_tools/deny_tools live in
 	// config.toml only).
 	resKeyTools = "resident.tools"
@@ -77,6 +79,21 @@ func (sv *SettingsView) residentRows() []settingsRow {
 			if rows[i].key == resKeyMaxWorkers {
 				rows[i].label += " (config.toml)"
 			}
+		}
+	}
+	if !sv.remote {
+		cfg := sv.database.Config()
+		for _, account := range agent.ResidentWorkerAccounts(cfg) {
+			enabled, set := cfg.Resident.WorkerAccounts[account]
+			state := "ON"
+			if set && !enabled {
+				state = "OFF"
+			}
+			label := "Worker accounts / " + account + ": " + state
+			if d := sv.accountDB(); d != nil && d.ResidentSources().WorkerAccounts[account] {
+				label += " (config.toml)"
+			}
+			rows = append(rows, settingsRow{kind: srResident, key: resWorkerAccountPrefix + account, label: label})
 		}
 	}
 	return rows
@@ -138,6 +155,9 @@ func (sv *SettingsView) persistResident(key, val string) bool {
 
 // handleResidentEnter toggles enabled or starts inline editing of a field.
 func (sv *SettingsView) handleResidentEnter(key string) bool {
+	if strings.HasPrefix(key, resWorkerAccountPrefix) {
+		return sv.toggleResidentWorkerAccount(strings.TrimPrefix(key, resWorkerAccountPrefix))
+	}
 	if key == resKeyMaxWorkers && sv.residentMaxWorkersOverridden() {
 		return sv.residentNotify("max_workers is defined in config.toml — read-only")
 	}
@@ -274,6 +294,9 @@ func (sv *SettingsView) renderResidentDetail(screen tcell.Screen, x, y, w, h int
 		text = "Optional account override. Empty uses the default account."
 	case resKeyTools:
 		text = "allow_tools, ask_tools and deny_tools are edited in config.toml under [resident]."
+	}
+	if strings.HasPrefix(row.key, resWorkerAccountPrefix) {
+		text = "Enter toggles this account for new resident workers. Running workers keep their account. Only eligible accounts are listed; config.toml overrides are read-only."
 	}
 	widget.DrawText(screen, x, y+2, w, text, theme.StyleDimmed)
 	line := y + 4

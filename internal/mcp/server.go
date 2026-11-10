@@ -75,6 +75,7 @@ type TaskCreateInput struct {
 // task + role + binding creation (agent.CreateAndStart + an AfterPersist hook),
 // because only the daemon co-locates the DB, runner, and hera store.
 type HeraSpawnInput struct {
+	Account        string // optional account pin
 	Project        string // resolved argus project (input override or coordinator's task project)
 	BaseName       string // base worker role name; daemon uniquifies within the orchestrator
 	TaskPrompt     string // orientation-prefixed prompt delivered to the worker session
