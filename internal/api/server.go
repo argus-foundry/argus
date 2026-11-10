@@ -70,6 +70,9 @@ type Server struct {
 	scheduler   ScheduleRunner   // optional; set by SetScheduler before ListenAndServe
 	clipboard   *clipboard.Store // optional; set by SetClipboard before ListenAndServe
 	mcpRegistry *mcp.Registry    // optional; set by SetMCPRegistry before ListenAndServe
+	// artifactPublisher backs POST /api/artifacts/publish; optional, set by
+	// SetArtifactPublisher before ListenAndServe.
+	artifactPublisher ArtifactPublisher
 
 	// eventBus broadcasts model.Events to attached SSE subscribers. Server
 	// implements events.Sink (see Emit) so the daemon can wire the global

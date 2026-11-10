@@ -219,21 +219,28 @@ type Server struct {
 	createTask  TaskCreator
 	taskDB      TaskStore
 	taskStopper TaskStopper
-	taskRecycle TaskRecycler    // optional; set via SetTaskRecycler
-	clipboard   ClipboardSetter // optional; set via SetClipboard
-	sandboxProp SandboxProposer // optional; set via SetSandboxProposer
-	schedDB     ScheduleStore   // optional; set via SetScheduleManager
-	schedRunner ScheduleRunner  // optional; set via SetScheduleManager
-	messages    MessageStore    // optional; set via SetMessageManager
-	nudger      MessageNudger   // optional; set via SetMessageManager (best-effort)
-	artifacts   ArtifactStore   // optional; set via SetArtifactManager
-	heraSvc     *hera.Service   // optional; set via SetHeraService
-	heraStore   HeraStore       // optional; set via SetHeraService
-	heraSpawn   HeraSpawner     // optional; set via SetHeraService (born-bound spawn)
-	heraRevive  HeraReviver     // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
-	profileCfg  ConfigStore     // optional; set via SetProfileResolver
-	apiGetMu    sync.RWMutex    // guards apiGet (set after the listener is serving)
-	apiGet      APIGetter       // optional; set via SetAPIGetter (argus_api_get)
+	taskRecycle TaskRecycler      // optional; set via SetTaskRecycler
+	clipboard   ClipboardSetter   // optional; set via SetClipboard
+	sandboxProp SandboxProposer   // optional; set via SetSandboxProposer
+	schedDB     ScheduleStore     // optional; set via SetScheduleManager
+	schedRunner ScheduleRunner    // optional; set via SetScheduleManager
+	messages    MessageStore      // optional; set via SetMessageManager
+	nudger      MessageNudger     // optional; set via SetMessageManager (best-effort)
+	artifacts   ArtifactStore     // optional; set via SetArtifactManager
+	publisher   ArtifactPublisher // optional; set via SetArtifactPublisher
+	// openArtifact opens (or, with reveal, reveals) a verified artifact path;
+	// nil means defaultArtifactOpener. A seam so tests never launch Finder.
+	openArtifact func(path string, reveal bool) error
+	// pathPolicy gives a task's writable roots and deny-read paths for
+	// confinedOpen; set via SetPathPolicy (nil = config-free default).
+	pathPolicy func(task *model.Task) (write, deny []string)
+	heraSvc    *hera.Service // optional; set via SetHeraService
+	heraStore  HeraStore     // optional; set via SetHeraService
+	heraSpawn  HeraSpawner   // optional; set via SetHeraService (born-bound spawn)
+	heraRevive HeraReviver   // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
+	profileCfg ConfigStore   // optional; set via SetProfileResolver
+	apiGetMu   sync.RWMutex  // guards apiGet (set after the listener is serving)
+	apiGet     APIGetter     // optional; set via SetAPIGetter (argus_api_get)
 	// accountMover backs task_move_account; set via SetAccountMover.
 	accountMover accountMoverSlot
 	createMu     sync.Mutex
@@ -1126,6 +1133,10 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 	if s.artifactsEnabled() {
 		tools = append(tools, artifactToolDefs...)
+		tools = append(tools, artifactOpenToolDefs...)
+	}
+	if s.publisher != nil && s.taskMgmtEnabled() {
+		tools = append(tools, artifactPublishToolDefs...)
 	}
 	if s.heraEnabled() {
 		tools = append(tools, heraToolDefs...)
@@ -1233,6 +1244,10 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		return s.toolTaskAsk(req.ID, params.Arguments)
 	case "artifact_register":
 		return s.toolArtifactRegister(req.ID, params.Arguments)
+	case "artifact_publish":
+		return s.toolArtifactPublish(req.ID, params.Arguments)
+	case "artifact_open":
+		return s.toolArtifactOpen(req.ID, params.Arguments)
 	case "hera_new_orchestrator":
 		return s.toolHeraNewOrchestrator(req.ID, params.Arguments)
 	case "hera_join":

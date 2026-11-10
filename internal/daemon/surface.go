@@ -211,7 +211,7 @@ const (
 	//     recycles Claude sessions with no --session-id, leaving the task row
 	//     without a resumable ID (ctrl+n re-render refuses).
 	// 40: BuildCmd exports ARGUS_ARTIFACT_ACCOUNT (the project's artifact home
-	//     account) when the agent must publish claude.ai artifacts via artpush,
+	//     account) when the agent must publish claude.ai artifacts via Argus,
 	//     strips an inherited value, and the injected routing content gains the
 	//     argus-artifacts snippet (add-artifact-home-account). A stale
 	//     supervisor never exports it, so routed-away tasks keep publishing to
@@ -243,7 +243,13 @@ const (
 	//     backend command must also be a single line (an unescaped newline
 	//     would split off every appended flag in sh).
 	// 42: Pi launches register the native Argus MCP server.
-	SupervisorSpawnSurface = 42
+	// 43: the injected argus-artifacts routing snippet tells agents to publish
+	//     through the daemon's artifact_publish MCP tool and, on an unavailable
+	//     home account, to ask the user (publish elsewhere / open / reveal /
+	//     park) instead of an external publishing CLI that was never built
+	//     (add-argus-artifact-publish). A stale supervisor injects the old
+	//     CLI guidance until restarted.
+	SupervisorSpawnSurface = 43
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -481,29 +487,30 @@ var SupervisorSpawnPaths = []string{
 	"internal/bridgemod/mod/argus-bridge/hooks/tracker.ts",
 	"internal/bridgemod/mod/argus-bridge/hooks/ui.tsx",
 	"internal/bridgemod/mod/argus-bridge/types/index.d.ts",
-	"internal/backendkind/backendkind.go",        // command → family classification
-	"internal/inject/antigravity/antigravity.go", // agy global config BuildCmd refreshes before launch
-	"internal/inject/atomicfile/atomicfile.go",   // atomic writer the global-config injectors use
-	"internal/inject/opencode/opencode.go",       // opencode global config BuildCmd refreshes before launch
-	"internal/agent/claudeaccount.go",            // per-task account dir bootstrap, env hygiene, sandbox grant
-	"internal/claudeenv/claudeenv.go",            // parent-session marker denylist + persistence flag BuildCmd applies
-	"internal/agent/codexaccount.go",             // per-task Codex home, env hygiene, sandbox grant
-	"internal/config/accounts.go",                // account → config dir resolution BuildCmd reads
-	"internal/config/resident.go",                // resident allow/ask/deny defaults BuildCmd turns into --settings
-	"internal/db/resident.go",                    // ResidentWorkDir BuildCmd checks for the resident
-	"internal/model/task.go",                     // Task.IsResident, the gate on every resident spawn flag
-	"internal/agent/nonclaude_context.go",        // OpenCode child-only skills config content
-	"internal/agent/omp.go",                      // omp MCP plugin + skills overlay materialization, permission flags
-	"internal/agent/cachedir.go",                 // content-addressed ~/.argus/cache materialization omp launches use
-	"internal/agent/prelaunch.go",                // backend prelaunch (pi/ollama) run before the fork
-	"internal/agent/routing_prompt.go",           // --append-system-prompt-file routing injection
-	"internal/agent/sandbox.go",                  // the sandbox-exec wrapper the command is wrapped in
-	"internal/agent/spawnpath.go",                // ~/.local/bin PATH guarantee BuildCmd applies
-	"internal/agent/secret.go",                   // point-of-use secret resolution inside BuildCmd
-	"internal/agent/secretregistry.go",           // the resolver registry BuildCmd resolves through
-	"internal/skills/builtin.go",                 // builtin skills materialized at spawn time
-	"internal/skills/builtin/hera/SKILL.md",      // bridge delivery instructions materialized for Hera agents
-	"internal/skills/skills.go",                  // --add-dir skill provisioning
+	"internal/backendkind/backendkind.go",         // command → family classification
+	"internal/inject/antigravity/antigravity.go",  // agy global config BuildCmd refreshes before launch
+	"internal/inject/atomicfile/atomicfile.go",    // atomic writer the global-config injectors use
+	"internal/inject/opencode/opencode.go",        // opencode global config BuildCmd refreshes before launch
+	"internal/agent/claudeaccount.go",             // per-task account dir bootstrap, env hygiene, sandbox grant
+	"internal/claudeenv/claudeenv.go",             // parent-session marker denylist + persistence flag BuildCmd applies
+	"internal/agent/codexaccount.go",              // per-task Codex home, env hygiene, sandbox grant
+	"internal/config/accounts.go",                 // account → config dir resolution BuildCmd reads
+	"internal/config/resident.go",                 // resident allow/ask/deny defaults BuildCmd turns into --settings
+	"internal/db/resident.go",                     // ResidentWorkDir BuildCmd checks for the resident
+	"internal/model/task.go",                      // Task.IsResident, the gate on every resident spawn flag
+	"internal/agent/nonclaude_context.go",         // OpenCode child-only skills config content
+	"internal/agent/omp.go",                       // omp MCP plugin + skills overlay materialization, permission flags
+	"internal/agent/cachedir.go",                  // content-addressed ~/.argus/cache materialization omp launches use
+	"internal/agent/prelaunch.go",                 // backend prelaunch (pi/ollama) run before the fork
+	"internal/agent/routing_prompt.go",            // --append-system-prompt-file routing injection
+	"internal/agent/sandbox.go",                   // the sandbox-exec wrapper the command is wrapped in
+	"internal/agent/spawnpath.go",                 // ~/.local/bin PATH guarantee BuildCmd applies
+	"internal/agent/secret.go",                    // point-of-use secret resolution inside BuildCmd
+	"internal/agent/secretregistry.go",            // the resolver registry BuildCmd resolves through
+	"internal/skills/builtin.go",                  // builtin skills materialized at spawn time
+	"internal/skills/builtin/hera/SKILL.md",       // bridge delivery instructions materialized for Hera agents
+	"internal/skills/skills.go",                   // --add-dir skill provisioning
+	"internal/routing/builtin/argus-artifacts.md", // artifact publishing guidance injected at spawn
 }
 
 // SupervisorStreamPaths declares every source file whose content the supervisor
@@ -550,7 +557,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "f76aefd3c415f856b61c8e3a53315ad448f47915cae136b1505254a2348cdeae"
+	SpawnSurfaceDigest  = "af2a434ff830d90e3d2a8c2142551e5ad170408790df55b594aa67fa8c9987b0"
 	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 
