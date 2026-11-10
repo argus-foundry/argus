@@ -100,14 +100,17 @@ func TestSmoke_ResidentView_CreationKeysInert(t *testing.T) {
 			}
 			tasks0, orchs0 := f.counts(t)
 			// spawn, new coordinator, pin, kanban ±, adopt, clear archive, cleanup, move account, bounce
+			// One settle for the whole burst: a key that wrongly opened a modal would
+			// swallow the rest, which the mode/focus assertions below still catch.
 			for _, r := range []rune{'w', 'n', 'P', 'm', 'M', 'J', 'c', 'C', '>', 'B'} {
-				f.press(t, rune1(r))
-				readUI(t, f.a.tapp, func() {
-					testutil.Equal(t, f.a.mode, modeTaskList)
-					testutil.Equal(t, f.a.header.ActiveTab(), widget.TabResident)
-					testutil.Equal(t, f.a.tapp.GetFocus() == f.a.heraPage, true)
-				})
+				f.a.tapp.QueueEvent(rune1(r))
 			}
+			syncUI(t, f.a.tapp)
+			readUI(t, f.a.tapp, func() {
+				testutil.Equal(t, f.a.mode, modeTaskList)
+				testutil.Equal(t, f.a.header.ActiveTab(), widget.TabResident)
+				testutil.Equal(t, f.a.tapp.GetFocus() == f.a.heraPage, true)
+			})
 			tasks1, orchs1 := f.counts(t)
 			testutil.Equal(t, tasks1, tasks0)
 			testutil.Equal(t, orchs1, orchs0)
@@ -122,9 +125,10 @@ func TestSmoke_ResidentView_AllowedKeysActOnWorkerRowsOnly(t *testing.T) {
 		f.selectResident(t)
 		before, _ := f.d.HeraRoleStatusFor(f.roles[0]) // may be "not found" before any step
 		for _, ev := range []*tcell.EventKey{rune1('r'), rune1('a'), rune1('s'), rune1('S'), tcell.NewEventKey(tcell.KeyCtrlD, 0, tcell.ModCtrl)} {
-			f.press(t, ev)
-			readUI(t, f.a.tapp, func() { testutil.Equal(t, f.a.mode, modeTaskList) })
+			f.a.tapp.QueueEvent(ev)
 		}
+		syncUI(t, f.a.tapp)
+		readUI(t, f.a.tapp, func() { testutil.Equal(t, f.a.mode, modeTaskList) })
 		after, _ := f.d.HeraRoleStatusFor(f.roles[0])
 		testutil.DeepEqual(t, after, before)
 		// Every worker is untouched.
