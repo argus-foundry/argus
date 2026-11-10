@@ -282,6 +282,7 @@ func TestChangedTaskFields(t *testing.T) {
 		{"session runtime", func(x *Task) { x.SessionID = "session" }, []string{"runtime"}},
 		{"combined runtime", func(x *Task) { x.Backend = "codex"; x.Model = "m"; x.SessionID = "session" }, []string{"runtime"}},
 		{"agent pid is not tracked", func(x *Task) { x.AgentPID = 123 }, nil},
+		{"sandbox override", func(x *Task) { x.SandboxOverride = "enabled" }, []string{"runtime"}},
 		{"account", func(x *Task) { x.AccountRouted = true }, []string{"account"}},
 		{"result", func(x *Task) { x.Result = "{}" }, []string{"result"}},
 	}
