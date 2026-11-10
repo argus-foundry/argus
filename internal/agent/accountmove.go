@@ -112,6 +112,11 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	if err != nil {
 		return nil, AccountMoveResult{}, err
 	}
+	if task.IsResident() {
+		// Reject before the transcript copy: SetTaskAccount would refuse
+		// later, leaving a copied transcript behind in the target account.
+		return nil, AccountMoveResult{}, fmt.Errorf("%w: %w", ErrAccount, db.ErrResidentProtected)
+	}
 	cfg := database.Config()
 	backend, err := ResolveBackend(task, cfg)
 	if err != nil {

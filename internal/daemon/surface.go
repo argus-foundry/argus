@@ -218,13 +218,38 @@ const (
 	//     the wrong account. The home account must be Claude-capable (a
 	//     codex_home-only entry is skipped), and a stripped inherited value is
 	//     logged under [artifacts].
-	// 41: the injected argus-artifacts routing snippet tells agents to publish
+	// 41: the resident agent's launch carries its ask/deny tool rules as an
+	//     inline --settings flag and a non-bypass permission mode is forced
+	//     (add-resident-agent D6), and its Argus MCP URL is bound to its own task
+	//     (?caller=). A stale supervisor spawns the resident without them, so outward actions would not prompt.
+	//     The supervisor also rebuilds Task.Kind from the wire (protocol v13);
+	//     without it BuildCmd cannot tell the resident from a plain task. The
+	//     resident spawn also exports ARGUS_RESIDENT=1 (its Stop hook gates the
+	//     resident lookup on it), strips bypass flags with a shell-words parser
+	//     and refuses an unparseable command, and carries the widened default
+	//     ask list. It launches with --setting-sources project and an inline
+	//     --settings carrying its permissions (user deny/ask merged, never user
+	//     allow), defaultMode, disableBypassPermissionsMode and its own Stop
+	//     coord-hook; the user's CLAUDE.md rides the appended system prompt and
+	//     user skills an --add-dir symlink root. It also carries the account's
+	//     sandbox block with its Bash auto-approve escapes forced off,
+	//     reads user files from the account dir (never an inherited
+	//     $CLAUDE_CONFIG_DIR).
+	//     The sandbox carry is an allowlist of restrictive keys (no `enabled`
+	//     under Argus's own sandbox), the backend command must pass a flag
+	//     allowlist (else the resident refuses to start), and its prompt file
+	//     and skills root live in a private 0700 ~/.argus/resident-launch
+	//     (--allowedTools is refused by that allowlist, not stripped). The
+	//     backend command must also be a single line (an unescaped newline
+	//     would split off every appended flag in sh).
+	// 42: Pi launches register the native Argus MCP server.
+	// 43: the injected argus-artifacts routing snippet tells agents to publish
 	//     through the daemon's artifact_publish MCP tool and, on an unavailable
 	//     home account, to ask the user (publish elsewhere / open / reveal /
 	//     park) instead of an external publishing CLI that was never built
 	//     (add-argus-artifact-publish). A stale supervisor injects the old
 	//     CLI guidance until restarted.
-	SupervisorSpawnSurface = 41
+	SupervisorSpawnSurface = 43
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -470,6 +495,9 @@ var SupervisorSpawnPaths = []string{
 	"internal/claudeenv/claudeenv.go",             // parent-session marker denylist + persistence flag BuildCmd applies
 	"internal/agent/codexaccount.go",              // per-task Codex home, env hygiene, sandbox grant
 	"internal/config/accounts.go",                 // account → config dir resolution BuildCmd reads
+	"internal/config/resident.go",                 // resident allow/ask/deny defaults BuildCmd turns into --settings
+	"internal/db/resident.go",                     // ResidentWorkDir BuildCmd checks for the resident
+	"internal/model/task.go",                      // Task.IsResident, the gate on every resident spawn flag
 	"internal/agent/nonclaude_context.go",         // OpenCode child-only skills config content
 	"internal/agent/omp.go",                       // omp MCP plugin + skills overlay materialization, permission flags
 	"internal/agent/cachedir.go",                  // content-addressed ~/.argus/cache materialization omp launches use
@@ -529,8 +557,8 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "4ee6b0def734b298c422771562fed38e05f1927152f0359921a74f7325e34142"
-	StreamSurfaceDigest = "3119cb7016724a7989d50ec738bdaa9551ac6f16f8d50a48f04c908b2237405f"
+	SpawnSurfaceDigest  = "af2a434ff830d90e3d2a8c2142551e5ad170408790df55b594aa67fa8c9987b0"
+	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

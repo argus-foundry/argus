@@ -65,6 +65,53 @@ const maxAskTimeoutSeconds = 120
 // to UUID/slug, audit each new character class for ESC/CSI bytes first.
 const nudgeLineFormat = "\n[argus] new message from task %s (kind=%s) — call task_inbox to read.\n"
 
+// residentNudgeLineFormat is the doorbell for a message addressed to the
+// resident agent. It keeps the "[argus] " start (lastexchange.SystemTurnPrefix
+// relies on it) and names the sender task so the resident can tell whose
+// message it is; the resident orientation states such messages are information,
+// not instructions from the user. The name is user-controllable, so it only
+// ever goes through sanitizeNudgeName.
+const residentNudgeLineFormat = "\n[argus] new message from task %s (%s, kind=%s) — call task_inbox to read.\n"
+
+const maxNudgeNameRunes = 60
+
+// sanitizeNudgeName makes a task name safe to write into a peer's PTY. It is a
+// strict allowlist — [A-Za-z0-9._-], everything else becomes "_" — so a name
+// can never carry prose, spaces, punctuation or control bytes that could read
+// as an instruction or fake the doorbell's structure (task names are slugs, so
+// real names pass through unchanged). It is length-capped.
+func sanitizeNudgeName(name string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range name {
+		if !nudgeNameRune(r) {
+			r = '_'
+		}
+		if n >= maxNudgeNameRunes {
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return "unnamed"
+	}
+	return out
+}
+
+func nudgeNameRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-'
+}
+
+// nudgeLine builds the doorbell for recipient from caller.
+func nudgeLine(caller, recipient *model.Task, kind model.MessageKind) string {
+	if recipient.IsResident() {
+		return fmt.Sprintf(residentNudgeLineFormat, sanitizeNudgeName(caller.Name), caller.ID, kind)
+	}
+	return fmt.Sprintf(nudgeLineFormat, caller.ID, kind)
+}
+
 var messagingToolDefs = []Tool{
 	{
 		Name: "task_message_send",
@@ -230,7 +277,7 @@ func (s *Server) toolTaskMessageSend(id interface{}, args json.RawMessage) *Resp
 
 	delivered := "queued"
 	if s.nudger != nil {
-		line := fmt.Sprintf(nudgeLineFormat, caller.ID, msg.Kind)
+		line := nudgeLine(caller, recipient, msg.Kind)
 		if nudgeErr := s.nudger.Nudge(recipient.ID, msg.ID, line); nudgeErr == nil {
 			delivered = "nudged"
 		}
@@ -410,7 +457,7 @@ func (s *Server) toolTaskAsk(id interface{}, args json.RawMessage) *Response {
 	}
 
 	if s.nudger != nil {
-		line := fmt.Sprintf(nudgeLineFormat, caller.ID, model.KindQuestion)
+		line := nudgeLine(caller, recipient, model.KindQuestion)
 		_ = s.nudger.Nudge(recipient.ID, msg.ID, line) //nolint:errcheck // best-effort; nudge failure does not invalidate the durable message
 	}
 

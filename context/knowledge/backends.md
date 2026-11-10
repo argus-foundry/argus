@@ -17,7 +17,7 @@ commands get `customFamily`. To add one, follow `.agents/skills/add-backend/SKIL
 | Prompt | `-- <p>` | `-- <p>` | positional | `--prompt` (config) | `--prompt-interactive` (family default) | `-- <p>` | `-- <p>` | `-- <p>` |
 | Model | `--model` (curated aliases) | `--model` (curated) | `--model` | `OPENCODE_CONFIG_CONTENT` | `--model` (custom only) | `--model` (custom only) | `--model` (fuzzy) | none |
 | Permission | `defaults.permission_mode` → `--permission-mode …` | baked into command | — | `--auto` launch flag | mode → `--mode …` / `--dangerously-skip-permissions` | mode → `--force` / `--plan` | mode → `--approval-mode write` / `always-ask` (default, plan) / `yolo` | — |
-| MCP | `--mcp-config` per launch | `-c mcp_servers.argus.url` per launch | — | global `opencode.json` | global `~/.gemini/config/mcp_config.json` | global `~/.cursor/mcp.json` (+`--approve-mcps` in command) | `--plugin-dir` generated Claude-style plugin (`.mcp.json`) per launch | — |
+| MCP | `--mcp-config` per launch | `-c mcp_servers.argus.url` per launch | global `~/.pi/agent/mcp.json` | global `opencode.json` | global `~/.gemini/config/mcp_config.json` | global `~/.cursor/mcp.json` (+`--approve-mcps` in command) | `--plugin-dir` generated Claude-style plugin (`.mcp.json`) per launch | — |
 | Skills | `--add-dir ~/.argus/skills` | Argus-only `CODEX_HOME` overlay | `--skill <dir>` | `OPENCODE_CONFIG_CONTENT` | global `~/.gemini/config/skills.json` entry | — | `--config` overlay (`skills.customDirectories`) | — |
 | Routing | `--append-system-prompt-file` | `AGENTS.md` in the Argus-only `CODEX_HOME` overlay | `--append-system-prompt <file>` | `instructions` in `OPENCODE_CONFIG_CONTENT` | always-on global rule `~/.gemini/config/rules/argus-routing.md` | — (no native mechanism; see gotchas) | `--append-system-prompt <file>` | — |
 | Sandbox grant | `~/.claude.json*`, `~/.claude` | `~/.codex`, codex-home | `~/.pi` | (base `~/.local`) | `~/.gemini/{antigravity-cli,config,jetski}` (pre-created) | `~/.cursor/{chats,projects,statsig-cache.json}` (launch-only, pre-created; mcp.json/cli-config.json read-only) | `~/.omp` (launch-only) | — |
@@ -29,6 +29,8 @@ commands get `customFamily`. To add one, follow `.agents/skills/add-backend/SKIL
 | Prelaunch | — | — | ollama warmup (20s Start RPC) | — | — | — | — | — |
 | Context source | Claude bridge | `ContextReader` rollout | — | — | — | — | — | — |
 | Cost source | Stop hook + bridge mod | daemon rollout sweeper | — (n/a) | — (n/a) | — (n/a) | — (n/a) | — (n/a) | Stop hook |
+
+**Pi MCP uses native user-level configuration, refreshed before spawn.** Preserve unrelated servers and explicit operator settings; malformed JSON must remain untouched. Trusted `.pi/mcp.json` project overrides can disable or replace the global Argus registration.
 
 Rows map to `Family` fields: Session ID → `PinsSessionID`, Resume → `ResumeFlag`/`ResumeCmd`,
 Capture → `Capture`, Recapture → `RecaptureEveryExit`, Resume availability → `ResumeAvailable`, Prompt → `DefaultPromptFlag`/

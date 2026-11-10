@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/config"
@@ -58,4 +59,12 @@ func TestStopStrayJobs_NoopWhenSessionIDEmpty(t *testing.T) {
 func TestStopStrayJobs_NoopForNonClaudeBackend(t *testing.T) {
 	task := &model.Task{ID: "t1", Backend: "codex"}
 	testutil.NoError(t, StopStrayJobs(task, config.DefaultConfig(), "sess-a"))
+}
+
+func TestClaudeBinaryFromCommand_ExpandsLeadingTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	testutil.Equal(t, claudeBinaryFromCommand("~/bin/claude --model x"), filepath.Join(home, "bin", "claude"))
+	testutil.Equal(t, claudeBinaryFromCommand("~root/bin/claude"), "~root/bin/claude")
+	testutil.Equal(t, claudeBinaryFromCommand("$HOME/bin/claude"), "$HOME/bin/claude")
 }

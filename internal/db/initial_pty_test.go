@@ -12,7 +12,7 @@ func TestInitialPTYSize(t *testing.T) {
 	testutil.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
 	now := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
-	layout := InitialPTYLayout{ReportedAt: now, Active: PTYSize{Rows: 30, Cols: 150}, Coordinator: PTYSize{Rows: 30, Cols: 98}, Worker: PTYSize{Rows: 30, Cols: 99}}
+	layout := InitialPTYLayout{ReportedAt: now, Active: PTYSize{Rows: 30, Cols: 150}, Coordinator: PTYSize{Rows: 30, Cols: 98}, Worker: PTYSize{Rows: 30, Cols: 99}, Resident: PTYSize{Rows: 36, Cols: 238}}
 	for _, tc := range []struct {
 		name string
 		role HeraRoleKind
@@ -25,6 +25,7 @@ func TestInitialPTYSize(t *testing.T) {
 		{"worker", HeraKindWorker, now, true, layout.Worker},
 		{"freelance", HeraKindFreelance, now, true, layout.Worker},
 		{"headless active", "", now, true, layout.Active},
+		{"resident own pane", InitialPTYRoleResident, now, true, layout.Resident},
 		{"expired", HeraKindWorker, now.Add(InitialPTYReportTTL), true, PTYSize{}},
 		{"clock moved backward", HeraKindWorker, now.Add(-time.Second), true, PTYSize{}},
 	} {
@@ -38,7 +39,7 @@ func TestInitialPTYSize(t *testing.T) {
 		})
 	}
 	testutil.NoError(t, d.PublishInitialPTYLayout(InitialPTYLayout{ReportedAt: now, Active: layout.Active}))
-	for _, role := range []HeraRoleKind{HeraKindCoordinator, HeraKindWorker, HeraKindFreelance} {
+	for _, role := range []HeraRoleKind{HeraKindCoordinator, HeraKindWorker, HeraKindFreelance, InitialPTYRoleResident} {
 		t.Run("active only "+string(role), func(t *testing.T) {
 			got, err := d.InitialPTYSize(role, now)
 			testutil.NoError(t, err)

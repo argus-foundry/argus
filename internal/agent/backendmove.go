@@ -55,6 +55,11 @@ func MoveTaskBackend(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	if err != nil {
 		return nil, AccountMoveResult{}, err
 	}
+	if task.IsResident() {
+		// The resident's permission policy is Claude-only (--settings rules,
+		// forced permission mode); it never moves to another CLI.
+		return nil, AccountMoveResult{}, fmt.Errorf("%w: %w", ErrAccount, db.ErrResidentProtected)
+	}
 	cfg := database.Config()
 	cur, err := ResolveBackend(task, cfg)
 	if err != nil {

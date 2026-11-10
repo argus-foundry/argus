@@ -21,9 +21,10 @@ import (
 // copies them into storage served over REST). Every such read goes through
 // confinedOpen, for every task, sandboxed or not:
 //
-//   - the caller's task is self-reported (id/cwd; the MCP endpoint is one
-//     shared URL with no per-task binding), so confinement is to THAT task's
-//     own roots: naming another task only reaches that task's worktree;
+//   - the caller's task is self-reported (id/cwd; the resident's ?caller=
+//     URL binding is resident-only and unauthenticated, and global-config MCP
+//     families share one URL), so confinement is to THAT task's own roots:
+//     naming another task only reaches that task's worktree;
 //   - make a relative path absolute against the request's cwd (else the task
 //     worktree), never the daemon's own working directory;
 //   - open ONCE with O_NOFOLLOW (a symlink as the final component is refused)

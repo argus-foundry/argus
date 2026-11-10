@@ -67,7 +67,9 @@ var helpLayout = []helpGroup{
 		{"ctrl+q (Tasks rail enabled)", "return focus to rail; keep terminal visible"},
 		{"Cmd+→", "enter Projects rail (Appearance option)"},
 	}},
-	{title: "Global", ctx: keymap.CtxGlobal},
+	{title: "Global", ctx: keymap.CtxGlobal, extra: []HelpBinding{
+		{"ctrl+q (resident)", "return to previous screen"},
+	}},
 	{title: "Agent View", ctx: keymap.CtxAgent, extra: []HelpBinding{
 		{"Cmd+→ (rightmost pane)", "hop to Projects rail; Cmd+← there returns (Appearance option)"},
 		{"ctrl+q / Esc", "back (diff → files → list)"},

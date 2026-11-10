@@ -109,7 +109,7 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-func callTool(t *testing.T, s *Server, name string, args map[string]any) ToolCallResult {
+func callArtifactTool(t *testing.T, s *Server, name string, args map[string]any) ToolCallResult {
 	t.Helper()
 	raw, _ := json.Marshal(args)
 	resp := doRequest(t, s, "tools/call", ToolCallParams{Name: name, Arguments: raw})
@@ -157,7 +157,7 @@ func TestArtifactPublish_Success(t *testing.T) {
 	logs := captureLog(t)
 	src := writeTempFile(t, "report.html", publishPage)
 
-	cr := callTool(t, s, "artifact_publish", map[string]any{"path": src, "account": "personal", "title": "Report", "id": "abc123"})
+	cr := callArtifactTool(t, s, "artifact_publish", map[string]any{"path": src, "account": "personal", "title": "Report", "id": "abc123"})
 	testutil.False(t, cr.IsError)
 	r := decodePublishResult(t, cr)
 	testutil.Equal(t, r.Status, "published")
@@ -173,7 +173,7 @@ func TestArtifactPublish_Success(t *testing.T) {
 func TestArtifactPublish_Update(t *testing.T) {
 	s, _, n := testPublishServer(t, true)
 	src := writeTempFile(t, "report.html", publishPage)
-	cr := callTool(t, s, "artifact_publish", map[string]any{
+	cr := callArtifactTool(t, s, "artifact_publish", map[string]any{
 		"path": src, "account": "personal", "update": "https://claude.ai/artifact/SLUG1", "id": "abc123",
 	})
 	testutil.False(t, cr.IsError)
@@ -203,7 +203,7 @@ func TestArtifactPublish_Errors(t *testing.T) {
 			s, store, n := testPublishServer(t, true)
 			logs := captureLog(t)
 			src := writeTempFile(t, "report.html", publishPage)
-			cr := callTool(t, s, "artifact_publish", tc.args(src))
+			cr := callArtifactTool(t, s, "artifact_publish", tc.args(src))
 			testutil.True(t, cr.IsError)
 			testutil.Contains(t, cr.Content[0].Text, tc.want)
 			testutil.Equal(t, n.Load(), int32(0))
@@ -218,7 +218,7 @@ func TestArtifactPublish_UnavailableRegistersAndListsAccounts(t *testing.T) {
 	logs := captureLog(t)
 	src := writeTempFile(t, "report.html", publishPage)
 
-	cr := callTool(t, s, "artifact_publish", map[string]any{"path": src, "account": "default", "title": "Weekly", "cwd": "/tmp/worktrees/myapp/fix-login"})
+	cr := callArtifactTool(t, s, "artifact_publish", map[string]any{"path": src, "account": "default", "title": "Weekly", "cwd": "/tmp/worktrees/myapp/fix-login"})
 	testutil.False(t, cr.IsError) // a result, not a tool error
 	r := decodePublishResult(t, cr)
 	testutil.Equal(t, r.Status, "unavailable")
@@ -261,7 +261,7 @@ func TestArtifactPublish_RequiresCallingTask(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, store, n := testPublishServer(t, tc.withTasks)
 			tc.args["path"] = writeTempFile(t, "report.html", publishPage)
-			cr := callTool(t, s, "artifact_publish", tc.args)
+			cr := callArtifactTool(t, s, "artifact_publish", tc.args)
 			testutil.True(t, cr.IsError)
 			testutil.Contains(t, cr.Content[0].Text, tc.want)
 			testutil.Equal(t, n.Load(), int32(0))
@@ -355,7 +355,7 @@ func TestArtifactPublish_ConfinesPath(t *testing.T) {
 			t.Run(fmt.Sprintf("sandboxed=%t/%s", sandboxed, tc.name), func(t *testing.T) {
 				s, store, n := testPublishServer(t, true)
 				f := confineTask(t, s, sandboxed)
-				cr := callTool(t, s, "artifact_publish", map[string]any{"path": tc.path(f), "account": "personal", "id": "abc123"})
+				cr := callArtifactTool(t, s, "artifact_publish", map[string]any{"path": tc.path(f), "account": "personal", "id": "abc123"})
 				if tc.want == "" {
 					testutil.False(t, cr.IsError)
 					testutil.Equal(t, decodePublishResult(t, cr).Status, "published")
@@ -380,7 +380,7 @@ func TestArtifactPublish_SpoofedTaskConfinedToItsRoots(t *testing.T) {
 	other := filepath.Join(t.TempDir(), "otherwt")
 	s.taskDB.(*mockTaskDB).tasks[1].Worktree = other // def456, unsandboxed
 
-	cr := callTool(t, s, "artifact_publish", map[string]any{"path": writeAt(t, filepath.Join(f.outside, "r.html"), publishPage), "account": "personal", "id": "def456"})
+	cr := callArtifactTool(t, s, "artifact_publish", map[string]any{"path": writeAt(t, filepath.Join(f.outside, "r.html"), publishPage), "account": "personal", "id": "def456"})
 	testutil.True(t, cr.IsError)
 	testutil.Contains(t, cr.Content[0].Text, notAllowed)
 	testutil.Equal(t, n.Load(), int32(0))
@@ -471,7 +471,7 @@ func TestConfinedRead(t *testing.T) {
 
 func TestArtifactPublish_NotConfigured(t *testing.T) {
 	s, _ := testServerWithArtifacts(t)
-	cr := callTool(t, s, "artifact_publish", map[string]any{"path": "/tmp/x.html", "account": "personal"})
+	cr := callArtifactTool(t, s, "artifact_publish", map[string]any{"path": "/tmp/x.html", "account": "personal"})
 	testutil.True(t, cr.IsError)
 	testutil.Contains(t, cr.Content[0].Text, "not configured")
 }
@@ -545,7 +545,7 @@ func TestArtifactOpen(t *testing.T) {
 			op := &stubOpener{}
 			s.openArtifact = op.open
 			registerForOpen(t, s, "report.html")
-			cr := callTool(t, s, "artifact_open", map[string]any{"filename": "report.html", "reveal": tc.reveal, "cwd": "/tmp/worktrees/myapp/fix-login"})
+			cr := callArtifactTool(t, s, "artifact_open", map[string]any{"filename": "report.html", "reveal": tc.reveal, "cwd": "/tmp/worktrees/myapp/fix-login"})
 			testutil.False(t, cr.IsError)
 			testutil.Equal(t, len(op.calls), 1)
 			testutil.Equal(t, op.calls[0].reveal, tc.reveal)
@@ -574,7 +574,7 @@ func TestArtifactOpen(t *testing.T) {
 			registerForOpen(t, s, "report.html")
 			// An unregistered file sitting in the artifact dir is still refused.
 			testutil.NoError(t, os.WriteFile(filepath.Join(agent.ArtifactsDir("abc123"), "other.html"), []byte("x"), 0o600))
-			cr := callTool(t, s, "artifact_open", tc.args)
+			cr := callArtifactTool(t, s, "artifact_open", tc.args)
 			testutil.True(t, cr.IsError)
 			testutil.Contains(t, cr.Content[0].Text, tc.want)
 			testutil.Equal(t, len(op.calls), 0)
@@ -586,7 +586,7 @@ func TestArtifactOpen(t *testing.T) {
 		op := &stubOpener{}
 		s.openArtifact = op.open
 		store.saved = append(store.saved, &model.Artifact{TaskID: "abc123", Filename: "../escape.html", Type: model.ArtifactHTML})
-		cr := callTool(t, s, "artifact_open", map[string]any{"filename": "../escape.html", "id": "abc123"})
+		cr := callArtifactTool(t, s, "artifact_open", map[string]any{"filename": "../escape.html", "id": "abc123"})
 		testutil.True(t, cr.IsError)
 		testutil.Contains(t, cr.Content[0].Text, "invalid artifact path")
 		testutil.Equal(t, len(op.calls), 0)
@@ -597,7 +597,7 @@ func TestArtifactOpen(t *testing.T) {
 		op := &stubOpener{err: io.ErrUnexpectedEOF}
 		s.openArtifact = op.open
 		registerForOpen(t, s, "report.html")
-		cr := callTool(t, s, "artifact_open", map[string]any{"filename": "report.html", "id": "abc123"})
+		cr := callArtifactTool(t, s, "artifact_open", map[string]any{"filename": "report.html", "id": "abc123"})
 		testutil.True(t, cr.IsError)
 		testutil.Contains(t, cr.Content[0].Text, "unexpected EOF")
 	})
@@ -611,7 +611,7 @@ func TestArtifactOpen_NotSupportedOffMacOS(t *testing.T) {
 	op := &stubOpener{}
 	s.openArtifact = op.open
 	registerForOpen(t, s, "report.html")
-	cr := callTool(t, s, "artifact_open", map[string]any{"filename": "report.html", "id": "abc123"})
+	cr := callArtifactTool(t, s, "artifact_open", map[string]any{"filename": "report.html", "id": "abc123"})
 	testutil.True(t, cr.IsError)
 	testutil.Contains(t, cr.Content[0].Text, "not supported on linux")
 	testutil.Equal(t, len(op.calls), 0)
@@ -650,7 +650,7 @@ func TestArtifactOpen_ExecutableAndTypeChecks(t *testing.T) {
 					args["type"] = tc.typ
 				}
 				testutil.False(t, callArtifactRegister(t, s, args).IsError)
-				cr := callTool(t, s, "artifact_open", map[string]any{"filename": tc.file, "reveal": reveal, "id": "abc123"})
+				cr := callArtifactTool(t, s, "artifact_open", map[string]any{"filename": tc.file, "reveal": reveal, "id": "abc123"})
 				want := tc.openOK
 				if reveal {
 					want = tc.revealOK
@@ -689,7 +689,7 @@ func TestArtifactOpen_DirectoriesAndBundlesRefused(t *testing.T) {
 					writeAt(t, full, "x")
 				}
 				store.saved = append(store.saved, &model.Artifact{TaskID: "abc123", Filename: tc.file, Type: model.ArtifactHTML})
-				cr := callTool(t, s, "artifact_open", map[string]any{"filename": tc.file, "reveal": reveal, "id": "abc123"})
+				cr := callArtifactTool(t, s, "artifact_open", map[string]any{"filename": tc.file, "reveal": reveal, "id": "abc123"})
 				testutil.True(t, cr.IsError)
 				testutil.Equal(t, len(op.calls), 0)
 			}
@@ -705,7 +705,7 @@ func TestOpenArgs(t *testing.T) {
 func TestArtifactPublish_UnavailableSaveFailureStillReports(t *testing.T) {
 	s, store, _ := testPublishServer(t, true)
 	store.err = io.ErrShortWrite
-	cr := callTool(t, s, "artifact_publish", map[string]any{"path": writeTempFile(t, "report.html", publishPage), "account": "default", "id": "abc123"})
+	cr := callArtifactTool(t, s, "artifact_publish", map[string]any{"path": writeTempFile(t, "report.html", publishPage), "account": "default", "id": "abc123"})
 	testutil.False(t, cr.IsError)
 	r := decodePublishResult(t, cr)
 	testutil.Equal(t, r.Status, "unavailable")
@@ -722,7 +722,7 @@ func TestArtifactOpen_MissingBytes(t *testing.T) {
 	op := &stubOpener{}
 	s.openArtifact = op.open
 	store.saved = append(store.saved, &model.Artifact{TaskID: "abc123", Filename: "gone.html", Type: model.ArtifactHTML})
-	cr := callTool(t, s, "artifact_open", map[string]any{"filename": "gone.html", "id": "abc123"})
+	cr := callArtifactTool(t, s, "artifact_open", map[string]any{"filename": "gone.html", "id": "abc123"})
 	testutil.True(t, cr.IsError)
 	testutil.Contains(t, cr.Content[0].Text, "no bytes on disk")
 	testutil.Equal(t, len(op.calls), 0)
@@ -770,7 +770,7 @@ func TestConfine_NoExistenceOracle(t *testing.T) {
 	missingDir := filepath.Join(f.outside, "nodir")
 	var texts []string
 	for _, p := range []string{existing, missing, denied} {
-		cr := callTool(t, s, "artifact_publish", map[string]any{"path": p, "account": "personal", "id": "abc123"})
+		cr := callArtifactTool(t, s, "artifact_publish", map[string]any{"path": p, "account": "personal", "id": "abc123"})
 		testutil.True(t, cr.IsError)
 		texts = append(texts, cr.Content[0].Text)
 	}
@@ -800,7 +800,7 @@ func TestConfine_CaseVariantDenyPath(t *testing.T) {
 	if _, err := os.Stat(variant); err != nil {
 		t.Skip("temp filesystem is case-sensitive")
 	}
-	cr := callTool(t, s, "artifact_publish", map[string]any{"path": variant, "account": "personal", "id": "abc123"})
+	cr := callArtifactTool(t, s, "artifact_publish", map[string]any{"path": variant, "account": "personal", "id": "abc123"})
 	testutil.True(t, cr.IsError)
 	testutil.Contains(t, cr.Content[0].Text, notAllowed)
 	testutil.Equal(t, n.Load(), int32(0))
@@ -826,7 +826,7 @@ func TestCanonicalPath(t *testing.T) {
 
 func TestArtifactPublish_UnavailableUpdateEchoesLink(t *testing.T) {
 	s, _, _ := testPublishServer(t, true)
-	cr := callTool(t, s, "artifact_publish", map[string]any{
+	cr := callArtifactTool(t, s, "artifact_publish", map[string]any{
 		"path": writeTempFile(t, "report.html", publishPage), "account": "default",
 		"update": "https://claude.ai/artifact/SLUG1", "id": "abc123",
 	})
@@ -860,7 +860,7 @@ func TestConfine_RelativePaths(t *testing.T) {
 			if c := tc.cwd(f); c != "" {
 				args["cwd"] = c
 			}
-			cr := callTool(t, s, "artifact_publish", args)
+			cr := callArtifactTool(t, s, "artifact_publish", args)
 			testutil.Equal(t, cr.IsError, !tc.allowed)
 			testutil.Equal(t, n.Load(), map[bool]int32{true: 1, false: 0}[tc.allowed])
 			reg := callArtifactRegister(t, s, args)

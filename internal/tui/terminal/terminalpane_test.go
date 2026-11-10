@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -2648,6 +2649,35 @@ func TestTerminalPane_Draw_NoSession_NoContent(t *testing.T) {
 	testutil.Contains(t, readScreen(sim), "No active session")
 }
 
+// The placeholder note sits two rows under the message; at small heights it
+// must be skipped rather than drawn below the pane's rect.
+func TestTerminalPane_Draw_PlaceholderNoteStaysInsidePane(t *testing.T) {
+	const note = "waiting-note-xyz"
+	for _, tc := range []struct {
+		height int
+		want   bool
+	}{{1, false}, {2, false}, {3, false}, {4, false}, {5, false}, {6, false}, {7, true}, {10, true}} {
+		t.Run("height="+strconv.Itoa(tc.height), func(t *testing.T) {
+			sim := newSim(t, 80, 20)
+			tp := NewTerminalPane()
+			tp.SetRect(0, 2, 80, tc.height)
+			tp.SetPlaceholderNote(note)
+			tp.Draw(sim)
+			screen := readScreen(sim)
+			testutil.Equal(t, strings.Contains(screen, note), tc.want)
+			if !tc.want {
+				return
+			}
+			// Never outside the rect (inner rows exclude the border).
+			for row, line := range strings.Split(screen, "\n") {
+				if strings.Contains(line, note) && (row < 3 || row >= 1+tc.height) {
+					t.Fatalf("note drawn at row %d outside pane inner rows [3,%d)", row, 1+tc.height)
+				}
+			}
+		})
+	}
+}
+
 func TestTerminalPane_Draw_NoSession_WithTaskID(t *testing.T) {
 	sim := newSim(t, 80, 20)
 	tp := NewTerminalPane()
@@ -4898,4 +4928,97 @@ func TestTerminalPane_PasteHandler_ReportsUserInput(t *testing.T) {
 
 	tp.OnUserInput = nil // an unwired pane must not panic
 	tp.PasteHandler()("again", func(tview.Primitive) {})
+}
+
+// A replayed (dead-session) pane never draws the placeholder, so the daemon's
+// not-running reason shows as a one-line banner on the pane's first inner row;
+// absent with no reason, absent over a live session.
+func TestTerminalPane_Draw_ReplayReasonBanner(t *testing.T) {
+	const note = "waiting for the Argus MCP server"
+	newReplay := func(t *testing.T) *TerminalPane {
+		setupTaskLog(t, "banner-task", strings.Repeat("replayed line\r\n", 40))
+		tp := NewTerminalPane()
+		tp.SetRect(0, 0, 60, 12)
+		tp.SetTaskID("banner-task")
+		return tp
+	}
+	t.Run("replayed pane with reason shows banner on first inner row", func(t *testing.T) {
+		sim := newSim(t, 60, 12)
+		tp := newReplay(t)
+		tp.SetPlaceholderNote(note)
+		tp.Draw(sim)
+		iy := 1 // Draw paints its own border; content starts one row below it
+		lines := strings.Split(readScreen(sim), "\n")
+		testutil.Contains(t, lines[iy], note)
+		for i, l := range lines {
+			if i != iy && strings.Contains(l, note) {
+				t.Fatalf("note drawn on row %d, want only the banner row %d", i, iy)
+			}
+		}
+	})
+	t.Run("no reason draws no banner", func(t *testing.T) {
+		sim := newSim(t, 60, 12)
+		tp := newReplay(t)
+		tp.Draw(sim)
+		testutil.False(t, strings.Contains(readScreen(sim), note))
+	})
+	t.Run("cleared reason removes banner", func(t *testing.T) {
+		sim := newSim(t, 60, 12)
+		tp := newReplay(t)
+		tp.SetPlaceholderNote(note)
+		tp.Draw(sim)
+		tp.SetPlaceholderNote("")
+		tp.Draw(sim)
+		testutil.False(t, strings.Contains(readScreen(sim), note))
+	})
+	t.Run("live session draws no banner", func(t *testing.T) {
+		sim := newSim(t, 60, 12)
+		tp := NewTerminalPane()
+		tp.SetRect(0, 0, 60, 12)
+		output := []byte("live output\r\n")
+		tp.SetSession(&mockAdapter{alive: true, totalWritten: uint64(len(output)), output: output})
+		tp.SetPlaceholderNote(note)
+		tp.Draw(sim)
+		testutil.False(t, strings.Contains(readScreen(sim), note))
+	})
+	t.Run("banner row is blanked of replay cells", func(t *testing.T) {
+		const shortNote = "hi"
+		setupTaskLog(t, "banner-blank", strings.Repeat(strings.Repeat("Z", 55)+"\r\n", 40))
+		sim := newSim(t, 60, 12)
+		tp := NewTerminalPane()
+		tp.SetRect(0, 0, 60, 12)
+		tp.SetTaskID("banner-blank")
+		tp.SetPlaceholderNote(shortNote)
+		var lines []string
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			tp.Draw(sim)
+			lines = strings.Split(readScreen(sim), "\n")
+			// The replay builds asynchronously: wait until it has painted the
+			// row below the banner, so a blanked banner row is meaningful.
+			if strings.Contains(lines[2], "Z") {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("replay never painted inner row 2:\n%s", strings.Join(lines, "\n"))
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		testutil.Contains(t, lines[1], shortNote)
+		if strings.Contains(lines[1], "Z") {
+			t.Fatalf("replay cells leaked into the banner row: %q", lines[1])
+		}
+	})
+	t.Run("narrow pane truncates to width", func(t *testing.T) {
+		sim := newSim(t, 60, 12)
+		tp := newReplay(t)
+		tp.SetRect(0, 0, 24, 12)
+		tp.SetPlaceholderNote(note)
+		tp.Draw(sim)
+		for i, l := range strings.Split(readScreen(sim), "\n") {
+			if r := []rune(l); len(r) > 24 && strings.TrimSpace(string(r[24:])) != "" {
+				t.Fatalf("row %d leaked past pane width: %q", i, l)
+			}
+		}
+	})
 }

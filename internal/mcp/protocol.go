@@ -8,6 +8,11 @@ type Request struct {
 	ID      interface{}     `json:"id"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
+
+	// caller is the task ID the connection was bound to at spawn (the
+	// `?caller=` query on the task's own MCP URL), never read from the body.
+	// Empty for unbound connections. See toolTaskRecycle.
+	caller string
 }
 
 // Response is a JSON-RPC 2.0 response.

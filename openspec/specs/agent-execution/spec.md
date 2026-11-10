@@ -4,6 +4,22 @@
 
 Agent Execution governs how Argus turns a task into a running LLM coding agent: resolving which backend command to launch, building the shell command (with prompt, session pinning, and resume flags), spawning the process attached to a pseudo-terminal, and managing that process's lifecycle. It owns the single-reader model that tees PTY output to a replayable ring buffer and to any number of live consumers (TUI, daemon stream, SSE), plus attach/detach, idle detection, resize, and post-exit session-ID capture. The goal is that one task's agent runs in isolation, its output is never lost or duplicated across reconnecting viewers, and a viewer joining late sees a coherent stream.
 ## Requirements
+
+### Requirement: Pi receives native Argus MCP registration
+Argus SHALL register its current streamable HTTP MCP endpoint as the `argus` server in Pi's user-level native MCP configuration before launching Pi. Registration SHALL preserve unrelated servers and configuration fields, including explicit operator disablement. Invalid existing configuration SHALL NOT be overwritten and failures SHALL be logged.
+
+#### Scenario: Fresh Pi configuration
+- **WHEN** Argus launches Pi without an existing MCP configuration
+- **THEN** Pi's user-level MCP configuration contains an enabled Argus server pointing to the configured Argus MCP endpoint
+
+#### Scenario: Existing configuration
+- **WHEN** Argus launches Pi with existing MCP settings and a changed Argus MCP port
+- **THEN** the Argus registration uses the current endpoint and unrelated settings remain unchanged
+
+#### Scenario: Malformed configuration
+- **WHEN** Pi's existing MCP configuration cannot be parsed
+- **THEN** Argus preserves the file and logs the injection failure
+
 ### Requirement: Backend resolution precedence
 
 The system SHALL resolve a task's backend using the following precedence, evaluated in order, stopping at the first non-empty result: (1) the task's own explicit backend, (2) the owning project's configured backend, (3) the tiered backend-routing resolver's result when a tier list is configured, (4) the single global default backend. Steps 1 and 2 SHALL NOT consult the tiered resolver at all — an explicit task or project backend is never overridden by usage-based routing.

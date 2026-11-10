@@ -75,7 +75,7 @@ The daemon runs outside the agent sandbox, so it SHALL NOT read a file on an age
 
 Every refusal SHALL return the same generic error ("path is not an allowed artifact source"), whatever the reason (missing, unreadable, not regular, symlink, hard link, outside the roots, deny-read), so the tools cannot reveal whether a file exists. The specific reason SHALL be logged daemon-side under `[artifacts]`, without file contents. Off macOS the location comes from resolving the name, which does not canonicalize case.
 
-The calling task is self-reported (`id` or `cwd`): the MCP endpoint is shared and binds no connection to a task. Naming another task SHALL therefore confine the read to that task's roots, never widen it further. The REST endpoint and CLI carry the page's content in the request body, never a server-side path.
+The calling task is self-reported (`id` or `cwd`): the MCP endpoint takes no per-task credential, so no connection is authenticated as a task. Naming another task SHALL therefore confine the read to that task's roots, never widen it further. The REST endpoint and CLI carry the page's content in the request body, never a server-side path.
 
 #### Scenario: No calling task
 

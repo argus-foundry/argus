@@ -250,3 +250,34 @@ The keymap SHALL define a rebindable `CtxAgent` action `agent.rerender`, default
 - **WHEN** config.toml binds `agent.rerender` to a plain letter
 - **THEN** the override is rejected with a warning and the default stays
 
+### Requirement: Resident toggle and tab actions are global keymap actions
+
+The keymap SHALL define `global.resident` (default `ctrl+\`) and `global.tab_resident` (default `0`) in `CtxGlobal` through `defaultSpecs`, `actionLabels` and `contextOrder`, so the `?` help overlay and the command palette list them automatically. `global.resident` SHALL be an unconditional global dispatch like `global.palette` and `global.switcher`. `keymap.Parse` SHALL accept the `ctrl+\` keyspec and map it to `tcell.KeyCtrlBackslash` (control byte 0x1c), pinned by a test in the same way as `ctrlKeys`. The README SHALL document the terminal-mapping recipe that sends 0x1c for Cmd+` in iTerm2 and Ghostty and note that macOS must not reserve Cmd+` for window cycling.
+
+`keymap.Build` SHALL reject any unmodified binding for `global.resident` (a bare printable rune such as `~`, or an unmodified named key such as `backspace`, `delete`, `up`, `enter`) with a warning that says it needs a modifier and keep the default, because the toggle is dispatched ahead of tab, modal, text-input and PTY handling and an unmodified key would steal typing. Only modified keys are accepted (`ctrl+<letter>`, `ctrl+\`, and modifier+arrow specs such as `shift+up`); other global actions such as `global.tab_resident` keep their rune bindings.
+
+#### Scenario: Bare rune rejected for the resident toggle
+
+- **WHEN** `[keybindings.global] resident = "~"` is configured
+- **THEN** `Build` returns a warning naming `global.resident` and the default `ctrl+\` stays bound
+
+#### Scenario: ctrl+backslash parses
+
+- **WHEN** `keymap.Parse("ctrl+\\")` is called
+- **THEN** it returns a binding that matches `tcell.KeyCtrlBackslash` and round-trips through `String()`
+
+#### Scenario: Help lists the actions
+
+- **WHEN** the `?` overlay is generated
+- **THEN** it lists the resident toggle and resident tab rows from the keymap with no static additions
+
+#### Scenario: Unconditional dispatch
+
+- **WHEN** the hotkey is pressed in the Tasks list, an agent view, the Hera tab or Settings with no modal open
+- **THEN** it reaches the global handler and is not forwarded to any PTY
+
+#### Scenario: Conflict-free default
+
+- **WHEN** the default keymap is validated
+- **THEN** `ctrl+\` and `0` conflict with no other global binding
+

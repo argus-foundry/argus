@@ -151,6 +151,7 @@ func (c *sessionCore) StartSession(req *StartReq, resp *StartResp) error {
 		Worktree:        req.Worktree,
 		Branch:          req.Branch,
 		Account:         req.Account,
+		Kind:            req.Kind,
 		SandboxOverride: req.SandboxOverride,
 	}
 
@@ -407,6 +408,7 @@ func (c *sessionCore) kickRerender(req *KickReq, resp *StatusResp, widthRepair b
 		Worktree:        req.Worktree,
 		Branch:          req.Branch,
 		Account:         req.Account,
+		Kind:            req.Kind,
 		SandboxOverride: req.SandboxOverride,
 	}
 	cfg := c.cfgFn()
@@ -451,6 +453,7 @@ func (c *sessionCore) Recycle(req *RecycleReq, resp *StatusResp) error {
 		Worktree:        req.Worktree,
 		Branch:          req.Branch,
 		Account:         req.Account,
+		Kind:            req.Kind,
 		SandboxOverride: req.SandboxOverride,
 	}
 	cfg := c.cfgFn()

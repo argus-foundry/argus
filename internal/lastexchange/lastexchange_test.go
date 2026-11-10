@@ -114,3 +114,59 @@ func TestFromFile(t *testing.T) {
 	_, err = FromFile(filepath.Join(t.TempDir(), "missing.jsonl"))
 	testutil.Equal(t, err != nil, true)
 }
+
+// Argus-injected turns (typed or bridge-delivered, e.g. the resident's budget
+// nudge or a task-message doorbell) are never the user's last message: the
+// earlier genuine exchange survives, and the session's reply to the injected
+// turn is not attributed to the human.
+func TestExtract_SkipsArgusInjectedTurns(t *testing.T) {
+	nudge := `{"type":"user","message":{"role":"user","content":"[argus] Context budget reached (300000/300000 tokens). Write undone items to resident/open-loops.md, then call task_recycle."}}`
+	doorbellBlock := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"\n[argus] new message from task t1 (kind=note) — call task_inbox to read.\n"}]}}`
+	nudgeReply := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Saving open loops and recycling."}]}}`
+	for name, injected := range map[string]string{"budget nudge": nudge, "doorbell": doorbellBlock} {
+		t.Run(name, func(t *testing.T) {
+			ex := extract(t, humanStr, asstText2, injected, nudgeReply)
+			testutil.Equal(t, ex.Human, "is the slowness pure CPU load?")
+			testutil.Equal(t, ex.Reply, "It is CPU load.")
+		})
+	}
+	t.Run("a later genuine message resets", func(t *testing.T) {
+		ex := extract(t, humanStr, asstText2, nudge, nudgeReply, humanBlock, asstText2)
+		testutil.Equal(t, ex.Human, "is it CPU?")
+		testutil.Equal(t, ex.Reply, "It is CPU load.")
+	})
+	// Real bridge rows: Claude Code wraps the submitted text in a fixed lead
+	// line and trailer (verified against live transcripts).
+	const wrapLead = `The argus-bridge plugin sent a message:\n`
+	const wrapTail = `\n\nThis is how Claude Code surfaces a prompt a plugin submits between turns — it starts this turn in the user's place. Address the message above.`
+	for name, row := range map[string]string{
+		"bridge-delivered nudge":    `{"type":"user","message":{"role":"user","content":"` + wrapLead + `[argus] Context budget reached.\n[argus-delivery:resident:1]` + wrapTail + `"}}`,
+		"bridge-delivered doorbell": `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"` + wrapLead + `[argus] new message from task t1 (kind=note) — call task_inbox to read.\n[argus-delivery:42]` + wrapTail + `"}]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ex := extract(t, humanStr, asstText2, row, nudgeReply)
+			testutil.Equal(t, ex.Human, "is the slowness pure CPU load?")
+			testutil.Equal(t, ex.Reply, "It is CPU load.")
+		})
+	}
+	t.Run("bridge-delivered unprefixed notice does not freeze (follow-up)", func(t *testing.T) {
+		hera := `{"type":"user","message":{"role":"user","content":"` + wrapLead + `[hera from coord] msg #1 — read: hera_inbox\n[argus-delivery:hera:1]` + wrapTail + `"}}`
+		ex := extract(t, humanStr, asstText2, hera, nudgeReply)
+		testutil.Equal(t, ex.Human, "is the slowness pure CPU load?")
+		testutil.Equal(t, ex.Reply, "It is CPU load.\n\nSaving open loops and recycling.")
+	})
+	t.Run("genuine message mentioning [argus] mid-text", func(t *testing.T) {
+		mention := `{"type":"user","message":{"role":"user","content":"why did [argus] nudge me?"}}`
+		ex := extract(t, humanStr, asstText2, mention, nudgeReply)
+		testutil.Equal(t, ex.Human, "why did [argus] nudge me?")
+		testutil.Equal(t, ex.Reply, "Saving open loops and recycling.")
+	})
+	t.Run("reminder before the injected text", func(t *testing.T) {
+		reminded := `{"type":"user","message":{"role":"user","content":"<system-reminder>x</system-reminder>\n[argus] Context budget reached."}}`
+		ex := extract(t, humanStr, asstText2, reminded, nudgeReply)
+		testutil.Equal(t, ex.Reply, "It is CPU load.")
+	})
+	t.Run("only injected turns", func(t *testing.T) {
+		testutil.Equal(t, extract(t, nudge, nudgeReply), Exchange{})
+	})
+}

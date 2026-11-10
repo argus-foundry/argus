@@ -44,3 +44,41 @@ The `task_recycle` seed prompt SHALL be composed after the idle wait, at restart
 #### Scenario: Final reply is captured
 - **WHEN** the session writes its final reply to the user after calling task_recycle and then goes idle
 - **THEN** the seed built at restart includes that reply in the last-exchange section
+
+### Requirement: Resident recycle seed re-reads the vault
+
+When the recycled task is the resident, the seed prompt SHALL order: the caller-supplied handoff note first, then the last-exchange section and relay directive required by "Task-recycle seed carries the last exchange and is built at restart time", then an instruction to read `resident/open-loops.md`, then `resident/profile.md`, then continue, then the resident's persistent orientation as background. The seed SHALL need no further tool calls beyond those reads. Non-resident tasks SHALL keep the handoff, last-exchange, relay-directive, then original-prompt seed.
+
+#### Scenario: Handoff, then open loops
+
+- **WHEN** the resident is recycled with a handoff note
+- **THEN** the composed seed places the handoff note before the instruction to read `resident/open-loops.md`, which precedes the orientation
+
+#### Scenario: Resident seed relays the last exchange
+
+- **WHEN** the resident is recycled after replying to the user
+- **THEN** the last-exchange section and relay directive appear after the handoff note and before the open-loops instruction
+
+#### Scenario: Plain tasks unchanged
+
+- **WHEN** a non-resident task is recycled
+- **THEN** its seed is the handoff note, the last-exchange section and relay directive, followed by the original prompt
+
+### Requirement: Only the resident recycles the resident
+
+The `task_recycle` MCP tool SHALL bind a connection that carries a caller identity (the resident's spawn URL `?caller=`) to recycling only that caller's own task, and SHALL refuse to recycle the resident unless the caller is the resident itself, failing closed when the caller is absent. Any other session's `handoff_note` would otherwise become the fresh resident's own authoritative handoff. Unbound callers SHALL keep recycling ordinary tasks unchanged.
+
+#### Scenario: Unbound caller targets the resident
+
+- **WHEN** a connection with no caller identity calls `task_recycle` for the resident, by id or by its working directory
+- **THEN** the call is refused and no recycle is scheduled
+
+#### Scenario: Another task targets the resident
+
+- **WHEN** a connection bound to a non-resident task calls `task_recycle` for the resident
+- **THEN** the call is refused and no recycle is scheduled
+
+#### Scenario: Resident recycles itself
+
+- **WHEN** the resident's own connection calls `task_recycle` for itself
+- **THEN** the recycle is scheduled

@@ -18,6 +18,7 @@ func publishLayout(t *testing.T, d *db.DB, at time.Time) {
 		Active:      db.PTYSize{Rows: 40, Cols: 140},
 		Coordinator: db.PTYSize{Rows: 45, Cols: 150},
 		Worker:      db.PTYSize{Rows: 35, Cols: 100},
+		Resident:    db.PTYSize{Rows: 50, Cols: 238},
 		ReportedAt:  at,
 	}))
 }
@@ -39,6 +40,7 @@ func TestResolveSpawnSize(t *testing.T) {
 	}{
 		{"fresh coordinator report beats stale pty", true, 0, db.HeraKindCoordinator, ptySizer{80, 24}, 45, 150, "report"},
 		{"worker role uses worker pane", true, 0, db.HeraKindWorker, ptySizer{80, 24}, 35, 100, "report"},
+		{"resident uses its own pane, not active", true, 0, db.InitialPTYRoleResident, ptySizer{80, 24}, 50, 238, "report"},
 		{"plain task uses active pane", true, 0, "", ptySizer{80, 24}, 40, 140, "report"},
 		{"expired report falls back to live pty", true, db.InitialPTYReportTTL + time.Minute, db.HeraKindCoordinator, ptySizer{120, 40}, 40, 120, "pty"},
 		{"no report uses live pty", false, 0, db.HeraKindCoordinator, ptySizer{120, 40}, 40, 120, "pty"},
@@ -60,4 +62,21 @@ func TestResolveSpawnSize(t *testing.T) {
 			testutil.Equal(t, source, tc.wantSource)
 		})
 	}
+}
+
+// An older TUI publishes no resident size: the resident must fall back to the
+// live PTY then 24x80, never to Active (whatever view the user happens to be on).
+func TestResolveSpawnSize_ResidentWithoutReportedSize(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	now := time.Now()
+	testutil.NoError(t, d.PublishInitialPTYLayout(db.InitialPTYLayout{
+		Active: db.PTYSize{Rows: 40, Cols: 140}, ReportedAt: now,
+	}))
+	rows, cols, source := resolveSpawnSize(d, db.InitialPTYRoleResident, ptySizer{120, 40}, now)
+	testutil.Equal(t, [3]any{rows, cols, source}, [3]any{uint16(40), uint16(120), "pty"})
+	rows, cols, source = resolveSpawnSize(d, db.InitialPTYRoleResident, nil, now)
+	testutil.Equal(t, [3]any{rows, cols, source}, [3]any{uint16(24), uint16(80), "default"})
 }

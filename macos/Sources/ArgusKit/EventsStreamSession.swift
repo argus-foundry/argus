@@ -250,6 +250,9 @@ public struct EventsStreamSession: Sendable, Equatable {
     /// lacks the full task shape). Everything else applies incrementally.
     static func effect(for event: DaemonEvent) -> [Action] {
         switch event {
+        case .unknown(let type) where type.hasPrefix("resident."):
+            // Resident-agent events carry no task state; ignore, don't re-snapshot.
+            return []
         case .resync, .unknown, .taskCreated, .taskForked:
             return [.resnapshot]
         case .taskContextChanged:

@@ -3120,8 +3120,8 @@ func TestSmoke_JumpSwitcherFilterAndEnter(t *testing.T) {
 }
 
 // TestSmoke_ReleaseIdlePaneMemory exercises the tick hook on the real event
-// loop: before the loop exists it is a no-op; with it, every pane (agent view
-// plus the two Hera panes) is visited exactly once, on the tview goroutine.
+// loop: before the loop exists it is a no-op; with it, every pane (agent view,
+// the two Hera panes and the resident pane) is visited exactly once, on the tview goroutine.
 func TestSmoke_ReleaseIdlePaneMemory(t *testing.T) {
 	var mu sync.Mutex
 	seen := map[*terminal.TerminalPane]int{}
@@ -3151,8 +3151,8 @@ func TestSmoke_ReleaseIdlePaneMemory(t *testing.T) {
 	syncUI(t, app.tapp)
 	mu.Lock()
 	defer mu.Unlock()
-	testutil.Equal(t, len(seen), 3)
-	for _, p := range []*terminal.TerminalPane{app.agentPane, app.heraPage.CoordPane(), app.heraPage.AgentPane()} {
+	testutil.Equal(t, len(seen), 4)
+	for _, p := range []*terminal.TerminalPane{app.agentPane, app.heraPage.CoordPane(), app.heraPage.AgentPane(), app.residentPane} {
 		testutil.Equal(t, seen[p], 1)
 	}
 }

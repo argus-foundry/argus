@@ -487,6 +487,11 @@ type TerminalPane struct {
 	// its middle pane so the same widget reads correctly in both surfaces.
 	borderTitle string
 
+	// placeholderNote is an optional extra line drawn under the "no session"
+	// placeholder (the resident tab's "why isn't it running" reason). UI
+	// goroutine only, like borderTitle.
+	placeholderNote string
+
 	// borderHint is drawn immediately after borderTitle in a distinct
 	// highlight style (theme.StyleClipboardHint), rather than being baked
 	// into borderTitle itself — so it renders visibly distinct from the rest
@@ -836,6 +841,12 @@ func (tp *TerminalPane) SetFocused(f bool) {
 // by the native Hera view to label its coordinator pane distinctly.
 func (tp *TerminalPane) SetBorderTitle(t string) {
 	tp.borderTitle = t
+}
+
+// SetPlaceholderNote sets (or clears, via "") a reason line drawn under the
+// "no session" placeholder. Never shown once content or a session exists.
+func (tp *TerminalPane) SetPlaceholderNote(n string) {
+	tp.placeholderNote = n
 }
 
 // SetBorderHint sets (or clears, via "") a highlight-styled affordance drawn
@@ -1977,6 +1988,22 @@ func drawClosedOutBanner(screen tcell.Screen, x, y, width, height int) {
 	}
 }
 
+// drawReasonBanner paints a one-line, closed-out-banner-styled reason over the
+// first row of a replayed (not-running) pane: the row is blanked first so the
+// text never mixes with replay cells. Truncated to the pane width.
+func drawReasonBanner(screen tcell.Screen, x, y, width int, note string) {
+	if width <= 0 {
+		return
+	}
+	line := " " + note
+	if utf8.RuneCountInString(line) > width {
+		r := []rune(line)
+		line = string(r[:width])
+	}
+	widget.FillArea(screen, x, y, width, 1, ' ', theme.StyleClipboardHint)
+	widget.DrawText(screen, x, y, width, line, theme.StyleClipboardHint)
+}
+
 // --- Draw ---
 
 func (tp *TerminalPane) Draw(screen tcell.Screen) {
@@ -2109,6 +2136,14 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 		return
 	}
 
+	if note := tp.placeholderNote; note != "" && !alive && (sess != nil || tp.HasContent()) {
+		// The pane is replaying a dead session's log instead of drawing the
+		// placeholder, so the placeholder's reason line would never show. Overlay
+		// the same reason as a one-line banner on the pane's first row once the
+		// replay has painted (deferred, so every replay return path is covered).
+		defer drawReasonBanner(screen, x, y, width, note)
+	}
+
 	if sess == nil && !tp.HasContent() {
 		if pending {
 			// Show launch banner while worktree is being created.
@@ -2136,6 +2171,13 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 		// never leak a prior frame's cells regardless of which path got here).
 		widget.FillArea(screen, x, y, width, height, ' ', tcell.StyleDefault)
 		widget.DrawText(screen, midX, midY, width, msg, theme.StyleDimmed)
+		if note := tp.placeholderNote; note != "" && midY+2 < y+height {
+			nx := x + (width-utf8.RuneCountInString(note))/2
+			if nx < x {
+				nx = x
+			}
+			widget.DrawText(screen, nx, midY+2, width-(nx-x), note, theme.StyleDimmed)
+		}
 		return
 	}
 

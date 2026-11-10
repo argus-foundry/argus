@@ -24,7 +24,7 @@ func TestDefaultsParseAndUnique(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s/%s default %q: %v", ctx, act, spec, err)
 			}
-			if msg, ok := bindingAllowed(ctx, b); !ok {
+			if msg, ok := bindingAllowed(ctx, act, b); !ok {
 				t.Fatalf("%s/%s default %q not allowed: %s", ctx, act, spec, msg)
 			}
 			if other, dup := seen[b]; dup {
@@ -357,6 +357,50 @@ func TestGlobalSwitcher_ReplacesAgentSwitcher(t *testing.T) {
 	})
 }
 
+// TestResidentActions covers keybindings delta: global.resident (ctrl+\) and
+// global.tab_resident (0) are CtxGlobal defaults, listed in help order, with
+// labels, and conflict-free.
+func TestResidentActions(t *testing.T) {
+	testutil.Equal(t, string(ActGlobalResident), "global.resident")
+	testutil.Equal(t, string(ActGlobalTabResident), "global.tab_resident")
+
+	km, warns := Build(config.Keybindings{})
+	testutil.Equal(t, len(warns), 0)
+
+	got, ok := km.Resolve(CtxGlobal, ev(tcell.KeyCtrlBackslash, 0, 0))
+	testutil.True(t, ok)
+	testutil.Equal(t, got, ActGlobalResident)
+	got, ok = km.Resolve(CtxGlobal, ev(tcell.KeyRune, '0', 0))
+	testutil.True(t, ok)
+	testutil.Equal(t, got, ActGlobalTabResident)
+
+	rb, ok := km.BindingFor(CtxGlobal, ActGlobalResident)
+	testutil.True(t, ok)
+	testutil.Equal(t, rb.String(), `ctrl+\`)
+	tb, ok := km.BindingFor(CtxGlobal, ActGlobalTabResident)
+	testutil.True(t, ok)
+	testutil.Equal(t, tb.String(), "0")
+	testutil.NotEqual(t, km.ActionLabel(ActGlobalResident), string(ActGlobalResident))
+	testutil.NotEqual(t, km.ActionLabel(ActGlobalTabResident), string(ActGlobalTabResident))
+
+	var inOrder int
+	for _, a := range ContextOrder(CtxGlobal) {
+		if a == ActGlobalResident || a == ActGlobalTabResident {
+			inOrder++
+		}
+	}
+	testutil.Equal(t, inOrder, 2)
+
+	// No other global default shares either binding.
+	for act, spec := range defaultSpecs[CtxGlobal] {
+		if act == ActGlobalResident || act == ActGlobalTabResident {
+			continue
+		}
+		testutil.NotEqual(t, spec, `ctrl+\`)
+		testutil.NotEqual(t, spec, "0")
+	}
+}
+
 // resize-without-restart: the on-demand re-render chord is a plain ctrl+letter
 // so every terminal delivers it with no setup.
 func TestAgentRerender_DefaultCtrlN(t *testing.T) {
@@ -381,7 +425,7 @@ func TestAgentRerender_NoDefaultCollision(t *testing.T) {
 // leave every one of them unbound in the agent context so they reach the PTY.
 func TestAgentCtx_ComposerChordsNotBound(t *testing.T) {
 	km := DefaultKeymap()
-	for _, k := range []tcell.Key{tcell.KeyCtrlA, tcell.KeyCtrlE, tcell.KeyCtrlU, tcell.KeyCtrlW, tcell.KeyCtrlK, tcell.KeyCtrlO, tcell.KeyCtrlB} {
+	for _, k := range []tcell.Key{tcell.KeyCtrlA, tcell.KeyCtrlE, tcell.KeyCtrlU, tcell.KeyCtrlW, tcell.KeyCtrlK, tcell.KeyCtrlO, tcell.KeyCtrlX, tcell.KeyCtrlB} {
 		if act, ok := km.Resolve(CtxAgent, ev(k, 0, 0)); ok {
 			t.Errorf("ctrl chord %v unexpectedly bound in CtxAgent to %s", k, act)
 		}
@@ -403,4 +447,37 @@ func TestAgentRerender_PlainKeyRejectedAndRebindHonored(t *testing.T) {
 	testutil.Equal(t, got, ActAgentRerender)
 	_, ok = km.Resolve(CtxAgent, ev(tcell.KeyCtrlN, 0, 0))
 	testutil.False(t, ok)
+}
+
+// TestResidentRejectsBareRuneBinding: a modifier-less printable rune would steal
+// typing while an agent PTY owns the keyboard, so Build rejects it with a clear
+// warning and keeps the default; modified/named keys are accepted.
+func TestResidentRejectsBareRuneBinding(t *testing.T) {
+	t.Run("bare rune rejected", func(t *testing.T) {
+		for _, spec := range []string{"~", "x", "0", "backspace", "delete", "enter", "tab", "escape", "up", "home", "pgdn", "space"} {
+			km, warns := Build(config.Keybindings{Global: map[string]string{"resident": spec}})
+			testutil.Equal(t, len(warns), 1)
+			testutil.Equal(t, warns[0].Action, ActGlobalResident)
+			testutil.True(t, strings.Contains(warns[0].Message, "needs a modifier"))
+			testutil.True(t, strings.Contains(warns[0].Message, "keeping default"))
+			rb, ok := km.BindingFor(CtxGlobal, ActGlobalResident)
+			testutil.True(t, ok)
+			testutil.Equal(t, rb.String(), `ctrl+\`)
+		}
+	})
+	t.Run("modified accepted", func(t *testing.T) {
+		km, warns := Build(config.Keybindings{Global: map[string]string{"resident": "ctrl+x"}})
+		testutil.Equal(t, len(warns), 0)
+		got, ok := km.Resolve(CtxGlobal, ev(tcell.KeyCtrlX, 0, 0))
+		testutil.True(t, ok)
+		testutil.Equal(t, got, ActGlobalResident)
+		for _, spec := range []string{`ctrl+\`, "ctrl+x", "shift+up"} {
+			_, warns := Build(config.Keybindings{Global: map[string]string{"resident": spec}})
+			testutil.Equal(t, len(warns), 0)
+		}
+	})
+	t.Run("other global actions keep rune bindings", func(t *testing.T) {
+		_, warns := Build(config.Keybindings{Global: map[string]string{"tab_resident": "9"}})
+		testutil.Equal(t, len(warns), 0)
+	})
 }
