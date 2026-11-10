@@ -28,6 +28,17 @@ func (m *mockArtifactStore) PruneFolderArtifacts(taskID, folder string, keep []s
 	return m.stale, nil
 }
 
+// GetArtifact answers from the rows UpsertArtifact recorded (newest wins),
+// mirroring db.GetArtifact's (nil, nil) for an unregistered name.
+func (m *mockArtifactStore) GetArtifact(taskID, filename string) (*model.Artifact, error) {
+	for i := len(m.saved) - 1; i >= 0; i-- {
+		if a := m.saved[i]; a.TaskID == taskID && a.Filename == filename {
+			return a, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockArtifactStore) UpsertArtifact(a *model.Artifact) (*model.Artifact, error) {
 	if m.err != nil {
 		return nil, m.err
@@ -153,7 +164,7 @@ func TestArtifactRegister_NonexistentSource(t *testing.T) {
 	s, _ := testServerWithArtifacts(t)
 	cr := callArtifactRegister(t, s, map[string]any{"path": "/no/such/file.html", "id": "abc123"})
 	testutil.True(t, cr.IsError)
-	testutil.Contains(t, cr.Content[0].Text, "Failed to register")
+	testutil.Contains(t, cr.Content[0].Text, "failed to register")
 }
 
 func TestArtifactRegister_SizeCap(t *testing.T) {
@@ -279,7 +290,10 @@ func TestArtifactRegister_Folder(t *testing.T) {
 	testutil.Contains(t, cr.Content[0].Text, "3 files")
 }
 
-func TestArtifactRegister_FolderSymlinkedRoot(t *testing.T) {
+// TestArtifactRegister_FolderSymlinkedRootRefused: the path is opened without
+// following a final symlink (add-argus-artifact-publish confinement), so a
+// symlinked folder is refused like a symlinked file; register the real dir.
+func TestArtifactRegister_FolderSymlinkedRootRefused(t *testing.T) {
 	s, store := testServerWithArtifacts(t)
 	root := makeFolder(t, map[string]string{"a.png": "x"})
 	link := filepath.Join(t.TempDir(), "alias")
@@ -287,9 +301,11 @@ func TestArtifactRegister_FolderSymlinkedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	cr := callArtifactRegister(t, s, map[string]any{"path": link, "id": "abc123"})
-	testutil.True(t, !cr.IsError)
+	testutil.True(t, cr.IsError)
+	testutil.Equal(t, len(store.saved), 0)
+	cr = callArtifactRegister(t, s, map[string]any{"path": root, "id": "abc123"})
+	testutil.False(t, cr.IsError)
 	testutil.Equal(t, len(store.saved), 1)
-	testutil.Equal(t, store.saved[0].Folder, "alias")
 }
 
 func TestArtifactRegister_FolderReregisterPrunesStale(t *testing.T) {
@@ -358,14 +374,16 @@ func TestArtifactRegister_ReservedStandaloneName(t *testing.T) {
 	testutil.Equal(t, len(store.saved), 0)
 }
 
-func TestCopyArtifact_RejectsNonRegular(t *testing.T) {
+func TestConfinedRead_RejectsNonRegular(t *testing.T) {
 	s, _ := testServerWithArtifacts(t)
 	fifo := filepath.Join(t.TempDir(), "pipe")
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 		t.Skipf("mkfifo unsupported: %v", err)
 	}
-	_, err := s.copyArtifact("abc123", fifo, "g/pipe.txt", model.ArtifactText)
-	testutil.True(t, err != nil)
+	task, _ := s.taskDB.Get("abc123")
+	_, err := s.confinedRead(task, "", fifo, 1024)
+	testutil.Error(t, err)
+	testutil.ErrorIs(t, err, errNotAllowedSource)
 }
 
 func TestArtifactRegister_FolderReportsReplaced(t *testing.T) {

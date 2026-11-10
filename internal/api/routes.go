@@ -154,6 +154,10 @@ func (s *Server) routes() *http.ServeMux {
 	// like the rest of /api/*.
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts", s.handleListArtifacts)
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts/{filename...}", s.handleGetArtifact)
+	// Publish a page to claude.ai as a configured account (the CLI's
+	// `argus artifact publish` and any REST client). Authenticated like the
+	// rest of /api/*; see internal/api/artifacts_publish.go.
+	mux.HandleFunc("POST /api/artifacts/publish", s.handlePublishArtifact)
 	mux.HandleFunc("GET /api/push/vapid-public-key", s.handleVapidPublicKey)
 	mux.HandleFunc("POST /api/push/subscribe", s.handlePushSubscribe)
 	mux.HandleFunc("DELETE /api/push/subscribe/{id}", s.handlePushUnsubscribe)

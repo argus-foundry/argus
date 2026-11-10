@@ -11,7 +11,7 @@ import (
 )
 
 func TestResidentWorkerPreflightBeforeRPC(t *testing.T) {
-	c := &Client{peerProtocol: 13, peerSpawnSurface: 42}
+	c := &Client{peerProtocol: 13, peerSpawnSurface: 43}
 	c.SetResidentWorkerIdentity(func(string) (bool, error) { return true, nil })
 	cfg := config.DefaultConfig()
 	cfg.Sandbox.Enabled = false
@@ -41,20 +41,20 @@ func TestResidentWorkerPreflightBeforeRPC(t *testing.T) {
 		cfg.Sandbox.Enabled = true
 		c.SetResidentWorkerIdentity(func(string) (bool, error) { return true, nil })
 		testutil.Contains(t, c.checkResidentWorkerSupported(task, cfg).Error(), "restart the supervisor")
-		c.peerSpawnSurface = 43
+		c.peerSpawnSurface = 44
 		testutil.NoError(t, c.checkResidentWorkerSupported(task, cfg))
 	}
 }
 
-// Surface 42 shipped Pi support without the unattended launch policy. It must
+// Surface 43 (master's artifact publishing) lacks the unattended launch policy. It must
 // remain usable for ordinary tasks but cannot safely launch resident workers.
-func TestResidentWorkerSurface42(t *testing.T) {
+func TestResidentWorkerSurface43(t *testing.T) {
 	for _, worker := range []bool{false, true} {
 		t.Run(fmt.Sprintf("resident_worker=%t", worker), func(t *testing.T) {
 			if worker && !agent.IsSandboxAvailable() {
 				t.Skip("resident workers require sandbox-exec")
 			}
-			c := &Client{peerProtocol: 13, peerSpawnSurface: 42}
+			c := &Client{peerProtocol: 13, peerSpawnSurface: 43}
 			c.SetResidentWorkerIdentity(func(string) (bool, error) { return worker, nil })
 			cfg := config.DefaultConfig()
 			cfg.Sandbox.Enabled = true

@@ -1665,6 +1665,10 @@ func (d *Daemon) Serve(sockPath string) error {
 	}
 
 	// Start MCP HTTP server and KB indexer (only when KB is enabled in settings).
+	// One claude.ai artifact publisher, shared by the MCP artifact_publish
+	// tool and POST /api/artifacts/publish (add-argus-artifact-publish).
+	artifactPublisher := newArtifactPublisher(d.cfgFn)
+
 	if cfg.KB.Enabled {
 		mcpSrv := mcp.New(d.db, cfg.KB.HTTPPort, cfg.KB.MetisVaultPath)
 		mcpSrv.SetTaskManager(
@@ -1696,6 +1700,14 @@ func (d *Daemon) Serve(sockPath string) error {
 			mcpSrv.SetHeraGraduationPreflight(d.graduation.preflight)
 		}
 		mcpSrv.SetArtifactManager(d.db)
+		mcpSrv.SetArtifactPublisher(artifactPublisher)
+		// The daemon reads agent-supplied paths unsandboxed (artifact_register,
+		// artifact_publish); every task's paths are confined to the directories
+		// its sandbox could write, minus its deny-read paths, per live config.
+		mcpSrv.SetPathPolicy(func(t *model.Task) (write, deny []string) {
+			cfg := d.cfgFn()
+			return agent.SandboxWriteRoots(t, cfg), agent.SandboxDenyReadPaths(t, cfg)
+		})
 		mcpSrv.SetProfileResolver(d.db)
 		// d.db.Config() is read live on every tools/list/tools/call (see
 		// TodoConfigStore) — a backend selected in Settings takes effect
@@ -1754,6 +1766,7 @@ func (d *Daemon) Serve(sockPath string) error {
 			apiSrv.SetScheduler(sch)
 			apiSrv.SetClipboard(d.clipboard)
 			apiSrv.SetMCPRegistry(pluginRegistry)
+			apiSrv.SetArtifactPublisher(artifactPublisher)
 			apiSrv.SetNotifier(d.notifier)
 			apiSrv.SetFocusTracker(d.focusTracker)
 			d.mu.Lock()

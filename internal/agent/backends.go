@@ -128,7 +128,7 @@ type Family struct {
 	// NativeArtifacts: the CLI has Claude Code's built-in claude.ai artifact
 	// tool, which publishes to the session's own login. Families without it
 	// always get ARGUS_ARTIFACT_ACCOUNT in a mapped project so they publish
-	// through artpush instead (add-artifact-home-account).
+	// through Argus's artifact_publish tool instead (add-artifact-home-account).
 	NativeArtifacts bool
 	// CostSource is where hera cost accrual for this family's sessions comes
 	// from (add-codex-cost-accrual). The daemon's Codex rollout sweeper reads

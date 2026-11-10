@@ -683,7 +683,22 @@ Tier routing and account moves can run a project's Claude task on an account oth
 history = "personal"
 ```
 
-At every spawn, resume, restart and account move, Argus exports `ARGUS_ARTIFACT_ACCOUNT=<home account>` to the agent when the project has a home account and either the task runs on a different account or its backend has no built-in artifact tool (every backend except Claude). Otherwise the variable is absent (never empty), and an inherited value is removed. Argus's builtin routing guidance tells an agent that sees it to publish with the external `artpush` CLI (`artpush publish <path> --account "$ARGUS_ARTIFACT_ACCOUNT"`, `--update <url>` for an existing artifact) and to report an artpush failure rather than fall back to the built-in tool. Install `artpush` and run `artpush login <account>` once per account. The home account must be `default` or an account with a `claude_config_dir`. Cursor and custom backends receive the variable but not the routing guidance (they have no routing delivery), so their agents won't know to use artpush unless a project skill tells them. The table is `config.toml`-only for now.
+At every spawn, resume, restart and account move, Argus exports `ARGUS_ARTIFACT_ACCOUNT=<home account>` to the agent when the project has a home account and either the task runs on a different account or its backend has no built-in artifact tool (every backend except Claude). Otherwise the variable is absent (never empty), and an inherited value is removed. Argus's builtin routing guidance tells an agent that sees it to publish with the `artifact_publish` MCP tool (`account` = `$ARGUS_ARTIFACT_ACCOUNT`, plus `update` = the link for an existing artifact) and never to fall back to the built-in tool on its own. The home account must be `default` or an account with a `claude_config_dir`. Cursor and custom backends receive the variable but not the routing guidance (they have no routing delivery), so their agents won't know to use `artifact_publish` unless a project skill tells them. The table is `config.toml`-only for now.
+
+**Publishing from the daemon.** Argus publishes the page itself, from the daemon, with a per-account `claude setup-token` token; the token never reaches an agent. Setup, once per account:
+
+1. Sign in to Claude Code as that account and run `claude setup-token` (the token is valid for a year).
+2. Store it in a secret store, e.g. 1Password, and point `[artifact_tokens]` at it (a literal token is rejected):
+
+   ```toml
+   [artifact_tokens]
+   personal = "op://claude/shell-env/CLAUDE_SETUP_TOKEN_PERSONAL"
+   default = "keychain://argus-artifacts/default"
+   ```
+
+3. That's it: `[artifact_tokens]` is read live. A daemon restart is needed only when you rotate a secret the daemon has already resolved (resolved secrets are cached for its lifetime).
+
+If the home account can't publish right now (its usage is exhausted, so claude.ai switches its artifact tools off), `artifact_publish` saves the page as a task artifact, probes the other `[artifact_tokens]` accounts, and returns `status: "unavailable"` with the saved copy's `artifact_path` and the accounts that can publish. The agent then asks you whether to publish to one of those, open the page in the browser, reveal it in Finder, or park it; publish it later with `argus artifact publish <file> --account <name> [--title <t>] [--update <link>]` (exit `0` prints the link, `3` = account unavailable and lists the accounts that can publish, anything else non-zero). A rejected token (HTTP 401) means it expired or was revoked: re-run `claude setup-token`, update the secret, and restart the daemon so the cached old value is dropped. Only single self-contained HTML pages (≤16 MiB) are supported. Publish buttons in the TUI, web and macOS apps are a named follow-up; `POST /api/artifacts/publish` is the parity surface.
 
 #### Clients and API
 
@@ -861,7 +876,9 @@ Configuring a backend in Settings makes these tools appear on the very next `too
 
 | Tool                | Description                                                                                                                                                                                          |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `artifact_register` | Register a file the agent produced (HTML report, PDF, markdown, image, or text) so it renders in Argus Web. Params: `path` (required — a file, or a **directory** to register a whole folder shown as a thumbnail gallery in Argus Web; ≤500 files / 2 GiB), `title`, `type`, `id` or `cwd`. Self-contained files render best; 25 MiB max per file. |
+| `artifact_register` | Register a file the agent produced (HTML report, PDF, markdown, image, or text) so it renders in Argus Web. Params: `path` (required — a file, or a **directory** to register a whole folder shown as a thumbnail gallery in Argus Web; ≤500 files / 2 GiB), `title`, `type`, `id` or `cwd`. Self-contained files render best; 25 MiB max per file. The path must be inside the calling task's worktree, temp dirs or `extra_write` paths (no symlinks or hard links). |
+| `artifact_publish` | Publish a single self-contained HTML page (`.html`/`.htm`, ≤16 MiB) to claude.ai as a configured account, from the daemon with that account's [`[artifact_tokens]`](#artifact-home-account) token. Params: `path`, `account` (required), `title`, `update` (an existing artifact's link, to publish a new version), `id` or `cwd` (required: the calling task). `path` must be a regular, single-linked file (not a symlink) inside the calling task's worktree, temp dirs or `extra_write` paths, and outside its sandbox deny-read paths. Returns JSON: `status: "published"` with `url`, or `status: "unavailable"` with the saved task `artifact` and the `available_accounts` that can publish. |
+| `artifact_open` | Open a registered artifact of the calling task on the Mac (`open`), or with `reveal: true` select it in Finder (`open -R`). Params: `filename` (required), `reveal`, `id` or `cwd`. Opening is limited to HTML, PDF, image, Markdown, text, audio and video files with a matching extension; anything else can only be revealed, and directories/bundles are refused. macOS only. |
 
 ### Agent-facing skills
 
@@ -949,6 +966,7 @@ Every authenticated token has the same permissions **except** a small master-onl
 | ------ | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `GET`  | `/api/tasks/{id}/artifacts`               | List artifacts the agent registered via `artifact_register` (name, title, type, size)                                |
 | `GET`  | `/api/tasks/{id}/artifacts/{filename...}` | Serve one artifact's raw bytes (`filename` may be a nested `folder/x.png`; `?thumb=1` returns a ≤320px JPEG thumbnail for images/video, 404 if none). Scoped to the registered manifest set (no path traversal); HTML served in a sandbox. |
+| `POST` | `/api/artifacts/publish`                  | Publish an HTML page to claude.ai as a configured account (what `argus artifact publish` calls). Multipart form: `account` (required), `title`, `update` (existing artifact link), `file` (the page, ≤16 MiB). `200` with `{"status":"published","url":…}` or `{"status":"unavailable","available_accounts":[…]}`; `400` invalid page / no `[artifact_tokens]` entry; `502` endpoint failure (incl. an expired token). |
 
 #### Maintenance
 
@@ -1218,6 +1236,7 @@ Named work / personal accounts for Claude Code and Codex. How resolution, first 
 | `default_account` | string | `""` | Account used when the task, project, and routed tier name none. Empty = `default`. |
 | `project_accounts` | table | `{}` | Top-level map of project name to default account, e.g. `[project_accounts] acme-api = "work"`. Recommended for every work repo. |
 | `project_artifact_accounts` | table | `{}` | Top-level map of project name to its [artifact home account](#artifact-home-account), e.g. `[project_artifact_accounts] history = "personal"`. Must be `default` or an account with `claude_config_dir`. Falls back to `project_accounts`; never to `default_account`. `config.toml` only. |
+| `artifact_tokens` | table | `{}` | Top-level map of account name to the secret source of its `claude setup-token` token (`op://`, `keychain://` or `env://`; a literal token is rejected), e.g. `[artifact_tokens] personal = "op://claude/shell-env/CLAUDE_SETUP_TOKEN_PERSONAL"`. Read live and resolved inside the daemon when [publishing artifacts](#artifact-home-account); only rotating a secret the daemon has already resolved needs a daemon restart. `config.toml` only. |
 
 #### `[projects.<name>]`
 

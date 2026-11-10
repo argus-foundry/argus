@@ -116,6 +116,7 @@ func (l *FileLoader) Apply(base Config) Config {
 	merged.ProjectAccounts = maps.Clone(base.ProjectAccounts)
 	merged.ProjectArtifactAccounts = maps.Clone(base.ProjectArtifactAccounts)
 	merged.Resident.WorkerAccounts = maps.Clone(base.Resident.WorkerAccounts)
+	merged.ArtifactTokens = maps.Clone(base.ArtifactTokens)
 
 	// The returned MetaData (which keys decoded) is intentionally discarded:
 	// unknown/misspelled keys are silently ignored so the file stays

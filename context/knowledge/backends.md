@@ -26,7 +26,7 @@ commands get `customFamily`. To add one, follow `.agents/skills/add-backend/SKIL
 | Unattended worker | eligible: bypass-active + disallow question/plan tools; Argus sandbox required | **ineligible on 0.167.0**: question tools survive bypass and candidate disable flags ([evidence](../spikes/2026-11-09-codex-unattended-worker.md)) | unverified | unverified | unverified | unverified | unverified | unverified |
 | Session switcher | yes | — | — | — | — | — | — | yes |
 | Bridge mod | `--plugin-dir` | — | — | — | — | — | — | — |
-| Native artifacts | built-in claude.ai artifact tool | `ARGUS_ARTIFACT_ACCOUNT` (artpush) | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` |
+| Native artifacts | built-in claude.ai artifact tool | `ARGUS_ARTIFACT_ACCOUNT` (`artifact_publish`) | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` | `ARGUS_ARTIFACT_ACCOUNT` |
 | Prelaunch | — | — | ollama warmup (20s Start RPC) | — | — | — | — | — |
 | Context source | Claude bridge | `ContextReader` rollout | — | — | — | — | — | — |
 | Cost source | Stop hook + bridge mod | daemon rollout sweeper | — (n/a) | — (n/a) | — (n/a) | — (n/a) | — (n/a) | Stop hook |
@@ -47,7 +47,7 @@ Prelaunch → `Prelaunch`/`StartTimeout`, Bridge mod → `BridgeMod`, Native art
 
 - **Codex cost comes from the daemon, not the session.** Codex runs neither the Claude Stop hook nor the bridge mod, so `internal/codexcost` (a 60s daemon sweeper) reads the task's Codex rollout files via `state_5.sqlite` `threads.cwd` and prices each call into the hera binding. Pi/opencode/agy/cursor have no cost source yet — their roles show "n/a" (named follow-up in `add-codex-cost-accrual`).
 
-- **Native artifacts is Claude-only; `custom` stays false.** Claude Code's built-in artifact tool publishes to the session's own claude.ai login. In a project with an artifact home account (`[project_artifact_accounts]`, else `[project_accounts]`), BuildCmd exports `ARGUS_ARTIFACT_ACCOUNT=<home>` when the family lacks the tool or the task runs on another account, and the `argus-artifacts` routing snippet then steers the agent to `artpush`. A custom template may not be Claude Code at all, so it always gets the variable (harmless when artpush is present).
+- **Native artifacts is Claude-only; `custom` stays false.** Claude Code's built-in artifact tool publishes to the session's own claude.ai login. In a project with an artifact home account (`[project_artifact_accounts]`, else `[project_accounts]`), BuildCmd exports `ARGUS_ARTIFACT_ACCOUNT=<home>` when the family lacks the tool or the task runs on another account, and the `argus-artifacts` routing snippet then steers the agent to the daemon's `artifact_publish` MCP tool. A custom template may not be Claude Code at all, so it always gets the variable (harmless: it only names an account).
 - **Bridge mod is Claude-only.** Mods are a Claude Code feature; BuildCmd appends `--plugin-dir <argus-bridge dir>` for `Family.BridgeMod` families when `[bridge] enabled`. Every other family keeps screen-reading as its state source. See `gotchas/bridge.md`.
 
 - **antigravity is global-config only.** `agy` reads only `$HOME/.gemini/config` (no env

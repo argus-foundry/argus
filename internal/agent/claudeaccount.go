@@ -224,7 +224,7 @@ func spawnBaseEnv(environ []string, authStrip []string, taskID string) []string 
 }
 
 // artifactAccountEnv names the artifact home account BuildCmd exports when an
-// agent must publish claude.ai artifacts through artpush.
+// agent must publish claude.ai artifacts through Argus's artifact_publish tool.
 const artifactAccountEnv = "ARGUS_ARTIFACT_ACCOUNT"
 
 // sandboxWithClaudeConfigDir appends the task's own account Claude dir to

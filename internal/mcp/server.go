@@ -214,26 +214,35 @@ const maxTaskNameRunes = 200
 
 // Server is the MCP HTTP server.
 type Server struct {
-	db                      KBQuerier
-	port                    int
-	vaultPath               string // Metis vault path for write-back to Obsidian
-	httpSrv                 *http.Server
-	createTask              TaskCreator
-	taskDB                  TaskStore
-	taskStopper             TaskStopper
-	taskRecycle             TaskRecycler    // optional; set via SetTaskRecycler
-	clipboard               ClipboardSetter // optional; set via SetClipboard
-	sandboxProp             SandboxProposer // optional; set via SetSandboxProposer
-	schedDB                 ScheduleStore   // optional; set via SetScheduleManager
-	schedRunner             ScheduleRunner  // optional; set via SetScheduleManager
-	messages                MessageStore    // optional; set via SetMessageManager
-	nudger                  MessageNudger   // optional; set via SetMessageManager (best-effort)
-	artifacts               ArtifactStore   // optional; set via SetArtifactManager
-	heraSvc                 *hera.Service   // optional; set via SetHeraService
-	heraStore               HeraStore       // optional; set via SetHeraService
-	residentClassify        func(context.Context, *model.Task) (mergesafety.Verdict, error)
-	heraSpawn               HeraSpawner // optional; set via SetHeraService (born-bound spawn)
-	heraRevive              HeraReviver // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
+	db          KBQuerier
+	port        int
+	vaultPath   string // Metis vault path for write-back to Obsidian
+	httpSrv     *http.Server
+	createTask  TaskCreator
+	taskDB      TaskStore
+	taskStopper TaskStopper
+	taskRecycle TaskRecycler      // optional; set via SetTaskRecycler
+	clipboard   ClipboardSetter   // optional; set via SetClipboard
+	sandboxProp SandboxProposer   // optional; set via SetSandboxProposer
+	schedDB     ScheduleStore     // optional; set via SetScheduleManager
+	schedRunner ScheduleRunner    // optional; set via SetScheduleManager
+	messages    MessageStore      // optional; set via SetMessageManager
+	nudger      MessageNudger     // optional; set via SetMessageManager (best-effort)
+	artifacts   ArtifactStore     // optional; set via SetArtifactManager
+	publisher   ArtifactPublisher // optional; set via SetArtifactPublisher
+	// openArtifact opens (or, with reveal, reveals) a verified artifact path;
+	// nil means defaultArtifactOpener. A seam so tests never launch Finder.
+	openArtifact func(path string, reveal bool) error
+	// pathPolicy gives a task's writable roots and deny-read paths for
+	// confinedOpen; set via SetPathPolicy (nil = config-free default).
+	pathPolicy func(task *model.Task) (write, deny []string)
+	heraSvc    *hera.Service // optional; set via SetHeraService
+	heraStore  HeraStore     // optional; set via SetHeraService
+	// residentClassify is the hera_delete_worker merge-safety seam (nil = real classifier).
+	residentClassify func(context.Context, *model.Task) (mergesafety.Verdict, error)
+	heraSpawn        HeraSpawner // optional; set via SetHeraService (born-bound spawn)
+	heraRevive       HeraReviver // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
+	// heraGraduationPreflight is set via SetHeraGraduationPreflight.
 	heraGraduationPreflight func(*model.Task) error
 	profileCfg              ConfigStore  // optional; set via SetProfileResolver
 	apiGetMu                sync.RWMutex // guards apiGet (set after the listener is serving)
@@ -1130,6 +1139,10 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 	if s.artifactsEnabled() {
 		tools = append(tools, artifactToolDefs...)
+		tools = append(tools, artifactOpenToolDefs...)
+	}
+	if s.publisher != nil && s.taskMgmtEnabled() {
+		tools = append(tools, artifactPublishToolDefs...)
 	}
 	if s.heraEnabled() {
 		tools = append(tools, heraToolDefs...)
@@ -1256,6 +1269,10 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		return s.toolTaskAsk(req.ID, params.Arguments)
 	case "artifact_register":
 		return s.toolArtifactRegister(req.ID, params.Arguments)
+	case "artifact_publish":
+		return s.toolArtifactPublish(req.ID, params.Arguments)
+	case "artifact_open":
+		return s.toolArtifactOpen(req.ID, params.Arguments)
 	case "hera_new_orchestrator":
 		return s.toolHeraNewOrchestratorAs(req.ID, params.Arguments, req.caller)
 	case "hera_delete_worker":
