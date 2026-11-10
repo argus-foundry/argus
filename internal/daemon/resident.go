@@ -398,6 +398,7 @@ func (m *residentManager) metaValues(taskID string) map[string]string {
 func (m *residentManager) State() ResidentStateResp {
 	cfg := m.cfgFn()
 	resp := ResidentStateResp{Enabled: cfg.Resident.Enabled, Name: cfg.Resident.Name}
+	resp.RunningWorkers = m.runningWorkers()
 	if !resp.Enabled {
 		return resp
 	}

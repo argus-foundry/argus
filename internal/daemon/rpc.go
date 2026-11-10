@@ -333,7 +333,7 @@ func (s *RPCService) ForceRecycleCoordinator(req *TaskIDReq, resp *StatusResp) e
 		sessionID = task.SessionID
 	}
 
-	rr := NewHeraRecycleRunner(s.daemon.db, s.runner, s.cfgFn)
+	rr := s.daemon.heraRecycleRunner()
 	if err := hera.RecycleCoord(s.daemon.db, rr, coordRoleID, sessionID, hera.RecycleHumanForced); err != nil {
 		resp.Error = logRPCErr("rpc.ForceRecycleCoordinator",
 			fmt.Errorf("recycle task %s: %w", req.TaskID, err))

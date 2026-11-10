@@ -1087,6 +1087,23 @@ func (a *App) heraDoForceRecycle(role *hera.RoleView) {
 		return
 	}
 	taskID := roleReclaimTask(role)
+	if task, err := d.Get(taskID); err == nil && task.IsResident() {
+		if a.daemonClient == nil {
+			a.statusbar.SetError("Resident recycle requires the daemon")
+			return
+		}
+		go func() {
+			err := a.daemonClient.ForceRecycleCoordinator(taskID)
+			uxlog.Log("[resident] forced recycle task=%s err=%v", taskID, err)
+			a.tapp.QueueUpdateDraw(func() {
+				if err != nil {
+					a.statusbar.SetError("Resident recycle failed: " + err.Error())
+				}
+				a.heraRefresh()
+			})
+		}()
+		return
+	}
 	sessionID := ""
 	if taskID != "" {
 		if t, err := d.Get(taskID); err == nil && t != nil {

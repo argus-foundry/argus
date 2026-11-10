@@ -46,6 +46,16 @@ type fakeDaemon struct {
 	residentViewed bool
 	residentSent   daemon.ResidentSendReq
 	residentError  string
+	forcedRecycle  string
+}
+
+func (s *FakeRPCService) ForceRecycleCoordinator(req *daemon.TaskIDReq, resp *daemon.StatusResp) error {
+	s.fd.mu.Lock()
+	defer s.fd.mu.Unlock()
+	s.fd.forcedRecycle = req.TaskID
+	resp.OK = s.fd.residentError == ""
+	resp.Error = s.fd.residentError
+	return nil
 }
 
 func (s *FakeRPCService) ResidentState(_ *daemon.Empty, resp *daemon.ResidentStateResp) error {

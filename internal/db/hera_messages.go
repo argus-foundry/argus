@@ -218,6 +218,18 @@ func (d *DB) HeraInbox(roleID int64) ([]*HeraMessage, error) {
 	return out, rows.Err()
 }
 
+// HeraWorkerMessageSummary reads the latest self-reported line and the exact
+// unread count from one worker to its coordinator, without consuming mail.
+// A recent-history page cannot count older unread messages correctly.
+func (d *DB) HeraWorkerMessageSummary(fromRoleID, toRoleID int64) (string, int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var line string
+	var unread int
+	err := d.conn.QueryRow(`SELECT COALESCE((SELECT tldr FROM hera_messages WHERE from_role_id=? AND to_role_id=? ORDER BY sent_at DESC, id DESC LIMIT 1), ''), (SELECT COUNT(*) FROM hera_messages WHERE from_role_id=? AND to_role_id=? AND read_at IS NULL)`, fromRoleID, toRoleID, fromRoleID, toRoleID).Scan(&line, &unread)
+	return line, unread, err
+}
+
 // HeraMessagesForTask returns messages addressed to any role taskID is or was
 // bound to (ended bindings included), in every read state, oldest first. When
 // more than limit match, the newest limit are kept. Read-only: never stamps

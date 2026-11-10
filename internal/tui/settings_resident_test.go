@@ -47,6 +47,16 @@ func TestSettingsResident_CategoryAndRows(t *testing.T) {
 	testutil.False(t, sv.IsEditing())
 }
 
+func TestSettingsResidentRunningWorkers(t *testing.T) {
+	sv := testSettingsView(t)
+	sv.SetResidentRunningWorkers(3)
+	sv.setCategory(catResident)
+	selectRowInCategory(t, sv, catResident, srResident, resKeyEnabled)
+	testutil.Contains(t, sv.SelectedRow().label, "OFF — 3 workers still running")
+	sv.SetResidentRunningWorkers(0)
+	testutil.Equal(t, sv.SelectedRow().label, "Enabled: OFF")
+}
+
 func TestSettingsResidentMaxWorkers(t *testing.T) {
 	sv := testSettingsView(t)
 	residentEditField(t, sv, resKeyMaxWorkers, "3")

@@ -31,10 +31,10 @@
 
 ## 5. Recycle and lifecycle
 
-- [ ] 5.1 Route `HeraRecycleRunner.Restart` for `IsResident()` to the resident restart path; share the in-flight guard; build the team section into the resident seed.
-- [ ] 5.2 Make the coord-hook's resident path independent of Hera-role presence; resident budget from `resident.context_budget`; no generic pending-recycle flag for the resident.
-- [ ] 5.3 Lifecycle: disable/prerequisite-stop leaves workers running; Settings shows the running-worker count; tests for recycle, crash, bounce and disable with live workers.
-- [ ] 5.4 Test that `task_recycle` and a forced coordinator recycle fired together produce exactly one restart.
+- [x] 5.1 Route `HeraRecycleRunner.Restart` for `IsResident()` to the resident restart path; share the in-flight guard; build the team section into the resident seed.
+- [x] 5.2 Make the coord-hook's resident path independent of Hera-role presence; resident budget from `resident.context_budget`; no generic pending-recycle flag for the resident.
+- [x] 5.3 Lifecycle: disable/prerequisite-stop leaves workers running; Settings shows the running-worker count; tests for recycle, crash, bounce and disable with live workers.
+- [x] 5.4 Test that `task_recycle` and a forced coordinator recycle fired together produce exactly one restart.
 
 ## 5b. Graduation
 

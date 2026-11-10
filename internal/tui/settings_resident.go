@@ -59,6 +59,9 @@ func (sv *SettingsView) residentRows() []settingsRow {
 	if r.Enabled {
 		state = "ON"
 	}
+	if sv.residentRunningWorkers > 0 {
+		state += fmt.Sprintf(" — %d workers still running", sv.residentRunningWorkers)
+	}
 	rows := []settingsRow{
 		{kind: srResident, key: resKeyEnabled, label: "Enabled: " + state},
 		field(resKeyName, "Name", r.Name, "(required)"),
@@ -88,6 +91,14 @@ func (sv *SettingsView) residentMaxWorkersOverridden() bool {
 // running (empty when healthy). UI goroutine only.
 func (sv *SettingsView) SetResidentReason(reason string) {
 	sv.residentReason = reason
+}
+
+func (sv *SettingsView) SetResidentRunningWorkers(count int) {
+	if sv.residentRunningWorkers != count {
+		uxlog.Log("[resident] settings running workers=%d", count)
+		sv.residentRunningWorkers = count
+		sv.rebuildRows()
+	}
 }
 
 // sanitizeResidentReason keeps a daemon-supplied reason to one printable line

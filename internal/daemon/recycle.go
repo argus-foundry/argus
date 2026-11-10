@@ -21,11 +21,12 @@ import (
 // directly since the TUI's hera mutation layer already operates on *db.DB +
 // agent.SessionRunner in local mode, same pattern as its other hera ops).
 type HeraRecycleRunner struct {
-	database *db.DB
-	runner   agent.SessionRunner
-	cfgFn    func() config.Config
-	idle     agent.ContentIdleTracker
-	now      func() time.Time
+	database         *db.DB
+	runner           agent.SessionRunner
+	cfgFn            func() config.Config
+	idle             agent.ContentIdleTracker
+	now              func() time.Time
+	residentRecycler *taskRecycleRunner
 }
 
 // NewHeraRecycleRunner builds the production hera.RecycleRunner. Exported so
@@ -64,6 +65,9 @@ func (r *HeraRecycleRunner) StopStrayJobs(taskID, sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("stop stray jobs: load task %s: %w", taskID, err)
 	}
+	if task.IsResident() {
+		return nil // the shared resident runner owns cleanup under its guard
+	}
 	return agent.StopStrayJobs(task, r.cfgFn(), sessionID)
 }
 
@@ -79,6 +83,20 @@ func (r *HeraRecycleRunner) Restart(taskID string, roleID int64) error {
 	task, err := r.database.Get(taskID)
 	if err != nil {
 		return fmt.Errorf("recycle restart: load task %s: %w", taskID, err)
+	}
+	if task.IsResident() {
+		if r.residentRecycler == nil {
+			return fmt.Errorf("resident recycle requires the daemon's shared runner")
+		}
+		note := ""
+		if entries, err := r.database.ListMeta(taskID, db.HeraMetaNamespace); err == nil {
+			for _, entry := range entries {
+				if entry.Key == db.HeraMetaKeyHandoffNote {
+					note = entry.Value
+				}
+			}
+		}
+		return r.residentRecycler.restartResident(taskID, note)
 	}
 
 	binding, err := r.database.HeraLiveBindingByRole(roleID)

@@ -684,6 +684,27 @@ func TestSmoke_ResidentPollOffUIThread(t *testing.T) {
 	readUI(t, a.tapp, func() { testutil.Equal(t, a.header.TabLabel(widget.TabResident), "Solo ?") })
 }
 
+func TestSmoke_ResidentDisabledStillPollsWorkerCount(t *testing.T) {
+	a, d := residentTestApp(t)
+	testutil.NoError(t, d.SetConfigValue("resident.enabled", "false"))
+	a.residentStateFn = func() (daemon.ResidentStateResp, error) {
+		return daemon.ResidentStateResp{RunningWorkers: 2}, nil
+	}
+	_, stop := wireApp(t, a)
+	defer stop()
+	readUI(t, a.tapp, func() {
+		a.refreshResidentTab()
+		testutil.Equal(t, a.header.TabLabel(widget.TabResident), "")
+		a.pollResidentState()
+	})
+	waitForCond(t, a.tapp, "disabled worker count", func() bool { return a.settings.residentRunningWorkers == 2 })
+	readUI(t, a.tapp, func() {
+		a.settings.setCategory(catResident)
+		selectRowInCategory(t, a.settings, catResident, srResident, resKeyEnabled)
+		testutil.Contains(t, a.settings.SelectedRow().label, "2 workers still running")
+	})
+}
+
 func TestSmoke_ResidentHeraAndTasksRailBox(t *testing.T) {
 	a, _ := residentTestApp(t)
 	sim, stop := wireApp(t, a)

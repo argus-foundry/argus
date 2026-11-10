@@ -1638,7 +1638,7 @@ func (d *Daemon) Serve(sockPath string) error {
 		// nodes; this recycles live coordinators) but gated on the same
 		// cfg.Hera.Enabled — both are hera-native background loops with no
 		// meaning when hera is off.
-		d.heraRecycleWatcher = hera.NewRecycleWatcher(d.db, NewHeraRecycleRunner(d.db, d.runner, d.cfgFn))
+		d.heraRecycleWatcher = hera.NewRecycleWatcher(d.db, d.heraRecycleRunner())
 		go d.heraRecycleWatcher.Start()
 	}
 
@@ -1668,10 +1668,7 @@ func (d *Daemon) Serve(sockPath string) error {
 		// Constructed once, not per call: taskRecycleRunner's inFlight dedup
 		// (see task_recycle.go) only works across calls if the map itself
 		// persists between them.
-		taskRecycler := newTaskRecycleRunner(d.db, d.runner, d.cfgFn)
-		d.mu.Lock()
-		d.taskRecycler = taskRecycler
-		d.mu.Unlock()
+		taskRecycler := d.taskRecycleRunner()
 		mcpSrv.SetTaskRecycler(func(in mcp.TaskRecycleInput) error {
 			return taskRecycler.Recycle(in.TaskID, in.HandoffNote)
 		})

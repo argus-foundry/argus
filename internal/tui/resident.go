@@ -282,7 +282,7 @@ func (a *App) pollResidentState() {
 		}
 		fn = c.ResidentState
 	}
-	if a.residentPollPending || a.header.TabLabel(widget.TabResident) == "" ||
+	if a.residentPollPending ||
 		time.Since(a.residentPolledAt) < residentPollInterval {
 		return
 	}
@@ -325,6 +325,7 @@ func (a *App) applyResidentState(resp daemon.ResidentStateResp) {
 	}
 	a.residentSt = next
 	a.settings.SetResidentReason(next.reason)
+	a.settings.SetResidentRunningWorkers(resp.RunningWorkers)
 	a.residentPane.SetPlaceholderNote(next.reason)
 	a.refreshResidentTab()
 	a.syncResidentBox()
