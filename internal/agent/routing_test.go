@@ -167,6 +167,18 @@ func TestCoordinatorDynamicIgnoresConcreteProjectPreferenceWhenScoringTiers(t *t
 	testutil.Equal(t, resolveCoordinatorBackend(config.DynamicBackend, "p", cfg), "claude-alt")
 }
 
+func TestCoordinatorDynamicRejectsClaudeFallbackUnsupportedByEffectiveAccount(t *testing.T) {
+	cfg := config.Config{
+		Defaults:       config.Defaults{Backend: config.DynamicBackend},
+		Projects:       map[string]config.Project{"p": {Backend: "claude"}},
+		DefaultAccount: "cx",
+		Accounts:       map[string]config.Account{"cx": {CodexHome: t.TempDir()}},
+		Backends:       map[string]config.Backend{"claude": {Command: "claude"}, "codex": {Command: "codex"}},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{{Backend: "claude", Probe: "unknown"}}},
+	}
+	testutil.Equal(t, resolveCoordinatorBackend(config.DynamicBackend, "p", cfg), "")
+}
+
 func TestCoordinatorSpawnRoutesAccount(t *testing.T) {
 	for _, backend := range []string{"", "test"} {
 		t.Run(backend, func(t *testing.T) {
@@ -396,6 +408,26 @@ func TestDynamicBackendFiltersForConfiguredDefaultAccount(t *testing.T) {
 	choice := resolveTaskChoice(config.DynamicBackend, "", cfg, "", false)
 	testutil.Equal(t, choice.Backend, "claude")
 	testutil.Equal(t, choice.Account, "work")
+}
+
+func TestDynamicBackendFallbackRespectsEffectiveProjectAccount(t *testing.T) {
+	cfg := config.Config{
+		Defaults:        config.Defaults{Backend: "codex"},
+		Projects:        map[string]config.Project{"p": {Backend: config.DynamicBackend}},
+		ProjectAccounts: map[string]string{"p": "work"},
+		Accounts:        map[string]config.Account{"work": {ClaudeConfigDir: t.TempDir()}},
+		Backends: map[string]config.Backend{
+			"codex": {Command: "codex"},
+		},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "codex", Probe: "unknown"},
+		}},
+	}
+	choice := resolveTaskChoice("", "p", cfg, "", false)
+	testutil.Equal(t, choice.Backend, "")
+	_, err := ResolveBackend(&model.Task{Project: "p"}, cfg)
+	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "no backend configured")
 }
 
 func TestUnpinnedLandingOnDefaultIsStoredBlankAndRouted(t *testing.T) {

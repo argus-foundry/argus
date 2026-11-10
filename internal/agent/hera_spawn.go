@@ -108,15 +108,25 @@ func resolveCoordinatorBackend(explicit, project string, cfg config.Config, acco
 		return choice.Backend
 	}
 	name := resolveDefaultBackendName("", project, filtered, accounts...)
-	if b, ok := cfg.Backends[name]; ok && IsClaudeBackend(b.Command) {
+	effectiveAccount := pin
+	if effectiveAccount == "" {
+		effectiveAccount = cfg.ResolveAccount("", project)
+	}
+	if b, ok := cfg.Backends[name]; ok && IsClaudeBackend(b.Command) && cfg.AccountSupports(effectiveAccount, b.Command) {
 		return name
 	}
 
-	if b, ok := cfg.Backends[claudeFallback]; ok && IsClaudeBackend(b.Command) {
+	if b, ok := cfg.Backends[claudeFallback]; ok && IsClaudeBackend(b.Command) && cfg.AccountSupports(effectiveAccount, b.Command) {
 		warnCoordinatorBackend("resolved backend %q is not Claude-capable, "+
 			"forcing %q (coord-hook context tracking, cost accrual, and recycle require Claude Code)",
 			name, claudeFallback)
 		return claudeFallback
+	}
+	for _, b := range cfg.Backends {
+		if IsClaudeBackend(b.Command) {
+			warnCoordinatorBackend("no Claude-capable backend supports account %q", effectiveAccount)
+			return ""
+		}
 	}
 	warnCoordinatorBackend("resolved backend %q is not Claude-capable and no "+
 		"Claude-capable backend is configured; leaving as-is", name)
@@ -545,13 +555,17 @@ func MaterializeHeraSubCoordinator(database *db.DB, runner SessionProvider, in H
 	if aerr != nil {
 		return nil, aerr
 	}
+	backend := resolveCoordinatorBackend(in.Backend, in.Project, database.Config(), inheritedAccount)
+	if backend == "" {
+		return nil, fmt.Errorf("no Claude-capable backend supports account %q", inheritedAccount)
+	}
 	task, _, err := CreateAndStart(database, runner, CreateInput{
 		Name:    in.Role.Name,
 		PTYRole: db.HeraKindCoordinator,
 		Prompt:  in.TaskPrompt,
 		Project: in.Project,
 		// Sub-coordinators route only among Claude-capable tiers.
-		Backend: resolveCoordinatorBackend(in.Backend, in.Project, database.Config(), inheritedAccount),
+		Backend: backend,
 		Model:   in.Model,
 		// The planned subcoord role's authored archetype propagates onto the
 		// materialized task (add-diligence-profiles); empty stays empty.
@@ -766,13 +780,17 @@ func SpawnHeraCoordinator(database *db.DB, runner SessionProvider, in HeraCoordi
 
 	var role *db.HeraRole
 	var binding *db.HeraBinding
+	backend := resolveCoordinatorBackend(in.Backend, in.Project, database.Config())
+	if backend == "" {
+		return nil, fmt.Errorf("no Claude-capable backend supports the effective account")
+	}
 	task, _, err := CreateAndStart(database, runner, CreateInput{
 		Name:    taskName,
 		PTYRole: db.HeraKindCoordinator,
 		Prompt:  in.TaskPrompt,
 		Project: in.Project,
 		// Coordinators route among Claude-capable tiers, including accounts.
-		Backend:         resolveCoordinatorBackend(in.Backend, in.Project, database.Config()),
+		Backend:         backend,
 		Model:           in.Model,
 		Archetype:       archetype,
 		BaseBranch:      in.Branch,

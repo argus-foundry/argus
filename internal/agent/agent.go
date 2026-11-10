@@ -169,7 +169,7 @@ func resolveDefaultBackendName(explicit, project string, cfg config.Config, acco
 		backend = cfg.Projects[project].Backend
 	}
 	if backend == config.DynamicBackend {
-		return resolveDynamicBackendName(cfg, account)
+		return resolveDynamicBackendName(cfg, account, project)
 	}
 	if backend != "" {
 		return backend
