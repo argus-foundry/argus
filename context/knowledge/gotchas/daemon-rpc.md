@@ -211,3 +211,5 @@
 - **The resident loop starts only after the MCP and API servers are wired, and `tick` waits for a non-zero MCP port** (`mcpReady`). Started earlier, a cold start launched the resident with no `--mcp-config` (no `kb_*`, no `task_recycle`), and the session being alive meant it was never restarted; the `recycling`/`waiting` closures also raced `Serve`'s writes of `taskRecycler`/`apiServer`.
 - **Daemon-side `[resident]` logs go through `residentLog`, which also writes `slog`**: the daemon and supervisor never call `uxlog.Init`, so a bare `uxlog.Log` there is a no-op. The coord-hook writes its resident failures to stderr for the same reason.
 - **`config.ResidentPermissionsEnforced` ships true**; while false `ResidentPrereq` refuses to start the resident, so it must only ever be flipped together with the permission enforcement it guards.
+
+- **Automatic supervisor reattach uses ReconcileHeraWorkerToInProgress, which excludes complete tasks.** An accepted worker may reply working and clear its close-out signals; only explicit revive can reopen it. The final status write compares the original status under the DB mutex so a concurrent acceptance survives.

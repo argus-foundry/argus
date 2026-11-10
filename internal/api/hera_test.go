@@ -695,3 +695,21 @@ func TestHandleHera_CoordinatorContextUsesRecycleBudget(t *testing.T) {
 	testutil.Equal(t, *c.Context.DenominatorTokens, d.Config().Hera.CoordinatorContextBudget)
 	testutil.Equal(t, *c.Context.Percent, 50)
 }
+
+func TestHandleHera_ReadyToCloseClearedProjects(t *testing.T) {
+	srv, d := testServer(t)
+	task := &model.Task{Name: "w", Project: "p", Status: model.StatusInReview}
+	testutil.NoError(t, d.Add(task))
+	orch, err := d.CreateHeraOrchestrator("o", "")
+	testutil.NoError(t, err)
+	_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
+		OrchestratorID: orch.ID, Name: "w1", Kind: db.HeraKindWorker, ArgusProject: "p",
+	}, task.ID, "/tmp/wt")
+	testutil.NoError(t, err)
+
+	testutil.NoError(t, d.SetMeta(task.ID, db.HeraMetaNamespace, db.HeraMetaKeyReadyToClose, "true"))
+	testutil.Equal(t, getHera(t, srv).Orchestrators[0].Roles[0].ReadyToClose, true)
+
+	testutil.NoError(t, d.ClearHeraReadyToClose(task.ID))
+	testutil.Equal(t, getHera(t, srv).Orchestrators[0].Roles[0].ReadyToClose, false)
+}

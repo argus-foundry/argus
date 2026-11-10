@@ -75,3 +75,11 @@ func (d *DB) DeleteProject(name string) error {
 	_, err := d.conn.Exec(`DELETE FROM projects WHERE name=?`, name)
 	return err
 }
+
+// ProjectInConfigToml reports whether config.toml defines [projects.<name>] and
+// therefore overrides the DB row. It refreshes the overlay first. Always false
+// for an in-memory/test DB.
+func (d *DB) ProjectInConfigToml(name string) bool {
+	d.Config()
+	return d.cfgLoader.ProjectDefined(name)
+}

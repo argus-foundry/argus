@@ -1278,3 +1278,51 @@ REST and MCP schedule creation and update SHALL validate a non-empty explicit mo
 #### Scenario: Git failure
 - **WHEN** the worktree is not a git repository
 - **THEN** the response is 500
+
+### Requirement: Project REST endpoints expose and preserve the diligence profile
+
+`GET /api/projects/full`, `POST /api/projects` and `PUT /api/projects/{name}` SHALL return each project's `profile` (empty string for the default binding). `POST` SHALL accept `profile`. `PUT` SHALL preserve the stored profile when `profile` is omitted, clear it when `""`, and set it when a name. An unknown nonempty profile or blank path SHALL return 400, an unknown project on `PUT` 404, a project defined in config.toml 409, and a store failure 500. After a committed change the daemon SHALL emit `config.changed` with payload `{"resource":"projects","name":<name>}` and no task id; a no-op save SHALL emit nothing.
+
+#### Scenario: Unrelated edit keeps the profile
+
+- **WHEN** a project with profile `lean` is saved with only a new path and backend
+- **THEN** the stored profile is still `lean` and the response says so
+
+#### Scenario: Explicit clear
+
+- **WHEN** `PUT` carries `"profile":""`
+- **THEN** the stored profile is empty
+
+#### Scenario: Unrelated save overlaps an explicit profile change
+
+- **WHEN** a PUT omits profile and another writer commits an explicit profile change before that PUT writes
+- **THEN** the PUT preserves the current profile atomically and emits config.changed only if its own committed row changes
+
+#### Scenario: Identical POST
+
+- **WHEN** POST saves an existing project with identical values
+- **THEN** it returns the project without emitting config.changed
+
+#### Scenario: File-only project ownership
+
+- **WHEN** PUT targets a project defined only in config.toml
+- **THEN** it returns 409 without creating a database project
+
+### Requirement: Settings expose the configured spinner style
+
+`GET /api/settings` SHALL include `display.spinner_style`, and `PUT /api/settings` SHALL accept an optional `display.spinner_style` of `progress`, `dots`, `braille` or `classic`, persisted to the same setting the TUI reads. A missing `display` SHALL leave it unchanged. An unknown value SHALL return 400 `{"error":"invalid spinner style","code":"invalid_spinner_style"}` with nothing written. A valid update SHALL return 200 with the full settings response.
+
+#### Scenario: Round trip
+
+- **WHEN** a client PUTs `display.spinner_style` `braille`
+- **THEN** the response and the next GET report `braille` and the TUI config reads `braille`
+
+### Requirement: Stream clipboard events preserve presence
+
+On `/api/tasks/{id}/stream`, the `clipboard` event SHALL be `{"text":""}` for a staged empty value, `{"text":"…"}` for text, and `{"cleared":true}` only for clear or expiry. The connect snapshot and live events SHALL use the same semantics.
+
+#### Scenario: Snapshot and live agree
+
+- **WHEN** an empty value is staged before and after the stream connects
+- **THEN** both events are `{"text":""}`
+

@@ -38,9 +38,16 @@ type entry struct {
 	expireAt time.Time
 }
 
+// Update is one change delivered to a subscriber. Present is false only for a
+// clear or expiry, so a staged empty string stays distinguishable from none.
+type Update struct {
+	Text    string
+	Present bool
+}
+
 type subscriber struct {
 	id int64
-	fn func(text string)
+	fn func(Update)
 }
 
 // Store holds per-task staged text. Safe for concurrent use.
@@ -82,7 +89,7 @@ func (s *Store) Set(taskID, text string) error {
 	subs := append([]subscriber(nil), s.subs[taskID]...)
 	s.mu.Unlock()
 	for _, sub := range subs {
-		sub.fn(text)
+		sub.fn(Update{Text: text, Present: true})
 	}
 	return nil
 }
@@ -105,7 +112,7 @@ func (s *Store) Get(taskID string) (string, bool) {
 		s.mu.Unlock()
 		// Notify subscribers that the entry was cleared via expiry.
 		for _, sub := range subs {
-			sub.fn("")
+			sub.fn(Update{})
 		}
 		return "", false
 	}
@@ -113,8 +120,8 @@ func (s *Store) Get(taskID string) (string, bool) {
 	return e.text, true
 }
 
-// Clear removes the staged text for a task. Notifies subscribers with an
-// empty string so listeners can hide their UI affordance. No-op if nothing
+// Clear removes the staged text for a task. Notifies subscribers with a
+// not-present Update so listeners can hide their UI affordance. No-op if nothing
 // was staged.
 func (s *Store) Clear(taskID string) {
 	if taskID == "" {
@@ -129,7 +136,7 @@ func (s *Store) Clear(taskID string) {
 	}
 	s.mu.Unlock()
 	for _, sub := range subs {
-		sub.fn("")
+		sub.fn(Update{})
 	}
 }
 
@@ -137,7 +144,7 @@ func (s *Store) Clear(taskID string) {
 // or cleared. Returns an unsubscribe function. Subscribers are NOT called
 // for the existing value at registration time — the caller is expected to
 // call Get to fetch initial state.
-func (s *Store) Subscribe(taskID string, fn func(text string)) func() {
+func (s *Store) Subscribe(taskID string, fn func(Update)) func() {
 	s.mu.Lock()
 	id := s.next
 	s.next++
@@ -182,7 +189,7 @@ func (s *Store) Prune() {
 	s.mu.Unlock()
 	for _, list := range subs {
 		for _, sub := range list {
-			sub.fn("")
+			sub.fn(Update{})
 		}
 	}
 }

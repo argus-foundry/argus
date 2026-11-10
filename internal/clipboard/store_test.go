@@ -118,12 +118,12 @@ func TestStoreTTLExpiry(t *testing.T) {
 func TestStoreSubscribe(t *testing.T) {
 	t.Run("notifies on set", func(t *testing.T) {
 		s := New()
-		var got []string
+		var got []Update
 		var mu sync.Mutex
-		unsub := s.Subscribe("task1", func(text string) {
+		unsub := s.Subscribe("task1", func(u Update) {
 			mu.Lock()
 			defer mu.Unlock()
-			got = append(got, text)
+			got = append(got, u)
 		})
 		defer unsub()
 
@@ -132,17 +132,17 @@ func TestStoreSubscribe(t *testing.T) {
 
 		mu.Lock()
 		defer mu.Unlock()
-		testutil.DeepEqual(t, got, []string{"first", "second"})
+		testutil.DeepEqual(t, got, []Update{{Text: "first", Present: true}, {Text: "second", Present: true}})
 	})
 
 	t.Run("notifies on clear with empty string", func(t *testing.T) {
 		s := New()
-		var got []string
+		var got []Update
 		var mu sync.Mutex
-		unsub := s.Subscribe("task1", func(text string) {
+		unsub := s.Subscribe("task1", func(u Update) {
 			mu.Lock()
 			defer mu.Unlock()
-			got = append(got, text)
+			got = append(got, u)
 		})
 		defer unsub()
 
@@ -151,13 +151,13 @@ func TestStoreSubscribe(t *testing.T) {
 
 		mu.Lock()
 		defer mu.Unlock()
-		testutil.DeepEqual(t, got, []string{"hello", ""})
+		testutil.DeepEqual(t, got, []Update{{Text: "hello", Present: true}, {}})
 	})
 
 	t.Run("clear without prior set is silent", func(t *testing.T) {
 		s := New()
 		var calls int32
-		unsub := s.Subscribe("task1", func(text string) {
+		unsub := s.Subscribe("task1", func(Update) {
 			atomic.AddInt32(&calls, 1)
 		})
 		defer unsub()
@@ -169,7 +169,7 @@ func TestStoreSubscribe(t *testing.T) {
 	t.Run("unsubscribe stops delivery", func(t *testing.T) {
 		s := New()
 		var calls int32
-		unsub := s.Subscribe("task1", func(text string) {
+		unsub := s.Subscribe("task1", func(Update) {
 			atomic.AddInt32(&calls, 1)
 		})
 
@@ -182,17 +182,17 @@ func TestStoreSubscribe(t *testing.T) {
 
 	t.Run("per-task isolation of subscribers", func(t *testing.T) {
 		s := New()
-		var got1, got2 []string
+		var got1, got2 []Update
 		var mu sync.Mutex
-		s.Subscribe("task1", func(text string) {
+		s.Subscribe("task1", func(u Update) {
 			mu.Lock()
 			defer mu.Unlock()
-			got1 = append(got1, text)
+			got1 = append(got1, u)
 		})
-		s.Subscribe("task2", func(text string) {
+		s.Subscribe("task2", func(u Update) {
 			mu.Lock()
 			defer mu.Unlock()
-			got2 = append(got2, text)
+			got2 = append(got2, u)
 		})
 
 		testutil.NoError(t, s.Set("task1", "one"))
@@ -200,20 +200,20 @@ func TestStoreSubscribe(t *testing.T) {
 
 		mu.Lock()
 		defer mu.Unlock()
-		testutil.DeepEqual(t, got1, []string{"one"})
-		testutil.DeepEqual(t, got2, []string{"two"})
+		testutil.DeepEqual(t, got1, []Update{{Text: "one", Present: true}})
+		testutil.DeepEqual(t, got2, []Update{{Text: "two", Present: true}})
 	})
 
 	t.Run("expiry via Get notifies subscribers", func(t *testing.T) {
 		s := NewWithTTL(time.Hour)
 		current := time.Now()
 		s.now = func() time.Time { return current }
-		var got []string
+		var got []Update
 		var mu sync.Mutex
-		s.Subscribe("task1", func(text string) {
+		s.Subscribe("task1", func(u Update) {
 			mu.Lock()
 			defer mu.Unlock()
-			got = append(got, text)
+			got = append(got, u)
 		})
 
 		testutil.NoError(t, s.Set("task1", "hi"))
@@ -223,19 +223,19 @@ func TestStoreSubscribe(t *testing.T) {
 
 		mu.Lock()
 		defer mu.Unlock()
-		testutil.DeepEqual(t, got, []string{"hi", ""})
+		testutil.DeepEqual(t, got, []Update{{Text: "hi", Present: true}, {}})
 	})
 
 	t.Run("expiry via Prune notifies subscribers", func(t *testing.T) {
 		s := NewWithTTL(time.Hour)
 		current := time.Now()
 		s.now = func() time.Time { return current }
-		var got []string
+		var got []Update
 		var mu sync.Mutex
-		s.Subscribe("task1", func(text string) {
+		s.Subscribe("task1", func(u Update) {
 			mu.Lock()
 			defer mu.Unlock()
-			got = append(got, text)
+			got = append(got, u)
 		})
 
 		testutil.NoError(t, s.Set("task1", "hi"))
@@ -244,7 +244,7 @@ func TestStoreSubscribe(t *testing.T) {
 
 		mu.Lock()
 		defer mu.Unlock()
-		testutil.DeepEqual(t, got, []string{"hi", ""})
+		testutil.DeepEqual(t, got, []Update{{Text: "hi", Present: true}, {}})
 	})
 }
 
@@ -268,7 +268,7 @@ func TestStoreConcurrent(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			unsub := s.Subscribe("task1", func(string) {})
+			unsub := s.Subscribe("task1", func(Update) {})
 			unsub()
 			s.Clear("task1")
 		}()

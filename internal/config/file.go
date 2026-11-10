@@ -60,6 +60,8 @@ type FileLoader struct {
 	accountSources            AccountSources
 	residentMaxWorkersDefined bool
 	residentSources           ResidentSources
+	// projectsDefined holds project names the most recent Apply found under [projects.<name>].
+	projectsDefined map[string]bool
 }
 
 // NewFileLoader returns a loader for the given path. An empty path makes Apply a
@@ -103,6 +105,7 @@ func (l *FileLoader) Apply(base Config) Config {
 		l.accountSources = AccountSources{}
 		l.residentMaxWorkersDefined = false
 		l.residentSources = ResidentSources{}
+		l.projectsDefined = nil
 		if l.err != nil && prevErr == nil {
 			slog.Warn("argus config: cannot read config.toml, keeping current config", "path", l.path, "err", l.err)
 		}
@@ -132,6 +135,7 @@ func (l *FileLoader) Apply(base Config) Config {
 		l.accountSources = AccountSources{}
 		l.residentMaxWorkersDefined = false
 		l.residentSources = ResidentSources{}
+		l.projectsDefined = nil
 		if prevErr == nil {
 			slog.Warn("argus config: ignoring config.toml (parse error)", "path", l.path, "err", derr)
 		}
@@ -146,6 +150,7 @@ func (l *FileLoader) Apply(base Config) Config {
 			l.residentSources.WorkerAccounts[key[2]] = true
 		}
 	}
+	l.projectsDefined = projectsDefinedFrom(meta)
 	if changed {
 		slog.Info("argus config: applied config.toml overrides", "path", l.path)
 	}
@@ -167,6 +172,27 @@ func accountSourcesFrom(meta toml.MetaData) AccountSources {
 		}
 	}
 	return src
+}
+
+func projectsDefinedFrom(meta toml.MetaData) map[string]bool {
+	out := map[string]bool{}
+	for _, k := range meta.Keys() {
+		if len(k) >= 2 && k[0] == "projects" {
+			out[k[1]] = true
+		}
+	}
+	return out
+}
+
+// ProjectDefined reports whether the most recent Apply call found config.toml
+// defining [projects.<name>]. nil-safe; reflects only the last Apply.
+func (l *FileLoader) ProjectDefined(name string) bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.projectsDefined[name]
 }
 
 // AccountSources returns which account settings the most recent Apply call

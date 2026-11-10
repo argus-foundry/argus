@@ -250,7 +250,7 @@ func (d *Daemon) reattachSupervised() {
 	// the true orphans (handled below) deliberately flip the other way.
 	revived := 0
 	for id := range liveSet {
-		if ok, err := d.db.ReviveHeraWorkerToInProgress(id); err != nil {
+		if ok, err := d.db.ReconcileHeraWorkerToInProgress(id); err != nil {
 			slog.Warn("reattach: revive-to-in_progress failed", "task", id, "err", err)
 		} else if ok {
 			revived++
