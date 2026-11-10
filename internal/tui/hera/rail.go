@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/mattn/go-runewidth"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mattn/go-runewidth"
 
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 	"github.com/argus-foundry/argus/internal/hera/tiering"
