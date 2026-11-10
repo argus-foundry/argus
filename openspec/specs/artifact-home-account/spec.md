@@ -2,8 +2,7 @@
 
 ## Purpose
 
-Usage routing can run a task under an account other than the one its project's claude.ai artifacts belong to. This capability resolves each project's artifact home account. When an agent can't publish there with Claude Code's built-in artifact tool, the agent is told to publish through the external `artpush` CLI instead, so artifacts always land on the right account.
-
+Usage routing can run a task under an account other than the one its project's claude.ai artifacts belong to. This capability resolves each project's artifact home account. When an agent can't publish there with Claude Code's built-in artifact tool, the agent is told to publish through the Argus `artifact_publish` tool instead (see `artifact-publishing`), so artifacts always land on the right account.
 ## Requirements
 ### Requirement: Project artifact home account resolution
 
@@ -65,12 +64,17 @@ When building an agent's launch command, the system SHALL export `ARGUS_ARTIFACT
 
 ### Requirement: Artifact publish routing guidance
 
-The system SHALL inject builtin routing guidance into every agent whose backend family receives builtin routing content. The guidance SHALL be inert when `ARGUS_ARTIFACT_ACCOUNT` is unset. When the variable is set, the guidance SHALL instruct the agent to publish and update claude.ai artifacts with `artpush publish <path> --account "$ARGUS_ARTIFACT_ACCOUNT"` (adding `--update <url>` for an existing artifact) instead of the built-in artifact tool. It SHALL instruct the agent to report artpush failures to the user, including a missing login with the `artpush login <account>` remedy, rather than fall back to the built-in tool.
+The system SHALL inject builtin routing guidance into every agent whose backend family receives builtin routing content. The guidance SHALL be inert when `ARGUS_ARTIFACT_ACCOUNT` is unset. When the variable is set, the guidance SHALL instruct the agent to publish and update claude.ai artifacts by calling the Argus `artifact_publish` MCP tool with `account` set to the value of `ARGUS_ARTIFACT_ACCOUNT` (and the existing artifact's link when updating), instead of the built-in artifact tool. When the result reports the account as unavailable, the guidance SHALL instruct the agent to ask the user, with its question tool, to choose between: publishing to one of the reported available accounts, opening the page in the browser with `artifact_open`, revealing it in Finder with `artifact_open` and `reveal`, or parking it for later. Parking for later means giving the user the saved copy's absolute path (`artifact_path`) and the exact `argus artifact publish <artifact_path> --account <home>` command to publish it later, with `--update <link>` added when the original call was an update. The guidance SHALL instruct the agent never to fall back to the built-in artifact tool on its own initiative.
 
-#### Scenario: Guidance names the artpush command
+#### Scenario: Guidance names the artifact_publish tool
 
 - **WHEN** the builtin routing content is rendered for an agent
-- **THEN** it contains the `artpush publish` command with `--account "$ARGUS_ARTIFACT_ACCOUNT"`, the `--update` form, and an instruction not to fall back to the built-in artifact tool
+- **THEN** it names the `artifact_publish` tool with the account from `ARGUS_ARTIFACT_ACCOUNT`, the update-by-link form, and an instruction not to fall back to the built-in artifact tool on its own
+
+#### Scenario: Guidance describes the unavailable-account question
+
+- **WHEN** the builtin routing content is rendered for an agent
+- **THEN** it instructs the agent, on an unavailable result, to ask the user to choose between publishing to an available account, opening in the browser, revealing in Finder, and parking for later, where parking gives the user the saved copy's `artifact_path` and the exact `argus artifact publish` command for it (with `--update <link>` for an update)
 
 #### Scenario: Guidance self-gates when unset
 
