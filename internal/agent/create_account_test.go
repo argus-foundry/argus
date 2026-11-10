@@ -52,6 +52,39 @@ func TestCreateAndStart_DynamicSelectionPersistsConcreteBackend(t *testing.T) {
 	testutil.Equal(t, stored.Backend, "codex")
 }
 
+func TestCreateAndStart_DynamicUnavailableTierUsesConcreteDefault(t *testing.T) {
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo)
+	testutil.NoError(t, d.SetBackendTiers([]config.BackendTier{{Backend: "codex", Probe: "unknown"}}))
+	task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{
+		Name: "dynamic-default-fallback", Project: "proj", Backend: config.DynamicBackend,
+	})
+	testutil.NoError(t, err)
+	testutil.Equal(t, task.Backend, "test")
+	stored, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, stored.Backend, "test")
+}
+
+func TestCreateAndStart_DynamicWithoutTierOrConcreteDefaultFailsBeforeWorktree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo)
+	testutil.NoError(t, d.SetConfigValue(db.ConfigKeyDefaultBackend, config.DynamicBackend))
+	runner := &fakeRunner{sessionPID: 1}
+	task, _, err := CreateAndStart(d, runner, CreateInput{
+		Name: "dynamic-no-fallback", Project: "proj", Backend: config.DynamicBackend,
+	})
+	testutil.Nil(t, task)
+	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "no backend configured")
+	testutil.Equal(t, runner.startCalls, 0)
+	testutil.False(t, dirExists(WorktreeDir("proj", "dynamic-no-fallback")))
+	tasks, listErr := d.Tasks()
+	testutil.NoError(t, listErr)
+	testutil.Equal(t, len(tasks), 0)
+}
+
 func TestCreateAndStart_RejectsUnknownAccount(t *testing.T) {
 	repo := initGitRepo(t)
 	d := createTestDB(t, repo)

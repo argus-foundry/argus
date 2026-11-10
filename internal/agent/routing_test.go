@@ -257,6 +257,7 @@ func TestDynamicBackendSelection(t *testing.T) {
 		{name: "concrete backend stays pinned", explicit: "pi", project: "p", want: "pi", cfg: base},
 		{name: "concrete default fallback", explicit: config.DynamicBackend, project: "missing", want: "claude", cfg: config.Config{
 			Defaults: config.Defaults{Backend: "claude"}, Backends: base.Backends,
+			BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{{Backend: "codex", Probe: "unknown"}}},
 		}},
 		{name: "missing tier and dynamic default", explicit: config.DynamicBackend, project: "missing", want: "", cfg: noTiersDynamic},
 	} {
@@ -265,6 +266,17 @@ func TestDynamicBackendSelection(t *testing.T) {
 			testutil.Equal(t, got, tc.want)
 		})
 	}
+}
+
+func TestResolveBackend_DynamicFallsBackToConcreteDefaultWhenTiersAreUnavailable(t *testing.T) {
+	cfg := config.Config{
+		Defaults:       config.Defaults{Backend: "claude"},
+		Backends:       map[string]config.Backend{"claude": {Command: "claude"}, "codex": {Command: "codex"}},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{{Backend: "codex", Probe: "unknown"}}},
+	}
+	backend, err := ResolveBackend(&model.Task{Backend: config.DynamicBackend}, cfg)
+	testutil.NoError(t, err)
+	testutil.Equal(t, backend.Command, "claude")
 }
 
 func TestUnpinnedLandingOnDefaultIsStoredBlankAndRouted(t *testing.T) {

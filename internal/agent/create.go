@@ -215,6 +215,9 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	}
 	choice := resolveTaskChoice(input.Backend, input.Project, cfg, input.Account, true)
 	backend := choice.Backend
+	if backend == "" {
+		return nil, nil, fmt.Errorf("no backend configured")
+	}
 	// The burst ledger was charged to choice.Account; roll it back if the spawn
 	// fails, and move it if the task ends up running on a different account.
 	reservedAccount := choice.Account
