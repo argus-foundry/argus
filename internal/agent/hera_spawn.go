@@ -81,7 +81,7 @@ func resolveCoordinatorBackend(explicit, project string, cfg config.Config, acco
 	}
 	preferred := cfg.Projects[project].Backend
 	if dynamicSelected {
-		// An explicit dynamic choice asks the coordinator to consider every
+		// A dynamic choice asks the coordinator to consider every
 		// Claude-capable tier, not only the project's concrete backend tier.
 		preferred = ""
 	}

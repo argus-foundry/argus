@@ -209,6 +209,9 @@ func TestCoordinatorInheritedDynamicDoesNotUseImplicitClaudeFallback(t *testing.
 		}},
 	}
 	testutil.Equal(t, resolveCoordinatorBackend("", "p", cfg), "")
+	cfg.Projects = nil
+	cfg.Defaults.Backend = config.DynamicBackend
+	testutil.Equal(t, resolveCoordinatorBackend("", "p", cfg), "")
 }
 
 func TestCoordinatorSpawnRoutesAccount(t *testing.T) {

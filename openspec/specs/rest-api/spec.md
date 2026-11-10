@@ -705,7 +705,12 @@ The REST API SHALL expose authenticated POST endpoints under `/api/hera` for nuk
 
 ### Requirement: Backend listing carries family metadata
 
-`GET /api/backends` SHALL include, per backend, its family `kind` (`claude`, `codex`, `pi`, `opencode`, `antigravity`, or empty for custom), a `label` (the family's human label when the backend is named after its family, otherwise the backend's own name so two instances of one family stay distinguishable), the prompt `skill_prefix` (`$` for codex, `/` otherwise), `session_switcher` (whether the Claude session endpoints accept it), and `account_move` `{supported, preserves_conversation}` (true only for families with a tested conversation transfer: Claude and Codex). The create and update responses SHALL carry the same fields for the stored backend. Clients SHALL use these fields instead of hardcoding backend names.
+`GET /api/backends` SHALL include, per configured backend, its family `kind` (`claude`, `codex`, `pi`, `opencode`, `antigravity`, or empty for custom), a `label` (the family's human label when the backend is named after its family, otherwise the backend's own name so two instances of one family stay distinguishable), the prompt `skill_prefix` (`$` for codex, `/` otherwise), `session_switcher` (whether the Claude session endpoints accept it), and `account_move` `{supported, preserves_conversation}` (true only for families with a tested conversation transfer: Claude and Codex). The create and update responses SHALL carry the same fields for the stored backend. The listing SHALL also include the reserved `dynamic` selector with `name` and `kind` equal to `dynamic`, `label` equal to `Dynamic`, and no command metadata. The `dynamic` selector SHALL NOT be creatable, updatable, or deletable as a command backend. Clients SHALL use these fields instead of hardcoding backend names.
+
+#### Scenario: Backend list includes dynamic selector
+
+- **WHEN** a client requests the backend list
+- **THEN** the response includes the reserved dynamic selector without command metadata
 
 #### Scenario: Second instance keeps its own label
 - **WHEN** a backend named `claude-haiku` runs the `claude` command

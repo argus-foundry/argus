@@ -54,6 +54,11 @@ The system SHALL recognize the reserved backend name `dynamic` in default, proje
 - **WHEN** a Hera coordinator explicitly selects `dynamic` and no tier resolves
 - **THEN** coordinator routing uses only a configured compatible global concrete default, never the project backend or an implicit Claude fallback
 
+#### Scenario: Inherited dynamic coordinator selection does not use implicit fallback
+
+- **WHEN** a coordinator inherits `dynamic` from its project or global default and no Claude-capable tier or compatible concrete default resolves
+- **THEN** coordinator routing fails instead of selecting the implicit Claude fallback
+
 #### Scenario: Dynamic tier matches the effective default account
 
 - **WHEN** dynamic routing has no explicit or project account pin and a tier uses the configured project or global default account
