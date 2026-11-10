@@ -236,8 +236,9 @@ const (
 	//     would split off every appended flag in sh).
 	// v41: resident's launch policy allows standing-team coordination and
 	// spawn/delete, asks for graduation, and denies membership/plan surgery.
-	// v42: sandbox-gated unattended workers, authoritative standing-team identity.
-	SupervisorSpawnSurface = 42
+	// 42: Pi launches register the native Argus MCP server.
+	// 43: sandbox-gated unattended workers, authoritative standing-team identity.
+	SupervisorSpawnSurface = 43
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
