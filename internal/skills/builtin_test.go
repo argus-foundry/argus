@@ -25,6 +25,7 @@ func TestBuiltinItems_IncludesAllExpectedSkills(t *testing.T) {
 		"argus-schedule",
 		"hera",
 		"hera-plan",
+		"hera-remind-me",
 		"hera-review",
 		"hera-review-test-adversary",
 		"hera-spawn-review",
@@ -113,6 +114,35 @@ func TestBuiltinItems_ReviewSkillsHaveDescriptions(t *testing.T) {
 	testutil.Contains(t, byName["argus-resolve-model"], "per-archetype model")
 }
 
+// TestBuiltinRemindMe_RoutesByRole pins the add-hera-remind-me contract that
+// the board's coordinator-only authorization depends on: the skill's
+// description scopes it to the coordinator board, coordinators dedupe via
+// list-then-update before posting, workers relay through hera_send instead of
+// calling board tools, and a plain task stops without posting or sending.
+func TestBuiltinRemindMe_RoutesByRole(t *testing.T) {
+	byName := make(map[string]string)
+	for _, it := range BuiltinItems() {
+		byName[it.Name] = it.Description
+	}
+	testutil.Contains(t, byName["hera-remind-me"], "coordinator board")
+
+	raw, err := builtinFS.ReadFile(filepath.Join(builtinRoot, "hera-remind-me", skillManifestFile))
+	testutil.NoError(t, err)
+	body := string(raw)
+	for _, want := range []string{
+		"name: hera-remind-me",
+		"mcp__argus__hera_board_list",
+		"mcp__argus__hera_board_update",
+		"mcp__argus__hera_board_post",
+		"mcp__argus__hera_send",
+		"board tools require a coordinator binding",
+		"Do not call any board tool",
+		"no board for this session",
+	} {
+		testutil.Contains(t, body, want)
+	}
+}
+
 // TestBuiltinItems_NoUnparsedBlockScalarHeaders is a general invariant over
 // every current (and future) builtin skill: none of their descriptions may
 // be a bare YAML block-scalar header. This is what actually would have
@@ -152,6 +182,7 @@ func TestMaterializeBuiltinSkillsInto_WritesEmbeddedSet(t *testing.T) {
 		"argus-schedule",
 		"hera",
 		"hera-plan",
+		"hera-remind-me",
 		"hera-review",
 		"hera-review-test-adversary",
 		"hera-spawn-review",

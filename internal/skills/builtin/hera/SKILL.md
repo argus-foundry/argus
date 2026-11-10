@@ -14,7 +14,7 @@ description: >-
 
 # Hera — native multi-agent coordination inside argus
 
-Coordinators: put human decisions and attention on your board with `hera_board_post`; rewrite superseded items with `hera_board_update`, and resolve them with `hera_board_resolve` when settled, including after Aaron replies and follow-up concludes.
+Coordinators: put human decisions and attention on your board with `hera_board_post`; rewrite superseded items with `hera_board_update`, and resolve them with `hera_board_resolve` when settled, including after Aaron replies and follow-up concludes. A worker message saying Aaron ran `/hera-remind-me` is a request to put the enclosed item on your board: post it, or merge it into an existing item that covers the same follow-up.
 
 Hera is argus's **native, in-tree** layer for running a *team* of agents. It is not a separate
 daemon or plugin — coordination runs in-process in the argus daemon, the rail/tree render directly

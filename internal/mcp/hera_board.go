@@ -61,6 +61,8 @@ func (s *Server) toolHeraBoard(id interface{}, args json.RawMessage, verb string
 		return toolError(id, err.Error())
 	}
 	if caller.role.Kind != db.HeraKindCoordinator {
+		// The builtin hera-remind-me skill matches this exact text to detect a
+		// worker/freelance caller and relay via hera_send; reword both together.
 		return toolError(id, "board tools require a coordinator binding; report to your coordinator")
 	}
 	store, ok := s.heraStore.(boardStore)
