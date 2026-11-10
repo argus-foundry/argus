@@ -106,6 +106,25 @@ The `global.resident` action (default `ctrl+\`) SHALL be dispatched unconditiona
 - **WHEN** the user rebinds `global.resident` in `[keybindings]`
 - **THEN** the new key toggles the resident and the `?` help overlay shows it
 
+### Requirement: ctrl+g on the resident tab stays scoped to the team
+
+On the resident tab, the global jump-to-next-needs-input key SHALL jump within the standing team when a team worker needs input, staying on the resident tab without arming the Projects rail excursion. When no team worker needs input but a Projects role does, it SHALL switch to the Projects tab, arm the excursion on the Projects rail's own state from before the jump, and jump to that role, so the excursion-restore key returns the Projects rail to that state. When nothing needs input anywhere it SHALL only show the "No role needs input" notice and SHALL NOT switch tabs or change the resident tab's focus, selection, return snapshot or any held Projects excursion.
+
+#### Scenario: Team worker needs input
+
+- **WHEN** the resident tab is showing and a resident worker needs input
+- **THEN** that worker is selected on the resident tab and no Projects excursion is armed
+
+#### Scenario: Only a Projects role needs input
+
+- **WHEN** the resident tab is showing and only a Projects role needs input
+- **THEN** the Projects tab shows with that role selected, and the restore key returns the Projects rail to its prior selection
+
+#### Scenario: Nothing needs input
+
+- **WHEN** the resident tab is showing and nothing needs input anywhere
+- **THEN** only the notice appears; the tab, focus, selected row, return snapshot and any held Projects excursion are unchanged
+
 ### Requirement: The resident pane resizes on first attach and explains why it is not running
 
 When a live session is newly bound to the resident pane, the TUI SHALL schedule a one-shot forced PTY resync so the session is resized to the pane even when no width delta would be detected. The resident pane SHALL NOT use the Hera size-drift kill-and-resume kick machinery: that machinery is coupled to Hera pane bindings and its restart path would race the daemon's ensure loop. The TUI SHALL carry `ResidentStateResp.Reason` from its existing poll (UI goroutine only, control bytes stripped) into the resident tab's no-session placeholder and into the Settings -> Resident detail pane (`Not running: <reason>`), and SHALL clear it when the daemon reports none. Once the resident has run, its stopped tab replays the dead session's log instead of drawing the placeholder, so while the resident is not running and a reason exists the pane SHALL also draw the reason as a one-line banner on its first inner row over the replay (UI goroutine only, truncated to the pane width, no screen sync); the banner SHALL be absent while a live session is attached and once the reason is empty. The TUI SHALL publish a dedicated resident size in its initial-PTY layout report, equal to the full-width resident pane's inner rect (the host screen minus the header row, the status bar row and the pane's one-cell borders), independent of whichever view is active.

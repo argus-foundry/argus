@@ -3,6 +3,7 @@ package agent
 import (
 	"testing"
 
+	"github.com/argus-foundry/argus/internal/backendtier"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/argus-foundry/argus/internal/usagebudget"
@@ -44,6 +45,9 @@ func TestResidentWorkerRouting(t *testing.T) {
 
 func TestResidentRoutingHeadroom(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Other tests' spawns charge the process-wide burst ledger; start clean.
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
 	used := map[string]float64{"default": 95, "work": 10}
 	restore := usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
 		if account == "" { // the default account is read under the empty key

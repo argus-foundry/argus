@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
+	"github.com/argus-foundry/argus/internal/backendtier"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
@@ -158,4 +160,37 @@ func TestSpawnHeraWorkerAccountPinOrdinaryOrch(t *testing.T) {
 		_, statErr := os.Stat(WorktreeDir("proj", "bogus"))
 		testutil.True(t, os.IsNotExist(statErr))
 	})
+}
+
+// max_workers below 1 must fall back to exactly 8 (not merely "more than the
+// workers already live"): seven live workers leave room for one more spawn and
+// the next is refused at cap 8.
+func TestSpawnResidentWorkerZeroCapFallsBackToEight(t *testing.T) {
+	// Spawns charge the process-wide burst ledger; leaving that charge behind
+	// would skew later headroom-ranking tests.
+	backendtier.ResetSpawnLedger()
+	t.Cleanup(backendtier.ResetSpawnLedger)
+	sandboxAvailabilityForSignalTest(t, true)
+	t.Setenv("HOME", t.TempDir())
+	d := createTestDB(t, initGitRepo(t))
+	testutil.NoError(t, d.SetSandboxEnabled(true))
+	res, _, err := d.EnsureResidentTask(db.ResidentWorkDir())
+	testutil.NoError(t, err)
+	o, err := d.EnsureResidentOrchestrator(res.ID)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.SetConfigValue("resident.max_workers", "0"))
+	for i := range 7 {
+		id := fmt.Sprintf("live-%d", i)
+		wt := &model.Task{ID: id, Name: id, Worktree: t.TempDir()}
+		testutil.NoError(t, d.Add(wt))
+		_, _, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: id, Kind: db.HeraKindWorker}, wt.ID, wt.Worktree)
+		testutil.NoError(t, err)
+	}
+	in := HeraWorkerSpawnInput{OrchestratorID: o.ID, BaseName: "eighth", Project: "proj", TaskPrompt: "do it"}
+	_, err = SpawnHeraWorker(d, &fakeRunner{}, in)
+	testutil.NoError(t, err)
+	in.BaseName = "ninth"
+	_, err = SpawnHeraWorker(d, &fakeRunner{}, in)
+	testutil.True(t, err != nil)
+	testutil.Contains(t, err.Error(), "cap 8")
 }

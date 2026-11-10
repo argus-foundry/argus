@@ -157,7 +157,20 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: only Claude tasks can move accounts (backend %q)", ErrAccount, task.Backend)
 	}
 	from := NormalizeAccount(task.Account)
-	to, err := resolveMoveTarget(cfg, backend.Command, from, in.Account)
+	// A resident worker's auto pick must only consider accounts it could
+	// actually run on: the lowest-usage account is often one disabled for
+	// resident workers, and picking it first would refuse a move that an
+	// enabled account could have satisfied.
+	var eligible func(string) bool
+	if worker, werr := database.IsResidentWorker(task.ID); werr != nil {
+		uxlog.Log("[resident] move refused task=%s: worker identity lookup failed: %v", task.ID, werr)
+		return nil, AccountMoveResult{}, fmt.Errorf("%w: resident worker identity: %w", ErrAccount, werr)
+	} else if worker {
+		eligible = func(name string) bool {
+			return residentWorkerMoveCause(task, cfg, task.Backend, name) == nil
+		}
+	}
+	to, err := resolveMoveTarget(cfg, backend.Command, from, in.Account, eligible)
 	if err != nil {
 		return nil, AccountMoveResult{}, err
 	}
@@ -269,14 +282,19 @@ func liveSession(runner accountMoveRunner, taskID string) SessionHandle {
 }
 
 // resolveMoveTarget validates the requested target and resolves "auto".
-func resolveMoveTarget(cfg config.Config, backendCommand, from, requested string) (string, error) {
+// A non-nil eligible restricts the auto candidates to accounts it accepts.
+func resolveMoveTarget(cfg config.Config, backendCommand, from, requested string, eligible func(string) bool) (string, error) {
 	target := strings.TrimSpace(requested)
 	if target == "" {
 		return "", fmt.Errorf("%w: account is required", ErrAccount)
 	}
 	if target == AutoMoveTarget {
-		picked, scores, ok := PickMoveTarget(cfg, AccountUsage(cfg), backendCommand, from)
+		picked, scores, ok := pickMoveTargetWhere(cfg, AccountUsage(cfg), backendCommand, from, eligible)
 		if !ok {
+			if eligible != nil {
+				uxlog.Log("[resident] auto move refused: no other account is eligible for a resident worker")
+				return "", fmt.Errorf("%w: resident workers can only move to an enabled account whose backend family supports unattended workers (no other eligible account)", ErrAccount)
+			}
 			return "", fmt.Errorf("%w: no other account can run this task", ErrAccount)
 		}
 		uxlog.Log("[account] move: auto picked %s (scores %s)", picked, scores)

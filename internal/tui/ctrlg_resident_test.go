@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/hera"
 	"github.com/argus-foundry/argus/internal/tui/widget"
 	"github.com/gdamore/tcell/v2"
 )
@@ -25,6 +26,84 @@ func TestSmoke_CtrlGResidentTabJumpsWithinTeam(t *testing.T) {
 		testutil.Equal(t, f.a.header.ActiveTab(), widget.TabResident)
 		testutil.True(t, f.a.heraPage.ResidentMode())
 		testutil.Equal(t, f.a.heraPage.SelectionContext().TaskID(), f.workers[1])
+		testutil.False(t, f.a.heraPage.HeldProjectsExcursion())
+	})
+}
+
+// enterResidentFromProjects seeds two Projects orchestrators ("orch"/pw needs
+// input later, "other"/ow), parks the Projects cursor on ow, optionally holds a
+// Projects excursion, then opens the resident tab and selects a team worker.
+func enterResidentFromProjects(t *testing.T, f *residentViewFixture, holdExcursion bool) {
+	t.Helper()
+	seedNeedsInputWorker(t, f.d, "orch", "pw")
+	seedNeedsInputWorker(t, f.d, "other", "ow")
+	readUI(t, f.a.tapp, func() {
+		f.a.switchTab(widget.TabHera)
+		f.a.heraPage.SetNeedsInput(nil)
+		f.a.heraPage.Refresh()
+		testutil.True(t, f.a.heraPage.JumpToTask("ow"))
+		if holdExcursion {
+			f.a.heraPage.Rail().EnsureExcursionArmed()
+		}
+		f.a.switchTab(widget.TabResident)
+	})
+	f.selectWorker(t, 1)
+}
+
+// Nothing needs input anywhere: ctrl+g must not touch anything (tab, return
+// target, focus, selected row, held Projects excursion).
+func TestSmoke_CtrlGResidentTabNothingNeedsInputTouchesNothing(t *testing.T) {
+	f := newResidentViewFixture(t)
+	defer f.stop()
+	enterResidentFromProjects(t, f, true)
+	ret := &residentReturn{tab: widget.TabTasks, taskID: "origin"}
+	var focus hera.Focus
+	readUI(t, f.a.tapp, func() {
+		f.a.residentReturn = ret
+		f.a.heraPage.Machine().ToRail()
+		focus = f.a.heraPage.Machine().State()
+		testutil.True(t, f.a.heraPage.HeldProjectsExcursion())
+	})
+
+	f.press(t, tcell.NewEventKey(tcell.KeyCtrlG, 0, 0))
+
+	readUI(t, f.a.tapp, func() {
+		testutil.Equal(t, f.a.header.ActiveTab(), widget.TabResident)
+		testutil.True(t, f.a.heraPage.ResidentMode())
+		testutil.True(t, f.a.residentReturn == ret)
+		testutil.Equal(t, f.a.heraPage.Machine().State(), focus)
+		testutil.Equal(t, f.a.heraPage.SelectionContext().TaskID(), f.workers[1])
+		testutil.True(t, f.a.heraPage.HeldProjectsExcursion())
+		testutil.Equal(t, f.a.header.Notice(), "No role needs input")
+	})
+}
+
+// The fall-through jump arms the Projects excursion from the Projects rail's
+// own pre-entry selection, so ctrl+b returns it there.
+func TestSmoke_CtrlGResidentFallThroughRestoresProjectsSelection(t *testing.T) {
+	f := newResidentViewFixture(t)
+	defer f.stop()
+	enterResidentFromProjects(t, f, false)
+	readUI(t, f.a.tapp, func() {
+		f.a.heraPage.SetNeedsInput([]string{"pw"})
+		f.a.heraPage.Refresh()
+	})
+
+	f.press(t, tcell.NewEventKey(tcell.KeyCtrlG, 0, 0))
+	readUI(t, f.a.tapp, func() {
+		testutil.Equal(t, f.a.header.ActiveTab(), widget.TabHera)
+		testutil.Equal(t, f.a.heraPage.SelectionContext().TaskID(), "pw")
+		testutil.True(t, f.a.heraPage.Rail().HasExcursionSnapshot())
+	})
+
+	f.press(t, tcell.NewEventKey(tcell.KeyCtrlB, 0, 0))
+	readUI(t, f.a.tapp, func() {
+		testutil.Equal(t, f.a.header.Notice(), "Rail restored")
+		// The rail's own selected row (the page's pane selection only
+		// refreshes on the next rebuild, as for any ctrl+b).
+		sel := f.a.heraPage.Rail().Selected()
+		testutil.True(t, sel != nil)
+		testutil.Equal(t, sel.TaskID, "ow")
 	})
 }
 

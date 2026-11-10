@@ -538,6 +538,10 @@ func trueKeys(m map[int64]bool) []int64 {
 // count gate and the excursion state machine use the same role membership.
 func (r *Rail) NeedsInputCount() int { return len(r.attentionRoleIDs(r.model)) }
 
+// NeedsInputCountIn counts attention roles in m with this rail's qualification
+// rules, without installing m (ctrl+g's resident-tab pre-check).
+func (r *Rail) NeedsInputCountIn(m heramodel.Model) int { return len(r.attentionRoleIDs(m)) }
+
 // HasExcursionSnapshot reports whether a snapshot is currently held (an
 // excursion is open). Exposed mainly for tests.
 func (r *Rail) HasExcursionSnapshot() bool { return r.excursion != nil }

@@ -455,6 +455,13 @@ func TestSmoke_ResidentDigitsRenameAndInput(t *testing.T) {
 		a.tapp.QueueEvent(ev)
 	}
 	syncUI(t, a.tapp)
+	// Keys reach the session's ring asynchronously; under full-suite load the
+	// control bytes can land after the UI queue drains, so wait for them.
+	waitFor(t, 5*time.Second, func() bool {
+		var got string
+		readUI(t, a.tapp, func() { got = string(sess.ring.Tail(100)) })
+		return got == "q1\x03\x0c\r"
+	})
 	readUI(t, a.tapp, func() {
 		testutil.Equal(t, string(sess.ring.Tail(100)), "q1\x03\x0c\r")
 		testutil.Equal(t, a.header.ActiveTab(), widget.TabResident)

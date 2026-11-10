@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -121,7 +122,7 @@ func TestResidentBackstopTailIsPlainText(t *testing.T) {
 	// Many redraw frames (each full of CSI/OSC noise) precede the prompt, so a
 	// raw-byte tail would be all escape remnants.
 	var raw strings.Builder
-	for range 40 {
+	for range 100 {
 		raw.WriteString("\x1b[?2026h\x1b[2K\x1b[1A\x1b[2K\x1b[1A\x1b[38;2;215;119;87m\xe2\x9c\xb3\x1b[39m\x1b]0;\xe2\x9c\xb3 Claude Code\x07\x1b[?2026l\r\n")
 	}
 	raw.WriteString("\x1b[1m Do you want to proceed?\x1b[22m\r\n\x1b[36m\xe2\x9d\xaf 1. Yes\x1b[39m\r\n  2. No\r\n\x1b[2K\x1b[G")
@@ -182,4 +183,36 @@ func TestResidentBackstopEpisodeSurvivesTaskReadError(t *testing.T) {
 	msgs, err = d.HeraInbox(coords[0].ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(msgs), 0)
+}
+
+func TestResidentPromptTail(t *testing.T) {
+	t.Run("colour codes do not eat the rune budget", func(t *testing.T) {
+		// Plain text is well under 600 chars; the raw bytes are far over.
+		var b strings.Builder
+		b.WriteString("\x1b[1;38;5;208mDo you want to proceed?\x1b[0m\n")
+		for range 100 {
+			b.WriteString("\x1b[2K\x1b[1G")
+		}
+		b.WriteString("\x1b[38;5;10m❯ 1. Yes\x1b[0m\n\x1b[38;5;9m  2. last option\x1b[0m")
+		raw := b.String()
+		testutil.True(t, len(raw) > 600)
+		got := residentPromptTail([]byte(raw))
+		testutil.Equal(t, got, "Do you want to proceed?\n❯ 1. Yes\n  2. last option")
+	})
+	t.Run("caps at 600 runes keeping the end", func(t *testing.T) {
+		got := residentPromptTail([]byte(strings.Repeat("x", 2000) + "END"))
+		testutil.Equal(t, len([]rune(got)), 600)
+		testutil.True(t, strings.HasSuffix(got, "END"))
+	})
+	t.Run("keeps the last 14 non-blank lines", func(t *testing.T) {
+		var lines []string
+		for i := range 20 {
+			lines = append(lines, fmt.Sprintf("line%02d", i))
+		}
+		got := residentPromptTail([]byte(strings.Join(lines, "\r\n")))
+		testutil.Equal(t, got, strings.Join(lines[6:], "\n"))
+	})
+	t.Run("bare carriage return splits lines", func(t *testing.T) {
+		testutil.Equal(t, residentPromptTail([]byte("foo\rbar")), "foo\nbar")
+	})
 }

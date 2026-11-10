@@ -198,23 +198,27 @@ func refuseIneligibleResidentWorkerMove(database *db.DB, task *model.Task, cfg c
 	if !worker {
 		return nil
 	}
-	refuse := func(cause error) error {
+	if cause := residentWorkerMoveCause(task, cfg, backendName, account); cause != nil {
 		uxlog.Log("[resident] move refused task=%s backend=%q account=%q: %v", task.ID, backendName, account, cause)
 		slog.Warn("[resident] move refused", "task", task.ID, "backend", backendName, "account", account, "err", cause)
 		return fmt.Errorf("%w: resident workers can only move to an enabled account whose backend family supports unattended workers: %w", ErrAccount, cause)
 	}
+	return nil
+}
+
+// residentWorkerMoveCause reports why a resident worker could not run on
+// backendName/account (nil when it can): the same rule spawn and the launch
+// gate apply. Pure; it does not check worker identity.
+func residentWorkerMoveCause(task *model.Task, cfg config.Config, backendName, account string) error {
 	target := *task
 	if backendName != "" {
 		target.Backend, target.Model = backendName, ""
 	}
 	target.Account = storedAccount(account)
 	if _, err := ResolveResidentWorker(cfg, task.Project, target.Backend, NormalizeAccount(account)); err != nil {
-		return refuse(err)
+		return err
 	}
-	if err := preflightUnattended(&target, cfg); err != nil {
-		return refuse(err)
-	}
-	return nil
+	return preflightUnattended(&target, cfg)
 }
 
 // prevBackendName is the backend the task was on: the stored name, or the

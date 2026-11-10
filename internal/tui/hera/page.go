@@ -81,12 +81,16 @@ type HeraPage struct {
 	// the standing orchestrator only. genericReader is the page's normal
 	// reader, residentReader the one scoped to the standing team; the mode
 	// swaps p.reader between them on the UI goroutine.
-	residentMode   bool
-	residentTitle  string // resident pane's base border title (SetResidentTitle)
-	residentUnread int    // the resident's own unread count, shown in the title
-	coordTitle     string // the coordinator pane's title as last set (resident mode)
-	genericReader  heramodel.HeraReader
-	residentReader heramodel.HeraReader
+	residentMode bool
+	// Projects-rail state parked while the resident view owns the shared rail.
+	projectsPrior     *railSnapshot
+	projectsExcursion *railSnapshot
+	projectsArmed     map[int64]bool
+	residentTitle     string // resident pane's base border title (SetResidentTitle)
+	residentUnread    int    // the resident's own unread count, shown in the title
+	coordTitle        string // the coordinator pane's title as last set (resident mode)
+	genericReader     heramodel.HeraReader
+	residentReader    heramodel.HeraReader
 
 	// 6b pane feeds.
 	coordPane *terminal.TerminalPane // middle: orchestrator coordinator session
@@ -409,10 +413,21 @@ func (p *HeraPage) SetResidentMode(on bool) {
 		return
 	}
 	if on {
+		// The single rail is about to hold the standing team. Park the Projects
+		// rail's own excursion state so team rebuilds can neither consume nor
+		// overwrite it, and remember its pre-entry layout/selection for a
+		// ctrl+g fall-through to arm from.
+		p.projectsPrior = p.rail.captureExcursionSnapshot()
+		p.projectsExcursion = p.rail.excursion
+		p.projectsArmed = p.rail.armedNeedsInputIDs
+		p.rail.excursion = nil
 		p.genericReader = p.reader
 		p.reader = p.residentReader
 	} else {
 		p.reader = p.genericReader
+		// Back to the Projects baseline so the rebuild below does not read the
+		// team's (empty) set as a fresh 0->1 interruption.
+		p.rail.armedNeedsInputIDs = p.projectsArmed
 	}
 	p.residentMode = on
 	p.rail.SetNeverCollapse(on)
@@ -428,6 +443,40 @@ func (p *HeraPage) SetResidentMode(on bool) {
 	p.bindPane(p.coordPane, &p.coordBound, &p.coordKickedFor, &p.coordKickPending, "", "coord")
 	p.bindPane(p.agentPane, &p.agentBound, &p.agentKickedFor, &p.agentKickPending, "", "agent")
 	p.Refresh()
+	if !on {
+		// Any snapshot the rebuild captured came from the TEAM rail's rows. A
+		// Projects excursion held before entry comes back; otherwise a fresh
+		// capture is replaced by the Projects rail's own pre-entry state.
+		switch {
+		case p.projectsExcursion != nil:
+			p.rail.excursion = p.projectsExcursion
+		case p.rail.excursion != nil && p.projectsPrior != nil:
+			p.rail.excursion = p.projectsPrior
+		default:
+			p.rail.excursion = nil
+		}
+		p.projectsExcursion = nil
+	}
+}
+
+// HeldProjectsExcursion reports whether a Projects-rail excursion is held,
+// including one parked while the resident view is showing.
+func (p *HeraPage) HeldProjectsExcursion() bool {
+	if p.residentMode {
+		return p.projectsExcursion != nil
+	}
+	return p.rail.HasExcursionSnapshot()
+}
+
+// ArmProjectsExcursion arms the Projects rail's excursion from its state before
+// the resident tab was entered (ctrl+g fall-through), so the restore key
+// returns the rail there. A no-op when one is already held.
+func (p *HeraPage) ArmProjectsExcursion() {
+	if p.rail.excursion == nil && p.projectsPrior != nil {
+		p.rail.excursion = p.projectsPrior
+	}
+	p.projectsPrior = nil
+	p.rail.EnsureExcursionArmed()
 }
 
 // ProjectsModel returns the Projects-view model. Outside resident mode that is
