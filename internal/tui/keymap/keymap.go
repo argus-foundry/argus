@@ -41,13 +41,15 @@ type Binding struct {
 // Matches reports whether a tcell key event is this binding. It mirrors how the
 // historical literal dispatch inspected events: rune bindings compare the rune
 // (shift already baked in); ctrl-letter / plain named keys compare the key only;
+// ctrl+backslash accepts both named-key and extended rune+ModCtrl events;
 // modified arrows use a LOOSE modifier test (ev has the modifier bit set) to
 // match the Ctrl+Alt (cmd) and Shift conventions byte-for-byte.
 func (b Binding) Matches(ev *tcell.EventKey) bool {
+	key := eventBinding(ev).Key
 	if b.Key == tcell.KeyRune {
-		return ev.Key() == tcell.KeyRune && ev.Rune() == b.Rune
+		return key == tcell.KeyRune && ev.Rune() == b.Rune
 	}
-	if ev.Key() != b.Key {
+	if key != b.Key {
 		return false
 	}
 	switch {
@@ -196,12 +198,17 @@ func (m *Keymap) Bindings(ctx Context) map[Action]Binding {
 	return m.fwd[ctx]
 }
 
-// eventBinding canonicalizes an event for the fast-path reverse lookup. Modifier
+// eventBinding canonicalizes an event for Matches and the reverse lookup. Modifier
 // bits are dropped: only mod-less bindings (runes, ctrl-letters, plain named
 // keys) live in the rev map; modified arrows are matched loosely via the arrows
 // slice, so a cmd+up / shift+up event misses the map here and falls to the scan.
 func eventBinding(ev *tcell.EventKey) Binding {
 	if ev.Key() == tcell.KeyRune {
+		// CSI-u / modifyOtherKeys leave ctrl+punctuation as rune+ModCtrl,
+		// unlike ctrl+letters. Match the same binding as legacy byte 0x1c.
+		if ev.Rune() == '\\' && ev.Modifiers()&tcell.ModCtrl != 0 {
+			return Binding{Key: tcell.KeyCtrlBackslash}
+		}
 		return Binding{Key: tcell.KeyRune, Rune: ev.Rune()}
 	}
 	return Binding{Key: ev.Key()}

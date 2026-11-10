@@ -21,6 +21,7 @@
 //     Ctrl(4). Ctrl+Alt yields mod 7, which iTerm2 maps Cmd+arrow onto.
 //   - PgUp → CSI 5 ~; PgDn → CSI 6 ~.
 //   - Ctrl+letter → the C0 control byte.
+//   - Ctrl+backslash / ] / ^ / _ → 0x1c / 0x1d / 0x1e / 0x1f.
 //   - Escape → ESC. Anything else → nil (dropped).
 package keyenc
 
@@ -45,6 +46,11 @@ func Encode(ev *tcell.EventKey) []byte {
 
 	if ev.Key() == tcell.KeyRune {
 		r := ev.Rune()
+		// Extended keyboard reporting leaves these as rune+ModCtrl;
+		// tcell only normalizes ctrl+letters to named control keys.
+		if mods&tcell.ModCtrl != 0 && r >= '\\' && r <= '_' {
+			r -= '@'
+		}
 		if alt {
 			return append([]byte{0x1b}, []byte(string(r))...)
 		}
@@ -136,6 +142,14 @@ func Encode(ev *tcell.EventKey) []byte {
 		return []byte{0x19}
 	case tcell.KeyCtrlZ:
 		return []byte{0x1a}
+	case tcell.KeyCtrlBackslash:
+		return []byte{0x1c}
+	case tcell.KeyCtrlRightSq:
+		return []byte{0x1d}
+	case tcell.KeyCtrlCarat:
+		return []byte{0x1e}
+	case tcell.KeyCtrlUnderscore:
+		return []byte{0x1f}
 	case tcell.KeyEscape:
 		return []byte{0x1b}
 	}

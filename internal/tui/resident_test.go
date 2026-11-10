@@ -185,6 +185,64 @@ func TestSmoke_ResidentRoundTrip(t *testing.T) {
 	}
 }
 
+// Exercise the global capture through the real event loop, with live PTYs on
+// both sides: extended ctrl+backslash must toggle, while plain backslash types.
+func TestSmoke_ResidentExtendedCtrlBackslash(t *testing.T) {
+	for _, from := range []string{"tasks", "agent", "hera"} {
+		t.Run(from, func(t *testing.T) {
+			a, d := residentTestApp(t)
+			origin, resident := newRepaintSession(), newRepaintSession()
+			residentSession(t, a, d, resident)
+			_, stop := wireApp(t, a)
+			defer stop()
+			wantTab := widget.TabTasks
+			readUI(t, a.tapp, func() {
+				switch from {
+				case "agent":
+					task := &model.Task{ID: "origin", Name: "Origin", Status: model.StatusInProgress}
+					testutil.NoError(t, d.Add(task))
+					a.refreshTasks()
+					a.onTaskSelect(task, false)
+					a.agentPane.SetSession(origin)
+				case "hera":
+					wantTab = widget.TabHera
+					a.switchTab(wantTab)
+				}
+			})
+			if from == "agent" {
+				a.tapp.QueueEvent(rune1('\\'))
+				syncUI(t, a.tapp)
+				testutil.Equal(t, string(origin.ring.Bytes()), `\`)
+			}
+			a.tapp.QueueEvent(tcell.NewEventKey(tcell.KeyRune, '\\', tcell.ModCtrl))
+			syncUI(t, a.tapp)
+			readUI(t, a.tapp, func() {
+				testutil.Equal(t, a.header.ActiveTab(), widget.TabResident)
+				testutil.Equal(t, a.mode, modeTaskList)
+				testutil.Equal(t, a.tapp.GetFocus(), tview.Primitive(a.heraPage))
+				testutil.Equal(t, a.heraPage.Machine().State(), hera.FocusCoord)
+				testutil.Equal(t, a.heraPage.CoordPane().Session(), agentview.TerminalAdapter(resident))
+			})
+			if from == "agent" {
+				testutil.Equal(t, string(origin.ring.Bytes()), `\`) // no toggle byte leaked
+			}
+			a.tapp.QueueEvent(rune1('\\'))
+			syncUI(t, a.tapp)
+			testutil.Equal(t, string(resident.ring.Bytes()), `\`)
+			a.tapp.QueueEvent(tcell.NewEventKey(tcell.KeyRune, '\\', tcell.ModCtrl))
+			syncUI(t, a.tapp)
+			readUI(t, a.tapp, func() {
+				testutil.Equal(t, a.header.ActiveTab(), wantTab)
+				if from == "agent" {
+					testutil.Equal(t, a.mode, modeAgent)
+					testutil.Equal(t, a.agentState.TaskID, "origin")
+				}
+			})
+			testutil.Equal(t, string(resident.ring.Bytes()), `\`) // toggle-back was intercepted too
+		})
+	}
+}
+
 func TestSmoke_ResidentIgnoredInModalAndFilter(t *testing.T) {
 	for _, mode := range []string{"modal", "filter", "settings edit", "hera rail filter"} {
 		t.Run(mode, func(t *testing.T) {
@@ -291,18 +349,33 @@ func TestSmoke_ResidentKeyForwardedInPluginView(t *testing.T) {
 	sim.InjectKey(tcell.KeyCtrlL, 0, 0)
 	syncUI(t, a.tapp)
 	waitFor(t, time.Second, func() bool { return fake.dialed.Load() })
-	// The default ctrl+\ has no keyenc encoding, so rebind to ctrl+x (bare runes
-	// are rejected); the pre-fix resolve swallowed it before the plugin saw it.
+	// Plugins retain full keyboard surrender, including both encodings of the
+	// resident default and a rebound resident key.
 	km, warnings := keymap.Build(config.Keybindings{Global: map[string]string{"resident": "ctrl+x"}})
 	testutil.Equal(t, len(warnings), 0)
 	readUI(t, a.tapp, func() { a.keymap = km })
-	sim.InjectKey(tcell.KeyCtrlX, 0, 0)
-	syncUI(t, a.tapp)
-	select {
-	case b := <-plugIn:
-		testutil.Equal(t, string(b), "\x18")
-	case <-time.After(time.Second):
-		t.Fatal("the resident key was not forwarded to the plugin")
+	for _, tc := range []struct {
+		name string
+		ev   *tcell.EventKey
+		want string
+	}{
+		{"rebound", tcell.NewEventKey(tcell.KeyCtrlX, 0, 0), "\x18"},
+		{"legacy", tcell.NewEventKey(tcell.KeyCtrlBackslash, 0, tcell.ModCtrl), "\x1c"},
+		{"extended", tcell.NewEventKey(tcell.KeyRune, '\\', tcell.ModCtrl), "\x1c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.name != "rebound" {
+				readUI(t, a.tapp, func() { a.keymap = keymap.DefaultKeymap() })
+			}
+			a.tapp.QueueEvent(tc.ev)
+			syncUI(t, a.tapp)
+			select {
+			case b := <-plugIn:
+				testutil.Equal(t, string(b), tc.want)
+			case <-time.After(time.Second):
+				t.Fatal("the resident key was not forwarded to the plugin")
+			}
+		})
 	}
 	readUI(t, a.tapp, func() {
 		testutil.Equal(t, a.mode, modePluginView)
