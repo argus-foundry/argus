@@ -6925,12 +6925,13 @@ async function loadBackendsBlock() {
 
 function renderBackendsBlock() {
   const el = document.getElementById('backends-list');
-  if (!backendsCache.length) {
+  const configured = backendsCache.filter(b => b.name !== 'dynamic');
+  if (!configured.length) {
     el.innerHTML = '<div class="meta" style="padding: 8px 0">No backends configured.</div>';
     return;
   }
   const def = settingsCache && settingsCache.defaults && settingsCache.defaults.backend;
-  el.innerHTML = backendsCache.map((b) => {
+  el.innerHTML = configured.map((b) => {
     const star = b.name === def ? ' ★' : '';
     const modelLabel = b.model ? ` · model: ${esc(b.model)}` : '';
     return `<div class="settings-row">

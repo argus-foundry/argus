@@ -16,6 +16,8 @@ Budget-aware routing is advisory steering, not enforcement. Exhausted tiers can 
 
 Generalizes usage-aware routing to task-backend resolution via an ordered, user-configurable `[backend_routing]` tier list, consulted through the shared backend/account choice used by task creation and backend resolution.
 
+- **The reserved `dynamic` backend is resolved once at task creation; task rows contain the selected concrete backend.** Use it for the global default, project backend, or explicit new-task choice to consider all configured tiers. Existing tasks do not switch backends as usage changes, and a concrete backend choice remains pinned.
+
 - **Resolve backend and account together before creation side effects.** Explicit/project backend names restrict backend choice but still permit account routing; account precedence is explicit nonblank/inherited pin → project_accounts → routed tier account → default_account → default, and stored tasks never change account on resume.
 
 - **Coordinators filter tiers to Claude-capable backends, including their accounts.** Ordinary workers omit backend; reserve an explicit Claude backend for actual worker self-promotion, Claude-only connectors/MCP, or in-session Claude review panels. If no eligible Claude tier resolves, retain the literal Claude fallback; self-promotion on a non-Claude task is rejected.

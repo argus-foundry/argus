@@ -34,6 +34,24 @@ func accountFileDB(t *testing.T, repo string, extraTOML ...string) *db.DB {
 	return d
 }
 
+func TestCreateAndStart_DynamicSelectionPersistsConcreteBackend(t *testing.T) {
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo)
+	testutil.NoError(t, d.SetConfigValue(db.ConfigKeyDefaultBackend, config.DynamicBackend))
+	testutil.NoError(t, d.SetBackendTiers([]config.BackendTier{
+		{Backend: "codex", Probe: config.ProbeNone},
+		{Backend: "pi", Probe: config.ProbeNone},
+	}))
+	task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{
+		Name: "dynamic", Project: "proj", Backend: config.DynamicBackend,
+	})
+	testutil.NoError(t, err)
+	testutil.Equal(t, task.Backend, "codex")
+	stored, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, stored.Backend, "codex")
+}
+
 func TestCreateAndStart_RejectsUnknownAccount(t *testing.T) {
 	repo := initGitRepo(t)
 	d := createTestDB(t, repo)

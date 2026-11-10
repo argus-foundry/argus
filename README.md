@@ -1193,6 +1193,30 @@ All four switches are in **Settings → Bridge** in local and remote TUI mode; `
 
 Backend/account tiers drive all task creation, including Hera workers. `ordered` picks the first available tier; `headroom` prefers the largest known `threshold_pct − usage`, then unknown tiers if no known tier is available. An explicit or project backend restricts routing to that backend while still allowing account selection. Account precedence is explicit (including nonblank inherited pins) → project_accounts → tier account → default_account → default. A blank parent account permits routing. Coordinators consider only Claude-capable tiers and retain the Claude fallback when none is available. Settings → **Backend Tiers** supports `n` add, `d` remove, `K`/`J` reorder, `p` probe, `A` account, and `e` threshold; config.toml-owned tiers remain read-only.
 
+Choose the reserved backend `dynamic` as the global default, a project backend, or a task backend to route across all configured tiers. The task stores the concrete backend selected at creation and keeps using it on later launches. For example, use Claude below 80% weekly usage, then Codex below 80%, then Pi:
+
+```toml
+[defaults]
+backend = "dynamic"
+
+[backend_routing]
+strategy = "ordered"
+
+[[backend_routing.tier]]
+backend = "claude"
+probe = "claude_usage"
+threshold_pct = 80
+
+[[backend_routing.tier]]
+backend = "codex"
+probe = "codex_usage"
+threshold_pct = 80
+
+[[backend_routing.tier]]
+backend = "pi"
+probe = "none"
+```
+
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `strategy` | string | `"ordered"` | `ordered` picks the first available tier (above). `headroom` picks the tier with the most room under its threshold (`threshold_pct − usage`, ties → list order), preferring any tier with a known reading over tiers with no reading (unknown/stale probes and `none` tiers, taken in list order). An unrecognized value is logged and treated as `ordered`. config.toml-only, read even when the tiers come from Settings. |

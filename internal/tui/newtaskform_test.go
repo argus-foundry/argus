@@ -45,6 +45,16 @@ func TestNewTaskForm_Creation(t *testing.T) {
 	}
 }
 
+func TestNewTaskForm_DynamicBackendOption(t *testing.T) {
+	backends := map[string]config.Backend{"claude": {Command: "claude"}, "codex": {Command: "codex"}}
+	f := NewNewTaskForm(map[string]config.Project{"p": {}}, "p", backends, config.DynamicBackend)
+	testutil.Equal(t, f.Task().Backend, config.DynamicBackend)
+	testutil.Equal(t, f.backendNames[len(f.backendNames)-1], config.DynamicBackend)
+
+	empty := NewNewTaskForm(map[string]config.Project{"p": {}}, "p", map[string]config.Backend{}, "")
+	testutil.Equal(t, len(empty.backendNames), 0)
+}
+
 func TestNewTaskForm_TabCycling(t *testing.T) {
 	f := NewNewTaskForm(
 		map[string]config.Project{"p1": {}},

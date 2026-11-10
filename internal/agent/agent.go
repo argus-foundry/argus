@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/argus-foundry/argus/internal/backendkind"
+	"github.com/argus-foundry/argus/internal/backendtier"
 	"github.com/argus-foundry/argus/internal/claudeenv"
 	"github.com/argus-foundry/argus/internal/claudesession"
 	"github.com/argus-foundry/argus/internal/codexctx"
@@ -167,6 +168,15 @@ func resolveDefaultBackendName(explicit, project string, cfg config.Config, acco
 	backend := explicit
 	if backend == "" {
 		backend = cfg.Projects[project].Backend
+	}
+	if backend == config.DynamicBackend {
+		if len(cfg.BackendRouting.Tiers) > 0 {
+			return backendtier.ResolveBackend(cfg, account)
+		}
+		if cfg.Defaults.Backend != config.DynamicBackend {
+			return cfg.Defaults.Backend
+		}
+		return ""
 	}
 	if backend != "" {
 		return backend

@@ -29,6 +29,10 @@ func resolveTaskChoiceLocked(explicit, project string, cfg config.Config, accoun
 	if backend == "" {
 		backend = cfg.Projects[project].Backend
 	}
+	dynamic := backend == config.DynamicBackend || (backend == "" && cfg.Defaults.Backend == config.DynamicBackend)
+	if backend == config.DynamicBackend {
+		backend = "" // Empty means consider every tier.
+	}
 	pin := account
 	step := "pinned-account"
 	if pin == "" {
@@ -44,7 +48,7 @@ func resolveTaskChoiceLocked(explicit, project string, cfg config.Config, accoun
 		}
 	}
 	choice := backendtier.ResolveChoice(cfg, backend, pin)
-	if choice.Backend == "" && pin == "" && explicit == "" && backend != "" {
+	if choice.Backend == "" && pin == "" && explicit == "" && backend != "" && !dynamic {
 		if overall := backendtier.ResolveChoice(cfg, "", ""); overall.Backend != "" {
 			overall.Step = "best-overall"
 			uxlog.Log("[routing] project backend %q has no eligible tier; best overall backend=%q account=%q", backend, overall.Backend, overall.Account)
@@ -57,6 +61,9 @@ func resolveTaskChoiceLocked(explicit, project string, cfg config.Config, accoun
 	}
 	if backend == "" {
 		backend = cfg.Defaults.Backend
+	}
+	if dynamic && backend == config.DynamicBackend {
+		backend = ""
 	}
 	return backendtier.Choice{Backend: backend, Account: pin, Reason: "explicit/project/default backend; no eligible tier", Step: step}
 }

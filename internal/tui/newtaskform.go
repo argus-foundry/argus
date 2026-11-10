@@ -166,6 +166,9 @@ func NewNewTaskForm(projects map[string]config.Project, defaultProject string, b
 		backNames = append(backNames, name)
 	}
 	sort.Strings(backNames)
+	if len(backNames) > 0 {
+		backNames = append(backNames, config.DynamicBackend)
+	}
 
 	// Preselect the default backend; when it isn't configured fall back to
 	// "claude" (the built-in default) before the first sorted name, so a

@@ -233,6 +233,40 @@ func TestResolveBackend_ExplicitBackendSkipsUsageReadings(t *testing.T) {
 	testutil.Equal(t, reads, 1) // blank backend still routes on readings
 }
 
+func TestDynamicBackendSelection(t *testing.T) {
+	base := config.Config{
+		Defaults: config.Defaults{Backend: config.DynamicBackend},
+		Backends: map[string]config.Backend{
+			"claude": {Command: "claude"}, "codex": {Command: "codex"}, "pi": {Command: "pi"},
+		},
+		Projects: map[string]config.Project{"p": {Backend: config.DynamicBackend}},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "codex", Probe: config.ProbeNone},
+			{Backend: "pi", Probe: config.ProbeNone},
+		}},
+	}
+	noTiersDynamic := base
+	noTiersDynamic.BackendRouting.Tiers = nil
+	for _, tc := range []struct {
+		name, explicit, project, want string
+		cfg                           config.Config
+	}{
+		{name: "dynamic default", project: "missing", want: "codex", cfg: base},
+		{name: "explicit dynamic", explicit: config.DynamicBackend, project: "p", want: "codex", cfg: base},
+		{name: "project dynamic", project: "p", want: "codex", cfg: base},
+		{name: "concrete backend stays pinned", explicit: "pi", project: "p", want: "pi", cfg: base},
+		{name: "concrete default fallback", explicit: config.DynamicBackend, project: "missing", want: "claude", cfg: config.Config{
+			Defaults: config.Defaults{Backend: "claude"}, Backends: base.Backends,
+		}},
+		{name: "missing tier and dynamic default", explicit: config.DynamicBackend, project: "missing", want: "", cfg: noTiersDynamic},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveTaskChoice(tc.explicit, tc.project, tc.cfg, "", false).Backend
+			testutil.Equal(t, got, tc.want)
+		})
+	}
+}
+
 func TestUnpinnedLandingOnDefaultIsStoredBlankAndRouted(t *testing.T) {
 	repo := initGitRepo(t)
 	d := accountFileDB(t, repo) // no tiers: nothing to route to, default account

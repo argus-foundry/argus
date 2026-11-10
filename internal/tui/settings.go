@@ -598,6 +598,9 @@ func (sv *SettingsView) Refresh() {
 	for _, name := range names {
 		sv.backends = append(sv.backends, backendEntry{Name: name, Backend: cfg.Backends[name]})
 	}
+	if len(names) > 0 {
+		sv.backends = append(sv.backends, backendEntry{Name: config.DynamicBackend})
+	}
 
 	// Backend-tier routing. cfg.BackendRouting.Tiers already reflects
 	// config.toml-wins-wholesale-over-DB precedence (db.Config's job);
@@ -2705,7 +2708,7 @@ func (sv *SettingsView) handleEditTodoTagKey(ev *tcell.EventKey) bool {
 // Returns false (key unhandled) when the cursor is not on a backend row.
 func (sv *SettingsView) handleEditModel() bool {
 	be := sv.SelectedBackend()
-	if be == nil {
+	if be == nil || be.Name == config.DynamicBackend {
 		return false
 	}
 	sv.editingBackendModel = be.Name
@@ -3878,6 +3881,15 @@ func (sv *SettingsView) renderBackendDetail(screen tcell.Screen, x, y, w, h int,
 	}
 
 	widget.DrawText(screen, x, y, w, be.Name, theme.StyleTitle)
+	if be.Name == config.DynamicBackend {
+		if h > 2 {
+			widget.DrawText(screen, x, y+1, w, "Selects a backend from the configured usage tiers for each new task.", theme.StyleDimmed)
+		}
+		if h > 2 {
+			widget.DrawText(screen, x, y+h-1, w, "[d] set as default", theme.StyleDimmed)
+		}
+		return
+	}
 	r := 1
 	if be.Name == sv.defaultBackend {
 		widget.DrawText(screen, x, y+r, w, "★ Default backend", tcell.StyleDefault.Foreground(theme.ColorComplete))
