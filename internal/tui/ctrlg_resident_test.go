@@ -318,3 +318,43 @@ func TestSmoke_OrdinaryLeaveAfterProjectsInterruptionRestoresPrior(t *testing.T)
 		testutil.Equal(t, selID, "ow")
 	})
 }
+
+// A ctrl+g fall-through while a Projects excursion is already held must keep
+// that excursion: ctrl+b returns to where the operator was before the original
+// interruption, not to the pre-entry cursor.
+func TestSmoke_CtrlGFallThroughKeepsHeldProjectsExcursion(t *testing.T) {
+	f := newResidentViewFixture(t)
+	defer f.stop()
+	enterResidentFromProjects(t, f, true) // holds the excursion at "ow"
+	readUI(t, f.a.tapp, func() {
+		f.a.switchTab(widget.TabHera)
+		testutil.True(t, f.a.heraPage.JumpToTask("pw"))
+		f.a.switchTab(widget.TabResident)
+	})
+	f.selectWorker(t, 1)
+	readUI(t, f.a.tapp, func() {
+		f.a.heraPage.SetNeedsInput([]string{"pw"})
+		f.a.heraPage.Refresh()
+	})
+	f.press(t, tcell.NewEventKey(tcell.KeyCtrlG, 0, 0))
+	var tab widget.Tab
+	var landed string
+	readUI(t, f.a.tapp, func() {
+		tab = f.a.header.ActiveTab()
+		if sel := f.a.heraPage.Rail().Selected(); sel != nil {
+			landed = sel.TaskID
+		}
+	})
+	testutil.Equal(t, tab, widget.TabHera)
+	testutil.Equal(t, landed, "pw")
+	f.press(t, tcell.NewEventKey(tcell.KeyCtrlB, 0, 0))
+	var notice, restored string
+	readUI(t, f.a.tapp, func() {
+		notice = f.a.header.Notice()
+		if sel := f.a.heraPage.Rail().Selected(); sel != nil {
+			restored = sel.TaskID
+		}
+	})
+	testutil.Equal(t, notice, "Rail restored")
+	testutil.Equal(t, restored, "ow")
+}
