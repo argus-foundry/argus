@@ -2158,7 +2158,13 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "task or worktree not found", nil)
 		return
 	}
-	msg := gitutil.FetchGitStatus(task.ID, task.Worktree)
+	msg := gitutil.FetchGitStatus(task.ID, task.Worktree, gitutil.Options{BaseBranch: task.BaseBranch})
+	if msg.Err != nil {
+		uxlog.Log("[api] git status failed task=%s: %v", task.ID, msg.Err)
+		writeErr(w, http.StatusInternalServerError, "git status failed", nil)
+		return
+	}
+	uxlog.Log("[api] git status task=%s base=%q resolved=%q", task.ID, msg.Comparison.RequestedBase, msg.Comparison.ResolvedBase)
 	writeJSON(w, http.StatusOK, msg)
 }
 
@@ -2177,7 +2183,12 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "valid path query param required", nil)
 		return
 	}
-	msg := gitutil.FetchFileDiff(task.ID, task.Worktree, path)
+	msg := gitutil.FetchFileDiff(task.ID, task.Worktree, path, gitutil.Options{BaseBranch: task.BaseBranch})
+	if msg.Err != nil {
+		uxlog.Log("[api] git diff failed task=%s: %v", task.ID, msg.Err)
+		writeErr(w, http.StatusInternalServerError, "git diff failed", nil)
+		return
+	}
 	writeJSON(w, http.StatusOK, msg)
 }
 

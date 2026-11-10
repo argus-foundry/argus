@@ -3,37 +3,55 @@ package gitutil
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
+// Options carries per-call comparison inputs shared by the git helpers. Add
+// new fields here rather than new positional parameters.
+type Options struct {
+	// BaseBranch is the task's stored base ref (a stacked task's parent
+	// branch). Empty means no requested base.
+	BaseBranch string
+}
+
 // FetchGitStatus runs git commands in the given worktree directory.
 // Intended to be called from a background goroutine.
-func FetchGitStatus(taskID, worktree string) GitStatusRefreshMsg {
+func FetchGitStatus(taskID, worktree string, opts Options) GitStatusRefreshMsg {
 	msg := GitStatusRefreshMsg{TaskID: taskID}
 
 	if worktree == "" {
 		return msg
 	}
 
-	if out, err := runGit(worktree, "status", "--short"); err == nil {
-		msg.Status = strings.TrimRight(out, "\n")
+	out, err := runGit(worktree, "status", "--short")
+	if err != nil {
+		msg.Err = fmt.Errorf("git status: %w", err)
+		return msg
 	}
+	msg.Status = strings.TrimRight(out, "\n")
 
 	if out, err := runGit(worktree, "diff", "HEAD", "--stat"); err == nil {
 		msg.Diff = strings.TrimRight(out, "\n")
 	}
 
-	if base := findMergeBase(worktree); base != "" {
+	msg.Comparison = resolveComparison(worktree, opts)
+	if base := msg.Comparison.MergeBase; base != "" {
 		if out, err := runGit(worktree, "diff", "--stat", base+"..HEAD"); err == nil {
 			msg.BranchDiff = strings.TrimRight(out, "\n")
+		} else {
+			msg.Err = fmt.Errorf("git diff --stat: %w", err)
 		}
 		if out, err := runGit(worktree, "diff", "--name-status", base+"..HEAD"); err == nil {
 			msg.BranchFiles = strings.TrimRight(out, "\n")
+		} else {
+			msg.Err = fmt.Errorf("git diff --name-status: %w", err)
 		}
 	}
 
@@ -41,8 +59,51 @@ func FetchGitStatus(taskID, worktree string) GitStatusRefreshMsg {
 }
 
 // findMergeBase finds the merge-base between HEAD and the upstream or default
-// branch. Remote-tracking branches are tried before local master/main: all
-// branch refs (local and remote-tracking alike) are shared across every
+// branch (no requested base).
+func findMergeBase(worktree string) string {
+	return resolveComparison(worktree, Options{}).MergeBase
+}
+
+// resolveComparison picks the comparison base: the requested base ref first,
+// then the fallback chain in fallbackMergeBase. A requested base that cannot
+// be resolved yields a non-nil FallbackReason alongside the fallback result.
+func resolveComparison(worktree string, opts Options) Comparison {
+	cmp := Comparison{RequestedBase: opts.BaseBranch}
+	if opts.BaseBranch != "" {
+		ref, sha, reason := mergeBaseWithRef(worktree, opts.BaseBranch)
+		if reason == "" {
+			cmp.ResolvedBase, cmp.MergeBase = ref, sha
+			return cmp
+		}
+		cmp.FallbackReason = &reason
+	}
+	cmp.ResolvedBase, cmp.MergeBase = fallbackMergeBase(worktree)
+	return cmp
+}
+
+// mergeBaseWithRef resolves a requested base, trying the local ref and then
+// origin's remote-tracking ref. The ref is always passed after a revision
+// check so option-looking values never reach git as flags.
+func mergeBaseWithRef(worktree, base string) (ref, sha, reason string) {
+	if strings.HasPrefix(base, "-") || strings.ContainsAny(base, " \t\n\x00") {
+		return "", "", "requested base " + strconv.Quote(base) + " is not a valid ref"
+	}
+	for _, cand := range []string{base, "origin/" + base} {
+		if _, err := runGit(worktree, "rev-parse", "--verify", "--quiet", "--end-of-options", cand+"^{commit}"); err != nil {
+			continue
+		}
+		if out, err := runGit(worktree, "merge-base", "HEAD", cand); err == nil {
+			if b := strings.TrimSpace(out); b != "" {
+				return cand, b, ""
+			}
+		}
+	}
+	return "", "", "requested base " + strconv.Quote(base) + " not found or shares no history with HEAD"
+}
+
+// fallbackMergeBase finds the merge-base between HEAD and the upstream or
+// default branch. Remote-tracking branches are tried before local master/main:
+// all branch refs (local and remote-tracking alike) are shared across every
 // worktree of a repo — only HEAD is per-worktree — so a local master is
 // exposed to any arbitrary rewrite (rebase, reset, amend) that some other
 // worktree or the primary checkout performs on it, silently jumping the
@@ -50,57 +111,76 @@ func FetchGitStatus(taskID, worktree string) GitStatusRefreshMsg {
 // they only ever change via an explicit fetch, which is a deliberate sync to
 // the real upstream state (normally fast-forward) rather than an arbitrary
 // history rewrite, so they're a safer fallback.
-func findMergeBase(worktree string) string {
+func fallbackMergeBase(worktree string) (ref, sha string) {
 	if base, err := runGit(worktree, "merge-base", "HEAD", "HEAD@{upstream}"); err == nil {
 		if b := strings.TrimSpace(base); b != "" {
-			return b
+			name := "@{upstream}"
+			if n, err := runGit(worktree, "rev-parse", "--abbrev-ref", "HEAD@{upstream}"); err == nil && strings.TrimSpace(n) != "" {
+				name = strings.TrimSpace(n)
+			}
+			return name, b
 		}
 	}
-	for _, branch := range priorityBranches {
+	for _, branch := range append(append([]string{}, priorityBranches...), "master", "main") {
 		if base, err := runGit(worktree, "merge-base", "HEAD", branch); err == nil {
 			if b := strings.TrimSpace(base); b != "" {
-				return b
+				return branch, b
 			}
 		}
 	}
-	for _, branch := range []string{"master", "main"} {
-		if base, err := runGit(worktree, "merge-base", "HEAD", branch); err == nil {
-			if b := strings.TrimSpace(base); b != "" {
-				return b
-			}
-		}
-	}
-	return ""
+	return "", ""
 }
 
 // FetchFileDiff runs git diff for a specific file and returns raw output.
-func FetchFileDiff(taskID, worktree, filePath string) FileDiffMsg {
+func FetchFileDiff(taskID, worktree, filePath string, opts Options) FileDiffMsg {
 	msg := FileDiffMsg{TaskID: taskID, FilePath: filePath}
 	if worktree == "" || filePath == "" {
 		return msg
 	}
+	if _, err := runGit(worktree, "rev-parse", "--show-toplevel"); err != nil {
+		msg.Err = fmt.Errorf("git worktree: %w", err)
+		return msg
+	}
+
+	msg.Comparison = resolveComparison(worktree, opts)
 
 	// Try uncommitted diff first (staged + unstaged) — raw output for parsing
-	if out, err := runGit(worktree, "diff", "HEAD", "--", filePath); err == nil && out != "" {
+	out, err := runGit(worktree, "--literal-pathspecs", "diff", "HEAD", "--", filePath)
+	if err != nil {
+		if _, headErr := runGit(worktree, "rev-parse", "--verify", "HEAD"); headErr != nil {
+			out, err = runGit(worktree, "--literal-pathspecs", "diff", "--cached", "--", filePath)
+			if err != nil {
+				msg.Err = fmt.Errorf("git diff --cached: %w", err)
+				return msg
+			}
+		}
+	}
+	if err == nil && out != "" {
 		msg.Diff = out
 		return msg
 	}
 
 	// Fall back to branch diff (committed changes vs merge-base)
-	if base := findMergeBase(worktree); base != "" {
-		if out, err := runGit(worktree, "diff", base+"..HEAD", "--", filePath); err == nil {
+	if base := msg.Comparison.MergeBase; base != "" {
+		if out, err := runGit(worktree, "--literal-pathspecs", "diff", base+"..HEAD", "--", filePath); err == nil {
 			msg.Diff = out
+		} else {
+			msg.Err = fmt.Errorf("git diff: %w", err)
+			return msg
 		}
 	}
 
 	// For untracked files, show the file contents as an "added" diff
-	if msg.Diff == "" {
-		if out, err := runGit(worktree, "diff", "--no-index", "/dev/null", filePath); err == nil || out != "" {
-			msg.Diff = out
-		}
+	if msg.Diff == "" && !isTracked(worktree, filePath) {
+		msg.Diff, msg.Err = untrackedFileDiff(worktree, filePath)
 	}
 
 	return msg
+}
+
+func isTracked(worktree, filePath string) bool {
+	_, err := runGit(worktree, "--literal-pathspecs", "ls-files", "--error-unmatch", "--", filePath)
+	return err == nil
 }
 
 // FetchDirFiles lists untracked/changed files inside a directory in the worktree.
@@ -219,6 +299,10 @@ func sortBranchesWithPriority(branches []string) []string {
 }
 
 func runGit(dir string, args ...string) (string, error) {
+	return runGitWithInput(dir, nil, nil, args...)
+}
+
+func runGitWithInput(dir string, input io.Reader, extraEnv []string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-pager"}, args...)...)
@@ -226,6 +310,8 @@ func runGit(dir string, args ...string) (string, error) {
 	cmd.Env = append(cmd.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	cmd.Stdin = input
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = io.Discard

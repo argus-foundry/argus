@@ -16,6 +16,17 @@ type GitStatusRefreshMsg struct {
 	Diff        string // git diff --stat (unstaged + staged) output
 	BranchDiff  string // git diff --stat against merge-base (committed changes)
 	BranchFiles string // git diff --name-status against merge-base (for file list)
+
+	Comparison Comparison `json:"comparison"`
+	Err        error      `json:"-"`
+}
+
+// Comparison describes which base a status or diff was computed against.
+type Comparison struct {
+	RequestedBase  string  `json:"requested_base"`
+	ResolvedBase   string  `json:"resolved_base"`
+	MergeBase      string  `json:"merge_base"`
+	FallbackReason *string `json:"fallback_reason"`
 }
 
 // FileDiffMsg carries the result of an async file diff fetch.
@@ -23,6 +34,9 @@ type FileDiffMsg struct {
 	TaskID   string
 	FilePath string
 	Diff     string
+
+	Comparison Comparison `json:"comparison"`
+	Err        error      `json:"-"`
 }
 
 // DirFilesMsg carries the result of listing files in a directory.
