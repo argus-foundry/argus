@@ -48,14 +48,22 @@ func resolveTaskChoiceLocked(explicit, project string, cfg config.Config, accoun
 		}
 	}
 	routingCfg := cfg
-	if dynamic && pin != "" {
-		// A dynamic account pin must be able to run the candidate backend. Filter
-		// incompatible tiers before scoring so an earlier Codex tier cannot hide
-		// a later Claude tier compatible with a Claude-only account (and vice versa).
+	if dynamic {
+		// The account selected for a tier must be able to run its backend. A
+		// project/explicit pin wins; otherwise the tier's own account wins over
+		// the configured project/global default. Filter before scoring so an
+		// incompatible earlier tier cannot hide a compatible later one.
 		routingCfg.BackendRouting.Tiers = make([]config.BackendTier, 0, len(cfg.BackendRouting.Tiers))
 		for _, tier := range cfg.BackendRouting.Tiers {
 			b, ok := cfg.Backends[tier.Backend]
-			if ok && cfg.AccountSupports(pin, b.Command) {
+			account := pin
+			if account == "" {
+				account = tier.Account
+			}
+			if account == "" {
+				account = cfg.ResolveAccount("", project)
+			}
+			if ok && cfg.AccountSupports(account, b.Command) {
 				routingCfg.BackendRouting.Tiers = append(routingCfg.BackendRouting.Tiers, tier)
 			}
 		}

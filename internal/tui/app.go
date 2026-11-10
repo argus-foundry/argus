@@ -6899,6 +6899,7 @@ func (a *App) openHeraNewTaskForm(title, defaultProject string, hideArchetype bo
 	// shows it.
 	a.newTaskForm.SetHideArchetype(hideArchetype)
 	if hideArchetype { // coordinator creation; worker spawn retains its existing flow
+		a.newTaskForm.SetCoordinatorBackendRouting()
 		a.setupProjectFirst(a.newTaskForm)
 	}
 	a.newTaskOnDone = onDone

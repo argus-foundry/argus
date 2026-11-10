@@ -141,6 +141,32 @@ func TestCoordinatorDynamicBackendSelectsOnlyClaudeTier(t *testing.T) {
 	testutil.Equal(t, resolveCoordinatorBackend(config.DynamicBackend, "", cfg), "claude")
 }
 
+func TestCoordinatorDynamicIgnoresConcreteProjectPreferenceWhenScoringTiers(t *testing.T) {
+	cfg := config.Config{
+		Projects: map[string]config.Project{"p": {Backend: "claude"}},
+		Accounts: map[string]config.Account{
+			"personal": {ClaudeConfigDir: t.TempDir()},
+			"work":     {ClaudeConfigDir: t.TempDir()},
+		},
+		Backends: map[string]config.Backend{
+			"claude":     {Command: "claude"},
+			"claude-alt": {Command: "claude"},
+		},
+		BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
+			{Backend: "claude", Account: "personal", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+			{Backend: "claude-alt", Account: "work", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+		}},
+	}
+	restore := usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
+		if account == "personal" {
+			return usagebudget.Reading{Percentage: 95}, true
+		}
+		return usagebudget.Reading{Percentage: 10}, account == "work"
+	})
+	defer restore()
+	testutil.Equal(t, resolveCoordinatorBackend(config.DynamicBackend, "p", cfg), "claude-alt")
+}
+
 func TestCoordinatorSpawnRoutesAccount(t *testing.T) {
 	for _, backend := range []string{"", "test"} {
 		t.Run(backend, func(t *testing.T) {
@@ -352,6 +378,24 @@ func TestDynamicBackendDoesNotFallbackToBackendUnsupportedByPinnedAccount(t *tes
 	_, err := ResolveBackend(&model.Task{Backend: config.DynamicBackend, Account: "work"}, cfg)
 	testutil.Error(t, err)
 	testutil.Contains(t, err.Error(), "no backend configured")
+}
+
+func TestDynamicBackendFiltersForConfiguredDefaultAccount(t *testing.T) {
+	cfg := config.Config{
+		DefaultAccount: "work",
+		Accounts:       map[string]config.Account{"work": {ClaudeConfigDir: t.TempDir()}},
+		Backends: map[string]config.Backend{
+			"codex":  {Command: "codex"},
+			"claude": {Command: "claude"},
+		},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "codex", Probe: config.ProbeNone},
+			{Backend: "claude", Probe: config.ProbeNone},
+		}},
+	}
+	choice := resolveTaskChoice(config.DynamicBackend, "", cfg, "", false)
+	testutil.Equal(t, choice.Backend, "claude")
+	testutil.Equal(t, choice.Account, "work")
 }
 
 func TestUnpinnedLandingOnDefaultIsStoredBlankAndRouted(t *testing.T) {

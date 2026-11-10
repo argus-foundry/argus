@@ -72,6 +72,11 @@ func resolveCoordinatorBackend(explicit, project string, cfg config.Config, acco
 		}
 	}
 	preferred := cfg.Projects[project].Backend
+	if explicit == config.DynamicBackend {
+		// An explicit dynamic choice asks the coordinator to consider every
+		// Claude-capable tier, not only the project's concrete backend tier.
+		preferred = ""
+	}
 	if b, ok := cfg.Backends[preferred]; !ok || !IsClaudeBackend(b.Command) {
 		preferred = ""
 	}
@@ -83,6 +88,21 @@ func resolveCoordinatorBackend(explicit, project string, cfg config.Config, acco
 		if p := cfg.ProjectAccounts[project]; p != "" && cfg.ValidateAccount(p) == nil {
 			pin = p
 		}
+	}
+	for i := 0; i < len(filtered.BackendRouting.Tiers); {
+		tier := filtered.BackendRouting.Tiers[i]
+		account := pin
+		if account == "" {
+			account = tier.Account
+		}
+		if account == "" {
+			account = cfg.ResolveAccount("", project)
+		}
+		if !cfg.AccountSupports(account, cfg.Backends[tier.Backend].Command) {
+			filtered.BackendRouting.Tiers = append(filtered.BackendRouting.Tiers[:i], filtered.BackendRouting.Tiers[i+1:]...)
+			continue
+		}
+		i++
 	}
 	if choice := backendtier.ResolveChoice(filtered, preferred, pin); choice.Backend != "" {
 		return choice.Backend

@@ -122,6 +122,16 @@ func TestNewTaskForm_Account(t *testing.T) {
 		testutil.DeepEqual(t, f.accountNames, []string{"default", "both", "cx", "work"})
 	})
 
+	t.Run("dynamic coordinator options exclude Codex-only accounts", func(t *testing.T) {
+		f := accountForm(t, config.DynamicBackend)
+		f.SetBackendRoutingTiers([]config.BackendTier{
+			{Backend: "x", Probe: config.ProbeNone},
+			{Backend: "b", Probe: config.ProbeNone},
+		})
+		f.SetCoordinatorBackendRouting()
+		testutil.DeepEqual(t, f.accountNames, []string{"default", "both", "work"})
+	})
+
 	t.Run("backend change keeps a selection that still applies", func(t *testing.T) {
 		f := accountForm(t, "b")
 		f.focused = ntFieldAccount

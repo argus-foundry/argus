@@ -119,6 +119,7 @@ type NewTaskForm struct {
 	backends             map[string]config.Backend
 	backendTiers         []config.BackendTier
 	globalDefaultBackend string
+	coordinatorRouting   bool
 
 	// project typeahead state
 	projInput     []rune   // typed text for project filter
@@ -221,6 +222,20 @@ func NewNewTaskForm(projects map[string]config.Project, defaultProject string, b
 // at least one routed backend (or the concrete default fallback).
 func (f *NewTaskForm) SetBackendRoutingTiers(tiers []config.BackendTier) {
 	f.backendTiers = append([]config.BackendTier(nil), tiers...)
+	f.rebuildAccountOptions(true)
+}
+
+// SetCoordinatorBackendRouting narrows dynamic account choices to Claude
+// identities, matching Hera coordinator routing's Claude-only invariant.
+func (f *NewTaskForm) SetCoordinatorBackendRouting() {
+	f.coordinatorRouting = true
+	filtered := f.backendTiers[:0]
+	for _, tier := range f.backendTiers {
+		if b, ok := f.backends[tier.Backend]; ok && backendkind.Of(b.Command) == backendkind.Claude {
+			filtered = append(filtered, tier)
+		}
+	}
+	f.backendTiers = filtered
 	f.rebuildAccountOptions(true)
 }
 
@@ -506,6 +521,9 @@ func (f *NewTaskForm) rebuildAccountOptions(keep bool) {
 func (f *NewTaskForm) accountSupportsCurrentBackend(account AccountOption, tool string) bool {
 	if f.backendIdx < 0 || f.backendIdx >= len(f.backendNames) || f.backendNames[f.backendIdx] != config.DynamicBackend {
 		return account.supports(tool)
+	}
+	if f.coordinatorRouting {
+		return account.supports(string(backendkind.Claude))
 	}
 	for _, tier := range f.backendTiers {
 		if b, ok := f.backends[tier.Backend]; ok && account.supports(accountToolForBackend(b)) {
