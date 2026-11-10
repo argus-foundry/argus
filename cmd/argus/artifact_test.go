@@ -44,6 +44,7 @@ func TestArtifactCommand_PublishSuccess(t *testing.T) {
 	env, n := stubDaemon(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.Method + " " + r.URL.Path
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		testutil.NoError(t, r.ParseMultipartForm(1<<20))
 		gotAccount, gotTitle, gotUpdate = r.FormValue("account"), r.FormValue("title"), r.FormValue("update")
 		f, hdr, err := r.FormFile("file")

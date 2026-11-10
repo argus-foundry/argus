@@ -120,17 +120,19 @@ func parseArtifactPublishArgs(args []string) (artifactPublishOpts, error) {
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
 		case "--account", "--title", "--update":
-			if i+1 >= len(args) {
+			rest := args[i+1:]
+			if len(rest) == 0 {
 				return o, fmt.Errorf("%s requires a value", a)
 			}
+			val := rest[0]
 			i++
 			switch a {
 			case "--account":
-				o.account = args[i]
+				o.account = val
 			case "--title":
-				o.title = args[i]
+				o.title = val
 			default:
-				o.update = args[i]
+				o.update = val
 			}
 		default:
 			if strings.HasPrefix(a, "-") {

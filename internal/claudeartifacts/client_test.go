@@ -15,7 +15,7 @@ import (
 	"github.com/argus-foundry/argus/internal/testutil"
 )
 
-const testToken = "sk-ant-oat01-SECRET-test-token"
+const fakeBearer = "fixture-bearer-0001"
 
 // rpcCall is one JSON-RPC request the fake endpoint received.
 type rpcCall struct {
@@ -124,14 +124,14 @@ func publishHandler(t *testing.T) func(w http.ResponseWriter, c rpcCall) {
 
 func TestClientPublish_RequestShape(t *testing.T) {
 	f, srv := newFakeEndpoint(t, publishHandler(t))
-	_, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{Name: "p.html", Content: []byte(page), Title: "My page"})
+	_, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{Name: "p.html", Content: []byte(page), Title: "My page"})
 	testutil.NoError(t, err)
 	testutil.Equal(t, f.count(), 1)
 	c := f.call(0)
 	for _, tc := range []struct{ name, got, want string }{
 		{"path", c.Path, "/api/artifacts/mcp"},
 		{"method", c.Method, http.MethodPost},
-		{"authorization", c.Header.Get("Authorization"), "Bearer " + testToken},
+		{"authorization", c.Header.Get("Authorization"), "Bearer " + fakeBearer},
 		{"beta", c.Header.Get("anthropic-beta"), "oauth-2025-04-20"},
 		{"accept", c.Header.Get("Accept"), "application/json, text/event-stream"},
 		{"content-type", c.Header.Get("Content-Type"), "application/json"},
@@ -154,7 +154,7 @@ func TestClientPublish_RequestShape(t *testing.T) {
 
 func TestClientPublish_CreateReturnsLink(t *testing.T) {
 	_, srv := newFakeEndpoint(t, publishHandler(t))
-	res, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
+	res, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
 	testutil.NoError(t, err)
 	testutil.Equal(t, res.URL, "https://claude.ai/artifact/NEWSLUG")
 	testutil.Equal(t, res.Slug, "NEWSLUG")
@@ -164,7 +164,7 @@ func TestClientPublish_CreateReturnsLink(t *testing.T) {
 
 func TestClientPublish_DefaultTitleFromFilename(t *testing.T) {
 	f, srv := newFakeEndpoint(t, publishHandler(t))
-	_, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{Name: "/tmp/weekly-report.html", Content: []byte(page)})
+	_, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{Name: "/tmp/weekly-report.html", Content: []byte(page)})
 	testutil.NoError(t, err)
 	testutil.Equal(t, fmt.Sprint(f.call(0).Body.Params.Arguments["title"]), "weekly-report")
 }
@@ -176,7 +176,7 @@ func TestClientPublish_Update(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, srv := newFakeEndpoint(t, publishHandler(t))
-			res, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{
+			res, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{
 				Name: "p.html", Content: []byte(page), Title: tc.title, UpdateURL: tc.link,
 			})
 			testutil.NoError(t, err)
@@ -210,7 +210,7 @@ func TestClientPublish_UpdateFallsBackToGivenLink(t *testing.T) {
 		testutil.Equal(t, fmt.Sprint(c.Body.Params.Arguments["base_version"]), "7")
 		toolOK(w, c.Body.ID, map[string]any{"version": 8})
 	})
-	res, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{
+	res, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{
 		Name: "p.html", Content: []byte(page), UpdateURL: "https://claude.ai/artifact/abc",
 	})
 	testutil.NoError(t, err)
@@ -221,7 +221,7 @@ func TestClientPublish_UpdateFallsBackToGivenLink(t *testing.T) {
 
 func TestClientPublish_BadUpdateLinkMakesNoRequest(t *testing.T) {
 	f, srv := newFakeEndpoint(t, publishHandler(t))
-	_, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{
+	_, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{
 		Name: "p.html", Content: []byte(page), UpdateURL: "https://example.com/artifact/abc",
 	})
 	testutil.ErrorIs(t, err, ErrInvalidInput)
@@ -314,7 +314,7 @@ func TestClient_ErrorMapping(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, srv := newFakeEndpoint(t, tc.handle)
-			_, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
+			_, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
 			testutil.Error(t, err)
 			if tc.wantIs != nil {
 				testutil.ErrorIs(t, err, tc.wantIs)
@@ -325,7 +325,7 @@ func TestClient_ErrorMapping(t *testing.T) {
 			for _, want := range tc.wantText {
 				testutil.Contains(t, err.Error(), want)
 			}
-			testutil.False(t, strings.Contains(err.Error(), testToken))
+			testutil.False(t, strings.Contains(err.Error(), fakeBearer))
 			testutil.False(t, strings.Contains(err.Error(), strings.Repeat("x", 301)))
 		})
 	}
@@ -340,7 +340,7 @@ func TestClient_SSEResponse(t *testing.T) {
 		}})
 		_, _ = fmt.Fprintf(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\nevent: message\ndata: %s\n\n", final)
 	})
-	res, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
+	res, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
 	testutil.NoError(t, err)
 	testutil.Equal(t, res.URL, "https://claude.ai/artifact/S")
 }
@@ -352,7 +352,7 @@ func TestClient_StructuredContentPreferred(t *testing.T) {
 			"content":           []map[string]any{{"type": "text", "text": `{"slug":"FROMTEXT"}`}},
 		}})
 	})
-	res, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
+	res, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
 	testutil.NoError(t, err)
 	testutil.Equal(t, res.Slug, "FROMSTRUCT")
 }
@@ -361,29 +361,29 @@ func TestClient_MissingResultContent(t *testing.T) {
 	_, srv := newFakeEndpoint(t, func(w http.ResponseWriter, c rpcCall) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": c.Body.ID, "result": map[string]any{"content": []any{}}})
 	})
-	_, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
+	_, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
 	testutil.Error(t, err)
 	testutil.Contains(t, err.Error(), "no content")
 }
 
 func TestClient_NetworkErrorRedacted(t *testing.T) {
 	c := &Client{BaseURL: "http://127.0.0.1:1", UserAgent: "argus/test"}
-	_, err := c.Publish(context.Background(), testToken, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
+	_, err := c.Publish(context.Background(), fakeBearer, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
 	testutil.Error(t, err)
-	testutil.False(t, strings.Contains(err.Error(), testToken))
+	testutil.False(t, strings.Contains(err.Error(), fakeBearer))
 }
 
 func TestClientProbe(t *testing.T) {
 	t.Run("available", func(t *testing.T) {
 		f, srv := newFakeEndpoint(t, publishHandler(t))
-		testutil.NoError(t, testClient(srv).Probe(context.Background(), testToken))
+		testutil.NoError(t, testClient(srv).Probe(context.Background(), fakeBearer))
 		c := f.call(0)
 		testutil.Equal(t, c.Body.Params.Name, "list_artifacts")
 		testutil.Equal(t, fmt.Sprint(c.Body.Params.Arguments["limit"]), "1")
 	})
 	t.Run("unavailable", func(t *testing.T) {
 		_, srv := newFakeEndpoint(t, func(w http.ResponseWriter, _ rpcCall) { unavailable(w) })
-		testutil.ErrorIs(t, testClient(srv).Probe(context.Background(), testToken), ErrAccountUnavailable)
+		testutil.ErrorIs(t, testClient(srv).Probe(context.Background(), fakeBearer), ErrAccountUnavailable)
 	})
 }
 
@@ -424,8 +424,8 @@ func TestParseArtifactSlug(t *testing.T) {
 }
 
 func TestRedactedError(t *testing.T) {
-	inner := fmt.Errorf("dial with %s: %w", testToken, ErrUnauthorized)
-	err := error(redactedError{err: inner, token: testToken})
+	inner := fmt.Errorf("dial with %s: %w", fakeBearer, ErrUnauthorized)
+	err := error(redactedError{err: inner, token: fakeBearer})
 	testutil.Equal(t, err.Error(), "dial with [redacted]: "+ErrUnauthorized.Error())
 	testutil.ErrorIs(t, err, ErrUnauthorized)
 }
@@ -456,7 +456,7 @@ func TestClientPublish_UpdateWithoutVersion(t *testing.T) {
 	_, srv := newFakeEndpoint(t, func(w http.ResponseWriter, c rpcCall) {
 		toolOK(w, c.Body.ID, map[string]any{"slug": "abc"})
 	})
-	_, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{
+	_, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{
 		Name: "p.html", Content: []byte(page), UpdateURL: "https://claude.ai/artifact/abc",
 	})
 	testutil.Error(t, err)
@@ -467,7 +467,7 @@ func TestClientPublish_NoSlugOrURL(t *testing.T) {
 	_, srv := newFakeEndpoint(t, func(w http.ResponseWriter, c rpcCall) {
 		toolOK(w, c.Body.ID, map[string]any{"version": "v1"})
 	})
-	_, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
+	_, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{Name: "p.html", Content: []byte(page), Title: "T"})
 	testutil.Error(t, err)
 	testutil.Contains(t, err.Error(), "no slug or url")
 }

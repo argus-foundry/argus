@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	apiPubTokenOK      = "tok-ok-API-secret"
-	apiPubTokenGone    = "tok-gone-API-secret"
-	apiPubTokenExpired = "tok-expired-API-secret"
-	apiPublishPage     = "<!DOCTYPE html><html><body>report</body></html>"
+	apiAcctOK      = "tok-ok-a1"
+	apiAcctGone    = "tok-gone-a2"
+	apiAcctExpired = "tok-expired-a3"
+	apiPublishPage = "<!DOCTYPE html><html><body>report</body></html>"
 )
 
 // fakeArtifactsUpstream stands in for the claude.ai artifacts endpoint.
@@ -34,11 +34,11 @@ func fakeArtifactsUpstream(t *testing.T) (*httptest.Server, *atomic.Int32) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		switch r.Header.Get("Authorization") {
-		case "Bearer " + apiPubTokenGone:
+		case "Bearer " + apiAcctGone:
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = io.WriteString(w, "the artifact tools on this server aren't available to this session")
 			return
-		case "Bearer " + apiPubTokenExpired:
+		case "Bearer " + apiAcctExpired:
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -60,7 +60,7 @@ func testPublishAPI(t *testing.T) (http.Handler, *atomic.Int32) {
 		"default":  "env://GONE",
 		"expired":  "env://EXPIRED",
 	}}
-	tokens := map[string]string{"env://OK": apiPubTokenOK, "env://GONE": apiPubTokenGone, "env://EXPIRED": apiPubTokenExpired}
+	tokens := map[string]string{"env://OK": apiAcctOK, "env://GONE": apiAcctGone, "env://EXPIRED": apiAcctExpired}
 	srv.SetArtifactPublisher(&claudeartifacts.Publisher{
 		Client:  &claudeartifacts.Client{HTTP: upstream.Client(), BaseURL: upstream.URL},
 		Config:  func() config.Config { return cfg },
@@ -103,7 +103,7 @@ func doPublish(t *testing.T, h http.Handler, token string, fields map[string]str
 
 func assertNoAPIToken(t *testing.T, body string) {
 	t.Helper()
-	for _, tok := range []string{apiPubTokenOK, apiPubTokenGone, apiPubTokenExpired} {
+	for _, tok := range []string{apiAcctOK, apiAcctGone, apiAcctExpired} {
 		testutil.False(t, strings.Contains(body, tok))
 	}
 }

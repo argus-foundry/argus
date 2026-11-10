@@ -21,11 +21,14 @@ import (
 	"github.com/argus-foundry/argus/internal/testutil"
 )
 
+// notAllowed is the one refusal every confinement failure returns.
+var notAllowed = errNotAllowedSource.Error()
+
 const (
-	pubTokenPersonal = "tok-ok-PERSONAL-secret"
-	pubTokenWork     = "tok-gone-WORK-secret"
-	pubTokenOther    = "tok-gone-OTHER-secret"
-	publishPage      = "<!DOCTYPE html><html><body>report</body></html>"
+	bearerPersonal = "tok-ok-personal-fixture"
+	bearerWork     = "tok-gone-work-fixture"
+	bearerOther    = "tok-gone-other-fixture"
+	publishPage    = "<!DOCTYPE html><html><body>report</body></html>"
 )
 
 // fakeArtifactsEndpoint stands in for the claude.ai artifacts endpoint: a
@@ -75,9 +78,9 @@ func testPublishServer(t *testing.T, withTasks bool) (*Server, *mockArtifactStor
 	}
 	endpoint, n := fakeArtifactsEndpoint(t)
 	tokens := map[string]string{
-		"src-personal": pubTokenPersonal,
-		"src-work":     pubTokenWork,
-		"src-other":    pubTokenOther,
+		"src-personal": bearerPersonal,
+		"src-work":     bearerWork,
+		"src-other":    bearerOther,
 	}
 	cfg := config.Config{ArtifactTokens: map[string]string{
 		"personal": "env://src-personal",
@@ -141,7 +144,7 @@ func decodePublishResult(t *testing.T, cr ToolCallResult) publishResultJSON {
 func assertNoToken(t *testing.T, texts ...string) {
 	t.Helper()
 	for _, s := range texts {
-		for _, tok := range []string{pubTokenPersonal, pubTokenWork, pubTokenOther} {
+		for _, tok := range []string{bearerPersonal, bearerWork, bearerOther} {
 			testutil.False(t, strings.Contains(s, tok))
 		}
 	}
@@ -192,7 +195,7 @@ func TestArtifactPublish_Errors(t *testing.T) {
 		}, ".html or .htm"},
 		{"missing file", func(string) map[string]any {
 			return map[string]any{"path": "/nonexistent/x.html", "account": "personal", "id": "abc123"}
-		}, "x.html"},
+		}, notAllowed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, store, n := testPublishServer(t, true)
@@ -312,30 +315,30 @@ func confineCases(t *testing.T, name string) []struct {
 	}{
 		{"inside worktree", func(f confineFixture) string { return writeAt(t, filepath.Join(f.worktree, "out", name), publishPage) }, ""},
 		{"temp root", func(f confineFixture) string { return writeAt(t, filepath.Join(f.tmpRoot, name), publishPage) }, ""},
-		{"outside the roots", func(f confineFixture) string { return writeAt(t, filepath.Join(f.outside, name), publishPage) }, "outside task abc123"},
+		{"outside the roots", func(f confineFixture) string { return writeAt(t, filepath.Join(f.outside, name), publishPage) }, notAllowed},
 		{"symlink final component", func(f confineFixture) string {
 			target := writeAt(t, filepath.Join(f.outside, "id_ed25519"+filepath.Ext(name)), publishPage)
 			link := filepath.Join(f.worktree, name)
 			testutil.NoError(t, os.Symlink(target, link))
 			return link
-		}, "is a symlink;"},
+		}, notAllowed},
 		{"symlinked parent pointing outside", func(f confineFixture) string {
 			writeAt(t, filepath.Join(f.outside, name), publishPage)
 			testutil.NoError(t, os.Symlink(f.outside, filepath.Join(f.worktree, "sub")))
 			return filepath.Join(f.worktree, "sub", name)
-		}, "outside task abc123"},
+		}, notAllowed},
 		{"dot-dot escape", func(f confineFixture) string {
 			writeAt(t, filepath.Join(f.outside, name), publishPage)
 			return filepath.Join(f.worktree, "..", "outside", name)
-		}, "outside task abc123"},
+		}, notAllowed},
 		{"hard-linked file", func(f confineFixture) string {
 			target := writeAt(t, filepath.Join(f.outside, name), publishPage)
 			link := filepath.Join(f.worktree, name)
 			testutil.NoError(t, os.Link(target, link))
 			return link
-		}, "more than one hard link"},
-		{"under a deny-read path", func(f confineFixture) string { return writeAt(t, filepath.Join(f.denied, name), publishPage) }, "will not read it"},
-		{"missing file", func(f confineFixture) string { return filepath.Join(f.worktree, "nope"+filepath.Ext(name)) }, "no such file"},
+		}, notAllowed},
+		{"under a deny-read path", func(f confineFixture) string { return writeAt(t, filepath.Join(f.denied, name), publishPage) }, notAllowed},
+		{"missing file", func(f confineFixture) string { return filepath.Join(f.worktree, "nope"+filepath.Ext(name)) }, notAllowed},
 	}
 }
 
@@ -372,7 +375,7 @@ func TestArtifactPublish_SpoofedTaskConfinedToItsRoots(t *testing.T) {
 
 	cr := callTool(t, s, "artifact_publish", map[string]any{"path": writeAt(t, filepath.Join(f.outside, "r.html"), publishPage), "account": "personal", "id": "def456"})
 	testutil.True(t, cr.IsError)
-	testutil.Contains(t, cr.Content[0].Text, "outside task def456")
+	testutil.Contains(t, cr.Content[0].Text, notAllowed)
 	testutil.Equal(t, n.Load(), int32(0))
 }
 
@@ -401,7 +404,7 @@ func TestArtifactRegister_ConfinesFolder(t *testing.T) {
 		writeAt(t, filepath.Join(f.outside, "shots", "a.png"), "png")
 		cr := callArtifactRegister(t, s, map[string]any{"path": filepath.Join(f.outside, "shots"), "id": "abc123"})
 		testutil.True(t, cr.IsError)
-		testutil.Contains(t, cr.Content[0].Text, "outside task abc123")
+		testutil.Contains(t, cr.Content[0].Text, notAllowed)
 		testutil.Equal(t, len(store.saved), 0)
 	})
 	t.Run("folder under deny-read refused", func(t *testing.T) {
@@ -410,7 +413,7 @@ func TestArtifactRegister_ConfinesFolder(t *testing.T) {
 		writeAt(t, filepath.Join(f.denied, "shots", "a.png"), "png")
 		cr := callArtifactRegister(t, s, map[string]any{"path": filepath.Join(f.denied, "shots"), "id": "abc123"})
 		testutil.True(t, cr.IsError)
-		testutil.Contains(t, cr.Content[0].Text, "will not read it")
+		testutil.Contains(t, cr.Content[0].Text, notAllowed)
 		testutil.Equal(t, len(store.saved), 0)
 	})
 	t.Run("hard-linked member skipped", func(t *testing.T) {
@@ -444,8 +447,7 @@ func TestConfinedRead(t *testing.T) {
 	})
 	t.Run("directory", func(t *testing.T) {
 		_, err := s.confinedRead(task, f.worktree, 10)
-		testutil.Error(t, err)
-		testutil.Contains(t, err.Error(), "not a regular file")
+		testutil.ErrorIs(t, err, errNotAllowedSource)
 	})
 }
 
@@ -732,4 +734,67 @@ func TestCopyArtifact_StreamOverCap(t *testing.T) {
 	testutil.Contains(t, err.Error(), "byte cap")
 	_, statErr := os.Stat(filepath.Join(agent.ArtifactsDir("abc123"), "big.txt"))
 	testutil.True(t, os.IsNotExist(statErr))
+}
+
+// TestConfine_NoExistenceOracle: a refused path tells the caller nothing about
+// whether it exists or why it was refused.
+func TestConfine_NoExistenceOracle(t *testing.T) {
+	s, _, _ := testPublishServer(t, true)
+	logs := captureLog(t)
+	f := confineTask(t, s, true)
+	existing := writeAt(t, filepath.Join(f.outside, "real.html"), publishPage)
+	missing := filepath.Join(f.outside, "ghost.html")
+	denied := writeAt(t, filepath.Join(f.denied, "d.html"), publishPage)
+	var texts []string
+	for _, p := range []string{existing, missing, denied} {
+		cr := callTool(t, s, "artifact_publish", map[string]any{"path": p, "account": "personal", "id": "abc123"})
+		testutil.True(t, cr.IsError)
+		texts = append(texts, cr.Content[0].Text)
+		reg := callArtifactRegister(t, s, map[string]any{"path": p, "id": "abc123"})
+		testutil.True(t, reg.IsError)
+		texts = append(texts, strings.TrimPrefix(reg.Content[0].Text, "failed to register artifact: "))
+	}
+	for _, txt := range texts {
+		testutil.Equal(t, txt, notAllowed)
+	}
+	// The specific reason stays daemon-side.
+	testutil.Contains(t, logs.String(), "[artifacts] refused source")
+	testutil.Contains(t, logs.String(), "outside the task's writable directories")
+	testutil.Contains(t, logs.String(), "deny-read")
+	testutil.False(t, strings.Contains(logs.String(), "report</body>"))
+}
+
+// TestConfine_CaseVariantDenyPath: on a case-insensitive filesystem a
+// differently-cased spelling of a deny-read directory still resolves into it
+// and must be refused.
+func TestConfine_CaseVariantDenyPath(t *testing.T) {
+	s, store, n := testPublishServer(t, true)
+	f := confineTask(t, s, true)
+	writeAt(t, filepath.Join(f.denied, "r.html"), publishPage)
+	variant := filepath.Join(f.worktree, "SECRETS", "r.html")
+	if _, err := os.Stat(variant); err != nil {
+		t.Skip("temp filesystem is case-sensitive")
+	}
+	cr := callTool(t, s, "artifact_publish", map[string]any{"path": variant, "account": "personal", "id": "abc123"})
+	testutil.True(t, cr.IsError)
+	testutil.Contains(t, cr.Content[0].Text, notAllowed)
+	testutil.Equal(t, n.Load(), int32(0))
+	reg := callArtifactRegister(t, s, map[string]any{"path": variant, "id": "abc123"})
+	testutil.True(t, reg.IsError)
+	testutil.Equal(t, len(store.saved), 0)
+}
+
+func TestCanonicalPath(t *testing.T) {
+	dir := t.TempDir()
+	real, err := filepath.EvalSymlinks(dir)
+	testutil.NoError(t, err)
+	testutil.Equal(t, canonicalPath(dir), real)
+	testutil.Equal(t, canonicalPath(""), "")
+	testutil.Equal(t, canonicalPath("/no/such/dir/x"), "/no/such/dir/x")
+	if descriptorPathCanonical {
+		upper := filepath.Join(filepath.Dir(dir), strings.ToUpper(filepath.Base(dir)))
+		if _, err := os.Stat(upper); err == nil {
+			testutil.Equal(t, canonicalPath(upper), real)
+		}
+	}
 }

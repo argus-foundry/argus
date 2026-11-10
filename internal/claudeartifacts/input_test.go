@@ -53,7 +53,7 @@ func TestClientPublish_InvalidInputMakesNoRequest(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, srv := newFakeEndpoint(t, publishHandler(t))
-			_, err := testClient(srv).Publish(context.Background(), testToken, PublishInput{Name: tc.file, Content: tc.content, Title: "T"})
+			_, err := testClient(srv).Publish(context.Background(), fakeBearer, PublishInput{Name: tc.file, Content: tc.content, Title: "T"})
 			testutil.ErrorIs(t, err, ErrInvalidInput)
 			testutil.Equal(t, f.count(), 0)
 		})

@@ -255,7 +255,7 @@ func (c *Client) doCallTool(ctx context.Context, token, name string, args, out a
 	payload := lastSSEData(raw)
 	var rpc rpcResponse
 	if err := json.Unmarshal(payload, &rpc); err != nil {
-		return fmt.Errorf("%s: decode response: %v: %s", name, err, excerpt(payload))
+		return fmt.Errorf("%s: decode response: %w: %s", name, err, excerpt(payload))
 	}
 	if rpc.Error != nil {
 		return fmt.Errorf("%s: JSON-RPC error %d: %s", name, rpc.Error.Code, rpc.Error.Message)
@@ -283,7 +283,7 @@ func (c *Client) doCallTool(ctx context.Context, token, name string, args, out a
 		return fmt.Errorf("%s: result has no content", name)
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("%s: decode result: %v: %s", name, err, excerpt(body))
+		return fmt.Errorf("%s: decode result: %w: %s", name, err, excerpt(body))
 	}
 	return nil
 }

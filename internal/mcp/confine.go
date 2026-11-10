@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,7 @@ import (
 )
 
 // Confinement of agent-supplied paths (add-argus-artifact-publish security
-// review). The MCP server runs inside the unsandboxed daemon and agents name
+// reviews). The MCP server runs inside the unsandboxed daemon and agents name
 // files for it to read (artifact_publish uploads them, artifact_register
 // copies them into storage served over REST). Every such read goes through
 // confinedOpen, for every task, sandboxed or not:
@@ -25,19 +26,26 @@ import (
 //     own roots: naming another task only reaches that task's worktree;
 //   - open with O_NOFOLLOW (a symlink as the final component is refused) and
 //     O_NONBLOCK (a FIFO can't hang the handler), then fstat the descriptor:
-//     it must be a regular file with one link (a hard link could alias a file
-//     outside the roots);
-//   - resolve the path's real location and require it inside the task's
+//     a regular file with one link (a hard link could alias a file outside
+//     the roots);
+//   - take the file's location from the OPEN DESCRIPTOR (darwin F_GETPATH, in
+//     the filesystem's canonical case) and require it inside the task's
 //     writable roots (agent.SandboxWriteRoots) and outside its deny-read paths
-//     (agent.SandboxDenyReadPaths);
-//   - require the descriptor and the resolved path to be the SAME file
-//     (os.SameFile on dev/inode), so a parent directory swapped between the
-//     open and the check is caught, and read only from that descriptor.
+//     (agent.SandboxDenyReadPaths), both canonicalized the same way, so a
+//     case variant (~/.AWS) or a symlinked parent can't slip past;
+//   - require the descriptor and that path to be the same file, re-fstat the
+//     descriptor (still regular, still one link), and read only from it.
 //
-// darwin's F_GETPATH would name the descriptor's path directly, but x/sys
-// exposes no wrapper and a raw pointer fcntl is unsafe; the dev/inode match
-// gives the same guarantee for a single-linked file, which the link-count
-// check enforces.
+// Off darwin there is no F_GETPATH: the location comes from resolving the
+// name (no case canonicalization) and the same-file check is what catches a
+// parent swapped after the open. See descriptorPathCanonical.
+//
+// Every refusal returns the same errNotAllowedSource, so a caller can't use
+// the tools as an existence or permission oracle for files outside its
+// roots; the specific reason is logged daemon-side under [artifacts].
+
+// errNotAllowedSource is the one error every confinement refusal returns.
+var errNotAllowedSource = errors.New("path is not an allowed artifact source (use a regular file in your task's worktree or a temp dir)")
 
 // SetPathPolicy wires how the server finds a task's writable roots and
 // deny-read paths (agent.SandboxWriteRoots / agent.SandboxDenyReadPaths over
@@ -54,17 +62,33 @@ func (s *Server) taskPathPolicy(task *model.Task) (write, deny []string) {
 	return agent.SandboxWriteRoots(task, config.Config{}), agent.SandboxDenyReadPaths(task, config.Config{})
 }
 
-// underAny reports whether real lies at or below one of roots (each
-// symlink-resolved before comparing).
+// canonicalPath returns p as the filesystem names it: symlinks resolved and,
+// on darwin, the on-disk case (from the opened directory's descriptor). A
+// path that can't be opened is returned symlink-resolved, or as given.
+func canonicalPath(p string) string {
+	if p == "" {
+		return p
+	}
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		p = r
+	}
+	if f, err := os.Open(p); err == nil { //nolint:gosec // G304: a configured root/deny path, opened only to read its canonical name.
+		defer f.Close() //nolint:errcheck // read-only
+		if dp, err := descriptorPath(f); err == nil {
+			return filepath.Clean(dp)
+		}
+	}
+	return filepath.Clean(p)
+}
+
+// underAny reports whether real lies at or below one of roots, comparing
+// canonical forms of each root.
 func underAny(real string, roots []string) bool {
 	for _, root := range roots {
 		if root == "" {
 			continue
 		}
-		if r, err := filepath.EvalSymlinks(root); err == nil {
-			root = r
-		}
-		root = filepath.Clean(root)
+		root = canonicalPath(root)
 		if real == root || strings.HasPrefix(real, root+string(filepath.Separator)) {
 			return true
 		}
@@ -72,25 +96,38 @@ func underAny(real string, roots []string) bool {
 	return false
 }
 
-// checkConfinedLocation resolves path and checks it against task's roots and
-// deny-read paths, returning the resolved path.
-func (s *Server) checkConfinedLocation(task *model.Task, path string) (string, error) {
-	abs, err := filepath.Abs(path)
+// refuseSource logs why an agent-supplied path was refused and returns the
+// one generic error callers see.
+func refuseSource(task *model.Task, path, reason string, err error) error {
 	if err != nil {
-		return "", fmt.Errorf("resolve %s: %w", path, err)
+		reason += ": " + err.Error()
 	}
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", fmt.Errorf("resolve %s: %w", path, err)
-	}
+	log.Printf("[artifacts] refused source: task=%s path=%q reason=%s", task.ID, path, reason)
+	return errNotAllowedSource
+}
+
+// checkLocation checks a descriptor-derived path against task's roots and
+// deny-read paths.
+func (s *Server) checkLocation(task *model.Task, path, real string) error {
 	write, deny := s.taskPathPolicy(task)
 	if !underAny(real, write) {
-		return "", fmt.Errorf("%s resolves to %s, outside task %s's writable directories (its worktree, temp dirs and extra_write paths); write the file there first", path, real, task.ID)
+		return refuseSource(task, path, "outside the task's writable directories ("+real+")", nil)
 	}
 	if underAny(real, deny) {
-		return "", fmt.Errorf("%s is under a sandbox deny-read path; Argus will not read it", path)
+		return refuseSource(task, path, "under a sandbox deny-read path ("+real+")", nil)
 	}
-	return real, nil
+	return nil
+}
+
+// checkRegularSingle requires a regular file with exactly one hard link.
+func checkRegularSingle(task *model.Task, path string, info os.FileInfo) error {
+	if !info.Mode().IsRegular() {
+		return refuseSource(task, path, "not a regular file", nil)
+	}
+	if linkCount(info) != 1 {
+		return refuseSource(task, path, fmt.Sprintf("%d hard links", linkCount(info)), nil)
+	}
+	return nil
 }
 
 // confinedOpen opens an agent-supplied file for reading on task's behalf,
@@ -99,14 +136,14 @@ func (s *Server) checkConfinedLocation(task *model.Task, path string) (string, e
 func (s *Server) confinedOpen(task *model.Task, path string) (*os.File, os.FileInfo, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve %s: %w", path, err)
+		return nil, nil, refuseSource(task, path, "resolve", err)
 	}
 	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: agent-supplied path, confined below before any byte is read.
 	if err != nil {
 		if errors.Is(err, syscall.ELOOP) {
-			return nil, nil, fmt.Errorf("%s is a symlink; pass the file it points to (inside your worktree or a temp dir)", path)
+			return nil, nil, refuseSource(task, path, "final component is a symlink", nil)
 		}
-		return nil, nil, err // *os.PathError already names the path
+		return nil, nil, refuseSource(task, path, "open", err)
 	}
 	ok := false
 	defer func() {
@@ -116,24 +153,53 @@ func (s *Server) confinedOpen(task *model.Task, path string) (*os.File, os.FileI
 	}()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
+		return nil, nil, refuseSource(task, path, "fstat", err)
 	}
-	if !info.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("%s is not a regular file", path)
-	}
-	if linkCount(info) > 1 {
-		return nil, nil, fmt.Errorf("%s has more than one hard link; Argus reads only single-linked files", path)
-	}
-	real, err := s.checkConfinedLocation(task, abs)
-	if err != nil {
+	if err := checkRegularSingle(task, path, info); err != nil {
 		return nil, nil, err
 	}
-	resolved, err := os.Lstat(real)
-	if err != nil || !os.SameFile(info, resolved) {
-		return nil, nil, fmt.Errorf("%s changed while it was being checked", path)
+	real, err := descriptorPath(f)
+	if err != nil {
+		return nil, nil, refuseSource(task, path, "descriptor path", err)
+	}
+	real = filepath.Clean(real)
+	if err := s.checkLocation(task, path, real); err != nil {
+		return nil, nil, err
+	}
+	if resolved, err := os.Lstat(real); err != nil || !os.SameFile(info, resolved) {
+		return nil, nil, refuseSource(task, path, "changed while it was being checked", err)
+	}
+	// Re-check the same descriptor after the location check: a link added
+	// meanwhile must not slip through.
+	info, err = f.Stat()
+	if err != nil {
+		return nil, nil, refuseSource(task, path, "fstat", err)
+	}
+	if err := checkRegularSingle(task, path, info); err != nil {
+		return nil, nil, err
 	}
 	ok = true
 	return f, info, nil
+}
+
+// confinedDir checks an agent-supplied directory (artifact_register's folder
+// form) the same way, from an opened descriptor. Each member is then opened
+// through confinedOpen.
+func (s *Server) confinedDir(task *model.Task, path string) error {
+	f, err := os.Open(path) //nolint:gosec // G304: agent-supplied dir, confined below before it is walked.
+	if err != nil {
+		return refuseSource(task, path, "open", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only
+	info, err := f.Stat()
+	if err != nil || !info.IsDir() {
+		return refuseSource(task, path, "not a directory", err)
+	}
+	real, err := descriptorPath(f)
+	if err != nil {
+		return refuseSource(task, path, "descriptor path", err)
+	}
+	return s.checkLocation(task, path, filepath.Clean(real))
 }
 
 // confinedRead reads an agent-supplied file of at most maxBytes through

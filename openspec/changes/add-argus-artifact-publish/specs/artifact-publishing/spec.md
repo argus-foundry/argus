@@ -63,8 +63,10 @@ The daemon runs outside the agent sandbox, so it SHALL NOT read a file on an age
 
 - open the file without following a symlink in its final component, and refuse a symlink;
 - require, from the open descriptor, a regular file with exactly one hard link;
-- resolve the path's real location and refuse it unless it lies inside the task's worktree, the sandbox profile's writable temp directories or the task's configured `extra_write` paths, and outside the sandbox's built-in and configured deny-read paths;
-- require the open descriptor and the resolved path to be the same file, and read only from that descriptor, enforcing the size cap while reading.
+- take the file's location from the open descriptor (on macOS, the filesystem's canonical path and case) and refuse it unless it lies inside the task's worktree, the sandbox profile's writable temp directories or the task's configured `extra_write` paths, and outside the sandbox's built-in and configured deny-read paths, with those roots and paths canonicalized the same way;
+- require the open descriptor and that location to be the same file, check the descriptor again (still a regular file with one link), and read only from that descriptor, enforcing the size cap while reading.
+
+Every refusal SHALL return the same generic error ("path is not an allowed artifact source"), whatever the reason (missing, unreadable, not regular, symlink, hard link, outside the roots, deny-read), so the tools cannot reveal whether a file exists. The specific reason SHALL be logged daemon-side under `[artifacts]`, without file contents. Off macOS the location comes from resolving the name, which does not canonicalize case.
 
 The calling task is self-reported (`id` or `cwd`): the MCP endpoint is shared and binds no connection to a task. Naming another task SHALL therefore confine the read to that task's roots, never widen it further. The REST endpoint and CLI carry the page's content in the request body, never a server-side path.
 
@@ -81,7 +83,7 @@ The calling task is self-reported (`id` or `cwd`): the MCP endpoint is shared an
 #### Scenario: Path outside the roots refused
 
 - **WHEN** a task, sandboxed or not, calls `artifact_publish` or `artifact_register` with a path that resolves outside its writable directories
-- **THEN** the call fails with an error saying the path is outside the task's writable directories, and the file is not read
+- **THEN** the call fails with the generic not-an-allowed-source error, and the file is not read
 
 #### Scenario: Symlink final component refused
 
@@ -102,6 +104,16 @@ The calling task is self-reported (`id` or `cwd`): the MCP endpoint is shared an
 
 - **WHEN** the given path lies inside a writable root but under a built-in or configured sandbox deny-read path
 - **THEN** the call fails and the file is not read
+
+#### Scenario: Case-variant spelling of a deny-read path refused
+
+- **WHEN** on a case-insensitive filesystem the given path spells a deny-read directory in a different case (for example `SECRETS` for `secrets`)
+- **THEN** the call fails and the file is not read
+
+#### Scenario: Refusals reveal nothing about the file
+
+- **WHEN** one call names an existing file outside the task's writable directories and another names a nonexistent path there
+- **THEN** both fail with the identical generic error, and the specific reason is only logged by the daemon
 
 #### Scenario: Spoofed task id confined to that task
 

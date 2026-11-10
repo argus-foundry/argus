@@ -164,7 +164,7 @@ func TestArtifactRegister_NonexistentSource(t *testing.T) {
 	s, _ := testServerWithArtifacts(t)
 	cr := callArtifactRegister(t, s, map[string]any{"path": "/no/such/file.html", "id": "abc123"})
 	testutil.True(t, cr.IsError)
-	testutil.Contains(t, cr.Content[0].Text, "Failed to register")
+	testutil.Contains(t, cr.Content[0].Text, "failed to register")
 }
 
 func TestArtifactRegister_SizeCap(t *testing.T) {
@@ -378,7 +378,7 @@ func TestConfinedRead_RejectsNonRegular(t *testing.T) {
 	task, _ := s.taskDB.Get("abc123")
 	_, err := s.confinedRead(task, fifo, 1024)
 	testutil.Error(t, err)
-	testutil.Contains(t, err.Error(), "not a regular file")
+	testutil.ErrorIs(t, err, errNotAllowedSource)
 }
 
 func TestArtifactRegister_FolderReportsReplaced(t *testing.T) {

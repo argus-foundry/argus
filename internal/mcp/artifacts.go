@@ -123,7 +123,7 @@ func (s *Server) registerArtifactFile(task *model.Task, path, title, typ string)
 	// can never contain a path separator or "..".
 	filename, err := model.SanitizeArtifactFilename(path)
 	if err != nil {
-		return nil, fmt.Errorf("invalid artifact path %q: %v", path, err)
+		return nil, fmt.Errorf("invalid artifact path %q: %w", path, err)
 	}
 
 	if _, err := model.ValidateArtifactRelPath(filename); err != nil {
@@ -141,11 +141,11 @@ func (s *Server) registerArtifactFile(task *model.Task, path, title, typ string)
 	src, info, err := s.confinedOpen(task, path)
 	if err != nil {
 		log.Printf("[mcp] artifact_register refused: id=%s path=%s err=%v", task.ID, path, err)
-		return nil, fmt.Errorf("Failed to register artifact: %w", err)
+		return nil, fmt.Errorf("failed to register artifact: %w", err)
 	}
 	defer src.Close() //nolint:errcheck // read-only
 	if maxBytes := model.MaxBytesForType(atype); info.Size() > maxBytes {
-		return nil, fmt.Errorf("Failed to register artifact: artifact exceeds %d byte cap (got %d)", maxBytes, info.Size())
+		return nil, fmt.Errorf("failed to register artifact: artifact exceeds %d byte cap (got %d)", maxBytes, info.Size())
 	}
 	return s.recordArtifact(task, filename, title, atype, src)
 }
@@ -156,7 +156,7 @@ func (s *Server) recordArtifact(task *model.Task, filename, title string, atype 
 	size, err := s.copyArtifact(task.ID, r, filename, atype)
 	if err != nil {
 		log.Printf("[mcp] artifact_register copy failed: id=%s file=%s err=%v", task.ID, filename, err)
-		return nil, fmt.Errorf("Failed to register artifact: %w", err)
+		return nil, fmt.Errorf("failed to register artifact: %w", err)
 	}
 
 	if title == "" {
@@ -175,7 +175,7 @@ func (s *Server) recordArtifact(task *model.Task, filename, title string, atype 
 		// unreferenced (and therefore unservable) file on disk.
 		os.Remove(filepath.Join(agent.ArtifactsDir(task.ID), filename)) //nolint:errcheck
 		log.Printf("[mcp] artifact_register manifest failed: id=%s err=%v", task.ID, err)
-		return nil, fmt.Errorf("Failed to record artifact: %w", err)
+		return nil, fmt.Errorf("failed to record artifact: %w", err)
 	}
 
 	return stored, nil
@@ -269,7 +269,7 @@ func (s *Server) registerArtifactFolder(id interface{}, task *model.Task, srcDir
 		return toolError(id, fmt.Sprintf("invalid folder path %q", srcDir))
 	}
 	// Confine the folder itself; each member is confined again as it is opened.
-	if _, err := s.checkConfinedLocation(task, srcDir); err != nil {
+	if err := s.confinedDir(task, srcDir); err != nil {
 		log.Printf("[mcp] artifact_register folder refused: id=%s err=%v", task.ID, err)
 		return toolError(id, err.Error())
 	}
@@ -601,7 +601,7 @@ func (s *Server) artifactPublishUnavailable(ctx context.Context, id interface{},
 func (s *Server) recordPublishedPage(task *model.Task, path, title string, content []byte) (*model.Artifact, error) {
 	filename, err := model.SanitizeArtifactFilename(path)
 	if err != nil {
-		return nil, fmt.Errorf("invalid artifact path %q: %v", path, err)
+		return nil, fmt.Errorf("invalid artifact path %q: %w", path, err)
 	}
 	if _, err := model.ValidateArtifactRelPath(filename); err != nil {
 		return nil, fmt.Errorf("invalid artifact path %q: reserved or unsafe name", path)
