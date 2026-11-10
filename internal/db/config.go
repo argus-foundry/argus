@@ -185,6 +185,16 @@ func (d *DB) Config() config.Config {
 	}
 
 	// Resident agent config (add-resident-agent). Absent keys keep the
+	if v := kv["resident.worker_accounts"]; v != "" {
+		if err := json.Unmarshal([]byte(v), &cfg.Resident.WorkerAccounts); err != nil {
+			slog.Warn("[resident] invalid worker_accounts setting", "err", err)
+		}
+	}
+	if v, ok := kv["resident.max_workers"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Resident.MaxWorkers = n
+		}
+	}
 	// DefaultConfig values (disabled, no name); config.toml still wins.
 	if v, ok := kv["resident.enabled"]; ok {
 		cfg.Resident.Enabled = v == "true"

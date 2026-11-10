@@ -38,13 +38,42 @@ func TestSettingsResident_CategoryAndRows(t *testing.T) {
 	sv := testSettingsView(t)
 	testutil.Equal(t, catResident.Label(), "Resident")
 	sv.setCategory(catResident)
-	testutil.Equal(t, len(sv.rows), 7)
+	testutil.Equal(t, len(sv.rows), 9)
 	selectRowInCategory(t, sv, catResident, srResident, resKeyName)
 	testutil.Contains(t, sv.SelectedRow().label, "(required)")
 	selectRowInCategory(t, sv, catResident, srResident, resKeyTools)
 	testutil.Contains(t, sv.SelectedRow().label, "config.toml")
 	testutil.True(t, sv.handleEnter()) // read-only pointer: no-op
 	testutil.False(t, sv.IsEditing())
+}
+
+func TestSettingsResidentRunningWorkers(t *testing.T) {
+	sv := testSettingsView(t)
+	sv.SetResidentRunningWorkers(3)
+	sv.setCategory(catResident)
+	selectRowInCategory(t, sv, catResident, srResident, resKeyEnabled)
+	testutil.Contains(t, sv.SelectedRow().label, "OFF — 3 workers still running")
+	sv.SetResidentRunningWorkers(0)
+	testutil.Equal(t, sv.SelectedRow().label, "Enabled: OFF")
+}
+
+func TestSettingsResidentMaxWorkers(t *testing.T) {
+	sv := testSettingsView(t)
+	residentEditField(t, sv, resKeyMaxWorkers, "3")
+	testutil.Equal(t, sv.database.Config().Resident.MaxWorkers, 3)
+	residentEditField(t, sv, resKeyMaxWorkers, "bad")
+	testutil.True(t, sv.IsEditing())
+	testutil.Equal(t, sv.database.Config().Resident.MaxWorkers, 3)
+}
+
+func TestSettingsResidentMaxWorkersOverride(t *testing.T) {
+	sv := testSettingsViewWithConfigToml(t, "[resident]\nmax_workers = 3\n")
+	sv.setCategory(catResident)
+	selectRowInCategory(t, sv, catResident, srResident, resKeyMaxWorkers)
+	testutil.Contains(t, sv.SelectedRow().label, "3 (config.toml)")
+	sv.handleEnter()
+	testutil.False(t, sv.IsEditing())
+	testutil.Contains(t, sv.residentMsg, "read-only")
 }
 
 func TestSettingsResident_EnableBlockedUntilNamed(t *testing.T) {

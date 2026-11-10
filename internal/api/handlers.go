@@ -815,6 +815,10 @@ func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 
 // --- Delete Task ---
 
+// deleteTaskAfterPrecheck is a test seam run between handleDeleteTask's
+// graduation pre-check and the refusal-capable db.Delete.
+var deleteTaskAfterPrecheck func(id string)
+
 // handleDeleteTask is a per-task destructive endpoint. Auth: requires a valid
 // token but NOT master. Under the single-tier model only the RCE/credential
 // denylist stays master-only: backends CRUD, self-update, and token
@@ -824,6 +828,36 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeErr(w, http.StatusNotFound, "task not found", nil)
+		return
+	}
+
+	// A graduate's restart intent must survive: refuse before any side effect.
+	if s.db.GraduationPending(id) {
+		uxlog.Log("[resident] api delete refused task=%s: graduation pending", id)
+		writeErr(w, http.StatusConflict, "", db.ErrGraduationPending)
+		return
+	}
+
+	if deleteTaskAfterPrecheck != nil {
+		deleteTaskAfterPrecheck(id)
+	}
+
+	// Delete the row FIRST: db.Delete refuses atomically while a graduation
+	// restart is pending, and a graduation can commit after the pre-check
+	// above. Only on success do we stop the session and remove its log and
+	// artifacts, so a refusal never leaves a stopped session / deleted log.
+	if err := s.db.Delete(id); err != nil {
+		if errors.Is(err, db.ErrGraduationPending) {
+			uxlog.Log("[resident] api delete refused task=%s: graduation pending (raced the pre-check)", id)
+			writeErr(w, http.StatusConflict, "", err)
+			return
+		}
+		if errors.Is(err, db.ErrResidentProtected) {
+			uxlog.Log("[resident] api delete refused task=%s: resident is protected", id)
+			writeErr(w, http.StatusConflict, "", err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
 
@@ -844,10 +878,6 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 	os.RemoveAll(agent.ArtifactsDir(id)) //nolint:errcheck,gosec // G304: id validated by db.Get; ArtifactsDir roots at ~/.argus/artifacts/<id>
 
-	if err := s.db.Delete(id); err != nil {
-		writeErr(w, http.StatusInternalServerError, "", err)
-		return
-	}
 	events.Emit(model.EventTypeTaskDeleted, id, nil)
 	// Drop any per-task cache entry so deleted tasks don't accumulate in
 	// the long-lived daemon process.
@@ -892,6 +922,10 @@ func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived boo
 	}
 	task.SetArchived(archived)
 	if err := s.db.Update(task); err != nil {
+		if errors.Is(err, db.ErrGraduationPending) {
+			writeErr(w, http.StatusConflict, "", err)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
@@ -1539,6 +1573,15 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 	// circuits before this gate even reads InitialPTYSize.
 	initCols, _ := sess.InitialPTYSize()
 	if !agent.MarginExceedsRerenderThreshold(initCols, int(cols)) {
+		return false, ""
+	}
+	// A pending graduate's restart belongs to the daemon graduation watcher
+	// (stray-job stop first, one restart). A width kick here would race it, so
+	// skip — fail closed: an unreadable marker counts as pending. The cols
+	// cache is invalidated so a resize after the graduation settles retries.
+	if pending, perr := s.db.GraduationPendingErr(taskID); perr != nil || pending {
+		uxlog.Log("[resident] kick skipped: graduation pending task=%s (err=%v)", taskID, perr)
+		s.invalidateColsCache(taskID)
 		return false, ""
 	}
 	// Now the expensive lookups. Re-check IsIdle here so the idle gate

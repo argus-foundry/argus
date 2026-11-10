@@ -1931,6 +1931,18 @@ func TestHera_SpawnWorker_ExplicitBackendPassesThrough(t *testing.T) {
 	testutil.Equal(t, wt.Backend, "claude-special")
 }
 
+func TestHera_SpawnWorker_AccountPassesThrough(t *testing.T) {
+	s, d := testHeraServer(t)
+	coord := seedCoordinator(t, s, d, "myorch", "/wt/coord")
+	var got string
+	spawn := s.heraSpawn
+	s.heraSpawn = func(in HeraSpawnInput) (*HeraSpawnResult, error) { got = in.Account; return spawn(in) }
+	resp := doRequest(t, s, "tools/call", ToolCallParams{Name: "hera_spawn_worker", Arguments: json.RawMessage(fmt.Sprintf(`{"cwd":%q,"prompt":"work","account":"work"}`, coord.Worktree))})
+	testutil.NoError(t, respErr(resp))
+	testutil.False(t, callResult(t, resp).IsError)
+	testutil.Equal(t, got, "work")
+}
+
 // TestHera_SpawnWorker_ModelArg asserts the optional `model` argument is read
 // from the tool call and threaded into the spawner input (and onto the task).
 func TestHera_SpawnWorker_ModelArg(t *testing.T) {

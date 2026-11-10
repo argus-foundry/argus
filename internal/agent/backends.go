@@ -168,9 +168,26 @@ type Family struct {
 	// LaunchFlag is inserted right after the binary unless already present
 	// before any `--` separator (OpenCode's --auto).
 	LaunchFlag string
+	// UnattendedWorker closes permission, question and plan prompts. Nil
+	// excludes this family from resident-worker routing. Requires Argus confinement.
+	UnattendedWorker func(command string) (string, error)
+	// UnattendedDenyFlag renders the per-launch flag that hard-denies the
+	// given permission rules (the resident's outward ask + deny tiers, see
+	// ResidentWorkerDenyRules) to an unattended worker, which cannot ask.
+	// Required whenever UnattendedWorker is set: BuildCmd refuses an
+	// unattended launch on a family without it rather than drop the deny.
+	UnattendedDenyFlag func(rules []string) string
+	// UnattendedUsageProbe ranks untiered eligible account pairs.
+	UnattendedUsageProbe string
 	// MCPFlag returns the per-launch flag wiring Argus's MCP server, or nil
 	// when the CLI only reads MCP servers from global config (see InjectGlobal).
 	MCPFlag func(url string) string
+	// MCPConfigFile renders a file-deliverable MCP config whose argus server
+	// sends headers on every request, and MCPConfigFileFlag loads such a file.
+	// Nil means the family cannot; the resident then refuses to launch with
+	// MCP, because its per-launch secret must never ride argv or env.
+	MCPConfigFile     func(url string, headers map[string]string) []byte
+	MCPConfigFileFlag func(path string) string
 	// PermissionFlags maps defaults.permission_mode to CLI flags; nil injects
 	// nothing. Skipped when the command already contains any
 	// PermissionFlagTokens.
@@ -242,11 +259,25 @@ func mustSpec(k backendkind.Kind) backendkind.Spec {
 	return s
 }
 
+// claudeMCPConfig renders Claude's --mcp-config JSON for the argus server;
+// headers (nil omits them) are sent on every request.
+func claudeMCPConfig(url string, headers map[string]string) []byte {
+	server := map[string]any{"type": "http", "url": url, "timeout": mcplimits.ClientTimeoutMilliseconds}
+	if len(headers) > 0 {
+		server["headers"] = headers
+	}
+	mcpConfig, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"argus": server}})
+	return mcpConfig
+}
+
 func claudeMCPFlag(url string) string {
-	mcpConfig, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		"argus": map[string]any{"type": "http", "url": url, "timeout": mcplimits.ClientTimeoutMilliseconds},
-	}})
-	return " --mcp-config " + shellQuote(string(mcpConfig))
+	return " --mcp-config " + shellQuote(string(claudeMCPConfig(url, nil)))
+}
+
+// claudeMCPConfigFileFlag loads an MCP config from a file (Claude accepts a
+// path or inline JSON for --mcp-config).
+func claudeMCPConfigFileFlag(path string) string {
+	return " --mcp-config " + shellQuote(path)
 }
 
 // ResidentPolicy is everything a family needs to make the resident's launch
@@ -302,6 +333,52 @@ func claudePermissionRulesFlag(p ResidentPolicy) string {
 	}
 	raw, _ := json.Marshal(settings)
 	return " --setting-sources project --settings " + shellQuote(string(raw))
+}
+
+// ResidentOutwardTiers is the single source of the resident's outward ask and
+// deny tiers: the [resident] ask_tools / deny_tools lists as loaded (shipped
+// defaults, or config.toml / DB overrides). The resident's own policy and the
+// unattended-worker deny are both derived from it.
+func ResidentOutwardTiers(cfg config.Config) (ask, deny []string) {
+	return cfg.Resident.AskTools, cfg.Resident.DenyTools
+}
+
+// ResidentWorkerDenyRules is what an unattended resident worker is
+// hard-denied at launch: every rule on the resident's ask OR deny tier. A
+// worker cannot ask, so ask becomes deny and the outward action has to come
+// back through the resident, which asks Aaron. The allow tier (drafts,
+// read-only connector calls, kb_*) is never added, so it stays usable exactly
+// as for the resident.
+func ResidentWorkerDenyRules(cfg config.Config) []string {
+	ask, deny := ResidentOutwardTiers(cfg)
+	return mergeRules(ask, deny)
+}
+
+// claudeUnattendedDenyFlag denies rules through a separate --disallowedTools
+// flag. Verified headless (claude 2.1.317, bypassPermissions, user settings
+// loaded): repeated --disallowedTools flags accumulate (the question/plan
+// trio from UnattendedWorker stays removed), a denied MCP tool is removed from
+// the session even when an inline --settings allow names it exactly or by
+// wildcard, a `mcp__server__*` deny removes the whole server's tools, and an
+// exact deny leaves same-server siblings callable.
+//
+// A blank or dash-led entry is no tool rule (it matches nothing in the
+// resident's inline JSON either) and would be parsed as a flag inside the
+// variadic list, so it is skipped and logged.
+func claudeUnattendedDenyFlag(rules []string) string {
+	quoted := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if strings.TrimSpace(r) == "" || strings.HasPrefix(r, "-") {
+			uxlog.Log("[resident] unattended worker deny: skipped malformed rule %q", r)
+			slog.Warn("[resident] unattended worker deny: skipped malformed rule", "rule", r)
+			continue
+		}
+		quoted = append(quoted, shellQuote(r))
+	}
+	if len(quoted) == 0 {
+		return ""
+	}
+	return " --disallowedTools " + strings.Join(quoted, " ")
 }
 
 // shellWord is one top-level shell word: its half-open byte range in the
@@ -637,9 +714,20 @@ var families = []*Family{
 		SkillDelivery:        SkillsAddDir,
 		RoutingDelivery:      RoutingSystemPromptFile,
 		MCPFlag:              claudeMCPFlag,
+		MCPConfigFile:        claudeMCPConfig,
+		MCPConfigFileFlag:    claudeMCPConfigFileFlag,
 		PermissionFlags:      config.PermissionModeFlags,
 		PermissionRulesFlag:  claudePermissionRulesFlag,
 		StripPermissionFlags: stripClaudePermissionFlags,
+		UnattendedUsageProbe: config.ProbeClaudeUsage,
+		UnattendedWorker: func(command string) (string, error) {
+			command, err := stripClaudePermissionFlags(command)
+			if err != nil {
+				return "", err
+			}
+			return command + " --dangerously-skip-permissions --disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode", nil
+		},
+		UnattendedDenyFlag:   claudeUnattendedDenyFlag,
 		ResidentCommandCheck: checkClaudeResidentCommand,
 		PermissionFlagTokens: []string{
 			"--permission-mode", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",

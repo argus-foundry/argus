@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -193,4 +195,37 @@ func TestHandleResize_ReportsDeferred(t *testing.T) {
 	out = post(`{"cols":120,"rows":24}`) // old-client shape: same size, nothing set
 	testutil.Equal(t, out["rerendered"], true)
 	testutil.Equal(t, out["deferred"], "")
+}
+
+// A pending graduate's restart belongs to the daemon watcher: a width-drift
+// kick from /resize must not fire, and an unreadable marker fails closed.
+func TestResizeKick_SkippedForPendingGraduate(t *testing.T) {
+	for _, tc := range []string{"pending", "unreadable"} {
+		t.Run(tc, func(t *testing.T) {
+			srv, task, r, _ := keepPlaceServer(t, nil)
+			if tc == "pending" {
+				testutil.NoError(t, srv.db.SetMeta(task.ID, db.HeraMetaNamespace, db.HeraMetaKeyGraduationPendingRestart, "true"))
+			} else {
+				// Only the marker is unreadable: the task row still loads, so a
+				// fail-open guard would fall through to the kick.
+				testutil.NoError(t, srv.db.WithTx(func(tx *sql.Tx) error {
+					_, err := tx.Exec(`DROP TABLE task_meta`)
+					return err
+				}))
+			}
+			kicked, deferred := srv.evalKickRerender(task.ID, 24, 120, kickClientState{})
+			testutil.False(t, kicked)
+			testutil.Equal(t, deferred, "")
+			testutil.Equal(t, r.kicks, 0)
+			if srv.isRedundantResize(task.ID, 120) {
+				t.Fatal("the skip must invalidate the cols cache so a later resize retries")
+			}
+		})
+	}
+	t.Run("not pending still kicks", func(t *testing.T) {
+		srv, task, r, _ := keepPlaceServer(t, nil)
+		kicked, _ := srv.evalKickRerender(task.ID, 24, 120, kickClientState{})
+		testutil.True(t, kicked)
+		testutil.Equal(t, r.kicks, 1)
+	})
 }

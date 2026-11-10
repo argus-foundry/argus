@@ -237,6 +237,13 @@ func (d *DB) updateLocked(t *model.Task) (*model.Task, error) {
 	if err := residentUpdateGuard(old, t); err != nil {
 		return old, err
 	}
+	// Archiving through Update (REST archive, MCP task_archive, raw PUT) must
+	// honour the same pending-graduation block as SetArchived.
+	if old != nil && !old.Archived && t.Archived {
+		if err := graduationPendingGuard(d.conn, t.ID); err != nil {
+			return old, err
+		}
+	}
 
 	sandboxedInt := 0
 	if t.Sandboxed {
@@ -457,6 +464,11 @@ func (d *DB) SetArchived(id string, archived bool) error {
 		if gerr := residentGuard(tx, id); gerr != nil {
 			return gerr
 		}
+		if archived {
+			if gerr := graduationPendingGuard(tx, id); gerr != nil {
+				return gerr
+			}
+		}
 		if qerr := tx.QueryRow(`SELECT archived, pinned FROM tasks WHERE id=?`, id).Scan(&oldArchived, &oldPinned); qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
 			return qerr
 		}
@@ -652,6 +664,9 @@ func (d *DB) Delete(id string) error {
 		if err := residentGuard(tx, id); err != nil {
 			return err
 		}
+		if err := graduationPendingGuard(tx, id); err != nil {
+			return err
+		}
 		res, err := tx.Exec(`DELETE FROM tasks WHERE id=?`, id)
 		if err != nil {
 			return err
@@ -684,6 +699,12 @@ func (d *DB) Delete(id string) error {
 		// hera_bindings.argus_task_id to tasks (argus_task_id is plain TEXT), so
 		// this app-level cleanup is what severs the link. Bindings are ended
 		// (ended_at stamped), not deleted, so the role's binding history survives.
+		// Deleting a resident worker's task from the Tasks list is a human
+		// nuke the resident must hear about; record it before the binding ends
+		// (the role must still resolve as a live resident worker).
+		if err := queueResidentTaskDeleteNotices(tx, id); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(
 			`UPDATE hera_bindings SET ended_at=?, end_reason=? WHERE argus_task_id=? AND ended_at IS NULL`,
 			formatTime(time.Now()), heraEndReasonTaskDeleted, id,
@@ -875,7 +896,9 @@ func (d *DB) pruneTasksLocked(ids []string) (pruned []*model.Task, skippedHeraBo
 		args[i] = id
 	}
 	inClause := `kind='' AND id IN (` + strings.Join(placeholders, ",") + `)`
-	const notLiveHeraBound = `id NOT IN (SELECT argus_task_id FROM hera_bindings WHERE ended_at IS NULL)`
+	// A pending graduate is also kept: deleting it would drop the restart intent
+	// (see graduationPendingGuard).
+	const notLiveHeraBound = `id NOT IN (SELECT argus_task_id FROM hera_bindings WHERE ended_at IS NULL) AND id NOT IN (SELECT task_id FROM task_meta WHERE namespace='hera' AND key='` + HeraMetaKeyGraduationPendingRestart + `')`
 
 	//nolint:gosec // G202: inClause is a fixed list of `?` literals and notLiveHeraBound is a constant; ids are bound parameters.
 	selectQ := `SELECT ` + taskColumns + ` FROM tasks WHERE ` + inClause + ` AND ` + notLiveHeraBound

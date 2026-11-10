@@ -1,6 +1,8 @@
 package hera
 
 import (
+	"fmt"
+
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
 	"github.com/argus-foundry/argus/internal/db"
@@ -37,9 +39,12 @@ func TaskBoundOutside(d *db.DB, taskID string, subtreeIDs map[int64]bool) bool {
 	return false
 }
 
-func subtreeIDSet(subtree []*heramodel.OrchView) map[int64]bool {
+func subtreeIDSet(d *db.DB, subtree []*heramodel.OrchView) map[int64]bool {
 	ids := make(map[int64]bool, len(subtree))
 	for _, o := range subtree {
+		if residentOrchestrator(d, o.ID) {
+			continue
+		}
 		ids[o.ID] = true
 	}
 	return ids
@@ -47,10 +52,14 @@ func subtreeIDSet(subtree []*heramodel.OrchView) map[int64]bool {
 
 // PreviewNukeSubtree counts what NukeSubtree would do without mutating anything.
 func PreviewNukeSubtree(d *db.DB, subtree []*heramodel.OrchView) NukePreview {
-	p := NukePreview{Orchestrators: len(subtree)}
-	ids := subtreeIDSet(subtree)
+	p := NukePreview{}
+	ids := subtreeIDSet(d, subtree)
 	seen := make(map[string]bool)
 	for _, o := range subtree {
+		if residentOrchestrator(d, o.ID) {
+			continue
+		}
+		p.Orchestrators++
 		for i := range o.Roles {
 			r := &o.Roles[i]
 			if !r.Live || r.TaskID == "" {
@@ -75,13 +84,13 @@ func PreviewNukeSubtree(d *db.DB, subtree []*heramodel.OrchView) NukePreview {
 
 // nukeRoleRow ends the role's live binding (user_deleted) and stamps it NUKED —
 // never a hard delete.
-func nukeRoleRow(d *db.DB, roleID int64) error {
+func nukeRoleRow(d *db.DB, roleID int64, actor db.HeraActor) error {
 	if b, err := d.HeraLiveBindingByRole(roleID); err == nil && b != nil {
 		if eErr := d.EndHeraBinding(b.ID, db.HeraEndReasonUserDeleted); eErr != nil {
 			uxlog.Log("[hera] nuke role %d: end binding %d failed: %v", roleID, b.ID, eErr)
 		}
 	}
-	return d.NukeHeraRole(roleID)
+	return d.NukeHeraRoleAs(roleID, actor)
 }
 
 // archiveNukedTask archives a reclaimed task (in_review advances to complete).
@@ -101,12 +110,55 @@ func archiveNukedTask(d *db.DB, taskID string) {
 	}
 }
 
+// CheckNukeTask refuses (db.ErrGraduationPending, wrapped) when taskID still
+// has a graduation restart pending, and fails CLOSED when that state cannot be
+// read. Callers use it to surface the refusal before any side effect.
+func CheckNukeTask(d *db.DB, taskID string) error {
+	if taskID == "" {
+		return nil
+	}
+	pending, err := d.GraduationPendingErr(taskID)
+	if err != nil {
+		return fmt.Errorf("graduation pending check for task %s: %w", taskID, err)
+	}
+	if pending {
+		return fmt.Errorf("%w (task %s)", db.ErrGraduationPending, taskID)
+	}
+	return nil
+}
+
+// CheckNukeSubtree scans every role of every nukeable orchestrator in subtree
+// and returns the first graduation-pending refusal, so a cascade nuke refuses
+// as a whole before any side effect.
+func CheckNukeSubtree(d *db.DB, subtree []*heramodel.OrchView) error {
+	for _, o := range subtree {
+		if residentOrchestrator(d, o.ID) {
+			continue
+		}
+		for i := range o.Roles {
+			if err := CheckNukeTask(d, o.Roles[i].TaskID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // NukeSubtree nukes every orchestrator in subtree, archiving tasks bound only inside it and preserving the rest.
 // Roles are nuked before their task is archived so the reclaim prune sees no live binding.
-func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (reclaimed []string, background func()) {
-	ids := subtreeIDSet(subtree)
+// A pending graduate anywhere in the subtree (or an unreadable check) refuses the
+// WHOLE cascade with no side effect and a non-nil error.
+func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (reclaimed []string, background func(), err error) {
+	if err := CheckNukeSubtree(d, subtree); err != nil {
+		uxlog.Log("[resident] cascade nuke refused: %v", err)
+		return nil, func() {}, err
+	}
+	ids := subtreeIDSet(d, subtree)
 	seen := make(map[string]bool)
 	for _, o := range subtree {
+		if residentOrchestrator(d, o.ID) {
+			continue
+		}
 		for i := range o.Roles {
 			r := &o.Roles[i]
 			reclaim := ""
@@ -115,7 +167,7 @@ func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (re
 				reclaim = r.TaskID
 			}
 			if r.Live {
-				if err := nukeRoleRow(d, r.RoleID); err != nil {
+				if err := nukeRoleRow(d, r.RoleID, db.HeraActorHuman); err != nil {
 					uxlog.Log("[hera] nuke subtree: nuke role %d failed: %v", r.RoleID, err)
 				}
 			}
@@ -128,20 +180,38 @@ func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (re
 			uxlog.Log("[hera] nuke subtree: nuke orchestrator %d failed: %v", o.ID, err)
 		}
 	}
-	return reclaimed, reclaimBackground(d, runner, reclaimed)
+	return reclaimed, reclaimBackground(d, runner, reclaimed), nil
 }
 
 // NukeSingleRole nukes one role. Its task is reclaimed only when it is solely
 // bound to this role; a multi-bound task is preserved untouched.
 func NukeSingleRole(d *db.DB, runner NukeRunner, r *heramodel.RoleView) (background func()) {
+	return NukeSingleRoleAs(d, runner, r, db.HeraActorHuman)
+}
+
+// NukeSingleRoleAs is NukeSingleRole with the acting party named: the
+// resident's own hera_delete_worker passes db.HeraActorResident so the
+// resident is not told about its own delete (6.4), everything else is human.
+func NukeSingleRoleAs(d *db.DB, runner NukeRunner, r *heramodel.RoleView, actor db.HeraActor) (background func()) {
+	if t, err := d.Get(r.TaskID); err == nil && t.IsResident() {
+		return func() {}
+	}
+
+	// Callers that need to REPORT the refusal run CheckNukeTask first; this
+	// no-op closure is only the defense-in-depth backstop.
+	if err := CheckNukeTask(d, r.TaskID); err != nil {
+		uxlog.Log("[resident] nuke role %d refused: %v", r.RoleID, err)
+		return func() {}
+	}
+
 	var reclaimed []string
 	if r.Live && r.TaskID != "" {
 		live, err := d.ListHeraLiveBindingsByTask(r.TaskID)
-		if err == nil && len(live) == 1 {
+		if err == nil && len(live) == 1 && live[0].RoleID == r.RoleID {
 			reclaimed = []string{r.TaskID}
 		}
 	}
-	if err := nukeRoleRow(d, r.RoleID); err != nil {
+	if err := nukeRoleRow(d, r.RoleID, actor); err != nil {
 		uxlog.Log("[hera] nuke role %d failed: %v", r.RoleID, err)
 	}
 	for _, id := range reclaimed {
@@ -166,4 +236,10 @@ func reclaimBackground(d *db.DB, runner NukeRunner, taskIDs []string) func() {
 			uxlog.Log("[hera] nuke: reclaim sweep failed: %v", err)
 		}
 	}
+}
+
+func residentOrchestrator(d *db.DB, id int64) bool {
+	resident, err := d.IsResidentOrchestrator(id)
+	// An unreadable orchestrator must never be treated as safe to destroy.
+	return err != nil || resident
 }

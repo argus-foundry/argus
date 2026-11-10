@@ -31,6 +31,7 @@ import (
 	dclient "github.com/argus-foundry/argus/internal/daemon/client"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/gitutil"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 	"github.com/argus-foundry/argus/internal/launchagent"
 	"github.com/argus-foundry/argus/internal/macapps"
 	"github.com/argus-foundry/argus/internal/mergesafety"
@@ -143,6 +144,9 @@ type App struct {
 	heraConfirmModal *modal.ConfirmModal
 	heraInputSubmit  func(string) // called with the field value on input-modal submit
 	heraConfirmDo    func()       // called on confirm-modal accept
+	// heraConfirmReturnTasks makes closeHeraConfirm return to the Tasks tab
+	// (graduation-pending abandon escape opened from Tasks-list delete/archive).
+	heraConfirmReturnTasks bool
 	// heraConfirmOnCancel is openHeraConfirmChoice's sibling to heraConfirmDo
 	// (Stage 5's per-branch stacked-branch review, heraReviewStackedBranchesStep):
 	// called on confirm-modal decline/cancel instead of the plain no-op every
@@ -358,11 +362,11 @@ type App struct {
 	// by switchTab and by the return hop.
 	agentCrossReturn      *residentReturn
 	residentReturn        *residentReturn
-	residentPane          *terminal.TerminalPane
-	residentAttachPending bool
 	residentBox           *widget.ResidentBox
 	residentSt            residentAttention
 	residentPollPending   bool
+	residentUnreadPending bool
+	residentUnreadAt      time.Time
 	residentPolledAt      time.Time
 	residentMarkViewedFn  func() error                             // test seam; default daemonClient.ResidentMarkViewed
 	residentStateFn       func() (daemon.ResidentStateResp, error) // test seam; default daemonClient.ResidentState
@@ -971,7 +975,19 @@ func (a *App) buildUI() {
 		// orphan messages in remote mode because apistore can't expose the
 		// DeleteMessagesForTask endpoint and PUT /api/tasks/{id}/raw doesn't
 		// trigger server-side cleanup.
-		a.db.SetArchived(t.ID, t.Archived) //nolint:errcheck // best-effort; display is source of truth
+		if err := a.db.SetArchived(t.ID, t.Archived); graduationPendingErr(err) {
+			uxlog.Log("[resident] tui archive refused task=%s: graduation pending", t.ID)
+			a.flashNotice(db.ErrGraduationPending.Error())
+			if t.Archived {
+				id := t.ID
+				a.graduationPendingEscape(id, "archive", true, func() {
+					if err := a.db.SetArchived(id, true); err != nil {
+						a.statusbar.SetError("Archive failed: " + err.Error())
+					}
+					a.refreshTasksAsync()
+				})
+			}
+		} // other errors: best-effort; display is source of truth
 		a.refreshTasksAsync()
 	}
 	a.tasklist.OnPin = func(t *model.Task) {
@@ -1009,8 +1025,6 @@ func (a *App) buildUI() {
 	a.agentPane = terminal.NewTerminalPane()
 	a.agentPane.SetOwedFunc(a.paneRerenderOwed, a.rerenderKeyHint)
 	a.agentPane.OnOwedClick = a.rerenderHotkeyClassic
-	a.residentPane = terminal.NewTerminalPane()
-	a.residentPane.OnNeedRedraw = func() { a.tapp.QueueUpdateDraw(func() {}) }
 	a.agentHeader = widget.NewAgentHeader()
 
 	// Wire mouse click callbacks so clicking a panel switches agentFocus.
@@ -1097,6 +1111,10 @@ func (a *App) buildUI() {
 		heraReader = d
 	}
 	a.heraPage = hera.NewHeraPage(heraReader)
+	if d, ok := a.db.(*db.DB); ok {
+		// The resident tab is this same page re-pointed at the standing team.
+		a.heraPage.SetResidentReader(heramodel.NewResidentReader(d, d))
+	}
 	a.heraPage.SetResidentBox(a.residentBox)
 	a.heraPage.SetBoardAuto(a.db.Config().UI.CoordinatorBoard)
 	a.heraPage.Keys = a.activeKeymap
@@ -1142,6 +1160,7 @@ func (a *App) buildUI() {
 	// changes state (keyboard or mouse). The statusbar renders different hint
 	// sets for rail vs pane focus so the operator always sees relevant keys.
 	// The int passed matches hera.Focus iota: 0=rail, 1=coord, 2=agent.
+	a.statusbar.SetResidentRailHints(a.residentRailStatusHints)
 	a.heraPage.OnFocusChange = func(f hera.Focus) {
 		a.statusbar.SetHeraFocus(int(f))
 	}
@@ -1219,7 +1238,6 @@ func (a *App) buildUI() {
 		AddPage("tasks", a.taskPage, true, true).
 		AddPage("tasks-rail", a.tasksRailPage, true, false).
 		AddPage("agent", a.agentPage, true, false).
-		AddPage("resident", a.residentPane, true, false).
 		AddPage("hera", a.heraPage, true, false).
 		AddPage("settings", a.settingsPage, true, false)
 	a.loadPluginViews()
@@ -1290,7 +1308,7 @@ func (a *App) afterDraw(screen tcell.Screen) {
 	a.reconcilePluginViewSize()
 	a.publishInitialPTYLayout(screen)
 	if a.typing != nil || a.repaint != nil {
-		frames := terminalFrames(a.agentPane, a.residentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane())
+		frames := terminalFrames(a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane())
 		if a.typing != nil {
 			a.typing.reconcileFrames(frames)
 		}
@@ -1753,7 +1771,6 @@ func (a *App) spinnerLoop() {
 			// freshly-bound session doesn't paint at a stale width for up to a
 			// full 1s tick. No-op when no hera pane is drawn this frame.
 			a.heraPage.SyncPanes()
-			a.residentPane.SyncPTYSize()
 			if hasActiveRunning {
 				a.tapp.QueueUpdateDraw(func() {})
 			}
@@ -1865,6 +1882,7 @@ func (a *App) onTick() {
 		a.refreshAutoRerender() // live ui.auto_rerender_on_resize flips (one db.Config() per tick, never per Draw)
 		a.refreshResidentTab()
 		a.pollResidentState()
+		a.pollResidentUnread()
 		a.reconcileTasksRail()
 
 		// Refresh task list side panels.
@@ -2406,7 +2424,7 @@ func (a *App) isViewingTaskSession(taskID string) bool {
 	}
 	viewingAgent := mode == modeAgent && a.agentState.TaskID == taskID
 	viewingAgent = viewingAgent || (a.tasksRailViewing && a.agentState.TaskID == taskID)
-	viewingHeraTab := mode == modeTaskList && a.header.ActiveTab() == widget.TabHera
+	viewingHeraTab := mode == modeTaskList && a.heraViewActive()
 	a.mu.Unlock()
 	if viewingAgent {
 		return true
@@ -3942,7 +3960,7 @@ func (a *App) refreshTasksWithIDs(runningIDs, idleIDs []string, allowCachedTasks
 	// The second tab is ALWAYS the native Hera view now (cfg.Hera.Enabled only
 	// gates daemon-side MCP tool registration), so this must NOT be gated on
 	// that flag — doing so froze the rail/reconcile loop when hera.enabled=false.
-	if a.header.ActiveTab() == widget.TabHera {
+	if a.heraViewActive() {
 		a.heraPage.ScheduleRefresh()
 		// Late-bind any coordinator/worker session that came up after the pane
 		// was bound (main thread — SetSession is main-goroutine-only).
@@ -4151,9 +4169,16 @@ const pluginFailsafeWindow = 400 * time.Millisecond
 // itself is NOT a content pane, so those globals still work while the rail holds
 // focus. Mirrors how modeAgent fully surrenders these keys to the agent PTY.
 func (a *App) heraPaneFocused() bool {
-	return a.header.ActiveTab() == widget.TabHera &&
+	return a.heraViewActive() &&
 		a.heraPage != nil && !a.heraPage.IsRemote() &&
 		a.heraPage.Machine().State() != hera.FocusRail
+}
+
+// heraViewActive reports whether the HeraPage is the visible view: the Projects
+// tab, or the resident tab (the same page in resident mode).
+func (a *App) heraViewActive() bool {
+	t := a.header.ActiveTab()
+	return t == widget.TabHera || t == widget.TabResident
 }
 
 // refreshKeymap rebuilds the keymap from the current config, but only when the
@@ -4431,10 +4456,6 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 	// failsafe + agent-view back ladder + quit-from-task-list).
 	switch event.Key() {
 	case tcell.KeyCtrlC:
-		if a.header.ActiveTab() == widget.TabResident {
-			a.forwardResidentKey(event)
-			return nil
-		}
 		if a.mode == modeAgent {
 			// Forward ctrl+c to the PTY if session is alive; otherwise ignore
 			if sess := a.agentPane.Session(); sess != nil && sess.Alive() {
@@ -4454,11 +4475,20 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 		// A focused Hera pane must receive ^C (interrupt the agent), not quit
 		// argus — fall through to HeraPage so it forwards 0x03 to the pane PTY.
 		if a.heraPaneFocused() {
+			if a.header.ActiveTab() == widget.TabResident {
+				// ^C interrupts the resident, as it always did on this tab. Returning
+				// the event unchanged would let tview's own Ctrl-C handling stop
+				// argus, so hand it to the page here and consume it.
+				a.heraPage.InputHandler()(event, func(tview.Primitive) {})
+				return nil
+			}
 			break
 		}
 		a.stopTUI()
 		return nil
 	case tcell.KeyCtrlQ:
+		// ctrl+q on the resident tab always returns to the origin (as it did
+		// before the tab became a team view); ctrl+alt+←/→ walks pane ⇄ rail.
 		if a.header.ActiveTab() == widget.TabResident {
 			a.toggleResident()
 			return nil
@@ -4502,10 +4532,9 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 	// Tab switching is 1/2/3 only (Left/Right fall through to the focused view).
 	suppressRune := event.Key() == tcell.KeyRune &&
 		((a.mode == modeTaskList && a.tasklist.Filtering()) ||
-			a.header.ActiveTab() == widget.TabResident ||
 			(a.mode == modeTaskList && a.settings.IsEditing()) ||
 			a.heraPaneFocused() ||
-			(a.mode == modeTaskList && a.header.ActiveTab() == widget.TabHera && a.heraPage.RailFiltering()))
+			(a.mode == modeTaskList && a.heraViewActive() && a.heraPage.RailFiltering()))
 
 	if !suppressRune {
 		if act, ok := a.activeKeymap().Resolve(keymap.CtxGlobal, event); ok {
@@ -4545,7 +4574,7 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 				// the diff-based Show() failed to overwrite. Only outside agent view
 				// and off a focused Hera pane; otherwise fall through so the agent /
 				// pane gets the key (handleAgentKey's link-picker binding, or the PTY).
-				if a.mode != modeAgent && !a.heraPaneFocused() && a.header.ActiveTab() != widget.TabResident {
+				if a.mode != modeAgent && !a.heraPaneFocused() {
 					uxlog.Log("[tui] refresh — Sync")
 					a.screen.Sync()
 					return nil
@@ -4622,10 +4651,6 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 		}
 	}
 
-	if a.header.ActiveTab() == widget.TabResident {
-		a.forwardResidentKey(event)
-		return nil
-	}
 	switch a.mode {
 	case modeAgent:
 		return a.handleAgentKey(event)
@@ -5449,8 +5474,10 @@ func (a *App) switchTab(t widget.Tab) {
 		}
 	}
 	if a.header.ActiveTab() == widget.TabResident && t != widget.TabResident {
-		a.residentPane.SetFocused(false)
-		a.residentPane.SetSession(nil)
+		// Leave resident mode BEFORE the new tab shows: the page goes back to
+		// the Projects model, rebinding both panes from scratch.
+		a.heraPage.SetResidentMode(false)
+		a.heraPage.CoordPane().SetPlaceholderNote("")
 	}
 	// Leaving agent view must restore the shell header before changing tabs.
 	if a.mode == modeAgent && t == widget.TabResident {
@@ -5474,11 +5501,8 @@ func (a *App) switchTab(t widget.Tab) {
 	switch t {
 	case widget.TabResident:
 		a.mode = modeTaskList
-		a.refreshResidentTab()
-		a.residentPane.SetFocused(true)
 		a.root.ResizeItem(a.header, 1, 0)
-		a.pages.SwitchToPage("resident")
-		a.tapp.SetFocus(a.residentPane)
+		a.enterResidentView()
 		a.markResidentViewed()
 		uxlog.Log("[resident] tab selected")
 	case widget.TabTasks:
@@ -5911,6 +5935,10 @@ func (a *App) maybeKickRerender(task *model.Task, sess agent.SessionHandle) {
 	if !a.autoRerenderOn() {
 		return // resize-without-restart: the owed notice + hotkey replace the automatic kick
 	}
+	if task != nil && a.graduationPendingQuiet(task.ID) {
+		uxlog.Log("[resident] size-drift kick skipped task=%s: graduation restart pending", task.ID)
+		return
+	}
 	_, panelCols := a.computePTYSize() // safe: GetInnerRect on the main goroutine
 	a.maybeKickRerenderGated(task, sess, panelCols, nil, func() bool { return a.agentPane.ScrollOffset() > 0 })
 }
@@ -6235,6 +6263,9 @@ func (a *App) rerenderHotkeyClassic() {
 	if taskID == "" {
 		return
 	}
+	if a.graduationPendingBlocked(taskID, "rerender") {
+		return // the daemon owns a pending graduate's restart
+	}
 	_, cols := a.computePTYSize()
 	a.rerenderNow(taskID, cols, func() bool { return a.agentPane.ScrollOffset() > 0 }, nil)
 }
@@ -6244,12 +6275,54 @@ func (a *App) rerenderHotkeyHera(taskID string) {
 	if a.heraPage == nil {
 		return
 	}
+	if a.graduationPendingBlocked(taskID, "rerender") {
+		return // the daemon owns a pending graduate's restart
+	}
 	_, cols, ok := a.heraPage.PaneSizeForTask(taskID)
 	if !ok {
 		a.hotkeyOutcome(taskID, 0, "no-pane", "")
 		return
 	}
 	a.rerenderNow(taskID, cols, func() bool { return a.heraPage.TaskScrolledUp(taskID) }, func() {})
+}
+
+// residentRailStatusHints derives the resident tab's status-bar management
+// hints from the live keymap (residentRailPolicy), so a rebind is reflected
+// instead of the stale defaults. Step-forward/back status keys render as one
+// "k1/k2" hint.
+func (a *App) residentRailStatusHints() []widget.ResidentHint {
+	km := a.activeKeymap()
+	key := func(act keymap.Action) string {
+		if b, ok := km.BindingFor(keymap.CtxHeraRail, act); ok {
+			return b.String()
+		}
+		return ""
+	}
+	short := map[keymap.Action]string{
+		keymap.ActHeraInbox:   "inbox",
+		keymap.ActHeraRename:  "rename",
+		keymap.ActHeraStatAdv: "status",
+		keymap.ActHeraArchive: "hide",
+		keymap.ActHeraDelete:  "nuke",
+	}
+	var out []widget.ResidentHint
+	for _, act := range keymap.ResidentRailActions() {
+		label, ok := short[act]
+		if !ok {
+			continue // StatRev folded into StatAdv; unknown future actions skipped
+		}
+		k := key(act)
+		if k == "" {
+			continue
+		}
+		if act == keymap.ActHeraStatAdv {
+			if rk := key(keymap.ActHeraStatRev); rk != "" {
+				k += "/" + rk
+			}
+		}
+		out = append(out, widget.ResidentHint{Key: k, Label: label})
+	}
+	return out
 }
 
 // rerenderKeyHint is the live agent.rerender binding for the owed notice
@@ -6275,6 +6348,10 @@ func (a *App) rerenderKeyHint() string {
 // (BUG-077 — see gotchas/hera-view.md).
 func (a *App) heraKickRerender(taskID string, panelCols uint16, onDeferred func()) {
 	if !a.autoRerenderOn() {
+		return
+	}
+	if a.graduationPendingQuiet(taskID) {
+		uxlog.Log("[resident] size-drift kick skipped task=%s: graduation restart pending", taskID)
 		return
 	}
 	task, err := a.db.Get(taskID)
@@ -6349,6 +6426,19 @@ func (a *App) kickRerenderCore(task *model.Task, sess agent.SessionHandle, panel
 		return
 	}
 	taskID := task.ID
+	if a.graduationPendingQuiet(taskID) {
+		// Single choke point for every kick path (automatic, hotkey, and the
+		// deferred forced retry): the daemon watcher owns a pending graduate's
+		// kill+resume. Drop any armed retry state so it cannot fire later.
+		uxlog.Log("[resident] rerender kick dropped task=%s forced=%t: graduation restart pending", taskID, forced)
+		a.dropKickWait(taskID)
+		if forced {
+			// The user pressed the hotkey: say why nothing happened. Automatic
+			// kicks stay quiet (no notice spam).
+			a.flashNotice(db.ErrGraduationPending.Error())
+		}
+		return
+	}
 	pid := sess.PID()
 	previousPID, observed := a.committedColsPID[taskID]
 	if !observed || previousPID != pid {
@@ -7025,7 +7115,7 @@ func (a *App) computePTYSize() (rows, cols uint16) {
 // Main-goroutine only.
 func (a *App) spawnPTYSize(taskID string) (rows, cols uint16) {
 	a.mu.Lock()
-	onHera := a.mode == modeTaskList && a.header.ActiveTab() == widget.TabHera
+	onHera := a.mode == modeTaskList && a.heraViewActive()
 	a.mu.Unlock()
 	if onHera && a.heraPage != nil {
 		if r, c, ok := a.heraPage.PaneSizeForTask(taskID); ok {
@@ -7525,6 +7615,9 @@ func (a *App) openSessionPicker() {
 		return
 	}
 
+	if a.graduationPendingBlocked(taskID, "session switch") {
+		return
+	}
 	cfg := a.db.Config()
 	backend, berr := agent.ResolveBackend(task, cfg)
 	if berr != nil {
@@ -7629,6 +7722,44 @@ func (a *App) jumpToNextNeedsInput() {
 		a.flashNotice("No role needs input")
 		return
 	}
+	if a.heraPage.ResidentMode() {
+		// The resident tab re-points the single HeraPage at the standing team,
+		// so its rail holds ONLY that team. Resolve the jump there first: a
+		// resident worker needing input is reached in place (no tab switch;
+		// ctrl+g arms no excursion for in-tab resident jumps, and a
+		// resident-tab ctrl+b restores that team rail's own layout).
+		// Otherwise count the Projects model WITHOUT switching (ProjectsModel),
+		// and only switch when something there needs input; the excursion is
+		// armed from the Projects rail's own pre-entry state, never the team
+		// rail's.
+		if a.heraPage.Rail().NeedsInputCount() >= 1 {
+			if !a.heraPage.JumpToNextNeedsInput() {
+				a.flashNotice("No role needs input")
+			}
+			return
+		}
+		if a.header.ActiveTab() != widget.TabResident {
+			a.flashNotice("No role needs input")
+			return
+		}
+		// Decide BEFORE mutating anything: switching tabs clears the resident
+		// return target, rebinds panes and drops the rail filter/selection.
+		if a.heraPage.Rail().NeedsInputCountIn(a.heraPage.ProjectsModel()) < 1 {
+			uxlog.Log("[resident-view] ctrl+g: nothing needs input anywhere; no-op")
+			a.flashNotice("No role needs input")
+			return
+		}
+		if a.mode == modeAgent {
+			a.exitAgentView()
+		}
+		uxlog.Log("[resident-view] ctrl+g: no team role needs input; jumping on the Projects rail")
+		a.switchTab(widget.TabHera)
+		if a.heraPage.ResidentMode() {
+			a.flashNotice("No role needs input")
+			return
+		}
+		a.heraPage.ArmProjectsExcursion()
+	}
 	rail := a.heraPage.Rail()
 	if rail.NeedsInputCount() >= 1 {
 		rail.EnsureExcursionArmed() // belt-and-suspenders; normally already armed
@@ -7686,6 +7817,9 @@ func (a *App) switchSession(newID, title string) {
 	a.mu.Unlock()
 	if taskID == "" || newID == "" {
 		return
+	}
+	if a.graduationPendingBlocked(taskID, "session switch") {
+		return // a different SessionID breaks the graduate's same-conversation resume
 	}
 	task, err := a.db.Get(taskID)
 	if err != nil || task == nil {
@@ -7747,8 +7881,10 @@ func (a *App) handleConfirmDeleteKey(event *tcell.EventKey) {
 
 	if a.confirmDeleteModal.Confirmed() {
 		t := a.confirmDeleteModal.Task()
-		a.deleteTask(t)
+		// Close first: a graduation-pending delete opens its own abandon
+		// confirm, which must not be torn down by this modal's close.
 		a.closeConfirmDelete()
+		a.deleteTask(t)
 	}
 }
 
@@ -7770,7 +7906,12 @@ func (a *App) openHelp() {
 	}
 	a.helpPrevPage, _ = a.pages.GetFrontPage()
 	// Render help from the live keymap so it reflects any config overrides.
-	a.helpModal = modal.NewHelpModalWith("Keybindings", modal.SectionsFromKeymap(a.activeKeymap()))
+	sections := modal.SectionsFromKeymap(a.activeKeymap())
+	if a.header.ActiveTab() == widget.TabResident && a.heraPage.ResidentMode() {
+		// The resident tab lists only the keys it honors (keymap resident policy).
+		sections = modal.ResidentSectionsFromKeymap(a.activeKeymap())
+	}
+	a.helpModal = modal.NewHelpModalWith("Keybindings", sections)
 	a.mode = modeHelp
 	a.pages.AddPage("help", a.helpModal, true, true)
 	a.pages.SwitchToPage("help")
@@ -7809,7 +7950,8 @@ func (a *App) restorePageFocus(prev string) {
 	// Restore focus to whichever widget owns the visible tab.
 	switch a.header.ActiveTab() {
 	case widget.TabResident:
-		a.tapp.SetFocus(a.residentPane)
+		a.pages.SwitchToPage("hera")
+		a.tapp.SetFocus(a.heraPage)
 	case widget.TabSettings:
 		a.tapp.SetFocus(a.settings)
 	case widget.TabHera:
@@ -7859,8 +8001,8 @@ func (a *App) closeErrorModal() {
 	a.pages.RemovePage("error")
 	switch a.header.ActiveTab() {
 	case widget.TabResident:
-		a.pages.SwitchToPage("resident")
-		a.tapp.SetFocus(a.residentPane)
+		a.pages.SwitchToPage("hera")
+		a.tapp.SetFocus(a.heraPage)
 	case widget.TabSettings:
 		a.pages.SwitchToPage("settings")
 		a.tapp.SetFocus(a.settings)
@@ -8633,10 +8775,30 @@ func (a *App) closeConfirmDeleteProject() {
 	a.tapp.SetFocus(a.settingsPage)
 }
 
+// removeWorktreeAndBranch is a test seam over agent.RemoveWorktreeAndBranch.
+var removeWorktreeAndBranch = agent.RemoveWorktreeAndBranch
+
 // deleteTask stops the agent, cleans up the worktree/branch, and removes the task from DB.
 // Worktree/branch cleanup runs in a background goroutine to avoid blocking the UI.
 func (a *App) deleteTask(t *model.Task) {
+	if a.graduationPendingEscape(t.ID, "delete", true, func() { a.deleteTask(t) }) {
+		return
+	}
 	uxlog.Log("[tui] deleting task %s (%s)", t.ID, t.Name)
+
+	// The refusal-capable DB delete runs FIRST: a refused delete (graduation
+	// pending — locally or as the daemon's 409 in remote mode) or any other
+	// failure must leave the session, log, artifacts and worktree untouched.
+	if err := a.db.Delete(t.ID); err != nil {
+		if graduationPendingErr(err) {
+			uxlog.Log("[resident] tui delete refused task=%s: graduation pending", t.ID)
+			a.flashNotice(db.ErrGraduationPending.Error())
+		} else {
+			uxlog.Log("[tui] failed to delete task %s: %v", t.ID, err)
+			a.statusbar.SetError("Delete failed: " + err.Error())
+		}
+		return
+	}
 
 	// Stop the agent if running.
 	if a.runner.HasSession(t.ID) {
@@ -8659,10 +8821,6 @@ func (a *App) deleteTask(t *model.Task) {
 	}
 	os.RemoveAll(agent.ArtifactsDir(t.ID)) //nolint:errcheck
 
-	// Delete from database first so the UI updates immediately.
-	if err := a.db.Delete(t.ID); err != nil {
-		uxlog.Log("[tui] failed to delete task %s: %v", t.ID, err)
-	}
 	// Drop any per-task cache entries so deleted tasks don't accumulate
 	// in long-lived TUI sessions. Matches the cleanup pattern for
 	// pendingRerenderRestart (in handleSessionExitUI).
@@ -8679,7 +8837,7 @@ func (a *App) deleteTask(t *model.Task) {
 	go func() {
 		repoDir := agent.ResolveDir(t, cfg)
 		if worktree != "" {
-			agent.RemoveWorktreeAndBranch(worktree, branch, repoDir)
+			removeWorktreeAndBranch(worktree, branch, repoDir)
 		} else if branch != "" && repoDir != "" {
 			agent.DeleteBranch(repoDir, branch)
 			agent.DeleteRemoteBranch(repoDir, branch)
@@ -8952,7 +9110,7 @@ func (a *App) releaseIdlePaneMemory() {
 	if !a.idleReleaseEnabled.Load() || a.tapp == nil || a.agentPane == nil || a.heraPage == nil {
 		return
 	}
-	panes := []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane(), a.residentPane}
+	panes := []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane()}
 	a.tapp.QueueUpdate(func() {
 		now := time.Now()
 		for _, p := range panes {

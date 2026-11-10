@@ -85,7 +85,7 @@ type Supervisor struct {
 // supervisor's config tracks the user's real backends without coupling the type
 // to persistence. A nil cfgFn falls back to config.DefaultConfig so the binary
 // is runnable and tests can stay DB-free.
-func NewSupervisor(cfgFn func() config.Config) *Supervisor {
+func NewSupervisor(cfgFn func() config.Config, identity ...agent.ResidentWorkerIdentity) *Supervisor {
 	s := &Supervisor{
 		done:     make(chan struct{}),
 		ready:    make(chan struct{}),
@@ -153,7 +153,7 @@ func NewSupervisor(cfgFn func() config.Config) *Supervisor {
 		for _, conn := range conns {
 			conn.Close() //nolint:errcheck // best-effort EOF signal; conn is being discarded
 		}
-	})
+	}, identity...)
 
 	core = newSessionCore(runner, cfgFn, s.done)
 	s.sessionCore = core

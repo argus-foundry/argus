@@ -203,10 +203,48 @@ func TestCoordHookResident_MarkerGatesSubjectLookup(t *testing.T) {
 	}
 }
 
-// A hera-bound role never reaches the resident lookup even with the marker.
-func TestCoordHookResident_HeraRoleSkipsLookup(t *testing.T) {
-	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "t", "ARGUS_RESIDENT": "1"}, roleKind: "worker"}
+// Standing-team membership must not divert the resident into generic budgets.
+func TestCoordHookResident_HeraRoleUsesResidentPath(t *testing.T) {
+	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "t", "ARGUS_RESIDENT": "1"}, roleKind: "coordinator", isResident: true, contextSize: 200, budget: 100}
 	var out, errs bytes.Buffer
 	runCoordHook(strings.NewReader(`{}`), &out, &errs, f.env())
-	testutil.Equal(t, f.isResidentCalled, false)
+	testutil.True(t, f.isResidentCalled)
+	testutil.True(t, f.residentStampCalled)
+	testutil.Equal(t, out.String(), "")
+	testutil.Equal(t, len(f.residentDelivered), 1)
+	testutil.False(t, f.forceRecycleCalled)
+	testutil.False(t, f.pendingRecycleCalled)
+	testutil.False(t, f.budgetCalled)
+}
+
+func TestCoordHookResident_RoleAndConfigStayIndependent(t *testing.T) {
+	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "t", "ARGUS_RESIDENT": "1"}, roleKind: "coordinator", isResident: true, contextSize: 200, budget: 1000}
+	env := f.env()
+	env.ResidentConfig = func(string) (config.ResidentConfig, error) { return config.ResidentConfig{ContextBudget: 100}, nil }
+	var out, errs bytes.Buffer
+	runCoordHook(strings.NewReader(`{}`), &out, &errs, env)
+	testutil.Equal(t, len(f.residentDelivered), 1)
+	testutil.False(t, f.budgetCalled)
+	testutil.False(t, f.pendingRecycleCalled)
+	testutil.Equal(t, out.String(), "")
+}
+
+func TestCoordHookResident_RoleCannotHardStopAfterIdentityFailure(t *testing.T) {
+	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "t", "ARGUS_RESIDENT": "1"}, roleKind: "coordinator", isResidentErr: errors.New("daemon down"), contextSize: 200, budget: 100}
+	var out, errs bytes.Buffer
+	runCoordHook(strings.NewReader(`{}`), &out, &errs, f.env())
+	testutil.Equal(t, out.String(), "")
+	testutil.False(t, f.forceRecycleCalled)
+	testutil.Contains(t, errs.String(), "resident subject lookup: daemon down")
+}
+
+func TestCoordHookResident_DisabledIdentityCannotUseGenericBudget(t *testing.T) {
+	f := &fakeCoordHookEnv{getenv: map[string]string{"ARGUS_TASK_ID": "t", "ARGUS_RESIDENT": "1"}, roleKind: "coordinator", contextSize: 200, budget: 100}
+	var out, errs bytes.Buffer
+	runCoordHook(strings.NewReader(`{}`), &out, &errs, f.env())
+	testutil.True(t, f.isResidentCalled)
+	testutil.False(t, f.budgetCalled)
+	testutil.False(t, f.pendingRecycleCalled)
+	testutil.False(t, f.forceRecycleCalled)
+	testutil.Equal(t, out.String(), "")
 }

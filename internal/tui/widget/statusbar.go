@@ -48,6 +48,11 @@ type StatusBar struct {
 	// TabHera is active. Zero value (FocusRail) is the correct default.
 	heraFocus int
 
+	// residentRailHints supplies the resident tab's rail-focus management hints
+	// (live keymap keys, evaluated each Draw so a rebind shows immediately).
+	// nil falls back to no management hints.
+	residentRailHints func() []ResidentHint
+
 	// Plugin-view state. When pluginActive is true, Draw renders the plugin's
 	// bar hints plus a reserved, non-displaceable exit hint instead of the
 	// tab-hints branch.
@@ -123,6 +128,15 @@ func (sb *StatusBar) SetUsage(claudePct float64, claudeKnown bool, codexPct floa
 // 2=agent. The caller converts before passing so widget never imports hera.
 func (sb *StatusBar) SetHeraFocus(f int) {
 	sb.heraFocus = f
+}
+
+// ResidentHint is one key/label pair for the resident tab's rail hints.
+type ResidentHint struct{ Key, Label string }
+
+// SetResidentRailHints wires the live, keymap-derived hint source for the
+// resident tab's rail focus (the App owns the keymap; widget never imports it).
+func (sb *StatusBar) SetResidentRailHints(fn func() []ResidentHint) {
+	sb.residentRailHints = fn
 }
 
 // HeraFocus returns the current Hera focus state (0=rail, 1=coord, 2=agent).
@@ -318,7 +332,22 @@ func (sb *StatusBar) Draw(screen tcell.Screen) {
 	var hints []hint
 	switch sb.activeTab {
 	case TabResident:
-		hints = []hint{{"ctrl+q", "return"}}
+		// Same focus-aware split as the Projects tab, limited to the keys the
+		// resident view honors (worker rows only for the management keys).
+		if sb.heraFocus == 0 {
+			hints = []hint{{"j/k", "nav"}, {"Tab", "pane"}}
+			if sb.residentRailHints != nil {
+				for _, h := range sb.residentRailHints() {
+					hints = append(hints, hint{h.Key, h.Label})
+				}
+			}
+			hints = append(hints, hint{"^q", "return"}, hint{"^⌥←→", "pane"}, hint{"?", "help"})
+		} else {
+			hints = []hint{
+				{"^Q", "return"}, {"^⌥←→", "pane/rail"}, {"^Z", "fullscreen"},
+				{"Cmd+↑↓", "rail nav"}, {"?", "help"},
+			}
+		}
 	case TabSettings:
 		hints = []hint{
 			{"n", "new project"}, {"d", "del"},

@@ -6,6 +6,19 @@ import (
 	"github.com/argus-foundry/argus/internal/daemon"
 )
 
+// ForceRecycleCoordinator routes resident rail triggers through the daemon's
+// shared recycle reservation. Call off the UI thread.
+func (c *Client) ForceRecycleCoordinator(taskID string) error {
+	var resp daemon.StatusResp
+	if err := c.call("Daemon.ForceRecycleCoordinator", &daemon.TaskIDReq{TaskID: taskID}, &resp); err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	return nil
+}
+
 // ResidentState reads the daemon-owned resident state. Call off the UI thread.
 func (c *Client) ResidentState() (daemon.ResidentStateResp, error) {
 	var resp daemon.ResidentStateResp

@@ -758,6 +758,21 @@ func (d *DB) createHeraTables() error {
 			resolution_note TEXT NOT NULL DEFAULT ''
 		);
 		CREATE INDEX IF NOT EXISTS idx_hera_board_open ON hera_board_items(role_id, resolved, is_read);
+		-- Human-action outbox for the standing resident (add-resident-coordinator
+		-- 6.4). The nuke/hide/rename choke points in db write a row when someone
+		-- other than the resident acts on one of its workers — possibly from the
+		-- TUI process, which cannot deliver — and the daemon's resident loop turns
+		-- each row into one Hera message. claimed_at marks an in-flight delivery;
+		-- rows are deleted once delivered.
+		CREATE TABLE IF NOT EXISTS resident_notices (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			worker_role_id INTEGER NOT NULL REFERENCES hera_roles(id) ON DELETE CASCADE,
+			kind           TEXT NOT NULL,
+			detail         TEXT NOT NULL DEFAULT '',
+			created_at     TEXT NOT NULL,
+			claimed_at     TEXT
+		);
+		CREATE INDEX IF NOT EXISTS idx_resident_notices_pending ON resident_notices(id) WHERE claimed_at IS NULL;
 		CREATE TABLE IF NOT EXISTS hera_messages (
 			id             INTEGER PRIMARY KEY AUTOINCREMENT,
 			from_role_id   INTEGER NOT NULL REFERENCES hera_roles(id) ON DELETE CASCADE,

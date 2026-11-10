@@ -92,6 +92,47 @@ func newTaskRecycleRunner(database *db.DB, runner agent.SessionRunner, cfgFn fun
 	}
 }
 
+// taskRecycleRunner is shared by MCP, Hera and the ensure-running loop even
+// when KB is disabled. Resolve it once after the session runner is installed.
+func (d *Daemon) taskRecycleRunner() *taskRecycleRunner {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.taskRecycler == nil {
+		d.taskRecycler = newTaskRecycleRunner(d.db, d.runner, d.cfgFn)
+	}
+	return d.taskRecycler
+}
+
+func (d *Daemon) heraRecycleRunner() *HeraRecycleRunner {
+	r := NewHeraRecycleRunner(d.db, d.runner, d.cfgFn)
+	r.residentRecycler = d.taskRecycleRunner()
+	return r
+}
+
+// restartResident is the immediate Hera path. The task_recycle idle poller
+// owns the same reservation; a forced request must never race that poller.
+func (r *taskRecycleRunner) restartResident(taskID, note string) error {
+	if _, held := r.inFlight.LoadOrStore(taskID, struct{}{}); held {
+		residentLog("[resident] recycle skipped task=%s: already in progress", taskID)
+		return fmt.Errorf("resident recycle: already in progress for task %s", taskID)
+	}
+	defer r.inFlight.Delete(taskID)
+	if r.runner.HasPendingRestart(taskID) {
+		return fmt.Errorf("resident recycle: already in progress for task %s", taskID)
+	}
+	return r.restart(taskID, func(t *model.Task) string { return r.residentSeed(t, note) })
+}
+
+func (r *taskRecycleRunner) residentSeed(task *model.Task, note string) string {
+	cfg := r.cfgFn()
+	seed := buildResidentRecycleSeedPrompt(residentOrientationPrompt(cfg), note, cfg.Resident.MemoryDir, recycleExchangeSection(task, cfg))
+	if task != nil {
+		seed += r.residentTeamSection(task.ID)
+	}
+	residentLog("[resident] recycle seed composed bytes=%d", len(seed))
+	return seed
+}
+
 // Recycle composes the fresh session's seed prompt and schedules the
 // kill/restart in the background (see awaitIdleAndRestart) — it returns as
 // soon as the recycle is scheduled, not once it has happened. Rejects a
@@ -112,6 +153,10 @@ func (r *taskRecycleRunner) Recycle(taskID, handoffNote string) error {
 	// the transcript extraction must see it.
 	originalPrompt := task.Prompt
 	resident := task.IsResident()
+	if resident && r.runner.HasPendingRestart(taskID) {
+		r.inFlight.Delete(taskID)
+		return fmt.Errorf("task_recycle: a recycle is already in progress for task %s", taskID)
+	}
 	r.spawn(func() {
 		defer r.inFlight.Delete(taskID)
 		r.awaitIdleAndRestart(taskID, func(t *model.Task) string {
@@ -119,9 +164,7 @@ func (r *taskRecycleRunner) Recycle(taskID, handoffNote string) error {
 			if resident {
 				// The resident re-reads its orientation and memory instead of a
 				// task prompt (add-resident-agent).
-				seed := buildResidentRecycleSeedPrompt(residentOrientationPrompt(cfg), handoffNote, cfg.Resident.MemoryDir, recycleExchangeSection(t, cfg))
-				residentLog("[resident] recycle seed composed task=%s bytes=%d", taskID, len(seed))
-				return seed
+				return r.residentSeed(t, handoffNote)
 			}
 			return buildTaskRecycleSeedPrompt(originalPrompt, handoffNote, recycleExchangeSection(t, cfg))
 		})
@@ -185,7 +228,18 @@ func (r *taskRecycleRunner) restart(taskID string, buildSeed func(*model.Task) s
 	if task.IsResident() {
 		role = db.InitialPTYRoleResident
 	}
-	return restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, buildSeed(task), role)
+	err = restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, buildSeed(task), role)
+	if task.IsResident() {
+		if err == nil {
+			// A watcher request that collided with task_recycle must not survive
+			// this successful restart and recycle the successor on its next tick.
+			if clearErr := r.database.SetMeta(taskID, db.HeraMetaNamespace, db.HeraMetaKeyPendingRecycle, "false"); clearErr != nil {
+				residentLog("[resident] clear recycle intent failed task=%s: %v", taskID, clearErr)
+			}
+		}
+		residentLog("[resident] recycle restart task=%s err=%v", taskID, err)
+	}
+	return err
 }
 
 // buildTaskRecycleSeedPrompt composes the opening prompt for the fresh

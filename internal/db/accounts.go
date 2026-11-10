@@ -1,10 +1,13 @@
 package db
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // Config kv keys for the Settings-UI-edited account selection state.
@@ -52,14 +55,53 @@ func (d *DB) SetAccount(name string, a config.Account) error {
 }
 
 // DeleteAccount removes one account. Tasks already bound to it are untouched
-// and fail loudly on their next spawn (add-agent-accounts).
+// and fail loudly on their next spawn (add-agent-accounts). In the same
+// transaction it drops the account's key from the DB-stored resident worker
+// accounts map, so an account later re-created under the same name starts
+// enabled for resident workers like any new account instead of inheriting a
+// stale toggle. config.toml-defined keys belong to the file overlay and stay.
 func (d *DB) DeleteAccount(name string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	_, err := d.conn.Exec(`DELETE FROM accounts WHERE name = ?`, name)
-	return err
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.Exec(`DELETE FROM accounts WHERE name = ?`, name); err != nil {
+		return err
+	}
+	var raw string
+	switch err := tx.QueryRow(`SELECT value FROM config WHERE key = ?`, configKeyResidentWorkerAccounts).Scan(&raw); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return fmt.Errorf("read resident worker accounts: %w", err)
+	case raw != "":
+		toggles := map[string]bool{}
+		if jerr := json.Unmarshal([]byte(raw), &toggles); jerr != nil {
+			// An unparseable value is already ignored by Config(); leave it.
+			uxlog.Log("[resident] delete account %q: worker_accounts unparseable, left as is: %v", name, jerr)
+			break
+		}
+		if _, ok := toggles[name]; ok {
+			delete(toggles, name)
+			out, merr := json.Marshal(toggles)
+			if merr != nil {
+				return merr
+			}
+			if _, err := tx.Exec(`UPDATE config SET value = ? WHERE key = ?`, string(out), configKeyResidentWorkerAccounts); err != nil {
+				return fmt.Errorf("update resident worker accounts: %w", err)
+			}
+			uxlog.Log("[resident] delete account %q: dropped its resident worker toggle", name)
+		}
+	}
+	return tx.Commit()
 }
+
+// configKeyResidentWorkerAccounts is the DB config key for the per-account
+// resident worker toggles (JSON object of account name to enabled).
+const configKeyResidentWorkerAccounts = "resident.worker_accounts"
 
 // SetDefaultAccount stores the global default account name ("" clears it).
 func (d *DB) SetDefaultAccount(name string) error {

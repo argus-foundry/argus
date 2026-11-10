@@ -895,7 +895,11 @@ const ResidentEnvMarker = "ARGUS_RESIDENT"
 // If resume is false and SessionID is set, it uses --session-id for a new session with a known ID.
 // When sandbox is enabled and available, the command is wrapped with sandbox-exec.
 // The returned cleanup function removes the sandbox config temp file (nil if no sandbox).
-func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func(), error) {
+func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...ResidentWorkerIdentity) (*exec.Cmd, func(), error) {
+	unattended, err := residentWorkerPreflight(task, cfg, identity...)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := cfg.Git.Validate(); err != nil {
 		uxlog.Log("[agent-git] task %q: invalid signing policy", task.ID)
 		return nil, nil, err
@@ -908,6 +912,28 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	cmdStr := backend.Command
 
 	fam := FamilyOf(backend.Command)
+	if unattended {
+		// Fail closed: an unattended worker that cannot be denied the
+		// resident's outward tools must never launch with them reachable.
+		if fam.UnattendedDenyFlag == nil {
+			uxlog.Log("[resident] worker launch refused task=%s: backend cannot deny outward tools", task.ID)
+			slog.Warn("[resident] worker launch refused: backend cannot deny outward tools", "task", task.ID)
+			return nil, nil, fmt.Errorf("backend %q cannot deny the resident's outward tools to an unattended worker", task.Backend)
+		}
+		backend.Command, err = fam.UnattendedWorker(backend.Command)
+		if err != nil {
+			return nil, nil, err
+		}
+		// A worker cannot ask, so the resident's ask AND deny tiers are both
+		// hard-denied: outward actions must come back through the resident.
+		deny := ResidentWorkerDenyRules(cfg)
+		backend.Command += fam.UnattendedDenyFlag(deny)
+		uxlog.Log("[resident] unattended worker outward deny task=%s rules=%d", task.ID, len(deny))
+		slog.Info("[resident] unattended worker outward deny", "task", task.ID, "rules", len(deny))
+		cmdStr = backend.Command
+		uxlog.Log("[resident] unattended worker launch task=%s mode=bypass-active", task.ID)
+		slog.Info("[resident] unattended worker launch", "task", task.ID, "mode", "bypass-active")
+	}
 	// residentArgusWrap records that the resident policy dropped the user's
 	// Claude sandbox `enabled` because Argus will wrap this launch itself.
 	residentArgusWrap := false
@@ -953,12 +979,22 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	if cfg.MCPPort > 0 && fam.MCPFlag != nil {
 		mcpURL := fmt.Sprintf("http://localhost:%d/mcp", cfg.MCPPort)
 		if task.IsResident() {
-			// Bind this connection to the resident so task_recycle can refuse to
-			// target any other task; the agent cannot alter its own spawn flags.
+			// Bind this connection to the resident. The caller id alone is
+			// forgeable, so every launch mints a fresh secret delivered only
+			// through a private config file (never argv/env); the MCP server
+			// treats a caller without the current token as unbound.
 			mcpURL += "?caller=" + url.QueryEscape(task.ID)
+			flag, err := writeResidentMCPConfig(fam, mcpURL)
+			if err != nil {
+				return nil, nil, fmt.Errorf("resident MCP identity: %w", err)
+			}
+			mcpFlag = flag
+		} else {
+			mcpFlag = fam.MCPFlag(mcpURL)
 		}
-		mcpFlag = fam.MCPFlag(mcpURL)
 		uxlog.Log("[mcp] configured task=%s family=%s client_timeout=%ds", task.ID, fam.Kind, mcplimits.ClientTimeoutSeconds)
+	} else if task.IsResident() {
+		retireResidentMCPToken()
 	}
 	cmdStr += mcpFlag
 	// Families without a per-launch MCP flag read Argus's registration (and,
@@ -1039,10 +1075,11 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		// through unsandboxed with neither sandbox applied.
 		residentArgusWrap = argusWrapsSandbox(task, cfg)
 		us := readResidentUserSettings(task, cfg, residentArgusWrap)
+		ask, deny := ResidentOutwardTiers(cfg)
 		policy := ResidentPolicy{
 			Allow:       cfg.Resident.AllowTools,
-			Ask:         mergeRules(cfg.Resident.AskTools, us.Ask),
-			Deny:        mergeRules(cfg.Resident.DenyTools, us.Deny),
+			Ask:         mergeRules(ask, us.Ask),
+			Deny:        mergeRules(deny, us.Deny),
 			HookCommand: residentStopHookCommand(),
 			Effort:      us.Effort,
 			Sandbox:     us.Sandbox,
@@ -1241,6 +1278,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 	// Wrap with sandbox if enabled (effective config merges global + per-project overrides).
 	var sandboxCleanup func()
 	effectiveSandbox := sandboxWithCodexHome(sandboxWithClaudeConfigDir(ResolveSandboxConfig(task, cfg), claudeConfigDir), codexAccountHome)
+	effectiveSandbox = sandboxWithResidentLaunchDenied(effectiveSandbox, task)
 	// The single shared predicate (also used for the resident's sandbox-carry
 	// decision above). effectiveSandbox only adds write paths, never Enabled.
 	if argusWrapsSandbox(task, cfg) {
@@ -1248,7 +1286,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool) (*exec.Cmd, func
 		if serr == nil {
 			cmdStr = WrapWithSandbox(cmdStr, profilePath, params)
 			sandboxCleanup = cleanup
-		} else if residentArgusWrap {
+		} else if residentArgusWrap || unattended {
 			// The resident's own Claude sandbox `enabled` was dropped on the
 			// promise of this wrap: never fall through with neither applied.
 			return nil, nil, fmt.Errorf("resident sandbox profile: %w", serr)

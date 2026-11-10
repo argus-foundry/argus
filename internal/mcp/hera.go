@@ -275,6 +275,7 @@ var heraToolDefs = []Tool{
 				"prompt":       map[string]interface{}{"type": "string", "description": "The worker's MISSION/task only. An orientation prefix naming the coordinator is prepended automatically; the verbatim prompt is stored on the role row and shown as the node's description in the plan-DAG view. Do NOT prepend organization or security policy: every spawned worker session receives its org instructions independently (harness-injected), so a prepended copy is redundant and pollutes the stored prompt and the plan-DAG view"},
 				"project":      map[string]interface{}{"type": "string", "description": "(optional) Override the argus project. Defaults to the coordinator's own project"},
 				"branch":       map[string]interface{}{"type": "string", "description": "(optional) Branch passed to argus CreateTask. Defaults to project default"},
+				"account":      map[string]interface{}{"type": "string", "description": "(optional) Account pin. Resident spawns accept only enabled accounts supporting an eligible unattended family; omit to route across enabled accounts by usage headroom."},
 				"backend":      map[string]interface{}{"type": "string", "description": "(optional) Omit by default: with no backend, argus picks one per spawn from the project override and [backend_routing] usage headroom, spreading work across Claude and Codex quota. Set it only for a concrete backend-specific need (it must promote itself via hera_new_orchestrator, it needs a connector or MCP signed in on only one backend, or it runs an in-session Claude review panel). \"The task is important\" is not such a need. The spawn result reports the backend the worker got and whether it was routed or explicit"},
 				"model":        map[string]interface{}{"type": "string", "description": "(optional) Per-worker model override. Prefer `archetype` instead: the backend is usually picked by [backend_routing] at spawn, so a backend-specific model (e.g. opus) is silently dropped when the worker lands on another backend, while an archetype resolves to the right model for whichever backend it gets. Must be valid for the worker's resolved backend (claude: opus/sonnet/haiku/fable; codex: e.g. gpt-6-sol; pi: its model ids; opencode: a provider-qualified provider/model id, e.g. opencode/space-bunny-free; antigravity: an agy model id; cursor: a cursor-agent model id; omp: an omp model id or fuzzy name). Empty = backend default. Delivered through the backend's supported mechanism (--model for claude/codex/pi/antigravity/cursor/omp, child-only OPENCODE_CONFIG_CONTENT for opencode); ignored if the backend command already hard-codes a model"},
 				"archetype":    map[string]interface{}{"type": "string", "description": "(optional) Diligence archetype for the worker (e.g. code_slice, bug_fix, big_build, review, ci_loop). Selects the per-archetype model from the project's bound profile and is exported as ARGUS_ARCHETYPE to the worker. Defaults to code_slice when omitted"},
@@ -613,6 +614,13 @@ func (s *Server) toolHeraNewOrchestrator(id interface{}, args json.RawMessage) *
 		return toolError(id, err.Error())
 	}
 
+	if err := s.residentPromotionGuard(task); err != nil {
+		return residentToolError(id, err.Error())
+	}
+	if p.Name == db.ResidentOrchestratorName {
+		return residentToolError(id, "orchestrator name resident is reserved")
+	}
+
 	// Guard the self-promotion footgun: a task that already holds a live
 	// coordinator binding under a DIFFERENT orchestrator must not bind its own
 	// session as a SECOND coordinator of a new one. Following such a call, the
@@ -738,6 +746,37 @@ func (s *Server) toolHeraNewOrchestrator(id interface{}, args json.RawMessage) *
 	return toolResult(id, b.String())
 }
 
+// graduationPendingRefusal returns a non-empty refusal message when the caller
+// task (resolved from cwd) is a graduate whose restart is still pending, or
+// when that state cannot be read (fail closed). A pending graduate must not
+// change membership: the restart watcher is tracking its coordinator binding.
+// Adoption by the human happens in the TUI.
+func (s *Server) graduationPendingRefusal(tool, cwd string) string {
+	if s.taskDB == nil {
+		return ""
+	}
+	chk, ok := s.taskDB.(interface {
+		GraduationPendingErr(string) (bool, error)
+	})
+	if !ok {
+		return ""
+	}
+	task, err := s.resolveTask("", cwd)
+	if err != nil || task == nil {
+		return ""
+	}
+	pending, err := chk.GraduationPendingErr(task.ID)
+	if err != nil {
+		uxlog.Log("[resident] %s refused task=%s: graduation check failed: %v", tool, task.ID, err)
+		return fmt.Sprintf("%s refused: could not verify graduation state (%v)", tool, err)
+	}
+	if pending {
+		uxlog.Log("[resident] %s refused task=%s: graduation pending", tool, task.ID)
+		return fmt.Sprintf("%s refused: this task's graduation restart is still pending; wait for it to finish restarting before changing membership", tool)
+	}
+	return ""
+}
+
 func (s *Server) toolHeraJoin(id interface{}, args json.RawMessage) *Response {
 	if !s.heraEnabled() {
 		return toolError(id, "hera not configured")
@@ -754,6 +793,9 @@ func (s *Server) toolHeraJoin(id interface{}, args json.RawMessage) *Response {
 
 	if p.Cwd == "" {
 		return toolError(id, "cwd is required")
+	}
+	if msg := s.graduationPendingRefusal("hera_join", p.Cwd); msg != "" {
+		return toolError(id, msg)
 	}
 
 	if p.RoleName == "" {
@@ -905,6 +947,9 @@ func (s *Server) toolHeraMove(id interface{}, args json.RawMessage) *Response {
 
 	if p.Cwd == "" {
 		return toolError(id, "cwd is required")
+	}
+	if msg := s.graduationPendingRefusal("hera_move", p.Cwd); msg != "" {
+		return toolError(id, msg)
 	}
 	if p.Orchestrator == "" {
 		return toolError(id, "orchestrator is required")
@@ -1815,6 +1860,7 @@ func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Resp
 		Project      string `json:"project"`
 		Branch       string `json:"branch"`
 		Backend      string `json:"backend"`
+		Account      string `json:"account"`
 		Model        string `json:"model"`
 		Archetype    string `json:"archetype"`
 	}
@@ -1836,6 +1882,34 @@ func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Resp
 		return toolError(id, fmt.Sprintf(
 			"caller role %q has kind %q; only coordinators may spawn workers",
 			caller.role.Name, caller.role.Kind))
+	}
+
+	if caller.task.IsResident() {
+		src, ok := s.taskDB.(accountConfigSource)
+		if !ok {
+			return residentToolError(id, "cannot verify resident project")
+		}
+		cfg := src.Config()
+		project := strings.TrimSpace(p.Project)
+		if entry, ok := cfg.Projects[project]; project == "" || !ok || entry.Path == "" {
+			return residentToolError(id, "resident spawn requires an explicit registered project")
+		}
+		d, ok := s.taskDB.(interface{ ResidentWorkerCount() (int, error) })
+		if !ok {
+			return residentToolError(id, "cannot verify resident worker cap")
+		}
+		count, err := d.ResidentWorkerCount()
+		if err != nil {
+			return residentToolError(id, err.Error())
+		}
+		cap := cfg.Resident.MaxWorkers
+		if cap < 1 {
+			cap = 8
+			slog.Warn("[resident] invalid max_workers; using default")
+		}
+		if count >= cap {
+			return residentToolError(id, fmt.Sprintf("resident max_workers cap %d reached (live workers: %d)", cap, count))
+		}
 	}
 
 	// Project: explicit override first, then the COORDINATOR'S OWN TASK project
@@ -1860,9 +1934,10 @@ func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Resp
 	// Prepend the orientation prefix so the worker knows it is born-bound and
 	// who its coordinator + orchestrator are. The verbatim user prompt follows
 	// the separator and is also stored on the role row.
-	taskPrompt := agent.HeraWorkerOrientation(caller.orch.Name, caller.role.Name) + "\n\n---\n\n" + prompt
+	taskPrompt := agent.HeraWorkerOrientation(caller.orch.Name, caller.role.Name, caller.task.IsResident()) + "\n\n---\n\n" + prompt
 
 	res, err := s.heraSpawn(HeraSpawnInput{
+		Account:        strings.TrimSpace(p.Account),
 		Project:        project,
 		BaseName:       baseName,
 		TaskPrompt:     taskPrompt,
@@ -1877,6 +1952,10 @@ func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Resp
 		return toolError(id, fmt.Sprintf("spawn worker: %v", err))
 	}
 
+	if caller.task.IsResident() {
+		uxlog.Log("[resident] spawned worker=%s task=%s project=%s", res.Role.Name, res.Task.ID, project)
+		slog.Info("[resident] spawned worker", "worker", res.Role.Name, "task", res.Task.ID, "project", project)
+	}
 	// Report which backend the worker got and who chose it, so a coordinator
 	// forcing a backend by habit (bypassing [backend_routing]) is visible.
 	backendSource := "routed"

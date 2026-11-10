@@ -123,14 +123,15 @@ func (s *Server) handlePushTest(w http.ResponseWriter, r *http.Request) {
 // Pulled out as a struct so idleWatcherTick can be exercised in unit tests
 // without spinning up a real ticker.
 type idleWatcherState struct {
-	bridgeSource  map[string]bool
-	scraperNeeds  map[string]bool
-	idleNow       map[string]bool       // taskID -> last seen idle?
-	seenBefore    map[string]bool       // taskID -> have we observed this session on a prior tick?
-	pushedAt      map[string]time.Time  // taskID -> wall-clock time we last fired an idle push
-	needsInputNow map[string]bool       // taskID -> last seen blocked-on-user-input?
-	contextAt     map[string]time.Time  // taskID -> measured_at last announced via task.context_changed
-	runtimeNow    map[string]runtimeSig // taskID -> last published REST runtime flags (non-zero only)
+	residentPromptEpisodes map[string]bool
+	bridgeSource           map[string]bool
+	scraperNeeds           map[string]bool
+	idleNow                map[string]bool       // taskID -> last seen idle?
+	seenBefore             map[string]bool       // taskID -> have we observed this session on a prior tick?
+	pushedAt               map[string]time.Time  // taskID -> wall-clock time we last fired an idle push
+	needsInputNow          map[string]bool       // taskID -> last seen blocked-on-user-input?
+	contextAt              map[string]time.Time  // taskID -> measured_at last announced via task.context_changed
+	runtimeNow             map[string]runtimeSig // taskID -> last published REST runtime flags (non-zero only)
 	// contentFP carries each prompt-showing session's content fingerprint from
 	// the previous tick (BUG-032). A session whose meaningful output is
 	// unchanged across ticks while it shows the prompt signature is blocked
@@ -778,6 +779,7 @@ func (s *Server) detectNeedsInputTick(state *idleWatcherState, running, idle []s
 		}
 	}
 	state.needsInputNow = needsSet
+	s.notifyResidentWorkerPrompts(state, needsSet, tailOf)
 	// The resident is excluded from the generic task needs-input set that the
 	// Tasks list and rail read; its own waiting signal is exposed separately.
 	waiting := s.containsResident(needs)

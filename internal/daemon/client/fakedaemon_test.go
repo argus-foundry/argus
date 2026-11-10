@@ -31,6 +31,7 @@ type fakeDaemon struct {
 	ln        net.Listener
 	zeroExit  bool   // GetExitInfo answers an all-zero ExitInfo (old server, nothing recorded)
 	alive     bool   // SessionStatus.Alive value
+	statusPID int    // SessionStatus.PID value (0 = unset)
 	dropAfter int    // how many bytes to send before dropping the stream
 	streamMsg []byte // bytes to send on stream before drop
 
@@ -46,6 +47,16 @@ type fakeDaemon struct {
 	residentViewed bool
 	residentSent   daemon.ResidentSendReq
 	residentError  string
+	forcedRecycle  string
+}
+
+func (s *FakeRPCService) ForceRecycleCoordinator(req *daemon.TaskIDReq, resp *daemon.StatusResp) error {
+	s.fd.mu.Lock()
+	defer s.fd.mu.Unlock()
+	s.fd.forcedRecycle = req.TaskID
+	resp.OK = s.fd.residentError == ""
+	resp.Error = s.fd.residentError
+	return nil
 }
 
 func (s *FakeRPCService) ResidentState(_ *daemon.Empty, resp *daemon.ResidentStateResp) error {
@@ -126,6 +137,7 @@ func (s *FakeRPCService) SessionStatus(req *daemon.TaskIDReq, resp *daemon.Sessi
 	defer s.fd.mu.Unlock()
 	resp.TaskID = req.TaskID
 	resp.Alive = s.fd.alive
+	resp.PID = s.fd.statusPID
 	return nil
 }
 

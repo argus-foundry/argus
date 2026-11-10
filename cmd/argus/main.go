@@ -274,7 +274,7 @@ func runTUI() {
 			if appRef != nil {
 				appRef.NotifySessionExit(taskID, exitErr, stopped, lastOutput)
 			}
-		})
+		}, database.IsResidentWorker)
 	} else {
 		uxlog.Log("connected to daemon at %s", sockPath)
 		daemonConnected = true
@@ -689,7 +689,7 @@ func runSupervisor() {
 	}
 	defer database.Close() //nolint:errcheck // process is exiting; close error is non-actionable
 
-	s := daemon.NewSupervisor(database.Config)
+	s := daemon.NewSupervisor(database.Config, database.IsResidentWorker)
 	if err := s.Serve(daemon.DefaultSupervisorSocketPath()); err != nil {
 		if errors.Is(err, daemon.ErrDaemonAlreadyRunning) {
 			// Lost the singleton race — another supervisor is already serving.

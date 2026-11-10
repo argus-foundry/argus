@@ -9,6 +9,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/tui/theme"
 	"github.com/argus-foundry/argus/internal/tui/widget"
@@ -19,12 +20,14 @@ import (
 // DB config keys the daemon's ensure-running loop and db.Config() read; the
 // category only ever writes those keys, the daemon picks the change up.
 const (
-	resKeyEnabled = "resident.enabled"
-	resKeyName    = "resident.name"
-	resKeyBudget  = "resident.context_budget"
-	resKeyMemory  = "resident.memory_dir"
-	resKeyModel   = "resident.model"
-	resKeyAccount = "resident.account"
+	resWorkerAccountPrefix = "resident.worker_accounts."
+	resKeyEnabled          = "resident.enabled"
+	resKeyName             = "resident.name"
+	resKeyMaxWorkers       = "resident.max_workers"
+	resKeyBudget           = "resident.context_budget"
+	resKeyMemory           = "resident.memory_dir"
+	resKeyModel            = "resident.model"
+	resKeyAccount          = "resident.account"
 	// resKeyTools is the read-only pointer row (allow_tools/ask_tools/deny_tools live in
 	// config.toml only).
 	resKeyTools = "resident.tools"
@@ -58,22 +61,61 @@ func (sv *SettingsView) residentRows() []settingsRow {
 	if r.Enabled {
 		state = "ON"
 	}
+	if sv.residentRunningWorkers > 0 {
+		state += fmt.Sprintf(" — %d workers still running", sv.residentRunningWorkers)
+	}
 	rows := []settingsRow{
 		{kind: srResident, key: resKeyEnabled, label: "Enabled: " + state},
 		field(resKeyName, "Name", r.Name, "(required)"),
 		field(resKeyBudget, "Context budget", strconv.Itoa(r.ContextBudget), "(default)"),
+		field(resKeyMaxWorkers, "Max workers", strconv.Itoa(r.MaxWorkers), "(default)"),
 		field(resKeyMemory, "Memory dir", r.MemoryDir, "(default)"),
 		field(resKeyModel, "Model", r.Model, "(default)"),
 		field(resKeyAccount, "Account", r.Account, "(default)"),
 		{kind: srResident, key: resKeyTools, label: "Tool permissions: config.toml"},
 	}
+	if sv.residentMaxWorkersOverridden() {
+		for i := range rows {
+			if rows[i].key == resKeyMaxWorkers {
+				rows[i].label += " (config.toml)"
+			}
+		}
+	}
+	if !sv.remote {
+		cfg := sv.database.Config()
+		for _, account := range agent.ResidentWorkerAccounts(cfg) {
+			enabled, set := cfg.Resident.WorkerAccounts[account]
+			state := "ON"
+			if set && !enabled {
+				state = "OFF"
+			}
+			label := "Worker accounts / " + account + ": " + state
+			if d := sv.accountDB(); d != nil && d.ResidentSources().WorkerAccounts[account] {
+				label += " (config.toml)"
+			}
+			rows = append(rows, settingsRow{kind: srResident, key: resWorkerAccountPrefix + account, label: label})
+		}
+	}
 	return rows
+}
+
+func (sv *SettingsView) residentMaxWorkersOverridden() bool {
+	d := sv.accountDB()
+	return d != nil && d.ResidentMaxWorkersFromConfigToml()
 }
 
 // SetResidentReason stores the daemon-reported reason the resident is not
 // running (empty when healthy). UI goroutine only.
 func (sv *SettingsView) SetResidentReason(reason string) {
 	sv.residentReason = reason
+}
+
+func (sv *SettingsView) SetResidentRunningWorkers(count int) {
+	if sv.residentRunningWorkers != count {
+		uxlog.Log("[resident] settings running workers=%d", count)
+		sv.residentRunningWorkers = count
+		sv.rebuildRows()
+	}
 }
 
 // sanitizeResidentReason keeps a daemon-supplied reason to one printable line
@@ -113,6 +155,12 @@ func (sv *SettingsView) persistResident(key, val string) bool {
 
 // handleResidentEnter toggles enabled or starts inline editing of a field.
 func (sv *SettingsView) handleResidentEnter(key string) bool {
+	if strings.HasPrefix(key, resWorkerAccountPrefix) {
+		return sv.toggleResidentWorkerAccount(strings.TrimPrefix(key, resWorkerAccountPrefix))
+	}
+	if key == resKeyMaxWorkers && sv.residentMaxWorkersOverridden() {
+		return sv.residentNotify("max_workers is defined in config.toml — read-only")
+	}
 	if key == resKeyTools {
 		return true
 	}
@@ -127,6 +175,8 @@ func (sv *SettingsView) handleResidentEnter(key string) bool {
 	switch key {
 	case resKeyName:
 		buf = r.Name
+	case resKeyMaxWorkers:
+		buf = strconv.Itoa(r.MaxWorkers)
 	case resKeyBudget:
 		buf = strconv.Itoa(r.ContextBudget)
 	case resKeyMemory:
@@ -163,6 +213,14 @@ func (sv *SettingsView) toggleResidentEnabled() bool {
 // edit stays open with the reason shown.
 func (sv *SettingsView) commitResidentEdit() bool {
 	key, buf := sv.resEdit.key, strings.TrimSpace(sv.resEdit.buf)
+	if key == resKeyMaxWorkers {
+		_ = sv.database.Config() // refresh config.toml source metadata before commit
+		if sv.residentMaxWorkersOverridden() {
+			sv.resEdit = residentEdit{}
+			return sv.residentNotify("max_workers is defined in config.toml — read-only")
+		}
+	}
+
 	switch key {
 	case resKeyName:
 		if buf == "" && !sv.database.Config().Resident.Enabled {
@@ -170,6 +228,10 @@ func (sv *SettingsView) commitResidentEdit() bool {
 		}
 		if err := config.ValidResidentName(buf); err != nil {
 			return sv.residentNotify("%v", err)
+		}
+	case resKeyMaxWorkers:
+		if _, err := strconv.Atoi(buf); err != nil {
+			return sv.residentNotify("max workers must be a number (below 1 uses 8)")
 		}
 	case resKeyBudget:
 		if n, err := strconv.Atoi(buf); err != nil || n <= 0 {
@@ -220,6 +282,8 @@ func (sv *SettingsView) renderResidentDetail(screen tcell.Screen, x, y, w, h int
 	switch row.key {
 	case resKeyName:
 		text = fmt.Sprintf("Display name (1 to %d characters), used for the tab label. Renaming applies live.", config.ResidentNameMaxRunes)
+	case resKeyMaxWorkers:
+		text = "Maximum live workers on the resident team. Default 8; values below 1 use 8. Ended or graduated workers free a slot."
 	case resKeyBudget:
 		text = "Context size at which the resident is nudged to recycle."
 	case resKeyMemory:
@@ -230,6 +294,9 @@ func (sv *SettingsView) renderResidentDetail(screen tcell.Screen, x, y, w, h int
 		text = "Optional account override. Empty uses the default account."
 	case resKeyTools:
 		text = "allow_tools, ask_tools and deny_tools are edited in config.toml under [resident]."
+	}
+	if strings.HasPrefix(row.key, resWorkerAccountPrefix) {
+		text = "Enter toggles this account for new resident workers. Running workers keep their account. Only eligible accounts are listed; config.toml overrides are read-only."
 	}
 	widget.DrawText(screen, x, y+2, w, text, theme.StyleDimmed)
 	line := y + 4

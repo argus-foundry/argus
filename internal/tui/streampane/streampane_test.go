@@ -2,7 +2,6 @@ package streampane
 
 import (
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -155,23 +154,18 @@ func TestStreamPane_OnRedrawFiresAfterBytes(t *testing.T) {
 	sp := New(src)
 	defer sp.Close()
 
-	var (
-		mu    sync.Mutex
-		count int
-	)
+	redrawn := make(chan struct{}, 1)
 	sp.OnNeedRedraw = func() {
-		mu.Lock()
-		defer mu.Unlock()
-		count++
+		redrawn <- struct{}{}
 	}
 
 	src <- []byte("x")
-	waitForTouched(t, sp, 1)
-
-	mu.Lock()
-	defer mu.Unlock()
-	if count < 1 {
-		t.Fatalf("expected OnNeedRedraw to fire at least once, got %d", count)
+	// Touched advances before the callback. Wait for the callback itself,
+	// otherwise a fast observer can assert before consume invokes it.
+	select {
+	case <-redrawn:
+	case <-time.After(time.Second):
+		t.Fatal("OnNeedRedraw did not fire after bytes")
 	}
 }
 

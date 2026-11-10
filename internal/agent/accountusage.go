@@ -62,10 +62,16 @@ func LocalAccountUsage(cfg config.Config) map[string]usagebudget.Reading {
 // (the fuller valid window). Unknown usage counts as 0%; ties keep candidate
 // order ("default", then names sorted). ok is false when no candidate exists.
 func PickMoveTarget(cfg config.Config, usage map[string]usagebudget.Reading, backendCommand, exclude string) (string, string, bool) {
+	return pickMoveTargetWhere(cfg, usage, backendCommand, exclude, nil)
+}
+
+// pickMoveTargetWhere is PickMoveTarget limited to accounts keep accepts
+// (nil keeps every account).
+func pickMoveTargetWhere(cfg config.Config, usage map[string]usagebudget.Reading, backendCommand, exclude string, keep func(string) bool) (string, string, bool) {
 	best, bestPct := "", 0.0
 	var scores []string
 	for _, name := range cfg.AccountNamesFor(backendCommand) {
-		if name == exclude {
+		if name == exclude || (keep != nil && !keep(name)) {
 			continue
 		}
 		pct := usage[name].Percentage

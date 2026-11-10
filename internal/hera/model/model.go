@@ -25,18 +25,19 @@ import (
 // its live binding points at (empty when unbound), and whether that task is
 // flagged meta:hera.ready_to_close (M4 — a finished worker awaiting close-out).
 type RoleView struct {
-	BoardItems   []*db.HeraBoardItem
-	BoardUnread  int
-	RoleID       int64
-	OrchID       int64
-	Name         string
-	Kind         db.HeraRoleKind
-	Status       db.HeraRoleStatusValue // "" when no status row exists
-	HasStatus    bool
-	TaskID       string // live binding's argus task, or "" when unbound
-	Live         bool   // has a live binding
-	ReadyToClose bool   // bound task carries meta:hera.ready_to_close=true
-	Archived     bool   // role archived_at set
+	BoardItems               []*db.HeraBoardItem
+	BoardUnread              int
+	RoleID                   int64
+	OrchID                   int64
+	Name                     string
+	Kind                     db.HeraRoleKind
+	Status                   db.HeraRoleStatusValue // "" when no status row exists
+	HasStatus                bool
+	TaskID                   string // live binding's argus task, or "" when unbound
+	Live                     bool   // has a live binding
+	GraduationPendingRestart bool   // durable resume intent; also shown on the ended worker notice
+	ReadyToClose             bool   // bound task carries meta:hera.ready_to_close=true
+	Archived                 bool   // role archived_at set
 	// Pinned is true when the role's hera_roles.pinned_at is set. A pinned
 	// non-root role FLOATS out of its parent subtree into the rail's Pinned
 	// section as a two-line breadcrumb entry (rail.collectPinnedRoles). Pin and
@@ -1256,6 +1257,11 @@ func BuildModel(r HeraReader, needsInput map[string]bool, sessionIdle map[string
 				continue
 			}
 			rv := buildRoleView(r, role, roleToBinding, roleToLatest, heraMeta, taskByID, needsInput, sessionIdle, sessionRunning, sustainedActive)
+			// The former worker is only a transient pending-restart notice. It
+			// must never bridge/nest the new independent coordinator.
+			if rv.LinkEndReason == db.HeraEndReasonGraduated && !rv.GraduationPendingRestart {
+				continue
+			}
 			if role.Kind == db.HeraKindCoordinator {
 				if br, ok := r.(interface {
 					ListHeraBoardItems(int64, bool) ([]*db.HeraBoardItem, error)
@@ -1428,6 +1434,7 @@ func buildRoleView(r HeraReader, role *db.HeraRole, roleToBinding map[int64]*db.
 		rv.WorktreePath = b.WorktreePath
 		rv.BindingStartedAt = b.StartedAt
 		if kv := heraMeta[taskID]; kv != nil {
+			rv.GraduationPendingRestart = kv[db.HeraMetaKeyGraduationPendingRestart] != ""
 			if kv[db.HeraMetaKeyReadyToClose] == "true" {
 				rv.ReadyToClose = true
 			}
@@ -1505,6 +1512,9 @@ func buildRoleView(r HeraReader, role *db.HeraRole, roleToBinding map[int64]*db.
 		rv.BridgeTaskID = b.ArgusTaskID
 		if b.EndedAt != nil {
 			rv.LinkEndReason = b.EndReason
+			if b.EndReason == db.HeraEndReasonGraduated {
+				rv.GraduationPendingRestart = heraMeta[b.ArgusTaskID][db.HeraMetaKeyGraduationPendingRestart] != ""
+			}
 		}
 	} else {
 		rv.BridgeTaskID = rv.TaskID

@@ -505,16 +505,17 @@ type SetFocusedReq struct {
 // the unmet prerequisite (name, KB, vault, backend) when enabled but unable to
 // run, so frontends can show why.
 type ResidentStateResp struct {
-	Enabled     bool
-	Name        string
-	TaskID      string
-	Running     bool
-	Unread      bool
-	Waiting     bool
-	LastReply   string
-	LastReplyAt string // RFC3339Nano UTC, empty when none
-	ViewedAt    string // RFC3339Nano UTC, empty when never viewed
-	Reason      string
+	RunningWorkers int
+	Enabled        bool
+	Name           string
+	TaskID         string
+	Running        bool
+	Unread         bool
+	Waiting        bool
+	LastReply      string
+	LastReplyAt    string // RFC3339Nano UTC, empty when none
+	ViewedAt       string // RFC3339Nano UTC, empty when never viewed
+	Reason         string
 }
 
 // ResidentSendReq is the request to deliver text to the resident through the

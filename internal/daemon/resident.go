@@ -83,6 +83,11 @@ type residentManager struct {
 	// started before it binds never gets the config.
 	mcpReady func() bool
 	now      func() time.Time
+	// commitNotice atomically moves one queued human-action notice into a Hera
+	// message (nil = db.DeliverResidentNotice); ringNotice then rings the
+	// doorbell for the committed message (nil = store only: tests, no notifier).
+	commitNotice func(noticeID, from, to int64, body, tldr string) (*db.HeraMessage, error)
+	ringNotice   func(msg *db.HeraMessage)
 
 	mu           sync.Mutex
 	failures     int
@@ -224,6 +229,10 @@ func (m *residentManager) tick() {
 		m.reason(fmt.Sprintf("resident row: %v", err))
 		return
 	}
+	if _, err := m.db.EnsureResidentOrchestrator(task.ID); err != nil {
+		m.reason(fmt.Sprintf("resident orchestrator: %v", err))
+		return
+	}
 	// Every early return above sets its own reason; past them, the reason is
 	// the last unresolved start failure (or none). Setting it any earlier would
 	// reset the log-on-change dedup each tick and re-log a persistent
@@ -362,12 +371,14 @@ func (m *residentManager) run(done <-chan struct{}) {
 	t := time.NewTicker(residentTickInterval)
 	defer t.Stop()
 	m.tick()
+	m.deliverNotices()
 	for {
 		select {
 		case <-done:
 			return
 		case <-t.C:
 			m.tick()
+			m.deliverNotices()
 		}
 	}
 }
@@ -394,6 +405,7 @@ func (m *residentManager) metaValues(taskID string) map[string]string {
 func (m *residentManager) State() ResidentStateResp {
 	cfg := m.cfgFn()
 	resp := ResidentStateResp{Enabled: cfg.Resident.Enabled, Name: cfg.Resident.Name}
+	resp.RunningWorkers = m.runningWorkers()
 	if !resp.Enabled {
 		return resp
 	}
@@ -506,6 +518,7 @@ func (d *Daemon) residentMgr() *residentManager {
 			defer d.mu.Unlock()
 			return d.mcpPort != 0
 		}
+		m.ringNotice = func(msg *db.HeraMessage) { d.heraNotifyService().Deliver(msg) }
 		m.waiting = func(id string) bool {
 			d.mu.Lock()
 			srv := d.apiServer

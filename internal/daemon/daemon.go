@@ -197,6 +197,7 @@ type Daemon struct {
 	// polls for coordinators with a pending recycle request and restarts
 	// each once its session goes idle.
 	heraRecycleWatcher *hera.RecycleWatcher
+	graduation         *graduationWatcher
 
 	// taskRecycler is the one task_recycle runner (nil until MCP wiring); the
 	// resident manager consults it so its restart never races a recycle.
@@ -324,6 +325,11 @@ type SupervisorClient interface {
 // captures the client. The in-process runner created in New is left unused; its
 // onFinish never fires because it never starts a session.
 func (d *Daemon) UseSupervisorRunner(c SupervisorClient) {
+	if guarded, ok := c.(interface {
+		SetResidentWorkerIdentity(agent.ResidentWorkerIdentity)
+	}); ok {
+		guarded.SetResidentWorkerIdentity(d.db.IsResidentWorker)
+	}
 	d.runner = c
 	d.supClient = c
 	// Prefer the owned form: the client drops the exiting session from its map
@@ -401,7 +407,7 @@ func New(database *db.DB) *Daemon {
 			LastOutput:     lastOutput,
 			PendingRestart: d.runner.HasPendingRestart(taskID),
 		}, d.runner.Get(taskID))
-	})
+	}, database.IsResidentWorker)
 
 	// Mount the session-serving substrate. The daemon owns the runner (and thus
 	// the onFinish wiring above); the core owns the stream registry, exit cache,
@@ -615,6 +621,7 @@ func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
 // adapter that translates the MCP payload to/from the shared types.
 func (d *Daemon) heraSpawnWorker(in mcp.HeraSpawnInput) (*mcp.HeraSpawnResult, error) {
 	res, err := agent.SpawnHeraWorker(d.db, d.runner, agent.HeraWorkerSpawnInput{
+		Account:        in.Account,
 		OrchestratorID: in.OrchestratorID,
 		BaseName:       in.BaseName,
 		TaskPrompt:     in.TaskPrompt,
@@ -1638,8 +1645,10 @@ func (d *Daemon) Serve(sockPath string) error {
 		// nodes; this recycles live coordinators) but gated on the same
 		// cfg.Hera.Enabled — both are hera-native background loops with no
 		// meaning when hera is off.
-		d.heraRecycleWatcher = hera.NewRecycleWatcher(d.db, NewHeraRecycleRunner(d.db, d.runner, d.cfgFn))
+		d.heraRecycleWatcher = hera.NewRecycleWatcher(d.db, d.heraRecycleRunner())
 		go d.heraRecycleWatcher.Start()
+		d.graduation = newGraduationWatcher(d.db, d.runner, d.cfgFn, d.notifier)
+		go d.graduation.start()
 	}
 
 	// Remove Argus-owned user-wide entries from older builds. Task launches now
@@ -1672,10 +1681,7 @@ func (d *Daemon) Serve(sockPath string) error {
 		// Constructed once, not per call: taskRecycleRunner's inFlight dedup
 		// (see task_recycle.go) only works across calls if the map itself
 		// persists between them.
-		taskRecycler := newTaskRecycleRunner(d.db, d.runner, d.cfgFn)
-		d.mu.Lock()
-		d.taskRecycler = taskRecycler
-		d.mu.Unlock()
+		taskRecycler := d.taskRecycleRunner()
 		mcpSrv.SetTaskRecycler(func(in mcp.TaskRecycleInput) error {
 			return taskRecycler.Recycle(in.TaskID, in.HandoffNote)
 		})
@@ -1691,6 +1697,7 @@ func (d *Daemon) Serve(sockPath string) error {
 		if cfg.Hera.Enabled {
 			mcpSrv.SetHeraService(hera.New(d.db, d.notifier), d.db, d.heraSpawnWorker)
 			mcpSrv.SetHeraReviver(d.heraReviveRole)
+			mcpSrv.SetHeraGraduationPreflight(d.graduation.preflight)
 		}
 		mcpSrv.SetArtifactManager(d.db)
 		mcpSrv.SetArtifactPublisher(artifactPublisher)
@@ -1930,6 +1937,10 @@ func (d *Daemon) cleanup() {
 		}
 	}
 
+	if d.graduation != nil {
+		close(d.graduation.stop)
+		<-d.graduation.done
+	}
 	if d.supClient != nil {
 		// Supervisor mode: the supervisor owns the agent PTYs and MUST survive
 		// this daemon's exit — that is the entire point (agents keep running

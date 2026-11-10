@@ -343,3 +343,66 @@ var contextOrder = map[Context][]Action{
 		ActHeraCleanup, ActHeraInbox, ActHeraMoveAccount, ActHeraDelete},
 	CtxHeraBoard: {ActBoardToggle, ActBoardReply, ActBoardDismiss, ActBoardDown, ActBoardUp},
 }
+
+// ResidentAccess classifies a Projects-rail action for the resident tab.
+type ResidentAccess int
+
+const (
+	// ResidentInert: the key does nothing on the resident tab and is absent
+	// from its help overlay and palette (creation and structure changes).
+	ResidentInert ResidentAccess = iota
+	// ResidentAnywhere: works on any resident-tab row.
+	ResidentAnywhere
+	// ResidentWorkerOnly: works on worker rows and is inert on the resident's
+	// own row (the standing coordinator is protected from the rail).
+	ResidentWorkerOnly
+)
+
+// residentRailPolicy is the resident tab's key allowlist, as data. Every
+// CtxHeraRail action MUST appear (TestResidentRailPolicyClassifiesEveryRailAction),
+// so a new rail action is a deliberate resident decision, never an accidental
+// allow. Navigation and Enter are structural and live outside the keymap.
+var residentRailPolicy = map[Action]ResidentAccess{
+	ActHeraDelete:      ResidentWorkerOnly,
+	ActHeraRename:      ResidentWorkerOnly,
+	ActHeraArchive:     ResidentWorkerOnly,
+	ActHeraStatAdv:     ResidentWorkerOnly,
+	ActHeraStatRev:     ResidentWorkerOnly,
+	ActHeraInbox:       ResidentAnywhere,
+	ActHeraSpawn:       ResidentInert,
+	ActHeraNewCoord:    ResidentInert,
+	ActHeraPin:         ResidentInert,
+	ActHeraKanbanAdv:   ResidentInert,
+	ActHeraKanbanRev:   ResidentInert,
+	ActHeraAdopt:       ResidentInert,
+	ActHeraClear:       ResidentInert,
+	ActHeraCleanup:     ResidentInert,
+	ActHeraMoveAccount: ResidentInert,
+}
+
+// ResidentRailAccess reports how the resident tab treats a rail action;
+// unknown actions are inert.
+func ResidentRailAccess(act Action) ResidentAccess { return residentRailPolicy[act] }
+
+// ResidentRailActions lists the allowed rail actions in help order.
+func ResidentRailActions() []Action {
+	var out []Action
+	for _, act := range contextOrder[CtxHeraRail] {
+		if residentRailPolicy[act] != ResidentInert {
+			out = append(out, act)
+		}
+	}
+	return out
+}
+
+// ResidentHelpRows renders the resident tab's allowed rail actions with their
+// live (possibly rebound) keys; the help overlay is generated from it.
+func (k *Keymap) ResidentHelpRows() []HelpRow {
+	var rows []HelpRow
+	for _, act := range ResidentRailActions() {
+		if b, ok := k.fwd[CtxHeraRail][act]; ok {
+			rows = append(rows, HelpRow{Key: b.String(), Label: actionLabels[act]})
+		}
+	}
+	return rows
+}

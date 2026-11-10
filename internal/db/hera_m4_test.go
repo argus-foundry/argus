@@ -111,6 +111,22 @@ func TestUniqueHeraOrchestratorName(t *testing.T) {
 		testutil.Equal(t, got, "fix-bug-3")
 	})
 
+	t.Run("reserved resident name de-collides", func(t *testing.T) {
+		d := heraTestDB(t)
+		got, err := d.UniqueHeraOrchestratorName(ResidentOrchestratorName)
+		testutil.NoError(t, err)
+		testutil.Equal(t, got, "resident-2")
+
+		mkOrch(t, d, "resident-2")
+		got, err = d.UniqueHeraOrchestratorName(ResidentOrchestratorName)
+		testutil.NoError(t, err)
+		testutil.Equal(t, got, "resident-3")
+
+		// Explicit creation of the reserved name stays rejected.
+		_, err = d.CreateHeraOrchestrator(ResidentOrchestratorName, "")
+		testutil.ErrorIs(t, err, ErrResidentProtected)
+	})
+
 	t.Run("archived orchestrator does not block reuse", func(t *testing.T) {
 		d := heraTestDB(t)
 		o := mkOrch(t, d, "fix-bug")

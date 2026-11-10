@@ -15,6 +15,7 @@ import (
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
@@ -49,6 +50,35 @@ func releaseAccountMove(id string) {
 	delete(accountMovesInFlight.ids, id)
 	accountMovesInFlight.Unlock()
 }
+
+// AccountMoveInFlight reports whether an account or backend move of id is in
+// progress in this process. Graduation refuses while one is, which (with the
+// move's own pending-graduate check, made after it claims the task) closes
+// most of the move-vs-graduation race; the residual cross-lock window is a
+// named follow-up (see gotchas/resident.md).
+func AccountMoveInFlight(id string) bool {
+	accountMovesInFlight.Lock()
+	defer accountMovesInFlight.Unlock()
+	return accountMovesInFlight.ids[id]
+}
+
+// refuseMoveOfPendingGraduate fails closed for a pending graduate: it restarts
+// only through the daemon watcher, and any account or backend move would
+// restart it alongside the watcher (a kill+resume) or clear/re-mint its
+// session ID (no transferable transcript, or a backend move), so the watcher's
+// resume preflight fails forever. Called after claimAccountMove so a
+// concurrent graduation preflight sees the move as in flight.
+func refuseMoveOfPendingGraduateImpl(database *db.DB, taskID string) error {
+	if pending, perr := database.GraduationPendingErr(taskID); perr != nil || pending {
+		uxlog.Log("[resident] refused account/backend move of task %s: graduation pending (check err=%v)", taskID, perr)
+		return fmt.Errorf("%w (task %s)", db.ErrGraduationPending, taskID)
+	}
+	return nil
+}
+
+// refuseMoveOfPendingGraduate is a seam so a test can observe that the move
+// is already claimed in flight when the check runs.
+var refuseMoveOfPendingGraduate = refuseMoveOfPendingGraduateImpl
 
 // ErrAccountMoveRestartUnknown means the persisted move may still start.
 var ErrAccountMoveRestartUnknown = errors.New("account move restart outcome unknown")
@@ -122,6 +152,9 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 		return nil, AccountMoveResult{}, errAccountMovePending
 	}
 	defer releaseAccountMove(in.TaskID)
+	if err := refuseMoveOfPendingGraduate(database, in.TaskID); err != nil {
+		return nil, AccountMoveResult{}, err
+	}
 	task, err := database.Get(in.TaskID)
 	if err != nil {
 		return nil, AccountMoveResult{}, err
@@ -141,8 +174,24 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: backend %q cannot move accounts", ErrAccount, task.Backend)
 	}
 	from := NormalizeAccount(task.Account)
-	to, err := resolveMoveTarget(cfg, backend.Command, from, in.Account)
+	// A resident worker's auto pick must only consider accounts it could
+	// actually run on: the lowest-usage account is often one disabled for
+	// resident workers, and picking it first would refuse a move that an
+	// enabled account could have satisfied.
+	var eligible func(string) bool
+	if worker, werr := database.IsResidentWorker(task.ID); werr != nil {
+		uxlog.Log("[resident] move refused task=%s: worker identity lookup failed: %v", task.ID, werr)
+		return nil, AccountMoveResult{}, fmt.Errorf("%w: resident worker identity: %w", ErrAccount, werr)
+	} else if worker {
+		eligible = func(name string) bool {
+			return residentWorkerMoveCause(task, cfg, task.Backend, name) == nil
+		}
+	}
+	to, err := resolveMoveTarget(cfg, backend.Command, from, in.Account, eligible)
 	if err != nil {
+		return nil, AccountMoveResult{}, err
+	}
+	if err := refuseIneligibleResidentWorkerMove(database, task, cfg, task.Backend, to); err != nil {
 		return nil, AccountMoveResult{}, err
 	}
 
@@ -230,14 +279,19 @@ func liveSession(runner accountMoveRunner, taskID string) SessionHandle {
 }
 
 // resolveMoveTarget validates the requested target and resolves "auto".
-func resolveMoveTarget(cfg config.Config, backendCommand, from, requested string) (string, error) {
+// A non-nil eligible restricts the auto candidates to accounts it accepts.
+func resolveMoveTarget(cfg config.Config, backendCommand, from, requested string, eligible func(string) bool) (string, error) {
 	target := strings.TrimSpace(requested)
 	if target == "" {
 		return "", fmt.Errorf("%w: account is required", ErrAccount)
 	}
 	if target == AutoMoveTarget {
-		picked, scores, ok := PickMoveTarget(cfg, AccountUsage(cfg), backendCommand, from)
+		picked, scores, ok := pickMoveTargetWhere(cfg, AccountUsage(cfg), backendCommand, from, eligible)
 		if !ok {
+			if eligible != nil {
+				uxlog.Log("[resident] auto move refused: no other account is eligible for a resident worker")
+				return "", fmt.Errorf("%w: resident workers can only move to an enabled account whose backend family supports unattended workers (no other eligible account)", ErrAccount)
+			}
 			return "", fmt.Errorf("%w: no other account can run this task", ErrAccount)
 		}
 		uxlog.Log("[account] move: auto picked %s (scores %s)", picked, scores)
@@ -350,6 +404,26 @@ func copyTree(src, dst string) error {
 		}
 		return nil
 	})
+}
+
+// PreviewMoveTarget is the account an "auto" move of task would pick right now
+// (the picker's "now X" label), applying the same resident-worker eligibility
+// filter MoveTaskAccount does. Fail-closed: when worker identity cannot be
+// determined, ok is false rather than naming an account the move might refuse.
+func PreviewMoveTarget(database *db.DB, task *model.Task, cfg config.Config, usage map[string]usagebudget.Reading, backendCommand, exclude string) (string, bool) {
+	var keep func(string) bool
+	if database != nil && task != nil {
+		worker, err := database.IsResidentWorker(task.ID)
+		if err != nil {
+			uxlog.Log("[resident] move preview: worker identity lookup failed task=%s: %v", task.ID, err)
+			return "", false
+		}
+		if worker {
+			keep = func(name string) bool { return residentWorkerMoveCause(task, cfg, task.Backend, name) == nil }
+		}
+	}
+	picked, _, ok := pickMoveTargetWhere(cfg, usage, backendCommand, exclude, keep)
+	return picked, ok
 }
 
 func claudeTransferSession(from, to *model.Task, cfg config.Config) (bool, error) {

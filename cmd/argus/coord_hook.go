@@ -149,12 +149,19 @@ func runCoordHook(stdin io.Reader, out, errOut io.Writer, env coordHookEnv) {
 	resident := false
 	// Only the resident's spawn carries the marker, so plain tasks never pay
 	// the Stop-time ResidentState RPC. The RPC still confirms identity.
-	if kind == "" && env.IsResident != nil && env.Getenv(agent.ResidentEnvMarker) == "1" {
+	if env.IsResident != nil && env.Getenv(agent.ResidentEnvMarker) == "1" {
 		var residentErr error
 		resident, residentErr = env.IsResident(taskID)
 		if residentErr != nil {
 			uxlog.Log("[resident] Stop subject lookup failed task=%s: %v", taskID, residentErr)
 			_, _ = fmt.Fprintf(errOut, "coord-hook: resident subject lookup: %v\n", residentErr)
+			return // a failed resident lookup must never fall into Hera's hard-stop path
+		}
+		if !resident {
+			// Disabled resident state deliberately omits TaskID. Its final Stop
+			// must still never become a generic coordinator hard-stop/recycle.
+			uxlog.Log("[resident] Stop subject unavailable task=%s; allowing Stop", taskID)
+			return
 		}
 	}
 	if err != nil && !resident {
@@ -859,7 +866,7 @@ func budgetReal(_ string) (int, error) {
 	return cfg.Hera.CoordinatorContextBudget, nil
 }
 
-// Use the daemon's singleton identity; the resident deliberately has no Hera
+// Use the daemon's singleton identity, independently of the resident's Hera
 // role and is invisible to the generic task read endpoints.
 func isResidentReal(taskID string) (bool, error) {
 	client, err := coordHookDial()

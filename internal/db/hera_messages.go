@@ -91,7 +91,22 @@ func (m *HeraMessage) SenderName(roleName string) string {
 // All checks run inside the DB lock so concurrent senders can't both squeak
 // past the caps. Returns the inserted message on success.
 func (d *DB) SendHeraMessage(fromRoleID, toRoleID int64, body, tldr string, inReplyTo *int64) (*HeraMessage, error) {
-	// Validate before acquiring the lock — cheap, no DB needed.
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return insertHeraMessage(d.conn, fromRoleID, toRoleID, body, tldr, inReplyTo)
+}
+
+// heraMsgQuerier is the *sql.DB / *sql.Tx surface insertHeraMessage needs.
+type heraMsgQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// insertHeraMessage validates and inserts one hera message through q (the
+// caller holds d.mu, and for a *sql.Tx owns the transaction). It is the single
+// implementation behind SendHeraMessage and DeliverResidentNotice.
+func insertHeraMessage(q heraMsgQuerier, fromRoleID, toRoleID int64, body, tldr string, inReplyTo *int64) (*HeraMessage, error) {
+	// Cheap checks first, no DB needed.
 	if fromRoleID == toRoleID {
 		return nil, ErrHeraMessageSelfSend
 	}
@@ -108,13 +123,10 @@ func (d *DB) SendHeraMessage(fromRoleID, toRoleID int64, body, tldr string, inRe
 		return nil, ErrHeraMessageTldrMultiline
 	}
 
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	// Recipient must exist and be active. The FK prevents non-existent IDs but
 	// not archived roles (archived_at IS NOT NULL). We must check explicitly.
 	var recipientArchivedAt sql.NullString
-	err := d.conn.QueryRow(
+	err := q.QueryRow(
 		`SELECT archived_at FROM hera_roles WHERE id=?`, toRoleID,
 	).Scan(&recipientArchivedAt)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && recipientArchivedAt.Valid) {
@@ -126,7 +138,7 @@ func (d *DB) SendHeraMessage(fromRoleID, toRoleID int64, body, tldr string, inRe
 
 	// Inbox-full check (per-recipient unread count).
 	var unread int
-	if err := d.conn.QueryRow(
+	if err := q.QueryRow(
 		`SELECT COUNT(*) FROM hera_messages WHERE to_role_id=? AND read_at IS NULL`, toRoleID,
 	).Scan(&unread); err != nil {
 		return nil, fmt.Errorf("count hera unread: %w", err)
@@ -138,7 +150,7 @@ func (d *DB) SendHeraMessage(fromRoleID, toRoleID int64, body, tldr string, inRe
 	// Rate-limit check: rolling 60-second window on the sender.
 	since := time.Now().Add(-heraRateLimitWindow)
 	var recent int
-	if err := d.conn.QueryRow(
+	if err := q.QueryRow(
 		`SELECT COUNT(*) FROM hera_messages WHERE from_role_id=? AND sent_at>=?`,
 		fromRoleID, formatTime(since),
 	).Scan(&recent); err != nil {
@@ -151,7 +163,7 @@ func (d *DB) SendHeraMessage(fromRoleID, toRoleID int64, body, tldr string, inRe
 	// Validate in_reply_to if provided.
 	if inReplyTo != nil {
 		var exists int
-		if err := d.conn.QueryRow(
+		if err := q.QueryRow(
 			`SELECT COUNT(*) FROM hera_messages WHERE id=?`, *inReplyTo,
 		).Scan(&exists); err != nil {
 			return nil, fmt.Errorf("check in_reply_to: %w", err)
@@ -166,7 +178,7 @@ func (d *DB) SendHeraMessage(fromRoleID, toRoleID int64, body, tldr string, inRe
 	if inReplyTo != nil {
 		replyToArg = *inReplyTo
 	}
-	res, err := d.conn.Exec(
+	res, err := q.Exec(
 		`INSERT INTO hera_messages (from_role_id, to_role_id, body, tldr, in_reply_to, sent_at, delivery_mode)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		fromRoleID, toRoleID, body, tldr, replyToArg, now, HeraDeliveryPending,
@@ -216,6 +228,18 @@ func (d *DB) HeraInbox(roleID int64) ([]*HeraMessage, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// HeraWorkerMessageSummary reads the latest self-reported line and the exact
+// unread count from one worker to its coordinator, without consuming mail.
+// A recent-history page cannot count older unread messages correctly.
+func (d *DB) HeraWorkerMessageSummary(fromRoleID, toRoleID int64) (string, int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var line string
+	var unread int
+	err := d.conn.QueryRow(`SELECT COALESCE((SELECT tldr FROM hera_messages WHERE from_role_id=? AND to_role_id=? ORDER BY sent_at DESC, id DESC LIMIT 1), ''), (SELECT COUNT(*) FROM hera_messages WHERE from_role_id=? AND to_role_id=? AND read_at IS NULL)`, fromRoleID, toRoleID, fromRoleID, toRoleID).Scan(&line, &unread)
+	return line, unread, err
 }
 
 // HeraMessagesForTask returns messages addressed to any role taskID is or was
@@ -454,7 +478,7 @@ type sqlExecer interface {
 // failures) keep mail unread: role-addressed mail waits for a later binding.
 func isTerminalHeraEndReason(reason string) bool {
 	switch reason {
-	case HeraEndReasonUserDeleted, heraEndReasonTaskDeleted, HeraEndReasonTaskMissing, HeraEndReasonMoved:
+	case HeraEndReasonUserDeleted, heraEndReasonTaskDeleted, HeraEndReasonTaskMissing, HeraEndReasonMoved, HeraEndReasonGraduated:
 		return true
 	}
 	return false
@@ -471,10 +495,10 @@ func clearDeadRoleMail(x sqlExecer) (int, error) {
 			SELECT r.id FROM hera_roles r
 			WHERE NOT EXISTS (SELECT 1 FROM hera_bindings b WHERE b.role_id=r.id AND b.ended_at IS NULL)
 			  AND ((r.nuked_at IS NOT NULL AND r.nuked_at<>'')
-			       OR (SELECT b.end_reason FROM hera_bindings b WHERE b.role_id=r.id ORDER BY b.id DESC LIMIT 1) IN (?,?,?,?))
+			       OR (SELECT b.end_reason FROM hera_bindings b WHERE b.role_id=r.id ORDER BY b.id DESC LIMIT 1) IN (?,?,?,?,?))
 		)`,
 		formatTime(time.Now()),
-		HeraEndReasonUserDeleted, heraEndReasonTaskDeleted, HeraEndReasonTaskMissing, HeraEndReasonMoved)
+		HeraEndReasonUserDeleted, heraEndReasonTaskDeleted, HeraEndReasonTaskMissing, HeraEndReasonMoved, HeraEndReasonGraduated)
 	if err != nil {
 		return 0, fmt.Errorf("clear dead-role hera mail: %w", err)
 	}

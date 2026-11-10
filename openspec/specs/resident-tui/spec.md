@@ -5,7 +5,7 @@ TBD - created by archiving change add-resident-agent. Update Purpose after archi
 ## Requirements
 ### Requirement: The resident tab is first and named after the agent
 
-When the resident is enabled the TUI header SHALL show the resident tab first, labelled with `resident.name`, for example `Solo | Tasks | Projects | Settings`. `1`, `2`, `3` SHALL continue to select Tasks, Projects and Settings; a new rebindable global action `global.tab_resident` (default `0`) SHALL select the resident tab. The tab SHALL show one full-width terminal pane bound to the resident session, with input going straight to the PTY. The resident tab SHALL NOT be restored by last-tab persistence; a launch whose persisted tab would be the resident SHALL land on Tasks. When the resident is disabled the tab and its marker SHALL NOT appear.
+When the resident is enabled the TUI header SHALL show the resident tab first, labelled with `resident.name`, for example `Solo | Tasks | Projects | Settings`. `1`, `2`, `3` SHALL continue to select Tasks, Projects and Settings; a new rebindable global action `global.tab_resident` (default `0`) SHALL select the resident tab. The tab SHALL be the Hera view with exactly one coordinator, the resident: a rail of the resident's workers, the resident's conversation pane bound to the resident session with input going straight to the PTY, and the resident's inbox. Selecting the resident row SHALL show the resident pane; selecting a worker row SHALL show that worker in the existing worker pane. The inbox SHALL be the existing read-only inbox viewer opened with `i`, and the rail SHALL show the unread count and the existing needs-input and ready-to-close markers per worker so a stuck agent is visible. The rail SHALL let the human manage workers but never create them: the existing nuke, hide, rename and role-status actions SHALL act on worker rows (and SHALL be inert on the resident's own row), while every creation or structure-changing action (new coordinator, spawn, move, join, detach, pin, kanban step, bounce) SHALL be inert in this tab and absent from its `?` overlay and ctrl+k palette. When the human nukes, hides or renames a worker the resident SHALL be notified (see the `resident-coordinator` capability). The resident tab SHALL NOT be restored by last-tab persistence; a launch whose persisted tab would be the resident SHALL land on Tasks. When the resident is disabled the tab and its marker SHALL NOT appear.
 
 #### Scenario: Tab order and digits
 
@@ -21,6 +21,51 @@ When the resident is enabled the TUI header SHALL show the resident tab first, l
 
 - **WHEN** the TUI exits on the resident tab and is relaunched
 - **THEN** it lands on the Tasks tab
+
+#### Scenario: Opens on the resident conversation
+
+- **WHEN** the user opens the resident tab
+- **THEN** keyboard focus is on the resident conversation pane (input goes straight to its PTY), `ctrl+alt+←` reaches the team rail, and `ctrl+q` returns to the previous screen from either
+
+#### Scenario: Unread counts
+
+- **WHEN** a worker (or the resident) has unread Hera or task mail
+- **THEN** the worker's rail row shows `✉N` and the resident pane title shows the resident's own unread count
+
+#### Scenario: Rail lists the team
+
+- **WHEN** the resident has three workers, one flagged needs-input
+- **THEN** the rail shows the three workers, the flagged one with its needs-input marker, beside the resident pane
+
+#### Scenario: Worker selection
+
+- **WHEN** the user selects a worker row
+- **THEN** that worker's pane or details are shown and the resident session is unaffected
+
+#### Scenario: Inbox viewer
+
+- **WHEN** the user presses `i` on the resident tab
+- **THEN** the read-only inbox viewer opens and does not acknowledge any message
+
+#### Scenario: No creation actions
+
+- **WHEN** the user presses any spawn, new-coordinator, move, join, detach, pin, kanban or bounce key on the resident rail
+- **THEN** nothing happens and none of them is listed in the help overlay or palette for this tab
+
+#### Scenario: Worker management works
+
+- **WHEN** the user presses nuke, hide, rename or the role-status key with a worker row selected
+- **THEN** the existing action runs on that worker and is listed in the help overlay for this tab
+
+#### Scenario: Resident row is protected
+
+- **WHEN** the user presses nuke, hide, rename or the role-status key with the resident row selected
+- **THEN** nothing happens
+
+#### Scenario: Resident pane lifecycle unchanged
+
+- **WHEN** a live session is newly bound to the resident pane
+- **THEN** the existing first-attach resync applies and the Hera size-drift kick is not armed
 
 ### Requirement: A global hotkey toggles the resident and returns exactly
 
@@ -60,6 +105,25 @@ The `global.resident` action (default `ctrl+\`) SHALL be dispatched unconditiona
 
 - **WHEN** the user rebinds `global.resident` in `[keybindings]`
 - **THEN** the new key toggles the resident and the `?` help overlay shows it
+
+### Requirement: ctrl+g on the resident tab stays scoped to the team
+
+On the resident tab, the global jump-to-next-needs-input key SHALL jump within the standing team when a team worker needs input, staying on the resident tab without arming the Projects rail excursion. When no team worker needs input but a Projects role does, it SHALL switch to the Projects tab, arm the excursion on the Projects rail's own state from before the jump, and jump to that role, so the excursion-restore key returns the Projects rail to that state. When nothing needs input anywhere it SHALL only show the "No role needs input" notice and SHALL NOT switch tabs or change the resident tab's focus, selection, return snapshot or any held Projects excursion.
+
+#### Scenario: Team worker needs input
+
+- **WHEN** the resident tab is showing and a resident worker needs input
+- **THEN** that worker is selected on the resident tab and no Projects excursion is armed
+
+#### Scenario: Only a Projects role needs input
+
+- **WHEN** the resident tab is showing and only a Projects role needs input
+- **THEN** the Projects tab shows with that role selected, and the restore key returns the Projects rail to its prior selection
+
+#### Scenario: Nothing needs input
+
+- **WHEN** the resident tab is showing and nothing needs input anywhere
+- **THEN** only the notice appears; the tab, focus, selected row, return snapshot and any held Projects excursion are unchanged
 
 ### Requirement: The resident pane resizes on first attach and explains why it is not running
 

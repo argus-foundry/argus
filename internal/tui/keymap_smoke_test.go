@@ -163,3 +163,20 @@ func TestHelpReflectsOverride(t *testing.T) {
 	}
 	testutil.Equal(t, found, "x")
 }
+
+// The resident tab's status-bar management hints derive from the live keymap
+// (residentRailPolicy), so a rebind shows up instead of the stale default.
+func TestResidentRailStatusHints_FollowRebind(t *testing.T) {
+	d := testDBWithConfig(t, "[keybindings.hera_rail]\nrename = \"x\"\n")
+	app := New(d, agent.NewRunner(nil), false)
+	byLabel := map[string]string{}
+	for _, h := range app.residentRailStatusHints() {
+		byLabel[h.Label] = h.Key
+	}
+	testutil.Equal(t, byLabel["rename"], "x")
+	testutil.Equal(t, byLabel["nuke"], "ctrl+d")
+	testutil.Equal(t, byLabel["hide"], "a")
+	testutil.Equal(t, byLabel["inbox"], "i")
+	_, hasStatus := byLabel["status"]
+	testutil.True(t, hasStatus)
+}

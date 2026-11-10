@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -32,6 +33,7 @@ type HeraWorkerSpawnInput struct {
 	Project        string // resolved argus project
 	Branch         string // optional base branch
 	Backend        string // optional backend override
+	Account        string // optional account pin; resident routing otherwise spans enabled accounts
 	Model          string // optional per-worker model override (empty = backend default)
 	Archetype      string // optional diligence archetype; defaults to code_slice when empty
 	Profile        string // optional per-spawn profile override; empty = use project binding
@@ -239,7 +241,38 @@ type HeraWorkerSpawnResult struct {
 // This is the single source of truth for hera worker spawn semantics: both the
 // daemon's MCP hera_spawn_worker arm and the native Hera view call it, rather
 // than each re-deriving the transactional steps.
+var residentSpawnMu sync.Mutex
+
 func SpawnHeraWorker(database *db.DB, runner SessionProvider, in HeraWorkerSpawnInput) (*HeraWorkerSpawnResult, error) {
+	_, err := database.HeraOrchestrator(in.OrchestratorID)
+	if err != nil {
+		return nil, err
+	}
+	residentWorker, err := database.IsResidentOrchestrator(in.OrchestratorID)
+	if err != nil {
+		return nil, err
+	}
+	if residentWorker {
+		residentSpawnMu.Lock()
+		defer residentSpawnMu.Unlock()
+		cfg := database.Config()
+		if p, ok := cfg.Projects[in.Project]; !ok || p.Path == "" {
+			return nil, fmt.Errorf("resident spawn requires a registered project")
+		}
+		count, err := database.ResidentWorkerCount()
+		if err != nil {
+			return nil, err
+		}
+		cap := cfg.Resident.MaxWorkers
+		if cap < 1 {
+			cap = 8
+			slog.Warn("[resident] max_workers below 1; using default", "max_workers", cfg.Resident.MaxWorkers)
+		}
+		if count >= cap {
+			return nil, fmt.Errorf("resident max_workers cap %d reached (live workers: %d)", cap, count)
+		}
+	}
+
 	// Uniquify the role name within the orchestrator up front so the argus task
 	// is titled after the role (not the orientation preamble). The partial
 	// unique index on hera_roles is the backstop against a concurrent-spawn race.
@@ -263,6 +296,30 @@ func SpawnHeraWorker(database *db.DB, runner SessionProvider, in HeraWorkerSpawn
 	if aerr != nil {
 		return nil, aerr
 	}
+	if in.Account != "" {
+		inheritedAccount = in.Account
+	}
+	if residentWorker {
+		cfg := database.Config()
+		if !argusWrapsSandbox(&model.Task{Project: in.Project, Worktree: cfg.Projects[in.Project].Path}, cfg) {
+			uxlog.Log("[resident] worker spawn refused: Argus sandbox unavailable project=%s", in.Project)
+			slog.Warn("[resident] worker spawn refused: Argus sandbox unavailable", "project", in.Project)
+			return nil, fmt.Errorf("resident worker requires the Argus sandbox")
+		}
+		backendtier.FreshenBeforeSpawn()
+		choice, err := ResolveResidentWorker(cfg, in.Project, in.Backend, in.Account)
+		if err != nil {
+			uxlog.Log("[resident] worker routing refused: %v", err)
+			slog.Warn("[resident] worker routing refused", "err", err)
+			return nil, err
+		}
+		in.Backend, inheritedAccount = choice.Backend, choice.Account
+		if err := preflightUnattended(&model.Task{Project: in.Project, Backend: in.Backend, Account: inheritedAccount, Worktree: cfg.Projects[in.Project].Path}, cfg); err != nil {
+			uxlog.Log("[resident] worker spawn refused: %v", err)
+			slog.Warn("[resident] worker spawn refused", "err", err)
+			return nil, err
+		}
+	}
 	task, _, err := CreateAndStart(database, runner, CreateInput{
 		Name:             uniqueName,
 		PTYRole:          db.HeraKindWorker,
@@ -275,15 +332,29 @@ func SpawnHeraWorker(database *db.DB, runner SessionProvider, in HeraWorkerSpawn
 		BaseBranch:       in.Branch,
 		BranchNamespace:  resolveOrchestratorBranchNamespace(database, in.OrchestratorID, in.Project),
 		Account:          inheritedAccount,
+		AccountRouted:    residentWorker && in.Account == "",
 		InheritedAccount: true,
 		AutoName:         false, // name is the meaningful role slug — no Haiku rename
 		AfterPersist: func(t *model.Task) (func(), error) {
+			if residentWorker {
+				if err := database.SetMeta(t.ID, db.HeraMetaNamespace, db.HeraMetaKeyResidentWorker, "true"); err != nil {
+					return nil, err
+				}
+				uxlog.Log("[resident] worker marked task=%s", t.ID)
+				slog.Info("[resident] worker marked", "task", t.ID)
+			}
 			// Stamp meta:hera.role=worker BEFORE the session starts. Best-effort:
 			// a meta failure must not abort an otherwise-valid spawn.
 			if mErr := database.SetMeta(t.ID, db.HeraMetaNamespace, db.HeraMetaKeyRole, string(db.HeraKindWorker)); mErr != nil {
 				slog.Warn("[hera] spawn: meta role stamp failed (continuing)", "task", t.ID, "err", mErr)
 			}
-			r, b, cErr := database.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
+			// Ordinary binding inserts refuse the standing team; resident spawn
+			// is the one privileged path that adds a member to it.
+			createRole := database.CreateHeraRoleWithBinding
+			if residentWorker {
+				createRole = database.CreateResidentWorkerRoleWithBinding
+			}
+			r, b, cErr := createRole(db.CreateHeraRoleInput{
 				OrchestratorID: in.OrchestratorID,
 				Name:           uniqueName,
 				Kind:           db.HeraKindWorker,
@@ -829,7 +900,11 @@ func DeriveHeraWorkerName(prompt string) string {
 // progress, sub-coordinator escalation, iris for PRs), augmented to name the
 // orchestrator and state that the worker is born-bound. Shared by the MCP arm
 // and the native Hera view.
-func HeraWorkerOrientation(orchestrator, coordinator string) string {
+func HeraWorkerOrientation(orchestrator, coordinator string, residentWorker ...bool) string {
+	if len(residentWorker) > 0 && residentWorker[0] {
+		return fmt.Sprintf("You are a resident worker born bound to hera orchestrator %q under coordinator %q. You cannot ask Aaron directly or use interactive question or plan tools. When you need a decision, send hera_send(status=blocked) to the resident with the question and options, then wait using hera_inbox. Outward actions are unavailable to you: tools that send, forward, post, schedule or change things outside Argus (mail, Slack messages, calendar events, Notion, Linear, Granola writes) are denied at launch, while drafts and read-only connector calls still work. When the work needs an outward action, send it to the resident via hera_send with exactly what to send or change and to whom; the resident confirms it with Aaron and performs it. Ask for graduation if the work needs multiple PRs, multiple workers, or is a long-running program. Never self-promote with hera_new_orchestrator; ask the resident to graduate you via hera_send. Use mcp__argus__iris_gh_pr_create for pull requests.", orchestrator, coordinator)
+	}
+
 	return fmt.Sprintf(
 		"You are a worker agent born bound to hera orchestrator %q under coordinator %q. "+
 			"You may report progress via hera_send. If you need your own sub-team, do NOT self-promote unless "+

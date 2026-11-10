@@ -105,7 +105,7 @@ func (s *Server) moveTaskAccountLocked(in agent.AccountMoveInput) (agent.Account
 	switch {
 	case errors.Is(err, db.ErrTaskNotFound):
 		return res, http.StatusNotFound, moveOutcome{}, err
-	case errors.Is(err, agent.ErrAccountMoveBusy):
+	case errors.Is(err, agent.ErrAccountMoveBusy), errors.Is(err, db.ErrGraduationPending):
 		return res, http.StatusConflict, moveOutcome{}, err
 	case errors.Is(err, agent.ErrAccountMoveRestartUnknown):
 		s.emitAccountChanged(in.TaskID, in, res)

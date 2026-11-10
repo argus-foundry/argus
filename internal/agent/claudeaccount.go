@@ -2,7 +2,9 @@ package agent
 
 import (
 	"bytes"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -674,4 +676,124 @@ func sandboxStringList(in map[string]any, group, key string) []string {
 		}
 	}
 	return out
+}
+
+// ResidentMCPTokenHeader carries the resident's per-launch Argus MCP secret.
+// An HTTP header rather than a URL query keeps the secret out of the URLs MCP
+// clients log.
+const ResidentMCPTokenHeader = "X-Argus-Resident-Token" //nolint:gosec // G101: a header NAME, not a credential
+
+const (
+	// residentMCPTokenHashName holds only the SHA-256 of the current token.
+	residentMCPTokenHashName = "mcp-token.sha256" //nolint:gosec // G101: a file name, not a credential
+	// residentMCPConfigName is the file-delivered MCP config carrying the token.
+	residentMCPConfigName = "mcp-config.json"
+)
+
+// residentLaunchDirPath is the resident-launch path under home (not created).
+// The data dir is symlink-resolved even before resident-launch first exists,
+// so a sandbox deny rule built from it matches what the kernel sees (the SBPL
+// symlink trap); resident-launch itself is always a real directory.
+func residentLaunchDirPath(home string) string {
+	return filepath.Join(evalSymlinksOrKeep(filepath.Join(home, ".argus")), residentLaunchDirName)
+}
+
+// ResidentMCPTokenHashPath returns the path of the current resident token's
+// hash. It creates nothing: the MCP server only reads it.
+func ResidentMCPTokenHashPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("no home dir: %w", err)
+	}
+	return filepath.Join(residentLaunchDirPath(home), residentMCPTokenHashName), nil
+}
+
+// HashResidentMCPToken is the only persisted form of a resident token.
+func HashResidentMCPToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// VerifyResidentMCPToken reports whether token matches the hash stored at
+// hashPath, in constant time. An empty token or a missing, non-regular or
+// malformed hash file never verifies.
+func VerifyResidentMCPToken(hashPath, token string) bool {
+	if token == "" || hashPath == "" {
+		return false
+	}
+	fi, err := os.Lstat(hashPath)
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	raw, err := os.ReadFile(hashPath)
+	if err != nil {
+		return false
+	}
+	want := strings.TrimSpace(string(raw))
+	if len(want) != sha256.Size*2 {
+		return false
+	}
+	got := HashResidentMCPToken(token)
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+// writeResidentMCPConfig mints this launch's resident MCP token and returns
+// the flag loading a private config file that carries it. The token rides
+// neither argv nor env: the sandbox profile allows process*/sysctl*, so any
+// same-user process can read both (KERN_PROCARGS2). The hash is replaced
+// FIRST, so the previous launch's token is refused before the new one exists
+// anywhere; only the hash is persisted beside the config. The error never
+// contains the token.
+func writeResidentMCPConfig(fam *Family, mcpURL string) (string, error) {
+	if fam.MCPConfigFile == nil || fam.MCPConfigFileFlag == nil {
+		return "", fmt.Errorf("backend family %q cannot load an MCP config from a private file", fam.Kind)
+	}
+	var b [32]byte
+	if _, err := cryptorand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate resident MCP token: %w", err)
+	}
+	token := hex.EncodeToString(b[:])
+	dir, err := residentLaunchDir()
+	if err != nil {
+		return "", err
+	}
+	if err := atomicWriteFile(filepath.Join(dir, residentMCPTokenHashName), []byte(HashResidentMCPToken(token)+"\n")); err != nil {
+		return "", fmt.Errorf("write resident MCP token hash: %w", err)
+	}
+	path := filepath.Join(dir, residentMCPConfigName)
+	if err := atomicWriteFile(path, fam.MCPConfigFile(mcpURL, map[string]string{ResidentMCPTokenHeader: token})); err != nil {
+		return "", fmt.Errorf("write resident MCP config: %w", err)
+	}
+	uxlog.Log("[resident] MCP identity rotated (config %s)", path)
+	return fam.MCPConfigFileFlag(path), nil
+}
+
+// retireResidentMCPToken removes the token hash and config, for a resident
+// launch without MCP: no earlier launch's token may stay valid.
+func retireResidentMCPToken() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	dir := residentLaunchDirPath(home)
+	for _, name := range []string{residentMCPTokenHashName, residentMCPConfigName} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			uxlog.Log("[resident] retire MCP identity %s: %v", name, err)
+		}
+	}
+}
+
+// sandboxWithResidentLaunchDenied denies every non-resident task file-read of
+// the resident's private launch dir (its MCP token config and policy copies).
+// The resident itself still reads them.
+func sandboxWithResidentLaunchDenied(sc config.SandboxConfig, task *model.Task) config.SandboxConfig {
+	if task.IsResident() {
+		return sc
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return sc
+	}
+	sc.DenyRead = append(append([]string{}, sc.DenyRead...), residentLaunchDirPath(home))
+	return sc
 }

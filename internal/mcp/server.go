@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,9 +21,11 @@ import (
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/hera"
 	"github.com/argus-foundry/argus/internal/kb"
+	"github.com/argus-foundry/argus/internal/mergesafety"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/sandboxprop"
 	"github.com/argus-foundry/argus/internal/todo"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // KBQuerier is the interface the MCP server needs from the database.
@@ -75,6 +79,7 @@ type TaskCreateInput struct {
 // task + role + binding creation (agent.CreateAndStart + an AfterPersist hook),
 // because only the daemon co-locates the DB, runner, and hera store.
 type HeraSpawnInput struct {
+	Account        string // optional account pin
 	Project        string // resolved argus project (input override or coordinator's task project)
 	BaseName       string // base worker role name; daemon uniquifies within the orchestrator
 	TaskPrompt     string // orientation-prefixed prompt delivered to the worker session
@@ -238,11 +243,23 @@ type Server struct {
 	pathPolicy func(task *model.Task) (write, deny []string)
 	heraSvc    *hera.Service // optional; set via SetHeraService
 	heraStore  HeraStore     // optional; set via SetHeraService
-	heraSpawn  HeraSpawner   // optional; set via SetHeraService (born-bound spawn)
-	heraRevive HeraReviver   // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
-	profileCfg ConfigStore   // optional; set via SetProfileResolver
-	apiGetMu   sync.RWMutex  // guards apiGet (set after the listener is serving)
-	apiGet     APIGetter     // optional; set via SetAPIGetter (argus_api_get)
+	// residentTokenHashPath locates the current resident token hash
+	// (nil = agent.ResidentMCPTokenHashPath). A seam so tests never touch ~/.argus.
+	residentTokenHashPath func() (string, error)
+	// residentClassify is the hera_delete_worker merge-safety seam (nil = real classifier).
+	residentClassify func(context.Context, *model.Task) (mergesafety.Verdict, error)
+	// residentFleetReconcile is the fleet-wide reclaim sweep hera_delete_worker
+	// runs asynchronously after its role-scoped work (nil = hera.ReconcileHeraReclaims).
+	residentFleetReconcile func(*db.DB, hera.SessionChecker) (hera.Summary, error)
+	// residentBackground tracks those async sweeps so tests can wait for them.
+	residentBackground sync.WaitGroup
+	heraSpawn          HeraSpawner // optional; set via SetHeraService (born-bound spawn)
+	heraRevive         HeraReviver // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
+	// heraGraduationPreflight is set via SetHeraGraduationPreflight.
+	heraGraduationPreflight func(*model.Task) error
+	profileCfg              ConfigStore  // optional; set via SetProfileResolver
+	apiGetMu                sync.RWMutex // guards apiGet (set after the listener is serving)
+	apiGet                  APIGetter    // optional; set via SetAPIGetter (argus_api_get)
 	// accountMover backs task_move_account; set via SetAccountMover.
 	accountMover accountMoverSlot
 	createMu     sync.Mutex
@@ -501,7 +518,7 @@ func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 		writeError(w, nil, -32700, "parse error")
 		return
 	}
-	req.caller = r.URL.Query().Get("caller")
+	req.caller = s.verifiedCaller(r)
 
 	if !hasID {
 		// Notification: dispatch for any side effect; the returned
@@ -1142,6 +1159,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 	if s.heraEnabled() {
 		tools = append(tools, heraToolDefs...)
+		if s.boundResident(req.caller) {
+			tools = append(tools, residentDeleteTool, residentGraduateTool)
+		}
 	}
 	if s.profileResolveEnabled() {
 		tools = append(tools, profileToolDefs...)
@@ -1189,6 +1209,30 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	var params ToolCallParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errorResp(req.ID, -32602, "invalid params")
+	}
+	// Must precede the resident pinning and identity guard: both read exact
+	// lower-case keys, while every tool's encoding/json decode folds case.
+	if refused := s.canonicalArgKeysGuard(req, params.Name, params.Arguments); refused != nil {
+		return refused
+	}
+	// A bound resident cannot impersonate another team's coordinator by
+	// supplying a different cwd/orchestrator to an otherwise allowed tool.
+	if strings.HasPrefix(params.Name, "hera_") && s.boundResident(req.caller) {
+		task, err := s.taskDB.Get(req.caller)
+		if err != nil {
+			return residentToolError(req.ID, "cannot verify resident caller")
+		}
+		var args map[string]interface{}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil || args == nil {
+			return residentToolError(req.ID, "invalid Hera arguments")
+		}
+		args["cwd"] = task.Worktree
+		args["orchestrator"] = db.ResidentOrchestratorName
+		args["from_orchestrator"] = db.ResidentOrchestratorName
+		params.Arguments, _ = json.Marshal(args)
+	}
+	if refused := s.residentHeraCallGuard(req, params.Name, params.Arguments); refused != nil {
+		return refused
 	}
 
 	switch params.Name {
@@ -1251,7 +1295,11 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	case "artifact_open":
 		return s.toolArtifactOpen(req.ID, params.Arguments)
 	case "hera_new_orchestrator":
-		return s.toolHeraNewOrchestrator(req.ID, params.Arguments)
+		return s.toolHeraNewOrchestratorAs(req.ID, params.Arguments, req.caller)
+	case "hera_delete_worker":
+		return s.toolHeraDeleteWorker(req.ID, params.Arguments, req.caller)
+	case "hera_graduate_worker":
+		return s.toolHeraGraduateWorker(req.ID, params.Arguments, req.caller)
 	case "hera_join":
 		return s.toolHeraJoin(req.ID, params.Arguments)
 	case "hera_board_post", "hera_board_update", "hera_board_resolve", "hera_board_list":
@@ -1330,6 +1378,298 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		}
 		return errorResp(req.ID, -32601, "unknown tool: "+params.Name)
 	}
+}
+
+// canonicalArgKeysGuard refuses a call whose top-level argument names are
+// not canonical. The resident pinning and residentHeraCallGuard read exact
+// keys ("cwd", "caller_id", "id", "orchestrator", "role_name"), but every
+// tool decodes into tagged structs with encoding/json, which matches keys
+// case-insensitively (including the Unicode folds U+017F→s and U+212A→k). A
+// key the guard does not see but the tool does ({"CWD": ...},
+// {"orcheſtrator": ...}) would otherwise bypass the identity guard or
+// override a pinned value. Every built-in schema declares only
+// ^[a-z0-9_]+$ names (TestBuiltinToolSchemasUseCanonicalKeys), so any other
+// key is refused outright. Plugin tools own their schemas, which may use
+// other spellings, and receive no Argus identity: for them only keys that
+// fold onto each other (an ambiguous decode) are refused here, and
+// residentIdentityArg folds keys itself so a plugin's case-insensitive decode
+// cannot carry the resident's id or cwd.
+func (s *Server) canonicalArgKeysGuard(req *Request, name string, raw json.RawMessage) *Response {
+	var args map[string]json.RawMessage
+	if json.Unmarshal(raw, &args) != nil || len(args) == 0 {
+		return nil // not an object: the tool reports its own decode error
+	}
+	plugin := false
+	if s.registry != nil && !builtinToolNames()[name] {
+		if pt, _ := s.registry.Get(name); pt != nil {
+			plugin = true
+		}
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for i, k := range keys {
+		bad := false
+		if plugin {
+			for _, other := range keys[i+1:] {
+				if strings.EqualFold(k, other) {
+					bad = true
+				}
+			}
+		} else {
+			bad = !canonicalArgKey(k)
+		}
+		if bad {
+			uxlog.Log("[mcp] %s refused: non-canonical argument key %q caller=%q", name, k, req.caller)
+			slog.Warn("[mcp] non-canonical argument key refused", "tool", name, "key", k, "caller", req.caller) //nolint:gosec // G706: slog encodes attributes, escaping control characters
+			return toolError(req.ID, fmt.Sprintf("invalid argument key %q: argument names must be canonical lower-case", k))
+		}
+	}
+	return nil
+}
+
+// canonicalArgKey reports whether k matches ^[a-z0-9_]+$.
+func canonicalArgKey(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i := 0; i < len(k); i++ {
+		c := k[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// builtinToolDefs lists every built-in tool definition, regardless of which
+// are enabled on this server.
+func builtinToolDefs() []Tool {
+	var out []Tool
+	for _, defs := range [][]Tool{toolDefs, taskToolDefs, taskRecycleToolDefs, todoToolDefs, clipboardToolDefs,
+		sandboxProposalToolDefs, scheduleToolDefs, messagingToolDefs, artifactToolDefs, artifactOpenToolDefs,
+		artifactPublishToolDefs, heraToolDefs, profileToolDefs, apiGetToolDefs, accountMoveToolDefs} {
+		out = append(out, defs...)
+	}
+	return append(out, residentDeleteTool, residentGraduateTool)
+}
+
+var builtinToolNames = sync.OnceValue(func() map[string]bool {
+	names := map[string]bool{}
+	for _, t := range builtinToolDefs() {
+		names[t.Name] = true
+	}
+	return names
+})
+
+// residentTaskIDArgs are the string arguments by which a tool names a task
+// (task_get/stop/archive/rename/complete/set_result/recycle, clipboard,
+// sandbox proposals, messaging, artifacts: "id"; task_move_account:
+// "task_id"; task_create/task_move_account: "caller_id"). Hera board and
+// message ids are integers, so they never match a task id string (a string
+// id there fails the tool's own int decode anyway); schedule and to-do ids
+// live in other id spaces and cannot equal the resident's random task id
+// unless deliberately forged, which fails closed.
+var residentTaskIDArgs = []string{"id", "task_id", "caller_id"}
+
+// residentHeraCallGuard fails closed, before dispatch, on two resident-team
+// escalations:
+//
+//   - Impersonation (EVERY tool): resolveTask falls back to the resident for
+//     its working directory, so a connection other than the verified resident
+//     naming the resident's cwd, or naming the resident's task id in ANY
+//     task-id argument (residentTaskIDArgs; keys case-folded and values
+//     trimmed, plugin tools included — see residentIdentityArg), would
+//     otherwise act as or on the
+//     resident (spawn unattended workers, forge a recycle handoff, read its
+//     inbox, send or set results as it, stop, archive, rename or complete it).
+//     There is deliberately no read-only allowlist: task_get already hides
+//     the resident, and no other tool needs to name it.
+//   - Enrollment: attach-mode hera_join, hera_move and hera_rebind into the
+//     standing team are refused here with a clear error (the db layer refuses
+//     the insert regardless; rebind would otherwise end the old binding first).
+func (s *Server) residentHeraCallGuard(req *Request, name string, raw json.RawMessage) *Response {
+	var args map[string]interface{}
+	if json.Unmarshal(raw, &args) != nil || args == nil {
+		return nil // the tool reports its own decode error
+	}
+	if field := s.residentIdentityArg(req.caller, args); field != "" {
+		uxlog.Log("[resident] %s refused: caller=%q named the resident's identity via %q", name, req.caller, field)
+		slog.Warn("[resident] resident identity refused", "tool", name, "caller", req.caller, "field", field) //nolint:gosec // G706: slog encodes attributes, escaping control characters
+		return residentToolError(req.ID, name+": resident identity requires the resident's own bound connection")
+	}
+	if !strings.HasPrefix(name, "hera_") {
+		return nil
+	}
+	switch name {
+	case "hera_join":
+		if rn, _ := args["role_name"].(string); rn == "" {
+			return nil // lookup mode: reads the caller's own binding, binds nothing
+		}
+	case "hera_move", "hera_rebind":
+	default:
+		return nil
+	}
+	orchName, _ := args["orchestrator"].(string)
+	if orchName == "" || s.heraStore == nil {
+		return nil
+	}
+	standing := orchName == db.ResidentOrchestratorName
+	if o, err := s.heraStore.HeraOrchestratorByName(orchName); err == nil && o != nil {
+		if st, ok := s.heraStore.(interface {
+			IsStandingTeamOrchestrator(int64) (bool, error)
+		}); ok {
+			yes, stErr := st.IsStandingTeamOrchestrator(o.ID)
+			standing = yes || stErr != nil
+		}
+	}
+	if standing {
+		return residentToolError(req.ID, fmt.Sprintf("%s: orchestrator %q is the resident's standing team; members are added only by resident spawn and leave only by graduation", name, orchName))
+	}
+	return nil
+}
+
+// residentIdentityArg returns the argument (as spelled by the caller) by
+// which a call on a connection that is not the verified resident identifies
+// the resident, or "" when it does not. It must match what every receiver
+// could make of the arguments, not just the exact built-in spelling:
+//
+//   - Keys fold: plugin tools keep their own (non-canonical) schemas and their
+//     decoders may match case-insensitively, so {"Task_ID": ...} or
+//     {"CWD": ...} reaches a plugin's task_id/cwd. Every key that
+//     strings.EqualFold-matches "cwd" or one of residentTaskIDArgs is checked,
+//     not just the first (built-ins have already had every non-canonical key
+//     refused by canonicalArgKeysGuard).
+//   - Values are normalized: receivers trim (task_move_account's
+//     task_id/caller_id, profile_resolve's cwd), so ids are compared after
+//     strings.TrimSpace (and case-insensitively against the resident's id);
+//     a cwd is compared after trimming, ~ expansion and filepath.Clean, both
+//     through resolveTask and directly against the resident's working
+//     directory (case-insensitively, symlinks resolved, since the default
+//     macOS filesystem and plugins see through both).
+func (s *Server) residentIdentityArg(caller string, args map[string]interface{}) string {
+	if s.taskDB == nil || s.boundResident(caller) {
+		return ""
+	}
+	var resident *model.Task
+	if rl, ok := s.taskDB.(residentLookup); ok {
+		if r, err := rl.ResidentTask(); err == nil && r != nil {
+			resident = r
+		}
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic refusal field
+	for _, key := range keys {
+		v, ok := args[key].(string)
+		if !ok {
+			continue
+		}
+		switch {
+		case strings.EqualFold(key, "cwd"):
+			if s.cwdIdentifiesResident(v, resident) {
+				return key
+			}
+		case residentTaskIDKey(key):
+			if s.idIdentifiesResident(v, resident) {
+				return key
+			}
+		}
+	}
+	return ""
+}
+
+// residentTaskIDKey reports whether key folds onto one of residentTaskIDArgs.
+func residentTaskIDKey(key string) bool {
+	for _, k := range residentTaskIDArgs {
+		if strings.EqualFold(key, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// idIdentifiesResident reports whether raw, trimmed, names the resident task.
+func (s *Server) idIdentifiesResident(raw string, resident *model.Task) bool {
+	id := strings.TrimSpace(raw)
+	if id == "" {
+		return false
+	}
+	if resident != nil && strings.EqualFold(id, resident.ID) {
+		return true
+	}
+	t, err := s.taskDB.Get(id)
+	return err == nil && t != nil && t.IsResident()
+}
+
+// cwdIdentifiesResident reports whether raw, normalized the way any receiver
+// might normalize it, resolves to or lies inside the resident's working
+// directory.
+func (s *Server) cwdIdentifiesResident(raw string, resident *model.Task) bool {
+	cwd := normalizeIdentityCwd(raw)
+	if cwd == "" {
+		return false
+	}
+	if t, err := s.resolveTask("", cwd); err == nil && t != nil && t.IsResident() {
+		return true
+	}
+	if resident == nil || resident.Worktree == "" {
+		return false
+	}
+	cands := pathForms(cwd)
+	for _, wt := range pathForms(filepath.Clean(resident.Worktree)) {
+		for _, c := range cands {
+			if pathWithinFold(c, wt) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// normalizeIdentityCwd trims raw, expands a leading ~ to $HOME, and cleans it.
+// Returns "" for a blank value.
+func normalizeIdentityCwd(raw string) string {
+	cwd := strings.TrimSpace(raw)
+	if cwd == "" {
+		return ""
+	}
+	if cwd == "~" || strings.HasPrefix(cwd, "~/") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			cwd = filepath.Join(home, cwd[1:])
+		}
+	}
+	return filepath.Clean(cwd)
+}
+
+// pathForms returns p and, when it differs and resolves, its symlink-free form.
+func pathForms(p string) []string {
+	out := []string{p}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil && resolved != p {
+		out = append(out, resolved)
+	}
+	return out
+}
+
+// pathWithinFold reports whether the cleaned path p equals the cleaned dir or
+// lies beneath it, comparing component by component case-insensitively
+// (component-wise because a fold can change a rune's byte length).
+func pathWithinFold(p, dir string) bool {
+	sep := string(filepath.Separator)
+	pc, dc := strings.Split(p, sep), strings.Split(dir, sep)
+	if len(pc) < len(dc) {
+		return false
+	}
+	for i := range dc {
+		if !strings.EqualFold(pc[i], dc[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) toolKBSearch(id interface{}, args json.RawMessage) *Response {

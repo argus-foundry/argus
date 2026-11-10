@@ -124,7 +124,9 @@ type Client struct {
 
 	// peerProtocol is the supervisor's Hello ProtocolVersion (0 = never
 	// handshaken, e.g. the TUI's daemon client). Guarded by c.mu.
-	peerProtocol int
+	peerProtocol     int
+	peerSpawnSurface int
+	residentWorker   agent.ResidentWorkerIdentity
 }
 
 // accountProtocolVersion is the first supervisor protocol that carries
@@ -290,6 +292,9 @@ func (c *Client) checkResidentSupported(task *model.Task) error {
 
 // Start requests the daemon to start a session and opens a stream for its output.
 func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, error) {
+	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
+		return nil, err
+	}
 	uxlog.Log("client.Start: task=%s session=%s resume=%v", task.ID, task.SessionID, resume)
 	if err := c.checkAccountSupported(task); err != nil {
 		return nil, err
@@ -585,15 +590,24 @@ func (c *Client) StartOrReattach(task *model.Task, cfg config.Config, rows, cols
 // Stop+Start. Against a v1 supervisor the RPC method is absent and errors; the
 // caller (api.maybeKickRerender) already treats a kick error as a non-fatal
 // no-op, so an older supervisor degrades to "no rerender" rather than breaking.
-func (c *Client) KickRerender(task *model.Task, _ config.Config, rows, cols uint16) error {
+func (c *Client) KickRerender(task *model.Task, cfg config.Config, rows, cols uint16) error {
+	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
+		return err
+	}
 	return c.kickRerender(task, rows, cols, false, "Daemon.KickRerender")
 }
 
-func (c *Client) Revive(task *model.Task, _ config.Config, rows, cols uint16) error {
+func (c *Client) Revive(task *model.Task, cfg config.Config, rows, cols uint16) error {
+	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
+		return err
+	}
 	return c.kickRerender(task, rows, cols, true, "Daemon.KickRerender")
 }
 
-func (c *Client) KickWidthRerender(task *model.Task, _ config.Config, rows, cols uint16) error {
+func (c *Client) KickWidthRerender(task *model.Task, cfg config.Config, rows, cols uint16) error {
+	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
+		return err
+	}
 	return c.kickRerender(task, rows, cols, false, "Daemon.KickWidthRerender")
 }
 
@@ -649,7 +663,10 @@ func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, 
 // errors, which the caller (RecycleCoord) surfaces rather than silently
 // no-ops — unlike a kick-rerender, a failed recycle must not look like
 // success to the coordinator waiting on it.
-func (c *Client) Recycle(task *model.Task, _ config.Config, rows, cols uint16) error {
+func (c *Client) Recycle(task *model.Task, cfg config.Config, rows, cols uint16) error {
+	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
+		return err
+	}
 	if err := c.checkAccountSupported(task); err != nil {
 		return err
 	}
@@ -721,6 +738,7 @@ func (c *Client) Hello() (daemon.HelloResp, error) {
 	}
 	c.mu.Lock()
 	c.peerProtocol = resp.ProtocolVersion
+	c.peerSpawnSurface = resp.SpawnSurface
 	c.mu.Unlock()
 	return resp, nil
 }

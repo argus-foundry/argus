@@ -6041,3 +6041,254 @@ func TestMaybeKickRerender_AutoSetting(t *testing.T) {
 		})
 	}
 }
+
+// pendingGraduateFixture builds a standing-team worker, graduates it, and
+// returns the app, db, the graduate's task and the graduate's OWN new role.
+func pendingGraduateFixture(t *testing.T) (*App, *db.DB, *model.Task, *db.HeraRole) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	d := testDB(t)
+	app := New(d, agent.NewRunner(nil), false)
+	res, _, err := d.EnsureResidentTask(t.TempDir())
+	testutil.NoError(t, err)
+	o, err := d.EnsureResidentOrchestrator(res.ID)
+	testutil.NoError(t, err)
+	task := &model.Task{ID: "grad", Name: "grad", Project: "p", Status: model.StatusInProgress, Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
+	_, b, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "w", Kind: db.HeraKindWorker}, task.ID, "")
+	testutil.NoError(t, err)
+	gr, err := d.GraduateHeraWorker(b.ID)
+	testutil.NoError(t, err)
+	app.refreshTasks()
+	return app, d, task, gr.NewRole
+}
+
+func pressEnter(t *testing.T, app *App) {
+	t.Helper()
+	readUI(t, app.tapp, func() {
+		app.handleHeraConfirmKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	})
+}
+
+func assertHeraConfirmMode(t *testing.T, app *App) {
+	t.Helper()
+	readUI(t, app.tapp, func() { testutil.Equal(t, app.mode, modeHeraConfirm) })
+}
+
+func pressEsc(t *testing.T, app *App) {
+	t.Helper()
+	readUI(t, app.tapp, func() {
+		app.handleHeraConfirmKey(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone))
+	})
+}
+
+func TestPendingGraduate_TUIArchiveAndDeleteRefused(t *testing.T) {
+	app, d, task, role := pendingGraduateFixture(t)
+	_, stop := wireApp(t, app)
+	defer stop()
+	logPath := agent.SessionLogPath(task.ID)
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o755))
+	testutil.NoError(t, os.WriteFile(logPath, []byte("log"), 0o644))
+
+	t.Run("delete", func(t *testing.T) {
+		readUI(t, app.tapp, func() { app.deleteTask(task) })
+		got, err := d.Get(task.ID)
+		testutil.NoError(t, err)
+		testutil.True(t, got != nil)
+		_, serr := os.Stat(logPath)
+		testutil.NoError(t, serr)
+		_, werr := os.Stat(task.Worktree)
+		testutil.NoError(t, werr)
+		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+		pressEsc(t, app) // cancel the escape offer
+	})
+	t.Run("archive", func(t *testing.T) {
+		app.header.ClearNotice()
+		toggled := *task
+		toggled.Archived = true // the task list flips the flag before firing OnArchive
+		readUI(t, app.tapp, func() { app.tasklist.OnArchive(&toggled) })
+		got, err := d.Get(task.ID)
+		testutil.NoError(t, err)
+		testutil.False(t, got.Archived)
+		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+		pressEsc(t, app)
+	})
+	t.Run("hera nuke", func(t *testing.T) {
+		app.header.ClearNotice()
+		readUI(t, app.tapp, func() {
+			app.heraNukeRole(&hera.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})
+		})
+		live, err := d.HeraLiveBindingByTask(task.ID)
+		testutil.NoError(t, err)
+		testutil.True(t, live != nil)
+		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+		pressEsc(t, app)
+	})
+}
+
+// The human abandon escape: a single confirm (or cancel at either step)
+// changes nothing; only the explicit second confirmation clears the marker and
+// re-runs the original delete.
+func TestPendingGraduate_AbandonEscape(t *testing.T) {
+	t.Run("single confirm then cancel changes nothing", func(t *testing.T) {
+		app, d, task, _ := pendingGraduateFixture(t)
+		_, stop := wireApp(t, app)
+		defer stop()
+		readUI(t, app.tapp, func() { app.deleteTask(task) })
+		readUI(t, app.tapp, func() { testutil.True(t, app.heraConfirmModal != nil) })
+		assertHeraConfirmMode(t, app)
+		pressEnter(t, app) // first confirm -> second modal
+		readUI(t, app.tapp, func() {
+			testutil.True(t, app.heraConfirmModal != nil)
+			testutil.Contains(t, app.heraConfirmModal.Title(), "Really abandon")
+		})
+		testutil.True(t, d.GraduationPending(task.ID))
+		pressEsc(t, app) // cancel at the second step
+		readUI(t, app.tapp, func() { testutil.True(t, app.heraConfirmModal == nil) })
+		testutil.True(t, d.GraduationPending(task.ID))
+		got, err := d.Get(task.ID)
+		testutil.NoError(t, err)
+		testutil.True(t, got != nil)
+
+		// Cancel at the first step.
+		readUI(t, app.tapp, func() { app.deleteTask(task) })
+		pressEsc(t, app)
+		testutil.True(t, d.GraduationPending(task.ID))
+	})
+	t.Run("double confirm abandons and deletes", func(t *testing.T) {
+		app, d, task, _ := pendingGraduateFixture(t)
+		task.Worktree = "" // no git work in the background cleanup
+		_, stop := wireApp(t, app)
+		defer stop()
+		readUI(t, app.tapp, func() { app.deleteTask(task) })
+		assertHeraConfirmMode(t, app)
+		pressEnter(t, app)
+		assertHeraConfirmMode(t, app)
+		pressEnter(t, app)
+		testutil.False(t, d.GraduationPending(task.ID))
+		got, err := d.Get(task.ID)
+		testutil.True(t, got == nil || err != nil)
+	})
+	t.Run("double confirm abandons and archives", func(t *testing.T) {
+		app, d, task, _ := pendingGraduateFixture(t)
+		_, stop := wireApp(t, app)
+		defer stop()
+		toggled := *task
+		toggled.Archived = true
+		readUI(t, app.tapp, func() { app.tasklist.OnArchive(&toggled) })
+		assertHeraConfirmMode(t, app)
+		pressEnter(t, app)
+		assertHeraConfirmMode(t, app)
+		pressEnter(t, app)
+		testutil.False(t, d.GraduationPending(task.ID))
+		got, err := d.Get(task.ID)
+		testutil.NoError(t, err)
+		testutil.True(t, got.Archived)
+	})
+	t.Run("hera nuke offers the escape", func(t *testing.T) {
+		app, d, task, role := pendingGraduateFixture(t)
+		_, stop := wireApp(t, app)
+		defer stop()
+		readUI(t, app.tapp, func() {
+			app.heraNukeRole(&hera.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})
+		})
+		assertHeraConfirmMode(t, app)
+		pressEnter(t, app)
+		assertHeraConfirmMode(t, app)
+		pressEnter(t, app)
+		testutil.False(t, d.GraduationPending(task.ID))
+		// The nuke actually ran: role nuked, graduate's live binding ended.
+		// (the nuke may hard-delete the role row or just stamp NukedAt).
+		got, err := d.HeraRole(role.ID)
+		if err == nil {
+			testutil.True(t, got.NukedAt != nil)
+		} else {
+			testutil.ErrorIs(t, err, db.ErrHeraNotFound)
+		}
+		live, err := d.HeraLiveBindingByTask(task.ID)
+		if err != nil {
+			testutil.ErrorIs(t, err, db.ErrHeraNotFound)
+		}
+		testutil.True(t, live == nil)
+	})
+	t.Run("remote mode offers no escape", func(t *testing.T) {
+		app, d, task, _ := pendingGraduateFixture(t)
+		// A store that can see the marker but lacks AbandonGraduationPending.
+		app.db = noAbandonStore{Store: d, d: d}
+		_, stop := wireApp(t, app)
+		defer stop()
+		readUI(t, app.tapp, func() { app.deleteTask(task) })
+		readUI(t, app.tapp, func() { testutil.True(t, app.heraConfirmModal == nil) })
+		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+		testutil.True(t, d.GraduationPending(task.ID))
+	})
+}
+
+// noAbandonStore exposes GraduationPending but hides AbandonGraduationPending
+// (embedding the interface type drops methods outside it).
+type noAbandonStore struct {
+	store.Store
+	d *db.DB
+}
+
+func (n noAbandonStore) GraduationPending(id string) bool { return n.d.GraduationPending(id) }
+
+// A cascade over a subtree containing a pending graduate refuses as a whole:
+// no sibling nuked, the orchestrator not nuked, nothing archived. "Clear
+// archive" over a hidden set containing one refuses the same way.
+func TestPendingGraduate_CascadeAndClearArchiveRefuseAsWhole(t *testing.T) {
+	app, d, task, role := pendingGraduateFixture(t)
+	sibTask := &model.Task{ID: "sib", Name: "sib", Project: "p", Status: model.StatusInProgress}
+	orch := seedHeraOrch(t, d, "cascade-orch")
+	sib := seedHeraBoundRole(t, d, orch, "sib", db.HeraKindWorker, sibTask.ID)
+	app.heraOps = hera.NewOps(d)
+	_, stop := wireApp(t, app)
+	defer stop()
+
+	roles := []hera.RoleView{
+		{RoleID: sib.ID, OrchID: orch, TaskID: sibTask.ID, Live: true},
+		{RoleID: role.ID, TaskID: task.ID, Live: true},
+	}
+	assertUntouched := func(t *testing.T) {
+		t.Helper()
+		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+		got, err := d.Get(sibTask.ID)
+		testutil.NoError(t, err)
+		testutil.False(t, got.Archived)
+		live, err := d.HeraLiveBindingByTask(sibTask.ID)
+		testutil.NoError(t, err)
+		testutil.True(t, live != nil)
+		live, err = d.HeraLiveBindingByTask(task.ID)
+		testutil.NoError(t, err)
+		testutil.True(t, live != nil)
+		o, err := d.HeraOrchestrator(orch)
+		testutil.NoError(t, err)
+		testutil.True(t, o.NukedAt == nil)
+	}
+
+	t.Run("cascade nuke", func(t *testing.T) {
+		subtree := []*hera.OrchView{{ID: orch, Name: "cascade-orch", Roles: roles}}
+		readUI(t, app.tapp, func() { app.heraDoCascadeNuke(subtree, map[int64]bool{orch: true}, nil) })
+		assertUntouched(t)
+	})
+	t.Run("clear archive", func(t *testing.T) {
+		app.header.ClearNotice()
+		readUI(t, app.tapp, func() { app.heraDoClearArchive(roles) })
+		assertUntouched(t)
+	})
+}
+
+// Adopt (`J`) refuses a pending graduate before opening the picker.
+func TestPendingGraduate_AdoptRefused(t *testing.T) {
+	app, d, task, _ := pendingGraduateFixture(t)
+	app.heraAdoptOps = hera.NewAdoptOps(d)
+	_, stop := wireApp(t, app)
+	defer stop()
+	_ = seedHeraOrch(t, d, "adopt-target")
+	mode := app.mode
+	readUI(t, app.tapp, func() {
+		app.heraAdoptFreelancer(&hera.RoleView{Kind: db.HeraKindFreelance, TaskID: task.ID, Name: "f"})
+		testutil.Equal(t, app.mode, mode)
+		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+	})
+}

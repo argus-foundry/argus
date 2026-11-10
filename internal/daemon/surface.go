@@ -249,7 +249,19 @@ const (
 	//     park) instead of an external publishing CLI that was never built
 	//     (add-argus-artifact-publish). A stale supervisor injects the old
 	//     CLI guidance until restarted.
-	SupervisorSpawnSurface = 43
+	// 44: standing-team coordination policy and sandbox-gated unattended workers
+	//     (add-resident-coordinator): a resident worker launches bypass-active
+	//     with question/plan tools disallowed, only under the Argus sandbox, and
+	//     its identity is re-evaluated from the DB on every launch/restart. A
+	//     stale supervisor launches workers attended, so they stall on prompts;
+	//     the client refuses worker launches to a supervisor below 44. The
+	//     resident's launch also writes a fresh per-launch MCP identity token
+	//     (hash + 0600 --mcp-config file in ~/.argus/resident-launch, never argv
+	//     or env) and every non-resident sandbox profile denies reading that
+	//     dir; a stale supervisor launches the resident unverified, so the
+	//     client refuses resident launches to it too. A worker launch also
+	//     hard-denies the resident's outward ask+deny tiers (--disallowedTools).
+	SupervisorSpawnSurface = 44
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -314,7 +326,8 @@ const (
 	//     the log is truncated together with it at session start
 	//     (add-session-width-index). A supervisor that predates this writes no
 	//     index and the replay falls back to a single width. No wire change.
-	SupervisorStreamSurface = 16
+	// v17: restart/kick preflight consults authoritative resident-worker identity.
+	SupervisorStreamSurface = 17
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -468,6 +481,8 @@ func CompareSupervisorSurface(reported SurfaceVersion) SurfaceSkew {
 // omission from this list is exactly the silent false-negative the surface
 // version is guarded against.
 var SupervisorSpawnPaths = []string{
+	"internal/agent/unattended.go",                                   // authoritative resident-worker launch gate
+	"internal/db/resident_hera.go",                                   // worker identity includes live standing-team membership
 	"internal/agent/agent.go",                                        // BuildCmd: argv, env, dir, cache-dir redirection
 	"internal/agent/routing.go",                                      // shared backend/account routing used by ResolveBackend
 	"internal/backendtier/choice.go",                                 // account-aware tier choice
@@ -557,8 +572,8 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "f988894f7b4380245f5a3a290ed225b8f3e8a72768b54e4d5163a689b8471d1d"
-	StreamSurfaceDigest = "75f94060600439c9683c2c926ca68bef6020f2edb209ce08fd0a0a05c1767d04"
+	SpawnSurfaceDigest  = "d20451fa2db716e7e4dec1290820092d4860cfd420edb08c089a81a8c95b198a"
+	StreamSurfaceDigest = "a0b3efb1c129a7c3a3ba94ef8922d258e60d87907e1f599f17e8108ad97770f0"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

@@ -3,9 +3,12 @@ package hera
 import (
 	"encoding/json"
 	"fmt"
+
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mattn/go-runewidth"
 
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 	"github.com/argus-foundry/argus/internal/hera/tiering"
@@ -150,6 +153,13 @@ func (r *Rail) coordMarkerStyle(orchID int64, style tcell.Style) tcell.Style {
 type Rail struct {
 	boardAuto bool
 	*tview.Box
+
+	// unread is the resident view's per-task unread-mail count (SetUnread).
+	unread map[string]int
+	// neverCollapse keeps every orchestrator expanded (the resident view's team
+	// is the only content, so a folded rail would hide it); it also leaves the
+	// one-shot first-run collapse for the Projects view.
+	neverCollapse bool
 
 	model  heramodel.Model
 	rows   []railRow
@@ -303,6 +313,14 @@ func (r *Rail) SetFocused(v bool) { r.focused = v }
 // SetPRMeta wires the best-effort "pr" namespace cache so managed rail rows can
 // render a PR indicator. Pass nil to clear it (the indicator just won't render).
 func (r *Rail) SetPRMeta(m map[string]map[string]string) { r.prMeta = m }
+
+// SetNeverCollapse pins every orchestrator open (resident view).
+func (r *Rail) SetNeverCollapse(v bool) { r.neverCollapse = v }
+
+// SetUnread hands the rail the per-task unread-mail counts the resident view
+// shows as a "✉N" tag on worker rows (nil/empty clears every tag). Keyed by the
+// role's bound task id; fed off-thread by the App and applied on the UI thread.
+func (r *Rail) SetUnread(m map[string]int) { r.unread = m }
 
 // PRMeta returns the "pr" namespace cache last handed to SetPRMeta (read-only;
 // the jump switcher feeds it to its private rail copy).
@@ -519,6 +537,10 @@ func trueKeys(m map[int64]bool) []int64 {
 // needs-input signals plus unread coordinator boards when enabled. Ctrl+G's
 // count gate and the excursion state machine use the same role membership.
 func (r *Rail) NeedsInputCount() int { return len(r.attentionRoleIDs(r.model)) }
+
+// NeedsInputCountIn counts attention roles in m with this rail's qualification
+// rules, without installing m (ctrl+g's resident-tab pre-check).
+func (r *Rail) NeedsInputCountIn(m heramodel.Model) int { return len(r.attentionRoleIDs(m)) }
 
 // HasExcursionSnapshot reports whether a snapshot is currently held (an
 // excursion is open). Exposed mainly for tests.
@@ -1038,7 +1060,7 @@ func (r *Rail) computeVisible(bridge map[string]*heramodel.OrchView) map[int64]b
 // fold. The persisted fold maps are read (not mutated), so clearing the filter
 // restores the operator's folds untouched.
 func (r *Rail) isCollapsed(id int64) bool {
-	if r.filterActive() {
+	if r.neverCollapse || r.filterActive() {
 		return false
 	}
 	return r.collapsed[id]
@@ -1222,7 +1244,7 @@ func (r *Rail) buildRows() {
 
 	// On first run (no saved state) collapse ALL orchestrators so the rail
 	// opens in a tidy summary view. One-shot: cleared after the seed.
-	if r.firstRunCollapse {
+	if r.firstRunCollapse && !r.neverCollapse {
 		for _, sec := range [][]heramodel.OrchView{r.model.Pinned, r.model.Active, r.model.Archived} {
 			for _, o := range sec {
 				r.collapsed[o.ID] = true
@@ -2394,6 +2416,9 @@ func (r *Rail) drawOrchRow(screen tcell.Screen, x, y, w int, row railRow, select
 	}
 	agents := r.model.SubtreeAgentCount(o.ID)
 	label := o.Name
+	if coord := o.CoordRole(); coord != nil && coord.GraduationPendingRestart {
+		label = "graduation pending restart · " + label
+	}
 	count := fmt.Sprintf(" %d", agents)
 	// Subtree cost figure (add-coordinator-cost-estimate, design.md Decision
 	// 5/7): appended alongside the existing agent-count badge, omitted
@@ -2479,14 +2504,38 @@ func (r *Rail) drawRoleRow(screen tcell.Screen, x, y, w int, row railRow, select
 	// PR indicator: a managed row whose bound task has an open PR renders a
 	// right-aligned "PR" tag, reserving space so the name truncates instead of
 	// overwriting it. Mirrors the Details roster's PR mark, on the rail row.
+	//
+	// The resident view's unread-mail count ("✉N") shares this slot: tags are
+	// right-aligned, each preceded by one gap column, name truncates first.
 	const prTag = "PR"
-	if r.rolePR(role) && remaining > len(prTag)+1 {
-		widget.DrawText(screen, col, y, remaining-len(prTag)-1, role.Name, nameStyle)
-		prStyle := theme.StyleInReview
-		if row.dim {
-			prStyle = theme.StyleDimmed
+	tagStyle := theme.StyleInReview
+	if row.dim {
+		tagStyle = theme.StyleDimmed
+	}
+	var tags []string
+	if role.GraduationPendingRestart {
+		widget.DrawText(screen, col, y, remaining, "graduation pending restart · "+role.Name, theme.StyleInReview)
+		drawInd()
+		return
+	}
+	if n := r.unread[role.TaskID]; n > 0 && role.TaskID != "" {
+		tags = append(tags, fmt.Sprintf("✉%d", n))
+	}
+	if r.rolePR(role) {
+		tags = append(tags, prTag)
+	}
+	tagW := 0
+	for _, tg := range tags {
+		tagW += runewidth.StringWidth(tg) + 1
+	}
+	if len(tags) > 0 && remaining > tagW {
+		widget.DrawText(screen, col, y, remaining-tagW, role.Name, nameStyle)
+		tx := x + rightW
+		for i := len(tags) - 1; i >= 0; i-- {
+			tx -= runewidth.StringWidth(tags[i])
+			widget.DrawText(screen, tx, y, runewidth.StringWidth(tags[i]), tags[i], tagStyle)
+			tx--
 		}
-		widget.DrawText(screen, x+rightW-len(prTag), y, len(prTag), prTag, prStyle)
 		drawInd()
 		return
 	}

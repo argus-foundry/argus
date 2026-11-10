@@ -12,6 +12,7 @@ import (
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 )
 
 // bmRunner adds the recycle path a backend move restarts through.
@@ -228,4 +229,158 @@ func TestMoveTaskBackend_ResidentRejected(t *testing.T) {
 	after, _ := f.d.Get(res.ID)
 	testutil.Equal(t, after.Backend, res.Backend)
 	testutil.Equal(t, after.Prompt, res.Prompt)
+}
+
+// A STOPPED resident worker is never preflighted by a restart, so a move to a
+// backend or account the launch gate refuses would strand it forever. The move
+// must refuse up front and leave the row untouched.
+func TestMoveTask_ResidentWorkerEligibility(t *testing.T) {
+	setup := func(t *testing.T, disabled string) *moveFixture {
+		t.Helper()
+		sandboxAvailabilityForSignalTest(t, true)
+		f := newMoveFixture(t, true)
+		testutil.NoError(t, f.d.SetSandboxEnabled(true))
+		testutil.NoError(t, f.d.SetMeta("mv", db.HeraMetaNamespace, db.HeraMetaKeyResidentWorker, "true"))
+		if disabled != "" {
+			testutil.NoError(t, f.d.SetConfigValue("resident.worker_accounts", `{"`+disabled+`":false}`))
+		}
+		return f
+	}
+	unchanged := func(t *testing.T, f *moveFixture) {
+		t.Helper()
+		got, err := f.d.Get("mv")
+		testutil.NoError(t, err)
+		testutil.Equal(t, got.Backend, "test")
+		testutil.Equal(t, got.Account, "")
+		testutil.Equal(t, got.SessionID, "sid-1")
+	}
+	t.Run("ineligible backend refused", func(t *testing.T) {
+		f := setup(t, "")
+		_, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Backend: "codex", Account: "cx"})
+		if err == nil {
+			t.Fatal("move to an ineligible backend must be refused")
+		}
+		testutil.True(t, errors.Is(err, ErrAccount))
+		testutil.Contains(t, err.Error(), "resident workers can only move")
+		unchanged(t, f)
+	})
+	t.Run("ineligible backend on an eligible account refused", func(t *testing.T) {
+		// default supports codex but the codex family has no unattended
+		// worker mode, so only the BACKEND check can refuse this.
+		f := setup(t, "")
+		_, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Backend: "codex", Account: "default"})
+		if err == nil {
+			t.Fatal("move to a backend without unattended support must be refused")
+		}
+		testutil.ErrorIs(t, err, ErrAccount)
+		testutil.Contains(t, err.Error(), "resident workers can only move")
+		unchanged(t, f)
+	})
+	t.Run("disabled account refused", func(t *testing.T) {
+		f := setup(t, "work")
+		_, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Account: "work"})
+		if err == nil {
+			t.Fatal("move to a disabled account must be refused")
+		}
+		testutil.Contains(t, err.Error(), "resident workers can only move")
+		unchanged(t, f)
+	})
+	t.Run("sandbox disabled refused", func(t *testing.T) {
+		f := setup(t, "")
+		testutil.NoError(t, f.d.SetSandboxEnabled(false))
+		_, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Account: "work"})
+		testutil.ErrorIs(t, err, ErrAccount)
+		testutil.Contains(t, err.Error(), "requires the Argus sandbox")
+		unchanged(t, f)
+	})
+	t.Run("enabled account still moves", func(t *testing.T) {
+		f := setup(t, "default")
+		task, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Account: "work"})
+		testutil.NoError(t, err)
+		testutil.Equal(t, task.Account, "work")
+	})
+	t.Run("non-resident unaffected", func(t *testing.T) {
+		sandboxAvailabilityForSignalTest(t, true)
+		f := newMoveFixture(t, true)
+		testutil.NoError(t, f.d.SetConfigValue("resident.worker_accounts", `{"work":false}`))
+		task, _, err := MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Account: "work"})
+		testutil.NoError(t, err)
+		testutil.Equal(t, task.Account, "work")
+		_, _, err = MoveTaskAccount(f.d, &bmRunner{}, AccountMoveInput{TaskID: "mv", Backend: "codex", Account: "cx"})
+		testutil.NoError(t, err)
+	})
+}
+
+// auto must pick among accounts the resident worker could run on; the
+// lowest-usage account is often the one disabled for resident workers.
+func TestMoveTask_ResidentWorkerAutoPicksEligibleAccount(t *testing.T) {
+	setup := func(t *testing.T, disabled string) *db.DB {
+		t.Helper()
+		sandboxAvailabilityForSignalTest(t, true)
+		t.Setenv("HOME", t.TempDir())
+		stubAccountUsage(t, map[string]usagebudget.Reading{
+			"work": {Percentage: 1}, "personal": {Percentage: 60}, "default": {Percentage: 90},
+		})
+		extra := "[accounts.personal]\nclaude_config_dir = \"" + filepath.Join(t.TempDir(), "personal") + "\""
+		d := accountFileDB(t, t.TempDir(), extra)
+		testutil.NoError(t, d.SetSandboxEnabled(true))
+		testutil.NoError(t, d.Add(&model.Task{ID: "mv", Name: "mover", Project: "proj", Backend: "test", Worktree: t.TempDir(), SessionID: "sid-1", Status: model.StatusInProgress}))
+		testutil.NoError(t, d.SetMeta("mv", db.HeraMetaNamespace, db.HeraMetaKeyResidentWorker, "true"))
+		testutil.NoError(t, d.SetConfigValue("resident.worker_accounts", disabled))
+		return d
+	}
+	t.Run("skips disabled lowest-usage account", func(t *testing.T) {
+		d := setup(t, `{"work":false}`)
+		task, res, err := MoveTaskAccount(d, &moveRunner{}, AccountMoveInput{TaskID: "mv", Account: AutoMoveTarget})
+		testutil.NoError(t, err)
+		testutil.Equal(t, res.To, "personal")
+		testutil.Equal(t, task.Account, "personal")
+	})
+	t.Run("no eligible other account refused", func(t *testing.T) {
+		d := setup(t, `{"work":false,"personal":false}`)
+		_, _, err := MoveTaskAccount(d, &moveRunner{}, AccountMoveInput{TaskID: "mv", Account: AutoMoveTarget})
+		if err == nil {
+			t.Fatal("auto with no eligible account must be refused")
+		}
+		testutil.ErrorIs(t, err, ErrAccount)
+		testutil.Contains(t, err.Error(), "resident workers can only move")
+		got, _ := d.Get("mv")
+		testutil.Equal(t, got.Account, "")
+	})
+	t.Run("explicit re-pick of a now-disabled current account refused", func(t *testing.T) {
+		d := setup(t, `{"default":false}`)
+		_, _, err := MoveTaskAccount(d, &moveRunner{}, AccountMoveInput{TaskID: "mv", Account: "default"})
+		if err == nil {
+			t.Fatal("re-picking a disabled account must be refused like spawn does")
+		}
+		testutil.Contains(t, err.Error(), "resident workers can only move")
+	})
+}
+
+// The picker's "now X" label must agree with what an auto move would pick.
+func TestPreviewMoveTarget(t *testing.T) {
+	sandboxAvailabilityForSignalTest(t, true)
+	t.Setenv("HOME", t.TempDir())
+	usage := map[string]usagebudget.Reading{"work": {Percentage: 1}, "personal": {Percentage: 60}, "default": {Percentage: 90}}
+	extra := "[accounts.personal]\nclaude_config_dir = \"" + filepath.Join(t.TempDir(), "personal") + "\""
+	d := accountFileDB(t, t.TempDir(), extra)
+	testutil.NoError(t, d.SetSandboxEnabled(true))
+	testutil.NoError(t, d.Add(&model.Task{ID: "mv", Name: "mover", Project: "proj", Backend: "test", Worktree: t.TempDir(), SessionID: "sid-1", Status: model.StatusInProgress}))
+	task, err := d.Get("mv")
+	testutil.NoError(t, err)
+	cfg := d.Config()
+
+	picked, ok := PreviewMoveTarget(d, task, cfg, usage, "claude", "default")
+	testutil.True(t, ok)
+	testutil.Equal(t, picked, "work")
+
+	testutil.NoError(t, d.SetMeta("mv", db.HeraMetaNamespace, db.HeraMetaKeyResidentWorker, "true"))
+	testutil.NoError(t, d.SetConfigValue("resident.worker_accounts", `{"work":false}`))
+	picked, ok = PreviewMoveTarget(d, task, d.Config(), usage, "claude", "default")
+	testutil.True(t, ok)
+	testutil.Equal(t, picked, "personal")
+
+	testutil.NoError(t, d.SetConfigValue("resident.worker_accounts", `{"work":false,"personal":false}`))
+	_, ok = PreviewMoveTarget(d, task, d.Config(), usage, "claude", "default")
+	testutil.False(t, ok)
 }
