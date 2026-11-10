@@ -421,7 +421,7 @@ func TestBoundNewOrchestratorRejectsNullArguments(t *testing.T) {
 }
 
 func TestResidentSpawnProjectAndCap(t *testing.T) {
-	for _, tc := range []string{"missing project", "unregistered project", "at cap", "freed slot", "configurable", "zero cap"} {
+	for _, tc := range []string{"missing project", "unregistered project", "at cap", "freed slot", "configurable", "zero cap", "negative cap"} {
 		t.Run(tc, func(t *testing.T) {
 			s, d, res, o := residentHeraFixture(t)
 			// Register a repo path; the fake spawner avoids git and processes.
@@ -441,13 +441,16 @@ func TestResidentSpawnProjectAndCap(t *testing.T) {
 			case "zero cap":
 				// An invalid cap falls back to the default of 8.
 				testutil.NoError(t, d.SetConfigValue("resident.max_workers", "0"))
+			case "negative cap":
+				// Settings accepts any integer; below 1 still means 8.
+				testutil.NoError(t, d.SetConfigValue("resident.max_workers", "-1"))
 			}
 			// Through the JSON-RPC dispatch as the bound resident: an unbound
 			// connection naming the resident's cwd is refused (see
 			// TestResidentImpersonationRefused).
 			args := spawnArgs(res.Worktree, "Do the errand", "next", project, "")
 			text, isErr := postTool(t, s, "/mcp?caller="+res.ID, "hera_spawn_worker", string(args))
-			ok := tc == "freed slot" || tc == "configurable" || tc == "zero cap"
+			ok := tc == "freed slot" || tc == "configurable" || tc == "zero cap" || tc == "negative cap"
 			testutil.Equal(t, isErr, !ok)
 			_, err := d.HeraRoleByName(o.ID, "next")
 			testutil.Equal(t, err == nil, ok)

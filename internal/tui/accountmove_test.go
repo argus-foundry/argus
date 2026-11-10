@@ -409,6 +409,9 @@ func (s backendMoveStore) MoveTaskBackend(_ context.Context, id, backend, accoun
 // The picker's auto label must name the account MoveTaskAccount would pick,
 // which for a resident worker excludes accounts disabled for workers.
 func TestAccountMoveChoices_AutoLabelResidentWorker(t *testing.T) {
+	// Resident-worker eligibility requires the Argus sandbox; force it so the
+	// test means the same thing on Linux CI (no sandbox-exec) as on macOS.
+	agent.ForceSandboxAvailableForTest(t, true)
 	stubTUIAccountUsage(t, map[string]usagebudget.Reading{"work": {Percentage: 1}, "personal": {Percentage: 60}, "default": {Percentage: 90}})
 	toml := moveTestTOML + "[accounts.personal]\nclaude_config_dir = \"~/personal-claude\"\n"
 	auto := func(t *testing.T, resident bool) string {

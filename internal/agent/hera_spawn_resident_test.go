@@ -49,6 +49,11 @@ func TestSpawnResidentWorkerMarkerAndCap(t *testing.T) {
 	in.BaseName = "zero-cap"
 	_, err = SpawnHeraWorker(d, &fakeRunner{}, in)
 	testutil.NoError(t, err)
+	// Settings accepts any integer: a negative cap also means 8.
+	testutil.NoError(t, d.SetConfigValue("resident.max_workers", "-1"))
+	in.BaseName = "negative-cap"
+	_, err = SpawnHeraWorker(d, &fakeRunner{}, in)
+	testutil.NoError(t, err)
 }
 
 func TestResidentWorkerOrientation(t *testing.T) {

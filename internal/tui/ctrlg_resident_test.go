@@ -102,8 +102,11 @@ func TestSmoke_CtrlGResidentFallThroughRestoresProjectsSelection(t *testing.T) {
 		// The rail's own selected row (the page's pane selection only
 		// refreshes on the next rebuild, as for any ctrl+b).
 		sel := f.a.heraPage.Rail().Selected()
-		testutil.True(t, sel != nil)
-		testutil.Equal(t, sel.TaskID, "ow")
+		selID := ""
+		if sel != nil {
+			selID = sel.TaskID
+		}
+		testutil.Equal(t, selID, "ow")
 	})
 }
 
@@ -209,8 +212,11 @@ func TestSmoke_ResidentRoundTripRestoresProjectsExcursion(t *testing.T) {
 	readUI(t, f.a.tapp, func() {
 		testutil.Equal(t, f.a.header.Notice(), "Rail restored")
 		sel := f.a.heraPage.Rail().Selected()
-		testutil.True(t, sel != nil)
-		testutil.Equal(t, sel.TaskID, "ow")
+		selID := ""
+		if sel != nil {
+			selID = sel.TaskID
+		}
+		testutil.Equal(t, selID, "ow")
 	})
 }
 
@@ -247,5 +253,68 @@ func TestSmoke_ResidentLeaveRestoresNeedsInputBaseline(t *testing.T) {
 		f.a.switchTab(widget.TabResident)
 		f.a.switchTab(widget.TabHera)
 		testutil.False(t, f.a.heraPage.Rail().HasExcursionSnapshot())
+	})
+}
+
+// ctrl+g fall-through when the Projects role already needed input (and was
+// acknowledged) before the resident tab was entered: the leave rebuild sees no
+// NEW id, so only ArmProjectsExcursion can arm from the pre-entry state.
+func TestSmoke_CtrlGFallThroughPreexistingNeedArmsFromPrior(t *testing.T) {
+	f := newResidentViewFixture(t)
+	defer f.stop()
+	seedNeedsInputWorker(t, f.d, "orch", "pw")
+	seedNeedsInputWorker(t, f.d, "other", "ow")
+	readUI(t, f.a.tapp, func() {
+		f.a.switchTab(widget.TabHera)
+		f.a.heraPage.SetNeedsInput(nil)
+		f.a.heraPage.Refresh()
+		testutil.True(t, f.a.heraPage.JumpToTask("ow"))
+		f.a.heraPage.SetNeedsInput([]string{"pw"})
+		f.a.heraPage.Refresh()
+		f.a.heraPage.Rail().RestoreExcursion()
+		testutil.False(t, f.a.heraPage.Rail().HasExcursionSnapshot())
+		testutil.Equal(t, f.a.heraPage.Rail().Selected().TaskID, "ow")
+		f.a.switchTab(widget.TabResident)
+	})
+	f.selectWorker(t, 1)
+	f.press(t, tcell.NewEventKey(tcell.KeyCtrlG, 0, 0))
+	readUI(t, f.a.tapp, func() {
+		testutil.Equal(t, f.a.header.ActiveTab(), widget.TabHera)
+		testutil.Equal(t, f.a.heraPage.SelectionContext().TaskID(), "pw")
+	})
+	f.press(t, tcell.NewEventKey(tcell.KeyCtrlB, 0, 0))
+	readUI(t, f.a.tapp, func() {
+		testutil.Equal(t, f.a.header.Notice(), "Rail restored")
+		sel := f.a.heraPage.Rail().Selected()
+		selID := ""
+		if sel != nil {
+			selID = sel.TaskID
+		}
+		testutil.Equal(t, selID, "ow")
+	})
+}
+
+// A Projects role that starts needing input while the resident tab shows,
+// followed by an ORDINARY leave (no ctrl+g): the leave-rebuild capture must be
+// replaced by the Projects pre-entry state, so ctrl+b returns there.
+func TestSmoke_OrdinaryLeaveAfterProjectsInterruptionRestoresPrior(t *testing.T) {
+	f := newResidentViewFixture(t)
+	defer f.stop()
+	enterResidentFromProjects(t, f, false)
+	readUI(t, f.a.tapp, func() {
+		f.a.heraPage.SetNeedsInput([]string{"pw"})
+		f.a.heraPage.Refresh()
+		f.a.switchTab(widget.TabHera)
+		testutil.True(t, f.a.heraPage.Rail().HasExcursionSnapshot())
+	})
+	f.press(t, tcell.NewEventKey(tcell.KeyCtrlB, 0, 0))
+	readUI(t, f.a.tapp, func() {
+		testutil.Equal(t, f.a.header.Notice(), "Rail restored")
+		sel := f.a.heraPage.Rail().Selected()
+		selID := ""
+		if sel != nil {
+			selID = sel.TaskID
+		}
+		testutil.Equal(t, selID, "ow")
 	})
 }
