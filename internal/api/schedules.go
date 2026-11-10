@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/uxlog"
@@ -128,6 +129,12 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "", err)
 		return
 	}
+	if err := agent.ValidateScheduleModel(sched, s.db.Config()); err != nil {
+		if !writeModelNotAllowed(w, err) {
+			writeErr(w, http.StatusBadRequest, "", err)
+		}
+		return
+	}
 	// Pre-populate NextRunAt so the UI shows it before the first tick lands.
 	sched.NextRunAt = sched.NextFire(time.Now())
 	if err := s.db.AddSchedule(sched); err != nil {
@@ -174,6 +181,12 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := sched.Validate(); err != nil {
 		writeErr(w, http.StatusBadRequest, "", err)
+		return
+	}
+	if err := agent.ValidateScheduleModel(sched, s.db.Config()); err != nil {
+		if !writeModelNotAllowed(w, err) {
+			writeErr(w, http.StatusBadRequest, "", err)
+		}
 		return
 	}
 	if req.Schedule != nil || req.RunOnceAt != nil {

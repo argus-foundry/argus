@@ -369,8 +369,8 @@ type createTaskReq struct {
 	// before the task is created.
 	Backend string `json:"backend"`
 	// Model overrides the backend's default model for this task. Empty = use
-	// the backend's configured default (or the CLI's own default). Free text —
-	// not validated, since the meaningful set differs per backend CLI.
+	// the backend's configured default (or the CLI's own default). Validated
+	// against the resolved backend's model policy before anything is created.
 	Model string `json:"model"`
 	// SandboxOverride is a tri-state per-task override of the resolved sandbox
 	// setting: "" (inherit the project/global setting), "enabled" (force
@@ -430,6 +430,9 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusInternalServerError
 		if errors.Is(err, agent.ErrAccount) {
 			status = http.StatusBadRequest
+		}
+		if writeModelNotAllowed(w, err) {
+			return
 		}
 		writeErr(w, status, "", err)
 		return
@@ -511,6 +514,9 @@ func (s *Server) handleCreateTaskMultipart(w http.ResponseWriter, r *http.Reques
 		status := http.StatusInternalServerError
 		if errors.Is(err, agent.ErrAccount) {
 			status = http.StatusBadRequest
+		}
+		if writeModelNotAllowed(w, err) {
+			return
 		}
 		writeErr(w, status, "", err)
 		return
@@ -1946,12 +1952,11 @@ type backendJSON struct {
 	// Model is the backend's default model, delivered through the backend's
 	// supported session-start mechanism unless the task carries its own override.
 	Model string `json:"model,omitempty"`
-	// Models is the per-backend option list for the web new-task model select,
-	// resolved via agent.BackendModels (the backend's configured Models, else
-	// the built-in KnownModels for its command). Config.toml `models` overrides
-	// reach only the TUI, which reads merged config; the API serves the DB
-	// roster, so this reflects the built-in list for DB-defined backends.
+	// Models follows the effective backend configuration used at creation.
 	Models []string `json:"models,omitempty"`
+	// ModelPolicy is "configured", "curated" or "freeform": how an explicit
+	// task model is validated for this backend (agent.ModelPolicy).
+	ModelPolicy string `json:"model_policy"`
 	// Kind, Label, SkillPrefix, and SessionSwitcher describe the backend's
 	// family (agent.FamilyOf) so clients never hardcode backend names. Kind
 	// is "" for a custom command; Label is the family label only for the
@@ -1978,6 +1983,7 @@ func newBackendJSON(name string, b config.Backend) backendJSON {
 		PromptFlag:      b.PromptFlag,
 		Model:           b.Model,
 		Models:          agent.BackendModels(b),
+		ModelPolicy:     agent.ModelPolicy(b),
 		Kind:            string(fam.Kind),
 		Label:           label,
 		SkillPrefix:     fam.SkillPrefix,
@@ -1991,8 +1997,12 @@ func (s *Server) handleListBackends(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
+	merged := s.db.Config().Backends
 	out := make([]backendJSON, 0, len(backends))
 	for name, b := range backends {
+		if mb, ok := merged[name]; ok {
+			b = mb
+		}
 		out = append(out, newBackendJSON(name, b))
 	}
 	for i := 1; i < len(out); i++ {
@@ -2240,6 +2250,29 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 //   - msg != "", err != nil  -> msg + ": " + err.Error() (the "prefix: " + err form)
 //   - msg != "", err == nil  -> msg                     (a static message)
 //   - msg == "", err == nil  -> ""                      (degenerate; avoid)
+//
+// writeModelNotAllowed writes the 422 model_not_allowed body and reports
+// whether err was a model rejection.
+func writeModelNotAllowed(w http.ResponseWriter, err error) bool {
+	var me *agent.ModelNotAllowedError
+	if !errors.As(err, &me) {
+		return false
+	}
+	allowed := me.AllowedModels
+	if allowed == nil {
+		allowed = []string{}
+	}
+	uxlog.Log("[model] create rejected 422 backend=%q model=%q", me.Backend, me.RequestedModel)
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+		"error":           "model is not allowed for resolved backend",
+		"code":            "model_not_allowed",
+		"backend":         me.Backend,
+		"requested_model": me.RequestedModel,
+		"allowed_models":  allowed,
+	})
+	return true
+}
+
 func writeErr(w http.ResponseWriter, status int, msg string, err error) {
 	text := msg
 	switch {
