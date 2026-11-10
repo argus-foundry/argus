@@ -318,7 +318,20 @@ func (sb *StatusBar) Draw(screen tcell.Screen) {
 	var hints []hint
 	switch sb.activeTab {
 	case TabResident:
-		hints = []hint{{"ctrl+q", "return"}}
+		// Same focus-aware split as the Projects tab, limited to the keys the
+		// resident view honors (worker rows only for the management keys).
+		if sb.heraFocus == 0 {
+			hints = []hint{
+				{"j/k", "nav"}, {"Tab", "pane"}, {"i", "inbox"},
+				{"r", "rename"}, {"s/S", "status"}, {"a", "hide"}, {"^d", "nuke"},
+				{"^q", "return"}, {"^⌥←→", "pane"}, {"?", "help"},
+			}
+		} else {
+			hints = []hint{
+				{"^Q", "return"}, {"^⌥←→", "pane/rail"}, {"^Z", "fullscreen"},
+				{"Cmd+↑↓", "rail nav"}, {"?", "help"},
+			}
+		}
 	case TabSettings:
 		hints = []hint{
 			{"n", "new project"}, {"d", "del"},

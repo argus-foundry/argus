@@ -195,6 +195,15 @@ func (a *App) heraRailActionRegistry() map[keymap.Action]func() {
 			reg[keymap.ActHeraMoveAccount] = func() { cb(taskID) }
 		}
 	}
+	if a.heraPage.ResidentMode() {
+		// Resident policy (keymap data): drop everything the tab ignores, and
+		// worker-only actions while the resident's own row is selected.
+		for act := range reg {
+			if !hera.ResidentRailAllows(act, sel) {
+				delete(reg, act)
+			}
+		}
+	}
 	return reg
 }
 
@@ -322,6 +331,20 @@ func (a *App) paletteApplicableActions() []paletteRow {
 			globals[keymap.ActGlobalResident] = a.toggleResident
 		}
 		return append(rows, rowsForContext(km, keymap.CtxGlobal, globals)...)
+	case a.mode == modeTaskList && a.header.ActiveTab() == widget.TabResident && a.heraPage != nil && a.heraPage.ResidentMode():
+		// The resident tab's palette is generated from the same keymap policy as
+		// its help overlay: only the allowlisted rail actions (worker-only ones
+		// offered on worker rows only), then the small global set that applies.
+		rows := a.heraLiteralRows()
+		rows = append(rows, rowsForContext(km, keymap.CtxHeraRail, a.heraRailActionRegistry())...)
+		globals := rowsForContext(km, keymap.CtxGlobal, map[keymap.Action]func(){
+			keymap.ActGlobalResident:    a.toggleResident,
+			keymap.ActGlobalSwitcher:    a.openJumpSwitcher,
+			keymap.ActGlobalTabTasks:    func() { a.switchTab(widget.TabTasks) },
+			keymap.ActGlobalTabHera:     func() { a.switchTab(widget.TabHera) },
+			keymap.ActGlobalTabSettings: func() { a.switchTab(widget.TabSettings) },
+		})
+		return append(globals, rows...)
 	case a.header.ActiveTab() == widget.TabResident:
 		return rowsForContext(km, keymap.CtxGlobal, map[keymap.Action]func(){
 			keymap.ActGlobalResident:    a.toggleResident,
@@ -391,7 +414,7 @@ func (a *App) closeCommandPaletteModal() {
 	case a.header.ActiveTab() == widget.TabSettings:
 		a.tapp.SetFocus(a.settingsPage)
 	case a.header.ActiveTab() == widget.TabResident:
-		a.tapp.SetFocus(a.residentPane)
+		a.tapp.SetFocus(a.heraPage)
 	default:
 		a.tapp.SetFocus(a.tasklist)
 	}

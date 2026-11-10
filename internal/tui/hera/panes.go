@@ -743,6 +743,10 @@ func (p *HeraPage) reattachPane(tp *terminal.TerminalPane) {
 	if p.OnReattach == nil {
 		return
 	}
+	if p.residentMode && tp == p.coordPane {
+		uxlog.Log("[resident-view] pane reattach skipped: the daemon owns the resident session")
+		return
+	}
 	sel := p.sel
 	if tp == p.coordPane {
 		orch := p.sel.Orch

@@ -170,7 +170,7 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 	}
 	// Synchronous closure execution ensures the result follows the reclaim work.
 	// The shared primitive preserves multi-bound tasks and rechecks reclaim safety.
-	hera.NukeSingleRole(d, runner, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})()
+	hera.NukeSingleRoleAs(d, runner, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true}, db.HeraActorResident)()
 	updated, err := d.HeraRole(role.ID)
 	if err != nil || updated.NukedAt == nil {
 		return residentToolError(id, "worker nuke did not complete")

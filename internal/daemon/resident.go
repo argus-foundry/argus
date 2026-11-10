@@ -83,6 +83,9 @@ type residentManager struct {
 	// started before it binds never gets the config.
 	mcpReady func() bool
 	now      func() time.Time
+	// sendNotice delivers one Hera message for a queued human-action notice
+	// (6.4). nil stores the message without a doorbell (tests, no notifier).
+	sendNotice func(from, to int64, body, tldr string) error
 
 	mu           sync.Mutex
 	failures     int
@@ -366,12 +369,14 @@ func (m *residentManager) run(done <-chan struct{}) {
 	t := time.NewTicker(residentTickInterval)
 	defer t.Stop()
 	m.tick()
+	m.deliverNotices()
 	for {
 		select {
 		case <-done:
 			return
 		case <-t.C:
 			m.tick()
+			m.deliverNotices()
 		}
 	}
 }
@@ -510,6 +515,10 @@ func (d *Daemon) residentMgr() *residentManager {
 			d.mu.Lock()
 			defer d.mu.Unlock()
 			return d.mcpPort != 0
+		}
+		m.sendNotice = func(from, to int64, body, tldr string) error {
+			_, err := d.heraNotifyService().Send(from, to, body, tldr, nil)
+			return err
 		}
 		m.waiting = func(id string) bool {
 			d.mu.Lock()

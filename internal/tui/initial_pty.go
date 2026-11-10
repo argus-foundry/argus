@@ -72,6 +72,7 @@ func (a *App) publishInitialPTYLayout(screen tcell.Screen) {
 	a.mu.Lock()
 	mode := a.mode
 	onHera := mode == modeTaskList && a.header.ActiveTab() == widget.TabHera
+	onResident := mode == modeTaskList && a.header.ActiveTab() == widget.TabResident
 	a.mu.Unlock()
 	if mode != modeTaskList && mode != modeAgent {
 		return
@@ -92,12 +93,16 @@ func (a *App) publishInitialPTYLayout(screen tcell.Screen) {
 	r, coord, worker := hera.SplitLaunchPaneSizes(w, h-2)
 	layout.Coordinator = db.PTYSize{Rows: r, Cols: coord}
 	layout.Worker = db.PTYSize{Rows: r, Cols: worker}
-	// The resident tab is one full-width pane under the header and above the
-	// status bar: exactly the zoomed agent-pane overhead.
-	rr, rc := ptySizeFromHostTerm(w, h, nil)
-	layout.Resident = db.PTYSize{Rows: rr, Cols: rc}
+	// The resident tab is the Hera layout in resident mode: the resident's
+	// conversation pane is the coordinator pane, so it launches at exactly the
+	// always-split coordinator geometry (the first-attach resync then only
+	// corrects drift, never a full-width-to-split jump).
+	layout.Resident = layout.Coordinator
 	if onHera {
 		layout.Active = layout.Worker
+	}
+	if onResident {
+		layout.Active = layout.Resident
 	}
 	a.initialPTYPublisher.queue(layout, d.PublishInitialPTYLayout)
 }

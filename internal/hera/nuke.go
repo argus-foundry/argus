@@ -82,13 +82,13 @@ func PreviewNukeSubtree(d *db.DB, subtree []*heramodel.OrchView) NukePreview {
 
 // nukeRoleRow ends the role's live binding (user_deleted) and stamps it NUKED —
 // never a hard delete.
-func nukeRoleRow(d *db.DB, roleID int64) error {
+func nukeRoleRow(d *db.DB, roleID int64, actor db.HeraActor) error {
 	if b, err := d.HeraLiveBindingByRole(roleID); err == nil && b != nil {
 		if eErr := d.EndHeraBinding(b.ID, db.HeraEndReasonUserDeleted); eErr != nil {
 			uxlog.Log("[hera] nuke role %d: end binding %d failed: %v", roleID, b.ID, eErr)
 		}
 	}
-	return d.NukeHeraRole(roleID)
+	return d.NukeHeraRoleAs(roleID, actor)
 }
 
 // archiveNukedTask archives a reclaimed task (in_review advances to complete).
@@ -125,7 +125,7 @@ func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (re
 				reclaim = r.TaskID
 			}
 			if r.Live {
-				if err := nukeRoleRow(d, r.RoleID); err != nil {
+				if err := nukeRoleRow(d, r.RoleID, db.HeraActorHuman); err != nil {
 					uxlog.Log("[hera] nuke subtree: nuke role %d failed: %v", r.RoleID, err)
 				}
 			}
@@ -144,6 +144,13 @@ func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (re
 // NukeSingleRole nukes one role. Its task is reclaimed only when it is solely
 // bound to this role; a multi-bound task is preserved untouched.
 func NukeSingleRole(d *db.DB, runner NukeRunner, r *heramodel.RoleView) (background func()) {
+	return NukeSingleRoleAs(d, runner, r, db.HeraActorHuman)
+}
+
+// NukeSingleRoleAs is NukeSingleRole with the acting party named: the
+// resident's own hera_delete_worker passes db.HeraActorResident so the
+// resident is not told about its own delete (6.4), everything else is human.
+func NukeSingleRoleAs(d *db.DB, runner NukeRunner, r *heramodel.RoleView, actor db.HeraActor) (background func()) {
 	if t, err := d.Get(r.TaskID); err == nil && t.IsResident() {
 		return func() {}
 	}
@@ -155,7 +162,7 @@ func NukeSingleRole(d *db.DB, runner NukeRunner, r *heramodel.RoleView) (backgro
 			reclaimed = []string{r.TaskID}
 		}
 	}
-	if err := nukeRoleRow(d, r.RoleID); err != nil {
+	if err := nukeRoleRow(d, r.RoleID, actor); err != nil {
 		uxlog.Log("[hera] nuke role %d failed: %v", r.RoleID, err)
 	}
 	for _, id := range reclaimed {

@@ -3151,8 +3151,8 @@ func TestSmoke_ReleaseIdlePaneMemory(t *testing.T) {
 	syncUI(t, app.tapp)
 	mu.Lock()
 	defer mu.Unlock()
-	testutil.Equal(t, len(seen), 4)
-	for _, p := range []*terminal.TerminalPane{app.agentPane, app.heraPage.CoordPane(), app.heraPage.AgentPane(), app.residentPane} {
+	testutil.Equal(t, len(seen), 3)
+	for _, p := range []*terminal.TerminalPane{app.agentPane, app.heraPage.CoordPane(), app.heraPage.AgentPane()} {
 		testutil.Equal(t, seen[p], 1)
 	}
 }

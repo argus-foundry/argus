@@ -31,6 +31,7 @@ import (
 	dclient "github.com/argus-foundry/argus/internal/daemon/client"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/gitutil"
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 	"github.com/argus-foundry/argus/internal/launchagent"
 	"github.com/argus-foundry/argus/internal/macapps"
 	"github.com/argus-foundry/argus/internal/mergesafety"
@@ -358,11 +359,11 @@ type App struct {
 	// by switchTab and by the return hop.
 	agentCrossReturn      *residentReturn
 	residentReturn        *residentReturn
-	residentPane          *terminal.TerminalPane
-	residentAttachPending bool
 	residentBox           *widget.ResidentBox
 	residentSt            residentAttention
 	residentPollPending   bool
+	residentUnreadPending bool
+	residentUnreadAt      time.Time
 	residentPolledAt      time.Time
 	residentMarkViewedFn  func() error                             // test seam; default daemonClient.ResidentMarkViewed
 	residentStateFn       func() (daemon.ResidentStateResp, error) // test seam; default daemonClient.ResidentState
@@ -1009,8 +1010,6 @@ func (a *App) buildUI() {
 	a.agentPane = terminal.NewTerminalPane()
 	a.agentPane.SetOwedFunc(a.paneRerenderOwed, a.rerenderKeyHint)
 	a.agentPane.OnOwedClick = a.rerenderHotkeyClassic
-	a.residentPane = terminal.NewTerminalPane()
-	a.residentPane.OnNeedRedraw = func() { a.tapp.QueueUpdateDraw(func() {}) }
 	a.agentHeader = widget.NewAgentHeader()
 
 	// Wire mouse click callbacks so clicking a panel switches agentFocus.
@@ -1097,6 +1096,10 @@ func (a *App) buildUI() {
 		heraReader = d
 	}
 	a.heraPage = hera.NewHeraPage(heraReader)
+	if d, ok := a.db.(*db.DB); ok {
+		// The resident tab is this same page re-pointed at the standing team.
+		a.heraPage.SetResidentReader(heramodel.NewResidentReader(d, d))
+	}
 	a.heraPage.SetResidentBox(a.residentBox)
 	a.heraPage.SetBoardAuto(a.db.Config().UI.CoordinatorBoard)
 	a.heraPage.Keys = a.activeKeymap
@@ -1219,7 +1222,6 @@ func (a *App) buildUI() {
 		AddPage("tasks", a.taskPage, true, true).
 		AddPage("tasks-rail", a.tasksRailPage, true, false).
 		AddPage("agent", a.agentPage, true, false).
-		AddPage("resident", a.residentPane, true, false).
 		AddPage("hera", a.heraPage, true, false).
 		AddPage("settings", a.settingsPage, true, false)
 	a.loadPluginViews()
@@ -1290,7 +1292,7 @@ func (a *App) afterDraw(screen tcell.Screen) {
 	a.reconcilePluginViewSize()
 	a.publishInitialPTYLayout(screen)
 	if a.typing != nil || a.repaint != nil {
-		frames := terminalFrames(a.agentPane, a.residentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane())
+		frames := terminalFrames(a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane())
 		if a.typing != nil {
 			a.typing.reconcileFrames(frames)
 		}
@@ -1753,7 +1755,6 @@ func (a *App) spinnerLoop() {
 			// freshly-bound session doesn't paint at a stale width for up to a
 			// full 1s tick. No-op when no hera pane is drawn this frame.
 			a.heraPage.SyncPanes()
-			a.residentPane.SyncPTYSize()
 			if hasActiveRunning {
 				a.tapp.QueueUpdateDraw(func() {})
 			}
@@ -1865,6 +1866,7 @@ func (a *App) onTick() {
 		a.refreshAutoRerender() // live ui.auto_rerender_on_resize flips (one db.Config() per tick, never per Draw)
 		a.refreshResidentTab()
 		a.pollResidentState()
+		a.pollResidentUnread()
 		a.reconcileTasksRail()
 
 		// Refresh task list side panels.
@@ -2406,7 +2408,7 @@ func (a *App) isViewingTaskSession(taskID string) bool {
 	}
 	viewingAgent := mode == modeAgent && a.agentState.TaskID == taskID
 	viewingAgent = viewingAgent || (a.tasksRailViewing && a.agentState.TaskID == taskID)
-	viewingHeraTab := mode == modeTaskList && a.header.ActiveTab() == widget.TabHera
+	viewingHeraTab := mode == modeTaskList && a.heraViewActive()
 	a.mu.Unlock()
 	if viewingAgent {
 		return true
@@ -3942,7 +3944,7 @@ func (a *App) refreshTasksWithIDs(runningIDs, idleIDs []string, allowCachedTasks
 	// The second tab is ALWAYS the native Hera view now (cfg.Hera.Enabled only
 	// gates daemon-side MCP tool registration), so this must NOT be gated on
 	// that flag — doing so froze the rail/reconcile loop when hera.enabled=false.
-	if a.header.ActiveTab() == widget.TabHera {
+	if a.heraViewActive() {
 		a.heraPage.ScheduleRefresh()
 		// Late-bind any coordinator/worker session that came up after the pane
 		// was bound (main thread — SetSession is main-goroutine-only).
@@ -4151,9 +4153,16 @@ const pluginFailsafeWindow = 400 * time.Millisecond
 // itself is NOT a content pane, so those globals still work while the rail holds
 // focus. Mirrors how modeAgent fully surrenders these keys to the agent PTY.
 func (a *App) heraPaneFocused() bool {
-	return a.header.ActiveTab() == widget.TabHera &&
+	return a.heraViewActive() &&
 		a.heraPage != nil && !a.heraPage.IsRemote() &&
 		a.heraPage.Machine().State() != hera.FocusRail
+}
+
+// heraViewActive reports whether the HeraPage is the visible view: the Projects
+// tab, or the resident tab (the same page in resident mode).
+func (a *App) heraViewActive() bool {
+	t := a.header.ActiveTab()
+	return t == widget.TabHera || t == widget.TabResident
 }
 
 // refreshKeymap rebuilds the keymap from the current config, but only when the
@@ -4431,10 +4440,6 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 	// failsafe + agent-view back ladder + quit-from-task-list).
 	switch event.Key() {
 	case tcell.KeyCtrlC:
-		if a.header.ActiveTab() == widget.TabResident {
-			a.forwardResidentKey(event)
-			return nil
-		}
 		if a.mode == modeAgent {
 			// Forward ctrl+c to the PTY if session is alive; otherwise ignore
 			if sess := a.agentPane.Session(); sess != nil && sess.Alive() {
@@ -4454,11 +4459,20 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 		// A focused Hera pane must receive ^C (interrupt the agent), not quit
 		// argus — fall through to HeraPage so it forwards 0x03 to the pane PTY.
 		if a.heraPaneFocused() {
+			if a.header.ActiveTab() == widget.TabResident {
+				// ^C interrupts the resident, as it always did on this tab. Returning
+				// the event unchanged would let tview's own Ctrl-C handling stop
+				// argus, so hand it to the page here and consume it.
+				a.heraPage.InputHandler()(event, func(tview.Primitive) {})
+				return nil
+			}
 			break
 		}
 		a.stopTUI()
 		return nil
 	case tcell.KeyCtrlQ:
+		// ctrl+q on the resident tab always returns to the origin (as it did
+		// before the tab became a team view); ctrl+alt+←/→ walks pane ⇄ rail.
 		if a.header.ActiveTab() == widget.TabResident {
 			a.toggleResident()
 			return nil
@@ -4502,10 +4516,9 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 	// Tab switching is 1/2/3 only (Left/Right fall through to the focused view).
 	suppressRune := event.Key() == tcell.KeyRune &&
 		((a.mode == modeTaskList && a.tasklist.Filtering()) ||
-			a.header.ActiveTab() == widget.TabResident ||
 			(a.mode == modeTaskList && a.settings.IsEditing()) ||
 			a.heraPaneFocused() ||
-			(a.mode == modeTaskList && a.header.ActiveTab() == widget.TabHera && a.heraPage.RailFiltering()))
+			(a.mode == modeTaskList && a.heraViewActive() && a.heraPage.RailFiltering()))
 
 	if !suppressRune {
 		if act, ok := a.activeKeymap().Resolve(keymap.CtxGlobal, event); ok {
@@ -4545,7 +4558,7 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 				// the diff-based Show() failed to overwrite. Only outside agent view
 				// and off a focused Hera pane; otherwise fall through so the agent /
 				// pane gets the key (handleAgentKey's link-picker binding, or the PTY).
-				if a.mode != modeAgent && !a.heraPaneFocused() && a.header.ActiveTab() != widget.TabResident {
+				if a.mode != modeAgent && !a.heraPaneFocused() {
 					uxlog.Log("[tui] refresh — Sync")
 					a.screen.Sync()
 					return nil
@@ -4622,10 +4635,6 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 		}
 	}
 
-	if a.header.ActiveTab() == widget.TabResident {
-		a.forwardResidentKey(event)
-		return nil
-	}
 	switch a.mode {
 	case modeAgent:
 		return a.handleAgentKey(event)
@@ -5449,8 +5458,10 @@ func (a *App) switchTab(t widget.Tab) {
 		}
 	}
 	if a.header.ActiveTab() == widget.TabResident && t != widget.TabResident {
-		a.residentPane.SetFocused(false)
-		a.residentPane.SetSession(nil)
+		// Leave resident mode BEFORE the new tab shows: the page goes back to
+		// the Projects model, rebinding both panes from scratch.
+		a.heraPage.SetResidentMode(false)
+		a.heraPage.CoordPane().SetPlaceholderNote("")
 	}
 	// Leaving agent view must restore the shell header before changing tabs.
 	if a.mode == modeAgent && t == widget.TabResident {
@@ -5474,11 +5485,8 @@ func (a *App) switchTab(t widget.Tab) {
 	switch t {
 	case widget.TabResident:
 		a.mode = modeTaskList
-		a.refreshResidentTab()
-		a.residentPane.SetFocused(true)
 		a.root.ResizeItem(a.header, 1, 0)
-		a.pages.SwitchToPage("resident")
-		a.tapp.SetFocus(a.residentPane)
+		a.enterResidentView()
 		a.markResidentViewed()
 		uxlog.Log("[resident] tab selected")
 	case widget.TabTasks:
@@ -7025,7 +7033,7 @@ func (a *App) computePTYSize() (rows, cols uint16) {
 // Main-goroutine only.
 func (a *App) spawnPTYSize(taskID string) (rows, cols uint16) {
 	a.mu.Lock()
-	onHera := a.mode == modeTaskList && a.header.ActiveTab() == widget.TabHera
+	onHera := a.mode == modeTaskList && a.heraViewActive()
 	a.mu.Unlock()
 	if onHera && a.heraPage != nil {
 		if r, c, ok := a.heraPage.PaneSizeForTask(taskID); ok {
@@ -7770,7 +7778,12 @@ func (a *App) openHelp() {
 	}
 	a.helpPrevPage, _ = a.pages.GetFrontPage()
 	// Render help from the live keymap so it reflects any config overrides.
-	a.helpModal = modal.NewHelpModalWith("Keybindings", modal.SectionsFromKeymap(a.activeKeymap()))
+	sections := modal.SectionsFromKeymap(a.activeKeymap())
+	if a.header.ActiveTab() == widget.TabResident && a.heraPage.ResidentMode() {
+		// The resident tab lists only the keys it honors (keymap resident policy).
+		sections = modal.ResidentSectionsFromKeymap(a.activeKeymap())
+	}
+	a.helpModal = modal.NewHelpModalWith("Keybindings", sections)
 	a.mode = modeHelp
 	a.pages.AddPage("help", a.helpModal, true, true)
 	a.pages.SwitchToPage("help")
@@ -7809,7 +7822,8 @@ func (a *App) restorePageFocus(prev string) {
 	// Restore focus to whichever widget owns the visible tab.
 	switch a.header.ActiveTab() {
 	case widget.TabResident:
-		a.tapp.SetFocus(a.residentPane)
+		a.pages.SwitchToPage("hera")
+		a.tapp.SetFocus(a.heraPage)
 	case widget.TabSettings:
 		a.tapp.SetFocus(a.settings)
 	case widget.TabHera:
@@ -7859,8 +7873,8 @@ func (a *App) closeErrorModal() {
 	a.pages.RemovePage("error")
 	switch a.header.ActiveTab() {
 	case widget.TabResident:
-		a.pages.SwitchToPage("resident")
-		a.tapp.SetFocus(a.residentPane)
+		a.pages.SwitchToPage("hera")
+		a.tapp.SetFocus(a.heraPage)
 	case widget.TabSettings:
 		a.pages.SwitchToPage("settings")
 		a.tapp.SetFocus(a.settings)
@@ -8952,7 +8966,7 @@ func (a *App) releaseIdlePaneMemory() {
 	if !a.idleReleaseEnabled.Load() || a.tapp == nil || a.agentPane == nil || a.heraPage == nil {
 		return
 	}
-	panes := []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane(), a.residentPane}
+	panes := []*terminal.TerminalPane{a.agentPane, a.heraPage.CoordPane(), a.heraPage.AgentPane()}
 	a.tapp.QueueUpdate(func() {
 		now := time.Now()
 		for _, p := range panes {

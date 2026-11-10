@@ -48,6 +48,8 @@ func (a *App) openJumpSwitcher() {
 		current = viewing
 	case a.header.ActiveTab() == widget.TabHera && a.heraPage != nil:
 		current = a.heraPage.Rail().Selection().FocusTaskID()
+	case a.header.ActiveTab() == widget.TabResident && a.heraPage != nil:
+		current = a.heraPage.Rail().Selection().FocusTaskID() // a resident-team task, not in the Projects column
 	default:
 		if t := a.tasklist.SelectedTask(); t != nil {
 			current = t.ID
@@ -121,7 +123,7 @@ func (a *App) jumpSwitcherFeed(in switcherReads) SwitcherFeed {
 	}
 	if a.heraPage != nil {
 		f.Remote = a.heraPage.IsRemote()
-		f.HeraModel = a.heraPage.Rail().Model()
+		f.HeraModel = a.heraPage.ProjectsModel()
 		f.PRMeta = a.heraPage.Rail().PRMeta()
 	}
 	return f
@@ -200,7 +202,7 @@ func (a *App) closeJumpSwitcher() {
 	case a.header.ActiveTab() == widget.TabSettings:
 		a.tapp.SetFocus(a.settingsPage)
 	case a.header.ActiveTab() == widget.TabResident:
-		a.tapp.SetFocus(a.residentPane)
+		a.tapp.SetFocus(a.heraPage)
 	default:
 		a.tapp.SetFocus(a.tasklist)
 	}
