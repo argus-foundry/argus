@@ -6760,11 +6760,11 @@ func resolveInlineDynamicBackend(task *model.Task, project config.Project, cfg c
 		return agent.TaskRouting{}, false, nil
 	}
 	routing, err := agent.ResolveTaskRouting(agent.CreateInput{
-		Project: task.Project,
-		Backend: task.Backend,
-		Account: task.Account,
+		Project:       task.Project,
+		Backend:       task.Backend,
+		Account:       task.Account,
 		AccountRouted: task.AccountRouted,
-		Model: task.Model,
+		Model:         task.Model,
 	}, cfg, true)
 	if err != nil {
 		return agent.TaskRouting{}, true, err
