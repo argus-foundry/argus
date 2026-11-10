@@ -811,6 +811,7 @@ func TestSmoke_ResidentReasonShownInPlaceholderAndSettings(t *testing.T) {
 	a, _ := residentTestApp(t)
 	sim, stop := wireApp(t, a)
 	defer stop()
+	sim.SetSize(240, 40) // the resident pane is the Hera coordinator pane: give the banner room
 	readUI(t, a.tapp, func() {
 		a.switchTab(widget.TabResident)
 		a.applyResidentState(daemon.ResidentStateResp{Reason: "waiting for the Argus MCP server\x1b[31m"})
@@ -819,7 +820,7 @@ func TestSmoke_ResidentReasonShownInPlaceholderAndSettings(t *testing.T) {
 	readUI(t, a.tapp, func() {
 		testutil.Equal(t, a.residentSt.reason, "waiting for the Argus MCP server [31m")
 		sim.Show()
-		testutil.Contains(t, screenText(sim, 80, 24), "waiting for the Argus MCP server")
+		testutil.Contains(t, screenText(sim, 240, 40), "waiting for the Argus MCP server")
 	})
 	readUI(t, a.tapp, func() {
 		a.switchTab(widget.TabSettings)
@@ -841,7 +842,7 @@ func TestSmoke_ResidentReasonShownInPlaceholderAndSettings(t *testing.T) {
 	redrawUI(t, a)
 	readUI(t, a.tapp, func() {
 		sim.Show()
-		testutil.False(t, strings.Contains(screenText(sim, 80, 24), "waiting for the Argus MCP server"))
+		testutil.False(t, strings.Contains(screenText(sim, 240, 40), "waiting for the Argus MCP server"))
 	})
 }
 
@@ -852,6 +853,7 @@ func TestSmoke_ResidentRunningDropsReason(t *testing.T) {
 	a, _ := residentTestApp(t)
 	sim, stop := wireApp(t, a)
 	defer stop()
+	sim.SetSize(240, 40)
 	const reason = "prereq-reason-xyz"
 	readUI(t, a.tapp, func() {
 		a.switchTab(widget.TabResident)
@@ -862,7 +864,7 @@ func TestSmoke_ResidentRunningDropsReason(t *testing.T) {
 	redrawUI(t, a)
 	readUI(t, a.tapp, func() {
 		sim.Show()
-		testutil.False(t, strings.Contains(screenText(sim, 80, 24), reason))
+		testutil.False(t, strings.Contains(screenText(sim, 240, 40), reason))
 		a.switchTab(widget.TabSettings)
 		selectRowInCategory(t, a.settings, catResident, srResident, resKeyName)
 		a.settings.SetRect(0, 0, 100, 30)
@@ -902,13 +904,14 @@ func TestSmoke_ResidentReasonBannerOverReplay(t *testing.T) {
 	writeResidentLog(t, d)
 	sim, stop := wireApp(t, a)
 	defer stop()
+	sim.SetSize(240, 40)
 	const reason = "waiting for the Argus MCP server"
 	show := func() string {
 		redrawUI(t, a)
 		var text string
 		readUI(t, a.tapp, func() {
 			sim.Show()
-			text = screenText(sim, 80, 24)
+			text = screenText(sim, 240, 40)
 		})
 		return text
 	}
@@ -982,6 +985,6 @@ func TestInitialPTYLayout_ResidentIndependentOfActive(t *testing.T) {
 	testutil.NoError(t, err)
 	active, err := d.InitialPTYSize("", time.Now())
 	testutil.NoError(t, err)
-	testutil.Equal(t, res, db.PTYSize{Rows: 36, Cols: 237})
+	testutil.Equal(t, res, db.PTYSize{Rows: 36, Cols: 100}) // the resident pane is the always-split coordinator pane
 	testutil.Equal(t, active, db.PTYSize{Rows: 36, Cols: 101})
 }

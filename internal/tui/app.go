@@ -357,21 +357,23 @@ type App struct {
 	// agentCrossReturn remembers the agent view a Cmd+Right hop left from, so
 	// Cmd+Left from the Hera rail can restore it. Main goroutine only; cleared
 	// by switchTab and by the return hop.
-	agentCrossReturn     *residentReturn
-	residentReturn       *residentReturn
-	residentBox          *widget.ResidentBox
-	residentSt           residentAttention
-	residentPollPending  bool
-	residentPolledAt     time.Time
-	residentMarkViewedFn func() error                             // test seam; default daemonClient.ResidentMarkViewed
-	residentStateFn      func() (daemon.ResidentStateResp, error) // test seam; default daemonClient.ResidentState
-	onSwitchTab          func(widget.Tab)                         // test seam: records every switchTab target
-	onPersistLastTab     func(widget.Tab)                         // test seam: records every last-tab persistence write
-	agentState           agentview.State
-	daemonConnected      bool
-	tasks                []*model.Task
-	runningIDs           []string
-	idleIDs              []string
+	agentCrossReturn      *residentReturn
+	residentReturn        *residentReturn
+	residentBox           *widget.ResidentBox
+	residentSt            residentAttention
+	residentPollPending   bool
+	residentUnreadPending bool
+	residentUnreadAt      time.Time
+	residentPolledAt      time.Time
+	residentMarkViewedFn  func() error                             // test seam; default daemonClient.ResidentMarkViewed
+	residentStateFn       func() (daemon.ResidentStateResp, error) // test seam; default daemonClient.ResidentState
+	onSwitchTab           func(widget.Tab)                         // test seam: records every switchTab target
+	onPersistLastTab      func(widget.Tab)                         // test seam: records every last-tab persistence write
+	agentState            agentview.State
+	daemonConnected       bool
+	tasks                 []*model.Task
+	runningIDs            []string
+	idleIDs               []string
 	// visibleActiveSpinner caches computeVisibleActiveSpinner's result
 	// (add-spinner-visible-scope), recomputed once per refreshTasksWithIDs
 	// call (tview main goroutine, a.mu held) so spinnerLoop's background
@@ -1864,6 +1866,7 @@ func (a *App) onTick() {
 		a.refreshAutoRerender() // live ui.auto_rerender_on_resize flips (one db.Config() per tick, never per Draw)
 		a.refreshResidentTab()
 		a.pollResidentState()
+		a.pollResidentUnread()
 		a.reconcileTasksRail()
 
 		// Refresh task list side panels.
@@ -4456,6 +4459,13 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 		// A focused Hera pane must receive ^C (interrupt the agent), not quit
 		// argus — fall through to HeraPage so it forwards 0x03 to the pane PTY.
 		if a.heraPaneFocused() {
+			if a.header.ActiveTab() == widget.TabResident {
+				// ^C interrupts the resident, as it always did on this tab. Returning
+				// the event unchanged would let tview's own Ctrl-C handling stop
+				// argus, so hand it to the page here and consume it.
+				a.heraPage.InputHandler()(event, func(tview.Primitive) {})
+				return nil
+			}
 			break
 		}
 		a.stopTUI()

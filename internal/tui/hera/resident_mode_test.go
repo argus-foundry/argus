@@ -268,3 +268,122 @@ func annotate(p *HeraPage, fn func(*heramodel.RoleView)) {
 	m := p.Rail().Model()
 	m.AnnotateRoles(fn)
 }
+
+// railScreen draws the rail to a sim screen and returns every row as text.
+func railScreen(t *testing.T, r *Rail, w, h int) []string {
+	t.Helper()
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	t.Cleanup(sim.Fini)
+	sim.SetSize(w, h)
+	r.SetRect(0, 0, w, h)
+	r.Draw(sim)
+	sim.Show()
+	cells, cw, _ := sim.GetContents()
+	rows := make([]string, h)
+	for y := 0; y < h; y++ {
+		var b []rune
+		for x := 0; x < w; x++ {
+			if rs := cells[y*cw+x].Runes; len(rs) > 0 {
+				b = append(b, rs[0])
+			}
+		}
+		rows[y] = string(b)
+	}
+	return rows
+}
+
+func joinRows(rows []string) string {
+	out := ""
+	for _, r := range rows {
+		out += r + "\n"
+	}
+	return out
+}
+
+func TestRail_UnreadTagOnWorkerRows(t *testing.T) {
+	r := NewRail()
+	r.SetModel(heramodel.Model{Active: []heramodel.OrchView{{ID: 1, Name: "resident", Roles: []heramodel.RoleView{
+		{RoleID: 1, OrchID: 1, Name: "resident", Kind: db.HeraKindCoordinator, Live: true, TaskID: "tc"},
+		{RoleID: 2, OrchID: 1, Name: "alpha", Kind: db.HeraKindWorker, Live: true, TaskID: "ta"},
+		{RoleID: 3, OrchID: 1, Name: "beta", Kind: db.HeraKindWorker, Live: true, TaskID: "tb"},
+	}}}})
+	r.SetUnread(map[string]int{"ta": 3})
+	text := joinRows(railScreen(t, r, 40, 12))
+	testutil.Contains(t, text, "alpha")
+	testutil.Contains(t, text, "✉3")
+	// Rows with nothing unread stay clean.
+	for _, line := range railScreenLines(text) {
+		if len(line) > 0 && containsAll(line, "beta") && containsAll(line, "✉") {
+			t.Fatalf("beta row shows an unread tag: %q", line)
+		}
+	}
+	// Clearing removes the tag.
+	r.SetUnread(nil)
+	testutil.False(t, containsAll(joinRows(railScreen(t, r, 40, 12)), "✉"))
+}
+
+func railScreenLines(s string) []string {
+	var out []string
+	cur := ""
+	for _, c := range s {
+		if c == '\n' {
+			out = append(out, cur)
+			cur = ""
+			continue
+		}
+		cur += string(c)
+	}
+	return out
+}
+
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		found := false
+		for i := 0; i+len(sub) <= len(s); i++ {
+			if s[i:i+len(sub)] == sub {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func TestResidentMode_UnreadCountsReachRailAndPaneTitle(t *testing.T) {
+	f := newResidentFixture(t)
+	f.enter(t)
+	f.p.SetResidentTitle("Solo")
+	testutil.Equal(t, f.p.coordTitle, "Solo")
+	residentTask, err := f.d.ResidentTask()
+	testutil.NoError(t, err)
+	f.p.SetUnread(map[string]int{residentTask.ID: 2, f.workers[0]: 1})
+	testutil.Equal(t, f.p.coordTitle, "Solo · ✉2")
+	f.p.SetUnread(nil)
+	testutil.Equal(t, f.p.coordTitle, "Solo")
+}
+
+type emptyRailStore struct{}
+
+func (emptyRailStore) LoadRailState() (string, error) { return "", nil }
+func (emptyRailStore) SaveRailState(string) error     { return nil }
+
+// A first-run rail seeds "collapse everything"; the resident view must always
+// show its team, and must not consume that one-shot meant for the Projects view.
+func TestResidentMode_TeamAlwaysExpandedAndFirstRunCollapseKept(t *testing.T) {
+	f := newResidentFixture(t)
+	f.p.SetRailStateStore(emptyRailStore{})
+	f.enter(t)
+	names := ""
+	annotate(f.p, func(rv *heramodel.RoleView) { names += rv.Name + " " })
+	rows := joinRows(railScreen(t, f.p.Rail(), 40, 12))
+	testutil.Contains(t, rows, "alpha")
+	testutil.Contains(t, rows, "beta")
+	testutil.True(t, f.p.Rail().firstRunCollapse) // untouched for the Projects view
+	f.p.SetResidentMode(false)
+	rows = joinRows(railScreen(t, f.p.Rail(), 40, 12))
+	testutil.False(t, containsAll(rows, "alpha")) // Projects rail honours its own first-run collapse
+}

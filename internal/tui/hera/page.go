@@ -1,6 +1,7 @@
 package hera
 
 import (
+	"fmt"
 	"maps"
 	"time"
 
@@ -81,6 +82,9 @@ type HeraPage struct {
 	// reader, residentReader the one scoped to the standing team; the mode
 	// swaps p.reader between them on the UI goroutine.
 	residentMode   bool
+	residentTitle  string // resident pane's base border title (SetResidentTitle)
+	residentUnread int    // the resident's own unread count, shown in the title
+	coordTitle     string // the coordinator pane's title as last set (resident mode)
 	genericReader  heramodel.HeraReader
 	residentReader heramodel.HeraReader
 
@@ -411,6 +415,9 @@ func (p *HeraPage) SetResidentMode(on bool) {
 		p.reader = p.genericReader
 	}
 	p.residentMode = on
+	p.rail.SetNeverCollapse(on)
+	p.rail.SetUnread(nil) // counts are per-view; the next poll refills them
+	p.residentUnread, p.coordTitle = 0, ""
 	p.lastPristine = nil // the equal-model drop must never compare across modes
 	uxlog.Log("[resident-view] mode=%v: rebuilding model and rebinding panes", on)
 	p.rail.ClearFilter()
@@ -440,6 +447,43 @@ func (p *HeraPage) ProjectsModel() heramodel.Model {
 		return heramodel.Model{}
 	}
 	return res.model
+}
+
+// SetResidentTitle sets the resident conversation pane's base border title (the
+// configured resident name); the unread count is appended to it.
+func (p *HeraPage) SetResidentTitle(name string) {
+	p.residentTitle = name
+	p.applyResidentTitle()
+}
+
+// SetUnread feeds per-task unread-mail counts to the rail's "✉N" tags and, in
+// resident mode, the resident's own count to its pane title. UI goroutine only.
+func (p *HeraPage) SetUnread(counts map[string]int) {
+	p.rail.SetUnread(counts)
+	p.residentUnread = 0
+	if p.residentMode {
+		m := p.rail.Model()
+		for i := range m.Active {
+			if tid := m.Active[i].CoordTaskID(); tid != "" {
+				p.residentUnread += counts[tid]
+			}
+		}
+	}
+	p.applyResidentTitle()
+}
+
+func (p *HeraPage) applyResidentTitle() {
+	if !p.residentMode || p.residentTitle == "" {
+		return
+	}
+	title := p.residentTitle
+	if p.residentUnread > 0 {
+		title = fmt.Sprintf("%s · ✉%d", title, p.residentUnread)
+	}
+	if title != p.coordTitle {
+		p.coordTitle = title
+		p.coordPane.SetBorderTitle(title)
+	}
 }
 
 // coordKickBound is the task the coordinator pane's size-drift kick may act

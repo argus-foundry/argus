@@ -1,11 +1,12 @@
 package tui
 
 import (
-	"sort"
 	"testing"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/argus-foundry/argus/internal/tui/keymap"
 	"github.com/argus-foundry/argus/internal/tui/widget"
@@ -365,25 +366,56 @@ func TestSmoke_CommandPaletteOpensFromPlainTaskList(t *testing.T) {
 	testutil.Equal(t, mode, modeTaskList)
 }
 
-func TestPaletteApplicableActions_ResidentTabIsTrimmedGlobalSet(t *testing.T) {
-	a, _ := residentTestApp(t)
-	a.switchTab(widget.TabResident)
-	km := a.activeKeymap()
-	rows := a.paletteApplicableActions()
-	var got []string
+func labelsOf(rows []paletteRow) map[string]bool {
+	out := map[string]bool{}
 	for _, r := range rows {
-		got = append(got, r.Label)
+		out[r.Label] = true
 	}
-	want := []string{
-		km.ActionLabel(keymap.ActGlobalResident),
-		km.ActionLabel(keymap.ActGlobalSwitcher),
-		km.ActionLabel(keymap.ActGlobalTabTasks),
-		km.ActionLabel(keymap.ActGlobalTabHera),
-		km.ActionLabel(keymap.ActGlobalTabSettings),
+	return out
+}
+
+// The resident tab's palette is the trimmed global set plus ONLY the rail
+// actions the keymap's resident policy allows: inbox on the resident row, and
+// nuke/hide/rename/status only once a worker row is selected. Creation and
+// structure actions never appear.
+func TestPaletteApplicableActions_ResidentTabFollowsKeymapPolicy(t *testing.T) {
+	a, d := residentTestApp(t)
+	testutil.NoError(t, d.Add(&model.Task{ID: "w1", Name: "w1", Status: model.StatusInProgress, Project: "p", CreatedAt: time.Now()}))
+	orchs, err := d.ListResidentOrchestrators(false)
+	testutil.NoError(t, err)
+	_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orchs[0].ID, Name: "w1", Kind: db.HeraKindWorker, ArgusProject: "p"}, "w1", t.TempDir())
+	testutil.NoError(t, err)
+	a.switchTab(widget.TabResident)
+	a.heraPage.Machine().ToRail()
+	km := a.activeKeymap()
+	label := km.ActionLabel
+
+	got := labelsOf(a.paletteApplicableActions())
+	for _, act := range []keymap.Action{keymap.ActGlobalResident, keymap.ActGlobalSwitcher, keymap.ActGlobalTabTasks, keymap.ActGlobalTabHera, keymap.ActGlobalTabSettings} {
+		testutil.True(t, got[label(act)])
 	}
-	sort.Strings(got)
-	sort.Strings(want)
-	testutil.DeepEqual(t, got, want)
+	// Resident row selected: only the inbox among rail actions.
+	testutil.True(t, got[label(keymap.ActHeraInbox)])
+	for _, act := range []keymap.Action{keymap.ActHeraDelete, keymap.ActHeraArchive, keymap.ActHeraRename, keymap.ActHeraStatAdv, keymap.ActHeraStatRev} {
+		testutil.False(t, got[label(act)])
+	}
+	// Never offered on this tab, whatever the selection.
+	inert := []keymap.Action{keymap.ActHeraSpawn, keymap.ActHeraNewCoord, keymap.ActHeraPin, keymap.ActHeraKanbanAdv,
+		keymap.ActHeraKanbanRev, keymap.ActHeraAdopt, keymap.ActHeraClear, keymap.ActHeraCleanup, keymap.ActHeraMoveAccount}
+	for _, act := range inert {
+		testutil.False(t, got[label(act)])
+	}
+
+	// Worker row selected: the worker-only management actions appear.
+	testutil.True(t, a.heraPage.JumpToTask("w1"))
+	a.heraPage.Machine().ToRail()
+	got = labelsOf(a.paletteApplicableActions())
+	for _, act := range []keymap.Action{keymap.ActHeraDelete, keymap.ActHeraArchive, keymap.ActHeraRename, keymap.ActHeraStatAdv, keymap.ActHeraStatRev, keymap.ActHeraInbox} {
+		testutil.True(t, got[label(act)])
+	}
+	for _, act := range inert {
+		testutil.False(t, got[label(act)])
+	}
 }
 
 func TestPaletteApplicableActions_AgentViewResidentRowFollowsEnabled(t *testing.T) {

@@ -3,6 +3,8 @@ package tui
 import (
 	"time"
 
+	heramodel "github.com/argus-foundry/argus/internal/hera/model"
+
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/daemon"
 	"github.com/argus-foundry/argus/internal/db"
@@ -67,7 +69,7 @@ func (a *App) enterResidentView() {
 	// the tab always did); ctrl+alt+← reaches the team rail.
 	a.heraPage.Machine().SetRegion(hera.FocusCoord)
 	a.statusbar.SetHeraFocus(int(hera.FocusCoord))
-	a.heraPage.CoordPane().SetBorderTitle(a.db.Config().Resident.Name)
+	a.heraPage.SetResidentTitle(a.db.Config().Resident.Name)
 	a.heraPage.CoordPane().SetPlaceholderNote(a.residentSt.reason)
 	a.pages.SwitchToPage("hera")
 	a.tapp.SetFocus(a.heraPage)
@@ -253,6 +255,61 @@ func (a *App) pollResidentState() {
 				return
 			}
 			a.applyResidentState(resp)
+		})
+	}()
+}
+
+// pollResidentUnread refreshes the resident view's unread-mail counts (the
+// per-worker "✉N" rail tags and the resident pane title) while that view is
+// showing. The role list is snapshotted on the UI goroutine; the per-role
+// queries run on one single-flight goroutine and the result is applied via
+// QueueUpdateDraw, never in Draw. Counts are Hera inbox plus task messages.
+func (a *App) pollResidentUnread() {
+	if a.header.ActiveTab() != widget.TabResident || !a.heraPage.ResidentMode() ||
+		a.residentUnreadPending || time.Since(a.residentUnreadAt) < residentPollInterval {
+		return
+	}
+	d, ok := a.db.(*db.DB)
+	if !ok {
+		return
+	}
+	type ref struct {
+		roleID int64
+		taskID string
+	}
+	var refs []ref
+	m := a.heraPage.Rail().Model()
+	m.AnnotateRoles(func(rv *heramodel.RoleView) {
+		if rv.TaskID != "" && rv.RoleID != 0 {
+			refs = append(refs, ref{rv.RoleID, rv.TaskID})
+		}
+	})
+	a.residentUnreadPending = true
+	a.residentUnreadAt = time.Now()
+	go func() {
+		counts := map[string]int{}
+		for _, r := range refs {
+			n := 0
+			if msgs, err := d.HeraInbox(r.roleID); err == nil {
+				n += len(msgs)
+			}
+			if c, err := d.UnreadCount(r.taskID); err == nil {
+				n += c
+			}
+			if n > 0 {
+				counts[r.taskID] = n
+			}
+		}
+		a.tapp.QueueUpdateDraw(func() {
+			a.residentUnreadPending = false
+			if !a.heraPage.ResidentMode() {
+				uxlog.Log("[resident] unread poll result dropped: view left")
+				return
+			}
+			a.heraPage.SetUnread(counts)
+			if len(counts) > 0 {
+				uxlog.Log("[resident] unread counts roles=%d", len(counts))
+			}
 		})
 	}()
 }
