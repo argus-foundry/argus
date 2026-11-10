@@ -149,6 +149,18 @@ The server SHALL create a task from a JSON body containing `prompt`, `project`, 
 - **WHEN** a create request sets `sandbox_override` to a value other than `""`, `"enabled"`, or `"disabled"`
 - **THEN** the server responds 400 Bad Request
 
+### Requirement: Explicit task model is validated before creation
+
+When a create request carries a non-empty `model`, the server SHALL validate it against the resolved backend (after backend resolution) before any worktree, database row, or session is created. A backend with a configured `models` list SHALL accept exactly that list; a backend with a curated family list SHALL accept exactly that list; a backend with neither SHALL accept any identifier. A rejected model SHALL produce 422 with `{"error":"model is not allowed for resolved backend","code":"model_not_allowed","backend":<name>,"requested_model":<id>,"allowed_models":[...]}`. The same validation SHALL apply to JSON and multipart creation. An empty `model` SHALL always pass.
+
+#### Scenario: Curated backend rejects unknown model
+- **WHEN** a create request names a curated backend and a model outside its list
+- **THEN** the server responds 422 with code `model_not_allowed` and no task or worktree exists
+
+#### Scenario: Freeform backend accepts custom model
+- **WHEN** a create request names a backend with no configured or curated list and any model
+- **THEN** the task is created and records that model
+
 ### Requirement: Task listing and retrieval with runtime idle state
 
 The server SHALL list tasks and SHALL support optional filtering by `status`, `project`, and `archived` (`0`/default excludes archived, `1` returns only archived, `all` returns both). For each task the server SHALL derive `live`, true whenever the runner holds an input-addressable session and no kill+resume restart is pending, regardless of workflow status, and `idle`, true only when the session is live and waiting for input; an absent session SHALL NOT be reported idle. A pending restart SHALL report `live`, `idle` and `needs_input` all false. `needs_input` SHALL require a live `in_progress` session. Retrieving a task that does not exist SHALL return 404.
@@ -688,7 +700,7 @@ The REST API SHALL expose authenticated POST endpoints under `/api/hera` for nuk
 
 ### Requirement: Backend listing carries family metadata
 
-`GET /api/backends` SHALL include, per backend, its family `kind` (`claude`, `codex`, `pi`, `opencode`, `antigravity`, or empty for custom), a `label` (the family's human label when the backend is named after its family, otherwise the backend's own name so two instances of one family stay distinguishable), the prompt `skill_prefix` (`$` for codex, `/` otherwise), and `session_switcher` (whether the Claude session endpoints accept it). The create and update responses SHALL carry the same fields for the stored backend. Clients SHALL use these fields instead of hardcoding backend names.
+`GET /api/backends` SHALL include, per backend, its family `kind` (`claude`, `codex`, `pi`, `opencode`, `antigravity`, or empty for custom), a `label` (the family's human label when the backend is named after its family, otherwise the backend's own name so two instances of one family stay distinguishable), the prompt `skill_prefix` (`$` for codex, `/` otherwise), `session_switcher` (whether the Claude session endpoints accept it), and `account_move` `{supported, preserves_conversation}` (true only for families with a tested conversation transfer: Claude and Codex). The create and update responses SHALL carry the same fields for the stored backend. Clients SHALL use these fields instead of hardcoding backend names.
 
 #### Scenario: Second instance keeps its own label
 - **WHEN** a backend named `claude-haiku` runs the `claude` command
@@ -697,6 +709,14 @@ The REST API SHALL expose authenticated POST endpoints under `/api/hera` for nuk
 #### Scenario: Antigravity listed with metadata
 - **WHEN** the backend roster contains `antigravity` with command `agy`
 - **THEN** its entry has kind `antigravity`, label `Antigravity`, skill_prefix `/`, and session_switcher false
+
+### Requirement: Backend listing reports model policy
+
+`GET /api/backends` SHALL include `model_policy` per backend: `configured` when the merged config defines `models`, `curated` when the family has a curated list, otherwise `freeform`. `models` and `model_policy` SHALL reflect the complete merged backend, including command overrides.
+
+#### Scenario: Configured list reported
+- **WHEN** `config.toml` defines `models` for a backend
+- **THEN** its entry has `model_policy` `configured` and that list as `models`
 
 ### Requirement: Bridge event ingest endpoint
 The REST API SHALL expose `POST /api/tasks/{id}/bridge/events`, authenticated like every `/api/*` route, accepting `{"events":[...]}` and recording them as the task's bridge state. It SHALL return 404 for an unknown task and 400 for a malformed body, and SHALL NOT alter any session or task state.
@@ -781,7 +801,7 @@ GET and PUT /api/settings SHALL include band and toasts booleans in the bridge s
 
 ### Requirement: Move a task to another account over REST
 
-`POST /api/tasks/{id}/account` with JSON `{"account": "<name>|default|auto", "force": <bool, optional>}` SHALL perform the account-move operation and resume the task's session as `POST /api/tasks/{id}/restart` does, responding 200 with `{from, to, resumed, started}`. An unknown task SHALL return 404; a live, non-idle session SHALL return 409 unless `force` is true, as SHALL a move or restart already in progress; every other rejection (unknown or unsupported target, same account, non-Claude backend, no other candidate for `auto`) SHALL return 400 with the reason. A failure to restart after the move has persisted SHALL return 500 with the task left on the target account.
+`POST /api/tasks/{id}/account` with JSON `{"account": "<name>|default|auto", "force": <bool, optional>}` SHALL perform the account-move operation and resume the task's session as `POST /api/tasks/{id}/restart` does, responding 200 with `{from, to, resumed, started}`. An unknown task SHALL return 404; a live, non-idle session SHALL return 409 unless `force` is true, as SHALL a move or restart already in progress; every other rejection (unknown or unsupported target, same account, a backend whose `account_move.supported` is false, a Codex target that is not signed in or has no state database, no other candidate for `auto`) SHALL return 400 with the reason. The move SHALL serialize with other moves and restarts of the task and emit `task.account_changed` `{from,to,resumed,started}` once the account is persisted. A closed-out Hera worker with no live session SHALL get 409 `hera_closeout` unless `force_revive` is true. A restart failure SHALL return 500 `{"error":"restart failed","code":"restart_failed","account","moved","started":false,...}` with `moved:true` and the task left on the target. Kick errors, checked probe errors, and pending restarts at the response deadline SHALL instead report `restart_unknown`, `settings_applied:true`, `moved:true`, `rolled_back:false` and `started:false`. Accepted kicks SHALL use the runtime endpoint's checked restart probe; a confirmed dead replacement SHALL report `restart_failed`, and a confirmed live replacement SHALL report `started:true`. An ambiguous start SHALL preserve cleared Hera closeout state; a definite start failure SHALL restore it. The endpoint SHALL retain the resident gate and reject resident account moves without mutations.
 
 #### Scenario: Move succeeds
 - **WHEN** a client POSTs `{"account": "personal"}` for an idle task on `default`
@@ -1167,3 +1187,77 @@ The system SHALL expose `POST /api/tasks/bulk-delete` accepting `task_ids` (1 to
 The daemon SHALL emit `task.runtime_changed` with payload `{"apply","changed_fields","started"}` once a runtime PATCH that persisted settles, and SHALL NOT emit it for rejections or a rolled-back restart. `task.updated` SHALL list `runtime` when `sandbox_override` changes.
 
 Client runtime controls remain named follow-ups for web (ENG-1076), TUI (ENG-1091), and macOS runtime controls: named follow-up, ticket to be filed.
+
+### Requirement: Account management endpoints
+
+The server SHALL let the master token create, edit and delete database-owned accounts, and SHALL report each account's field source and editability.
+
+#### Scenario: Create
+
+- **WHEN** the master token POSTs a valid new account
+- **THEN** the response is 201 with the effective account, the row is stored and `config.changed` `{"resource":"accounts","name":"<name>"}` is emitted
+
+#### Scenario: Non-master write
+
+- **WHEN** a device token POSTs, PATCHes or DELETEs an account
+- **THEN** the response is 403 and nothing is stored
+
+#### Scenario: Invalid or reserved input
+
+- **WHEN** the name or a directory is invalid, the name is `default`, or a directory is shared with another account
+- **THEN** the response is 400 and nothing is stored
+
+#### Scenario: config.toml ownership
+
+- **WHEN** an account is defined in config.toml
+- **THEN** its `source` fields are `config_file`, `editable` is false, and PATCH or DELETE return 409
+
+#### Scenario: Delete while referenced
+
+- **WHEN** a task (including resident and archived rows), default, project or artifact-home mapping, configured resident account or routing tier names the account
+- **THEN** DELETE returns 409 with a `references` body and the account is kept. An incomplete reference read returns 500 and leaves the account unchanged
+
+
+#### Scenario: Concurrent field edits
+
+- **WHEN** Settings and REST edit different fields of the same account
+- **THEN** each edit is merged with the current stored row and validated atomically, preserving compatible changes
+- **AND** an edit that would leave both credential directories empty changes nothing and returns HTTP 400 from REST or an inline validation error from Settings
+
+### Requirement: Account default endpoints
+
+The server SHALL expose the global and per-project account defaults and let any authenticated token change them unless config.toml owns the selection.
+
+#### Scenario: Distinguishable values
+
+- **WHEN** a client GETs `/api/account-defaults`
+- **THEN** each entry carries `explicit` (null when unset), `effective`, `source` and `editable`
+
+#### Scenario: Set and clear
+
+- **WHEN** a client PUTs `{"account":"work"}` then `{"account":null}`
+- **THEN** the stored selection is set then removed, other projects' mappings are untouched, and `config.changed` is emitted each time
+
+#### Scenario: Rejections
+
+- **WHEN** the account property is missing or the account is unknown
+- **THEN** the response is 400; an unknown project is 404; a config.toml-owned selection is 409; nothing is stored
+
+#### Scenario: Existing tasks
+
+- **WHEN** a default changes
+- **THEN** tasks already bound to an account keep it
+
+### Requirement: Explicit schedule model is validated before saving
+
+REST and MCP schedule creation and update SHALL validate a non-empty explicit model against the fresh merged backend selected by the same explicit, project, routing and default precedence used at task creation. Resolution at save time SHALL NOT reserve a launch. REST SHALL return the structured 422 model_not_allowed response used for task creation; MCP SHALL return a tool error identifying the rejected model and backend. A rejected save SHALL leave the stored schedule and run bookkeeping unchanged. Empty models SHALL pass. Validation at fire time SHALL remain in CreateAndStart because backend configuration and routing may change after saving. Existing LastRunAt and one-shot retry semantics SHALL remain unchanged.
+
+#### Scenario: Invalid recurring or one-shot model is rejected on save
+
+- **WHEN** a schedule is created or updated with a model outside its resolved backend policy
+- **THEN** the save fails without inserting or changing a schedule
+
+#### Scenario: Allowed model is saved
+
+- **WHEN** a schedule carries a model permitted by its resolved backend
+- **THEN** the model is saved and existing run bookkeeping is preserved

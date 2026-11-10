@@ -137,6 +137,7 @@ Argus sends `: ping` lines every 30 seconds so proxies and clients can detect de
 | `session.started`       | `{"pid":<n>,"resume":<bool>}`                        | `agent.Runner.Start`                         |
 | `session.exited`        | `{"stopped":<bool>,"err":"<str>","pending_restart":<bool>}` | session readLoop exit                  |
 | `session.idle`          | `null`                                               | push idle watcher                            |
+| `config.changed`        | `{"resource":"accounts","name":"<name>"}` or `{"resource":"account_defaults","project":"<name>"}` (`project` omitted for the global default) | account / account-default REST writes |
 | `resync`                | `{"reason":"...","cursor":<n>,"oldest":<n>}`         | synthetic, SSE handler only                  |
 
 Payloads are stable. A future major version will rename or restructure them; v1 is append-only.

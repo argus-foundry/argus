@@ -229,6 +229,10 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	if unpinned && choice.Account != "" && cfg.AccountSupports(choice.Account, cfg.Backends[backend].Command) {
 		input.Account = choice.Account
 	}
+	if err := ValidateExplicitModel(backend, cfg.Backends[backend], input.Model); err != nil {
+		uxlog.Log("[model] create rejected backend=%q model=%q", backend, input.Model)
+		return nil, nil, err
+	}
 	account, err := resolveTaskAccount(cfg, input, backend)
 	if err != nil {
 		return nil, nil, err

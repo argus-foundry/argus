@@ -14,6 +14,7 @@ commands get `customFamily`. To add one, follow `.agents/skills/add-backend/SKIL
 | Capture source | `~/.claude/projects/<enc>/*.jsonl` | `state_5.sqlite` `threads.cwd` | `~/.pi/agent/sessions/--<enc>--/` | `opencode.db` `session[_v2].directory` | `~/.gemini/antigravity-cli/conversation_summaries.db` `workspace_uris` | `~/.cursor/chats/<md5(cwd)>/<uuid>/` newest mtime | `~/.omp/agent/sessions/<-rel-under-HOME \| -tmp-rel \| --abs-->/<ts>_<uuid>.jsonl` | — |
 | Recapture | every exit + resume refresh | once | once | once | every exit + resume refresh | once | every exit + resume refresh | never |
 | Resume availability | exact account transcript | — | — | — | — | — | — | — |
+| Account move | transcript copy | thread row + rollout copy | — | — | — | — | — | — |
 | Prompt | `-- <p>` | `-- <p>` | positional | `--prompt` (config) | `--prompt-interactive` (family default) | `-- <p>` | `-- <p>` | `-- <p>` |
 | Model | `--model` (curated aliases) | `--model` (curated) | `--model` | `OPENCODE_CONFIG_CONTENT` | `--model` (custom only) | `--model` (custom only) | `--model` (fuzzy) | none |
 | Permission | `defaults.permission_mode` → `--permission-mode …` | baked into command | — | `--auto` launch flag | mode → `--mode …` / `--dangerously-skip-permissions` | mode → `--force` / `--plan` | mode → `--approval-mode write` / `always-ask` (default, plan) / `yolo` | — |
@@ -34,7 +35,7 @@ commands get `customFamily`. To add one, follow `.agents/skills/add-backend/SKIL
 **Pi MCP uses native user-level configuration, refreshed before spawn.** Preserve unrelated servers and explicit operator settings; malformed JSON must remain untouched. Trusted `.pi/mcp.json` project overrides can disable or replace the global Argus registration.
 
 Rows map to `Family` fields: Session ID → `PinsSessionID`, Resume → `ResumeFlag`/`ResumeCmd`,
-Capture → `Capture`, Recapture → `RecaptureEveryExit`, Resume availability → `ResumeAvailable`, Prompt → `DefaultPromptFlag`/
+Capture → `Capture`, Recapture → `RecaptureEveryExit`, Resume availability → `ResumeAvailable`, Account move → `TransferSession`, Prompt → `DefaultPromptFlag`/
 `PromptPositional`, Model → `ModelDelivery`/`KnownModels`, Permission →
 `PermissionFlags`/`PermissionFlagTokens`, Launch flag → `LaunchFlag`, MCP → `MCPFlag`/`InjectGlobal`,
 Skills → `SkillDelivery`, Routing → `RoutingDelivery`, Sandbox grant → `SandboxGrants`/

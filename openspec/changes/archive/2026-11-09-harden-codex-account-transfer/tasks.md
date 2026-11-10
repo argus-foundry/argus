@@ -1,0 +1,6 @@
+- [x] Add red/green regressions for all ten requested items, including credential and metadata mutation probes.
+- [x] Fix discovery, readiness, fresh launches, rooted transfers and failure restoration.
+- [x] Admit account requests through the cancellation-aware lock.
+- [x] Correct the contradictory base-spec scenario and document invariants.
+- [x] Run focused races and full pre-pr under the shared lock.
+- [x] Archive with the base spec in one new fix commit.

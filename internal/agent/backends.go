@@ -118,6 +118,10 @@ type Family struct {
 	// (Claude /clear, agy /new), so the ID is re-captured on every exit and
 	// refreshed at resume. False captures once, while SessionID is empty.
 	RecaptureEveryExit bool
+	// TransferSession carries a task's saved conversation between accounts
+	// before an account move persists; nil means the family cannot move
+	// accounts without losing its conversation.
+	TransferSession SessionTransfer
 	// SessionSwitcher: the Claude session list/switch endpoints apply.
 	SessionSwitcher bool
 	// BridgeMod: Claude Code mods can be loaded into this CLI's sessions, so
@@ -698,6 +702,7 @@ var families = []*Family{
 		PinsSessionID:        true,
 		ResumeFlag:           "--resume",
 		Capture:              captureClaude,
+		TransferSession:      claudeTransferSession,
 		ResumeAvailable:      claudeResumeAvailable,
 		RecaptureEveryExit:   true,
 		SessionSwitcher:      true,
@@ -735,6 +740,7 @@ var families = []*Family{
 	{
 		Spec:            mustSpec(backendkind.Codex),
 		Capture:         captureCodex,
+		TransferSession: codexTransferSession,
 		ResumeCmd:       codexResumeCommand,
 		CostSource:      CostSourceCodexRollout,
 		ContextReader:   readCodexContext,

@@ -44,6 +44,11 @@ const (
 	// settles. Payload: {"apply":"next_resume"|"restart","changed_fields":[...],
 	// "started":bool}. Never carries prompt text.
 	EventTypeTaskRuntimeChanged = "task.runtime_changed"
+
+	// EventTypeTaskAccountChanged fires after POST /api/tasks/{id}/account
+	// persisted a new account. Payload: {"from","to","resumed","started"};
+	// started:false after a persisted-but-failed restart lets callers reconcile.
+	EventTypeTaskAccountChanged = "task.account_changed"
 	EventTypeMessageSent        = "message.sent"
 	EventTypeMessageAcked       = "message.acked"
 	EventTypeSessionStarted     = "session.started"
@@ -101,6 +106,13 @@ const (
 	// changed token observation. Payload: {"session_id":"s","turn_id":"t","measured_at":"RFC3339"};
 	// identity and timing only, never the counts themselves.
 	EventTypeTaskUsageChanged = "task.usage_changed"
+
+	// EventTypeConfigChanged fires after a committed settings write so clients
+	// refetch the named resource. Payload carries identity only, e.g.
+	// {"resource":"accounts","name":"work"} or
+	// {"resource":"account_defaults","project":"argus"} (project omitted for
+	// the global default).
+	EventTypeConfigChanged = "config.changed"
 
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.

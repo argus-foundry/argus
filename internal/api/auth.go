@@ -83,7 +83,8 @@ func LoadOrCreateToken(path string) (string, error) {
 // Single-tier auth model: every authenticated token has the same permissions
 // EXCEPT for a small RCE/credential denylist that stays master-only. As of
 // this writing that denylist is: backends CRUD (command templates → arbitrary
-// command execution), self-update (source-path + rebuild/restart), and token
+// command execution), account create/edit/delete (credential directory
+// references), self-update (source-path + rebuild/restart), and token
 // list/mint/revoke (credential management). Everything else — tasks, projects,
 // schedules, settings, messages, push, raw endpoints, task_meta writes — is
 // open to any token.

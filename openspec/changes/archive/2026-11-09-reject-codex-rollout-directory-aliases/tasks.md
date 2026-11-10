@@ -1,0 +1,4 @@
+- [x] Reproduce sessions -> . credential copying and cover source/target aliases.
+- [x] Bind real directory identities and reject symlink components before rollout I/O.
+- [x] Run red/green, focused race tests and one full pre-pr under the shared lock.
+- [x] Archive delta and base spec in one new fix commit.

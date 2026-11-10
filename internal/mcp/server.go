@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/hera"
@@ -194,6 +195,7 @@ type SandboxProposer interface {
 // ScheduleStore provides read+write access to scheduled tasks. The signature
 // matches *db.DB so the daemon passes its DB handle directly.
 type ScheduleStore interface {
+	Config() config.Config
 	Schedules() ([]*model.ScheduledTask, error)
 	GetSchedule(id string) (*model.ScheduledTask, error)
 	AddSchedule(s *model.ScheduledTask) error
@@ -2922,6 +2924,9 @@ func (s *Server) toolScheduleCreate(id interface{}, args json.RawMessage) *Respo
 	if err := sched.Validate(); err != nil {
 		return toolError(id, err.Error())
 	}
+	if err := agent.ValidateScheduleModel(sched, s.schedDB.Config()); err != nil {
+		return toolError(id, err.Error())
+	}
 	// Pre-populate NextRunAt so the UI shows it before the first tick lands.
 	sched.NextRunAt = sched.NextFire(time.Now())
 	if err := s.schedDB.AddSchedule(sched); err != nil {
@@ -3022,6 +3027,9 @@ func (s *Server) toolScheduleUpdate(id interface{}, args json.RawMessage) *Respo
 		sched.Enabled = *p.Enabled
 	}
 	if err := sched.Validate(); err != nil {
+		return toolError(id, err.Error())
+	}
+	if err := agent.ValidateScheduleModel(sched, s.schedDB.Config()); err != nil {
 		return toolError(id, err.Error())
 	}
 	if cadenceChanged {

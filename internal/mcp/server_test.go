@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/kb"
 	"github.com/argus-foundry/argus/internal/model"
@@ -1486,6 +1487,8 @@ type mockScheduleStore struct {
 	schedules []*model.ScheduledTask
 	nextID    int
 }
+
+func (m *mockScheduleStore) Config() config.Config { return config.DefaultConfig() }
 
 func (m *mockScheduleStore) Schedules() ([]*model.ScheduledTask, error) {
 	out := make([]*model.ScheduledTask, len(m.schedules))

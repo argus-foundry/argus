@@ -1,9 +1,9 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"maps"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -240,28 +240,7 @@ func (sv *SettingsView) selectAccountRow(kind settingsRowKind, key string) {
 // validateAccountEdit checks an account the way config.toml entries are
 // checked (Config.ValidateAccount) before it is stored.
 func (sv *SettingsView) validateAccountEdit(name string, a config.Account) error {
-	accounts := maps.Clone(sv.accounts)
-	if accounts == nil {
-		accounts = map[string]config.Account{}
-	}
-	accounts[name] = a
-	if err := (config.Config{Accounts: accounts}).ValidateAccount(name); err != nil {
-		return err
-	}
-	for other, o := range sv.accounts {
-		if other == name {
-			continue
-		}
-		if sameAccountDir(a.ClaudeConfigDir, o.ClaudeConfigDir) || sameAccountDir(a.CodexHome, o.CodexHome) {
-			return fmt.Errorf("directory already used by account %q (accounts must not share a login)", other)
-		}
-	}
-	return nil
-}
-
-func sameAccountDir(a, b string) bool {
-	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
-	return a != "" && b != "" && filepath.Clean(config.ExpandHome(a)) == filepath.Clean(config.ExpandHome(b))
+	return config.ValidateAccountEdit(sv.accounts, name, a)
 }
 
 // accountReferences counts how many projects (and whether the global default)
@@ -329,15 +308,27 @@ func (sv *SettingsView) commitAccountEdit() bool {
 	if e.name == "" {
 		return sv.commitNewAccount(d, val)
 	}
-	updated := withAccountField(sv.accounts[e.name], e.field, val)
-	if err := sv.validateAccountEdit(e.name, updated); err != nil {
+	cfg := d.Config()
+	current, exists := cfg.Accounts[e.name]
+	if !exists {
+		return sv.rejectAccount("Account %s no longer exists", e.name)
+	}
+	if d.AccountsFromConfigToml().Accounts[e.name] {
+		return sv.rejectAccount("Account %s is defined in config.toml", e.name)
+	}
+	updated := withAccountField(current, e.field, val)
+	if err := config.ValidateAccountEdit(cfg.Accounts, e.name, updated); err != nil {
 		return sv.rejectAccount("Rejected %s for %s: %v", accountFieldTitle(e.field), e.name, err)
 	}
-	if err := d.SetAccount(e.name, updated); err != nil {
+	if err := d.UpdateAccountFields(e.name, map[string]string{e.field: val}); err != nil {
+		var invalid *db.AccountValidationError
+		if errors.As(err, &invalid) {
+			return sv.rejectAccount("Rejected %s for %s: %v", accountFieldTitle(e.field), e.name, err)
+		}
 		return sv.rejectAccount("Failed to save %s: %v", e.name, err)
 	}
 	uxlog.Log("[settings] accounts: %s %s updated", e.name, e.field)
-	sv.setLocalAccount(e.name, updated)
+	sv.setLocalAccount(e.name, d.Config().Accounts[e.name])
 	return true
 }
 
