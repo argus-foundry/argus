@@ -57,6 +57,8 @@ const ownerMarkerContent = "Materialized by argus. Safe to delete; argus will re
 // for the user to recover from.
 const reservedCodexSystemDir = ".system"
 
+const codexDaemonStateDir = "app-server-daemon"
+
 // BuiltinItems returns one SkillItem per embedded builtin skill, sorted by
 // name. Reads only the embedded FS — no filesystem or network access.
 func BuiltinItems() []SkillItem {
@@ -234,7 +236,10 @@ func ensureCodexSkills(source string) (string, error) {
 	// Link existing state and configuration so authentication, preferences,
 	// plugins, and session history carry over. The skills subtree is handled
 	// separately so Argus skills never enter the user's normal Codex catalog.
-	if err := linkCodexEntries(codexHome, argusHome, "skills", codexAgentsFile, codexAgentsOverrideFile); err != nil {
+	if err := linkCodexEntries(codexHome, argusHome, "skills", codexAgentsFile, codexAgentsOverrideFile, codexDaemonStateDir); err != nil {
+		return "", err
+	}
+	if err := ensureCodexDaemonState(argusHome); err != nil {
 		return "", err
 	}
 	// Best-effort: an unreadable user AGENTS.md must not cost the overlay its
@@ -253,6 +258,42 @@ func ensureCodexSkills(source string) (string, error) {
 		return "", err
 	}
 	return argusHome, nil
+}
+
+// Codex requires its daemon socket parent to be a real directory. Sharing the
+// source home's daemon state also crosses the otherwise isolated process boundary.
+func ensureCodexDaemonState(overlay string) error {
+	path := filepath.Join(overlay, codexDaemonStateDir)
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil && info.IsDir():
+		return nil
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove Codex daemon state link: %w", err)
+		}
+	case err == nil:
+		backupDir, err := os.MkdirTemp(overlay, ".argus-preserved-")
+		if err != nil {
+			return fmt.Errorf("preserve Codex daemon state entry: %w", err)
+		}
+		if err := os.Rename(path, filepath.Join(backupDir, codexDaemonStateDir)); err != nil {
+			return fmt.Errorf("preserve Codex daemon state entry: %w", err)
+		}
+	case !os.IsNotExist(err):
+		return fmt.Errorf("inspect Codex daemon state entry: %w", err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("create Codex daemon state directory: %w", err)
+	}
+	info, err = os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect Codex daemon state directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("codex daemon state path is not a directory: %s", path)
+	}
+	return nil
 }
 
 // linkCodexEntries mirrors existing root entries without writing to the

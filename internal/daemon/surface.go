@@ -261,7 +261,11 @@ const (
 	//     dir; a stale supervisor launches the resident unverified, so the
 	//     client refuses resident launches to it too. A worker launch also
 	//     hard-denies the resident's outward ask+deny tiers (--disallowedTools).
-	SupervisorSpawnSurface = 44
+	// 45: Codex overlay setup keeps app-server-daemon as a real local directory
+	//     and repairs stale symlinks before spawn (fix-codex-daemon-state-symlink).
+	//     A stale supervisor still links the source daemon state and can fail
+	//     every new Codex task at startup.
+	SupervisorSpawnSurface = 45
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -572,7 +576,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "d20451fa2db716e7e4dec1290820092d4860cfd420edb08c089a81a8c95b198a"
+	SpawnSurfaceDigest  = "c7fe8046cfe59d4f9e0b65046786276de9936a950a6006a114b70df15e27b924"
 	StreamSurfaceDigest = "a0b3efb1c129a7c3a3ba94ef8922d258e60d87907e1f599f17e8108ad97770f0"
 )
 

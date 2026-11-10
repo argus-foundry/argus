@@ -535,6 +535,94 @@ func TestEnsureCodexSkills_DefaultsToDotCodexUnderHome(t *testing.T) {
 	}
 }
 
+func TestEnsureCodexSkills_DaemonStateIsLocalDirectory(t *testing.T) {
+	for _, tc := range []struct {
+		name, source string
+		staleLink    bool
+	}{
+		{name: "default fresh"},
+		{name: "default stale link", staleLink: true},
+		{name: "account fresh", source: "account"},
+		{name: "account stale link", source: "account", staleLink: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("CODEX_HOME", "")
+			source := filepath.Join(home, ".codex")
+			arg := ""
+			if tc.source == "account" {
+				source = filepath.Join(home, "account")
+				arg = source
+			}
+			sourceDaemon := filepath.Join(source, "app-server-daemon")
+			testutil.NoError(t, os.MkdirAll(sourceDaemon, 0o700))
+			testutil.NoError(t, os.WriteFile(filepath.Join(sourceDaemon, "source-marker"), []byte("source"), 0o600))
+			testutil.NoError(t, os.WriteFile(filepath.Join(source, "config.toml"), []byte("config"), 0o600))
+			overlay, err := ArgusCodexHomeFor(arg)
+			testutil.NoError(t, err)
+			if tc.staleLink {
+				testutil.NoError(t, os.MkdirAll(overlay, 0o700))
+				testutil.NoError(t, os.Symlink(sourceDaemon, filepath.Join(overlay, "app-server-daemon")))
+			}
+			got, err := ensureCodexSkills(arg)
+			testutil.NoError(t, err)
+			testutil.Equal(t, got, overlay)
+			info, err := os.Lstat(filepath.Join(overlay, "app-server-daemon"))
+			testutil.NoError(t, err)
+			testutil.True(t, info.IsDir())
+			testutil.False(t, info.Mode()&os.ModeSymlink != 0)
+			_, err = os.Lstat(filepath.Join(overlay, "app-server-daemon", "source-marker"))
+			testutil.True(t, os.IsNotExist(err))
+			marker, err := os.ReadFile(filepath.Join(sourceDaemon, "source-marker"))
+			testutil.NoError(t, err)
+			testutil.Equal(t, string(marker), "source")
+			linked, err := os.Readlink(filepath.Join(overlay, "config.toml"))
+			testutil.NoError(t, err)
+			testutil.Equal(t, linked, filepath.Join(source, "config.toml"))
+		})
+	}
+}
+
+func TestEnsureCodexSkills_PreservesOverlayDaemonState(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dir  bool
+	}{
+		{name: "existing directory", dir: true},
+		{name: "existing file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("CODEX_HOME", "")
+			overlay, err := ArgusCodexHomeFor("")
+			testutil.NoError(t, err)
+			testutil.NoError(t, os.MkdirAll(overlay, 0o700))
+			path := filepath.Join(overlay, codexDaemonStateDir)
+			if tc.dir {
+				testutil.NoError(t, os.Mkdir(path, 0o700))
+				path = filepath.Join(path, "local-marker")
+			}
+			testutil.NoError(t, os.WriteFile(path, []byte("local"), 0o600))
+			_, err = ensureCodexSkills("")
+			testutil.NoError(t, err)
+			if !tc.dir {
+				matches, err := filepath.Glob(filepath.Join(overlay, ".argus-preserved-*", codexDaemonStateDir))
+				testutil.NoError(t, err)
+				testutil.Equal(t, len(matches), 1)
+				path = matches[0]
+			}
+			content, err := os.ReadFile(path)
+			testutil.NoError(t, err)
+			testutil.Equal(t, string(content), "local")
+			info, err := os.Lstat(filepath.Join(overlay, codexDaemonStateDir))
+			testutil.NoError(t, err)
+			testutil.True(t, info.IsDir())
+		})
+	}
+}
+
 func TestEnsureCodexSkills_LinksExistingConfigAndSkipsPreviouslyGlobalArgusSkills(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
