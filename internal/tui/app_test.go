@@ -6041,3 +6041,46 @@ func TestMaybeKickRerender_AutoSetting(t *testing.T) {
 		})
 	}
 }
+
+func TestPendingGraduate_TUIArchiveAndDeleteRefused(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := testDB(t)
+	app := New(d, agent.NewRunner(nil), false)
+	res, _, err := d.EnsureResidentTask(t.TempDir())
+	testutil.NoError(t, err)
+	o, err := d.EnsureResidentOrchestrator(res.ID)
+	testutil.NoError(t, err)
+	task := &model.Task{ID: "grad", Name: "grad", Project: "p", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	_, b, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "w", Kind: db.HeraKindWorker}, task.ID, "")
+	testutil.NoError(t, err)
+	_, err = d.GraduateHeraWorker(b.ID)
+	testutil.NoError(t, err)
+	app.refreshTasks()
+
+	t.Run("delete", func(t *testing.T) {
+		app.deleteTask(task)
+		got, err := d.Get(task.ID)
+		testutil.NoError(t, err)
+		testutil.True(t, got != nil)
+		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+	})
+	t.Run("archive", func(t *testing.T) {
+		app.header.ClearNotice()
+		toggled := *task
+		toggled.Archived = true // the task list flips the flag before firing OnArchive
+		app.tasklist.OnArchive(&toggled)
+		got, err := d.Get(task.ID)
+		testutil.NoError(t, err)
+		testutil.False(t, got.Archived)
+		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+	})
+	t.Run("hera nuke", func(t *testing.T) {
+		app.header.ClearNotice()
+		app.heraNukeRole(&hera.RoleView{RoleID: 1, TaskID: task.ID, Live: true})
+		live, err := d.HeraLiveBindingByTask(task.ID)
+		testutil.NoError(t, err)
+		testutil.True(t, live != nil)
+		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+	})
+}

@@ -21,7 +21,7 @@ func residentTeamWorker(t *testing.T, database *db.DB, resident *model.Task) (*m
 	testutil.NoError(t, err)
 	w := &model.Task{ID: "team-worker", Name: "worker", Project: "project-a", Status: model.StatusInProgress, Worktree: t.TempDir(), Backend: "test"}
 	testutil.NoError(t, database.Add(w))
-	role, _, err := database.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "helper", Kind: db.HeraKindWorker, ArgusProject: w.Project}, w.ID, w.Worktree)
+	role, _, err := database.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "helper", Kind: db.HeraKindWorker, ArgusProject: w.Project}, w.ID, w.Worktree)
 	testutil.NoError(t, err)
 	return w, role
 }

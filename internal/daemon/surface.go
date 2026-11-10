@@ -254,7 +254,12 @@ const (
 	//     with question/plan tools disallowed, only under the Argus sandbox, and
 	//     its identity is re-evaluated from the DB on every launch/restart. A
 	//     stale supervisor launches workers attended, so they stall on prompts;
-	//     the client refuses worker launches to a supervisor below 44.
+	//     the client refuses worker launches to a supervisor below 44. The
+	//     resident's launch also writes a fresh per-launch MCP identity token
+	//     (hash + 0600 --mcp-config file in ~/.argus/resident-launch, never argv
+	//     or env) and every non-resident sandbox profile denies reading that
+	//     dir; a stale supervisor launches the resident unverified, so the
+	//     client refuses resident launches to it too.
 	SupervisorSpawnSurface = 44
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
@@ -566,7 +571,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "2cb074fca3642fafc8c6f5093d856877ca0cb8ee6a6631db25a4be54029020f4"
+	SpawnSurfaceDigest  = "3ca51e0e4145e2cf2dc9d88f25475fccf97d17346ebe63275496200f3963a5aa"
 	StreamSurfaceDigest = "a0b3efb1c129a7c3a3ba94ef8922d258e60d87907e1f599f17e8108ad97770f0"
 )
 

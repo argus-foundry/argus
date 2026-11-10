@@ -56,7 +56,8 @@ func (d *DB) EnsureResidentOrchestrator(taskID string) (*HeraOrchestrator, error
 	if err != nil {
 		return nil, err
 	}
-	_, err = insertHeraBinding(tx, CreateHeraBindingInput{RoleID: r.ID, OrchestratorID: oid, ArgusTaskID: taskID, WorktreePath: task.Worktree}, now)
+	// Privileged: the resident's own coordinator binding into its standing team.
+	_, err = insertHeraBindingPrivileged(tx, CreateHeraBindingInput{RoleID: r.ID, OrchestratorID: oid, ArgusTaskID: taskID, WorktreePath: task.Worktree}, now)
 	if err != nil {
 		return nil, err
 	}

@@ -24,6 +24,15 @@ func TestTaskSummary(t *testing.T) {
 	v, err := ClassifyTask(ctx, cfg, task)
 	testutil.NoError(t, err)
 	testutil.True(t, v.Safe)
+	// Zero commits ahead but one untracked file is NOT empty: dirty work alone
+	// must keep the resident's default delete from reclaiming the worktree.
+	untracked := filepath.Join(dir, "scratch.txt")
+	testutil.NoError(t, os.WriteFile(untracked, []byte("x"), 0600))
+	s = SummarizeTask(ctx, cfg, task, "")
+	testutil.Equal(t, s.CommitsAhead, "0")
+	testutil.Equal(t, s.DirtyCount, "1")
+	testutil.False(t, s.Empty())
+	testutil.NoError(t, os.Remove(untracked))
 	addCommit(t, dir, "feature", "content")
 	// Empty-work safety follows the branch we would delete, even if somebody
 	// switched the worktree to the base branch after the worker made commits.

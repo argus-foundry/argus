@@ -856,9 +856,28 @@ When hera_accept (or the plan-DAG gater's auto-accept) marks a role's task compl
 - **WHEN** `force_revive:true` is sent and the session starts
 - **THEN** markers are cleared, status is in_progress, and the response is `resumed` or `restarted` (`healed:true` on reattach)
 
+### Requirement: hera_spawn_worker accepts an account pin
+
+`hera_spawn_worker` SHALL accept an optional `account` argument for every coordinator. For a non-resident caller a supplied account SHALL replace the coordinator's inherited account, SHALL be validated like any explicit account (it must exist and support the worker's resolved backend, else the spawn fails before anything is created) and SHALL be stored as a pin. For the resident the account SHALL be restricted to enabled worker accounts as the resident-coordinator capability specifies. Omitting it SHALL keep the existing inheritance and routing behavior.
+
+#### Scenario: Explicit account for a regular coordinator
+
+- **WHEN** a regular coordinator calls `hera_spawn_worker` with `account` naming a configured account that supports the routed backend
+- **THEN** the worker task runs on that account and is stored pinned to it
+
+#### Scenario: Unknown account
+
+- **WHEN** a regular coordinator passes an `account` that is not configured
+- **THEN** the spawn fails with an account error and no task, worktree, role or binding is created
+
+#### Scenario: Omitted account
+
+- **WHEN** `account` is omitted
+- **THEN** the worker inherits or routes its account exactly as before
+
 ### Requirement: hera_new_orchestrator interplay with the resident
 
-`hera_new_orchestrator` SHALL reject any caller that `IsResident()` before the existing coordinating-another-orchestrator scan, failing closed when the caller cannot be classified, with a message directing it to `hera_spawn_worker`. It SHALL reject any request for the reserved name `resident` from every other caller. The daemon's creation of the standing orchestrator SHALL NOT pass through this handler, so the existing guard SHALL NOT block it. The existing guard for non-resident callers SHALL be unchanged.
+`hera_new_orchestrator` SHALL reject any caller that `IsResident()` before the existing coordinating-another-orchestrator scan, failing closed when the caller cannot be classified, with a message directing it to `hera_spawn_worker`. It SHALL reject any request for the reserved name `resident` from every other caller. Automatic orchestrator naming (sub-coordinator materialization, self-promotion de-collision) that would produce `resident` SHALL de-collide to the next free suffix (`resident-2`, ...) instead of failing. The daemon's creation of the standing orchestrator SHALL NOT pass through this handler, so the existing guard SHALL NOT block it. The existing guard for non-resident callers SHALL be unchanged.
 
 #### Scenario: Resident calls it
 
@@ -869,6 +888,11 @@ When hera_accept (or the plan-DAG gater's auto-accept) marks a role's task compl
 
 - **WHEN** a regular worker calls `hera_new_orchestrator(name="resident")`
 - **THEN** the call is rejected as a reserved name
+
+#### Scenario: Automatic naming avoids the reserved name
+
+- **WHEN** a plan sub-coordinator node or other automatically named orchestrator has the base name `resident`
+- **THEN** it is created as `resident-2` (or the next free suffix) instead of failing
 
 #### Scenario: Guard unchanged for others
 

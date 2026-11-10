@@ -19,7 +19,7 @@ func TestSupervisorWorkerIdentity(t *testing.T) {
 	testutil.NoError(t, err)
 	w := &model.Task{ID: "worker", Name: "worker", Backend: "claude", Worktree: t.TempDir()}
 	testutil.NoError(t, d.Add(w))
-	_, binding, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Kind: db.HeraKindWorker, Name: "worker"}, w.ID, w.Worktree)
+	_, binding, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Kind: db.HeraKindWorker, Name: "worker"}, w.ID, w.Worktree)
 	testutil.NoError(t, err)
 	testutil.NoError(t, d.SetArchived(w.ID, true))
 	testutil.NoError(t, d.SetArchived(w.ID, false))

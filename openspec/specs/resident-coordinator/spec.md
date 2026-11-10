@@ -68,7 +68,7 @@ The resident SHALL spawn workers with `hera_spawn_worker`, which SHALL require `
 
 ### Requirement: hera_delete_worker is exclusive to the resident
 
-The system SHALL provide an MCP tool `hera_delete_worker(role, force?)` usable only by the resident. The handler SHALL identify the caller solely by the connection-bound `caller` set at spawn, SHALL ignore any self-reported `cwd` or `id`, and SHALL fail before any lookup when the connection has no bound caller or the caller is not `IsResident()`. The tool SHALL NOT be listed to non-resident connections and SHALL have no REST endpoint or TUI key. It SHALL delete only a role of kind worker in the resident's own orchestrator and SHALL reject the resident's own role or any role whose task `IsResident()`. Deletion SHALL reuse `hera.NukeSingleRole`: stop the session and remove the worktree, branch and task.
+The system SHALL provide an MCP tool `hera_delete_worker(role, force?)` usable only by the resident. The handler SHALL identify the caller solely by the verified connection-bound `caller` set at spawn (caller id plus per-launch token), SHALL ignore any self-reported `cwd` or `id`, and SHALL fail before any lookup when the connection has no bound caller or the caller is not `IsResident()`. The tool SHALL NOT be listed to non-resident connections and SHALL have no REST endpoint or TUI key. It SHALL delete only a role of kind worker in the resident's own orchestrator and SHALL reject the resident's own role or any role whose task `IsResident()`. Deletion SHALL reuse `hera.NukeSingleRole`: stop the session and remove the worktree, branch and task.
 
 #### Scenario: Regular coordinator is refused
 
@@ -95,9 +95,33 @@ The system SHALL provide an MCP tool `hera_delete_worker(role, force?)` usable o
 - **WHEN** a non-resident connection lists tools
 - **THEN** `hera_delete_worker` is absent
 
+### Requirement: The resident's connection identity is a per-launch secret
+
+The connection-bound `caller` that identifies the resident SHALL NOT be self-asserted: every resident launch (start, resume, restart, kick or recycle) SHALL generate a fresh unguessable token, deliver it to the resident's Argus MCP connection only through a private launch file under `~/.argus/resident-launch` that is readable by no other sandboxed task and never through the command line or environment, and persist only its hash. The MCP server SHALL treat a connection as bound to the resident only when its `caller` names the resident AND its token matches the current hash; any other connection, including one presenting the resident's task id with a missing, wrong or superseded token, SHALL be treated as unbound. The token SHALL never be logged, listed or returned by any tool, REST endpoint or Hera read. Every resident-only behavior keyed on the bound caller (`hera_delete_worker`, `hera_graduate_worker`, the resident's own `task_recycle`, the resident's Hera argument pinning and tool listing) SHALL use this verified identity. Any `hera_*` call from a connection that is not the verified resident whose arguments identify the resident (for example by the resident's `cwd`) SHALL be refused before dispatch.
+
+#### Scenario: Spoofed caller id is refused
+
+- **WHEN** a process posts to the MCP endpoint with `caller` set to the resident's task id and no token, or a wrong token
+- **THEN** `hera_graduate_worker` and `hera_delete_worker` (including with `force`) are refused as resident-only and neither tool is listed
+
+#### Scenario: Token rotates on every launch
+
+- **WHEN** the resident is recycled or restarted
+- **THEN** the new session's token is accepted and the previous session's token is refused
+
+#### Scenario: Resident cwd is not an identity
+
+- **WHEN** a connection that is not the verified resident calls `hera_spawn_worker`, `hera_status` or `hera_send` with the resident's `cwd`
+- **THEN** the call is refused and nothing is spawned, stamped or sent
+
+#### Scenario: Token never surfaces
+
+- **WHEN** the resident launches
+- **THEN** its token appears in no process argument, environment variable, log line, tool result or API response
+
 ### Requirement: Deleting a worker is merge-safe by default and forceable
 
-Unless `force` is true, `hera_delete_worker` SHALL first classify the worker's work with the merge-safety classifier, built through one shared single-task helper that uses the same candidate construction as the cleanup pass, and SHALL proceed only when the verdict is safe or the work is empty. Empty SHALL mean no commits ahead of the worker's base ref and a clean working tree, determined locally and failing closed. Otherwise it SHALL refuse with a reason naming the verdict and SHALL change nothing. With `force` true it SHALL skip the classification, but it SHALL still compute an unmerged summary BEFORE deleting (branch, commits ahead with subjects, dirty file count, last known PR state; any field it cannot determine SHALL read `unknown (reason)` and SHALL NOT block the delete) and the tool result SHALL carry that summary. The resident's orientation SHALL require it to report every force delete, naming the worker and what was unmerged, in its own conversation. A classification failure SHALL be treated as not safe. Deleting SHALL NOT require a confirmation prompt.
+Unless `force` is true, `hera_delete_worker` SHALL first classify the worker's work with the merge-safety classifier, built through one shared single-task helper that uses the same candidate construction as the cleanup pass, and SHALL proceed only when the working tree is clean and either the verdict is safe or the work is empty; a dirty working tree SHALL refuse without `force` even when the verdict is safe. Empty SHALL mean no commits ahead of the worker's base ref and a clean working tree, determined locally and failing closed. Otherwise it SHALL refuse with a reason naming the verdict and SHALL change nothing. With `force` true it SHALL skip the classification, but it SHALL still compute an unmerged summary BEFORE deleting, and the result SHALL be returned once the role-scoped stop and reclaim are done, without waiting for any fleet-wide reclaim reconciliation, which SHALL run asynchronously and log its outcome. The summary SHALL list (branch, commits ahead with subjects, dirty file count, last known PR state; any field it cannot determine SHALL read `unknown (reason)` and SHALL NOT block the delete) and the tool result SHALL carry that summary. The resident's orientation SHALL require it to report every force delete, naming the worker and what was unmerged, in its own conversation. A classification failure SHALL be treated as not safe. Deleting SHALL NOT require a confirmation prompt.
 
 #### Scenario: Merged work is deleted
 
@@ -108,6 +132,11 @@ Unless `force` is true, `hera_delete_worker` SHALL first classify the worker's w
 
 - **WHEN** the worker has no commits ahead and a clean tree
 - **THEN** it is deleted without needing a merged PR
+
+#### Scenario: Uncommitted work is refused even when the branch is safe
+
+- **WHEN** the worker's branch classifies as safe (merged, or no commits ahead) but its worktree has uncommitted or untracked files, and `force` is absent
+- **THEN** the call is refused naming the dirty file count and the worker, worktree and branch are untouched
 
 #### Scenario: Unmerged work is refused
 
@@ -128,6 +157,11 @@ Unless `force` is true, `hera_delete_worker` SHALL first classify the worker's w
 
 - **WHEN** `force` is true and the commit count cannot be computed
 - **THEN** the result shows `unknown (reason)` for it and the worker is still deleted
+
+#### Scenario: Summary does not wait on fleet reconciliation
+
+- **WHEN** `force` is true and the fleet-wide reclaim reconciliation is slow
+- **THEN** the tool result with the summary returns as soon as the worker's own stop and reclaim finish, and the reconciliation completes in the background with its outcome logged
 
 #### Scenario: No prompt
 
@@ -297,7 +331,7 @@ The resident SHALL use one recycle mechanism, the resident recycle runner (see t
 
 ### Requirement: The standing orchestrator is hidden from generic Hera surfaces
 
-The standing orchestrator, its coordinator role and its binding SHALL be excluded from the Projects tab model, the jump switcher's Hera column, the `/api/hera*` roster, cleanup and merge-safety roll-ups, and cascade-nuke candidate sets, and SHALL NOT be nukeable, hideable, detachable or movable through any generic path. Its workers SHALL remain ordinary tasks in the Tasks list. `TestResidentExcludedEverywhere` SHALL cover these choke points.
+The standing orchestrator, its coordinator role and its binding SHALL be excluded from the Projects tab model, the jump switcher's Hera column, the `/api/hera*` roster, cleanup and merge-safety roll-ups, and cascade-nuke candidate sets, and SHALL NOT be nukeable, hideable, detachable or movable through any generic path. No binding SHALL be inserted into the standing orchestrator except the resident's own and a worker created by the resident's `hera_spawn_worker`, so `hera_join`, `hera_move`, `hera_rebind`, adoption and plan materialization into it SHALL be refused; and no live worker binding SHALL be moved out of it except by graduation. Its workers SHALL remain ordinary tasks in the Tasks list. `TestResidentExcludedEverywhere` SHALL cover these choke points.
 
 #### Scenario: Not in the Projects tab
 
@@ -308,6 +342,11 @@ The standing orchestrator, its coordinator role and its binding SHALL be exclude
 
 - **WHEN** a cleanup pass or cascade nuke enumerates candidates
 - **THEN** the resident's orchestrator, role and binding are not among them
+
+#### Scenario: No enrollment by join or move
+
+- **WHEN** any task calls `hera_join` or `hera_move` targeting orchestrator `resident`, or a resident worker calls `hera_move` to leave it
+- **THEN** the call is refused, no binding changes, and the task does not become a resident worker
 
 #### Scenario: Workers are normal tasks
 
@@ -355,7 +394,7 @@ The resident tab's rail SHALL allow the human the existing nuke, hide, rename an
 
 ### Requirement: hera_graduate_worker turns a resident worker into a stand-alone coordinator
 
-The system SHALL provide an MCP tool `hera_graduate_worker(role)` usable only by the resident, guarded exactly like `hera_delete_worker`: the caller SHALL be identified solely by the connection-bound `caller`, `cwd` and `id` SHALL be ignored, a non-resident or unbound caller SHALL fail before any lookup, the tool SHALL be hidden from non-resident tool listings and SHALL have no REST endpoint or TUI key. The target SHALL be a live worker of the resident's standing orchestrator whose task is not `IsResident()`. Before changing anything the tool SHALL refuse, fail-closed, when the worker's backend is not coordinator-capable, when it has no session id to resume, or when its session is not idle. The change SHALL be a single database transaction that ends the worker binding with end reason `graduated`, creates a new top-level orchestrator (named from the worker role name, de-collided, never `resident`), creates a `coordinator` role carrying the worker's project and prompt, and binds it to the same task and worktree; it SHALL create no orchestrator link and SHALL leave either all or none of those changes applied. The graduated coordinator SHALL appear in the normal Hera rail and `/api/hera`, SHALL NOT be nested under the resident, and SHALL use the ordinary coordinator recycle and budget.
+The system SHALL provide an MCP tool `hera_graduate_worker(role)` usable only by the resident, guarded exactly like `hera_delete_worker`: the caller SHALL be identified solely by the verified connection-bound `caller` (caller id plus per-launch token), `cwd` and `id` SHALL be ignored, a non-resident or unbound caller SHALL fail before any lookup, the tool SHALL be hidden from non-resident tool listings and SHALL have no REST endpoint or TUI key. The target SHALL be a live worker of the resident's standing orchestrator whose task is not `IsResident()`. Before changing anything the tool SHALL refuse, fail-closed, when the worker's backend is not coordinator-capable, when it has no session id to resume, or when its session is not idle. The change SHALL be a single database transaction that ends the worker binding with end reason `graduated`, creates a new top-level orchestrator (named from the worker role name, de-collided, never `resident`), creates a `coordinator` role carrying the worker's project and prompt, and binds it to the same task and worktree; it SHALL create no orchestrator link and SHALL leave either all or none of those changes applied. The graduated coordinator SHALL appear in the normal Hera rail and `/api/hera`, SHALL NOT be nested under the resident, and SHALL use the ordinary coordinator recycle and budget.
 
 #### Scenario: Graduation produces a visible top-level coordinator
 
@@ -459,6 +498,45 @@ After a graduation commits, the system SHALL clear the task's resident-worker ma
 
 - **WHEN** Aaron tells the resident to make a worker a stand-alone coordinator
 - **THEN** the resident calls `hera_graduate_worker` and the permission prompt confirms it
+
+### Requirement: A graduate cannot be archived or deleted while its restart is pending
+
+While a task carries the graduation-pending-restart state, archiving or deleting that task SHALL be refused at the database choke point, so every surface that can archive or delete it (the Tasks list and Projects rail in the TUI, REST, MCP, cascade nuke and cleanup) SHALL refuse and SHALL show or return a notice that the graduation restart is still pending. The refusal SHALL change nothing; a cascade nuke over a subtree containing a pending graduate SHALL refuse as a whole before any side effect. Once the restart has happened and the state is cleared, archive and delete SHALL work normally. While the state is set, `hera_join`, `hera_move` and adoption SHALL be refused for that task, the restart watcher SHALL track the graduated coordinator binding recorded at graduation, and the state SHALL be cleared (with a log line) if that binding has ended. The only other way to clear it SHALL be a human-only escape: deleting or archiving a pending graduate from the TUI SHALL offer, behind an explicit second confirmation, to abandon the pending restart, which clears the state, logs it, and then proceeds. That escape SHALL NOT be reachable through MCP; REST SHALL keep refusing.
+
+#### Scenario: Archive refused while pending
+
+- **WHEN** the human archives a graduate from the Tasks list, or a REST or MCP client archives it, before its graduation restart has run
+- **THEN** the archive is refused with a "graduation restart pending" notice and the task, its meta and its session are unchanged
+
+#### Scenario: Delete refused while pending
+
+- **WHEN** any surface deletes the graduate's task before its graduation restart has run
+- **THEN** the delete is refused with the same notice and the worktree, branch and task are untouched
+
+#### Scenario: Cascade nuke refuses as a whole
+
+- **WHEN** the human cascade-nukes an orchestrator subtree that contains a pending graduate
+- **THEN** nothing in the subtree is nuked or archived and the pending notice is shown
+
+#### Scenario: Wedge causes are refused
+
+- **WHEN** a pending graduate's session calls `hera_join` or `hera_move`, or the human adopts it
+- **THEN** the call is refused and the graduate keeps exactly its one coordinator binding
+
+#### Scenario: Ended graduate binding clears the state
+
+- **WHEN** the graduated coordinator binding recorded at graduation has ended before the restart ran
+- **THEN** the watcher clears the pending state with a log line instead of retrying forever
+
+#### Scenario: Human abandon escape
+
+- **WHEN** the human deletes or archives a pending graduate in the TUI and confirms twice that the pending restart should be abandoned
+- **THEN** the pending state is cleared and logged and the delete or archive proceeds; no MCP tool offers this
+
+#### Scenario: Normal after restart
+
+- **WHEN** the graduation restart has completed
+- **THEN** the graduate can be archived or deleted like any coordinator task
 
 ### Requirement: A graduated worker is unreachable by the resident's delete
 

@@ -14,6 +14,12 @@ var residentGraduateTool = Tool{Name: "hera_graduate_worker", Description: "Resi
 	"type": "object", "properties": map[string]interface{}{"role": map[string]interface{}{"type": "string", "description": "Worker name or numeric role id"}}, "required": []string{"role"},
 }}
 
+// heraGraduateCommit is the membership commit graduation runs while holding
+// residentWorkerMutationMu. A seam so tests can prove the lock spans it.
+var heraGraduateCommit = func(d *db.DB, bindingID int64) (*db.MoveHeraBindingResult, error) {
+	return d.GraduateHeraWorker(bindingID)
+}
+
 // SetHeraGraduationPreflight wires daemon session/transcript validation. The
 // restart itself is driven by durable task metadata, never a request goroutine.
 func (s *Server) SetHeraGraduationPreflight(check func(*model.Task) error) {
@@ -76,7 +82,7 @@ func (s *Server) toolHeraGraduateWorker(id interface{}, args json.RawMessage, ca
 	if err = s.heraGraduationPreflight(task); err != nil {
 		return residentToolError(id, err.Error())
 	}
-	result, err := d.GraduateHeraWorker(b.ID)
+	result, err := heraGraduateCommit(d, b.ID)
 	if err != nil {
 		return residentToolError(id, err.Error())
 	}

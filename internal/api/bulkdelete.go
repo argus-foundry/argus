@@ -443,6 +443,11 @@ func (s *Server) preflightDeleteTask(task *model.Task, pre bulkDeletePreconditio
 		skipDeleteTask(res, "hera_cascade_required")
 		return false
 	}
+	if s.db.GraduationPending(task.ID) {
+		uxlog.Log("[resident] bulk-delete skipped task=%s: graduation pending", task.ID)
+		skipDeleteTask(res, "graduation_pending")
+		return false
+	}
 	if task.Status == model.StatusPending {
 		unlock, acquired, err := agent.TryLockTaskGitOwnership(s.deleteContext(), agent.ResolveDir(task, s.db.Config()))
 		if err != nil {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -29,6 +30,7 @@ func residentServer(t *testing.T) (*Server, *residentTaskDB) {
 	base.tasks = append(base.tasks, res)
 	rdb := &residentTaskDB{mockTaskDB: base, resident: res}
 	s.SetTaskManager(func(TaskCreateInput) (*model.Task, error) { return nil, nil }, rdb, stopper)
+	armResidentToken(t, s)
 	return s, rdb
 }
 
@@ -107,6 +109,11 @@ func postTool(t *testing.T, s *Server, path, tool, args string) (string, bool) {
 		Params: json.RawMessage(`{"name":"` + tool + `","arguments":` + args + `}`)})
 	testutil.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(body)))
+	// The fixture's resident presents its current launch token, as its real
+	// file-delivered MCP config does (see armResidentToken).
+	if tok, ok := armedResidentTokens.Load(s); ok {
+		req.Header.Set(agent.ResidentMCPTokenHeader, tok.(string))
+	}
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, req)
 	var resp Response
@@ -154,9 +161,10 @@ func TestResident_TaskRecycleBoundToCaller(t *testing.T) {
 	})
 	t.Run("unbound caller cannot recycle the resident", func(t *testing.T) {
 		s, got := newSrv()
+		// The resident's cwd from any other connection is refused up front.
 		text, isErr := postTool(t, s, "/mcp", "task_recycle", `{"cwd":"/home/x/.argus/resident",`+note+`}`)
 		testutil.Equal(t, isErr, true)
-		testutil.Contains(t, text, "only the resident agent may recycle itself")
+		testutil.Contains(t, text, "resident identity requires the resident's own bound connection")
 		testutil.Equal(t, len(*got), 0)
 		text, isErr = postTool(t, s, "/mcp", "task_recycle", `{"id":"res-1",`+note+`}`)
 		testutil.Equal(t, isErr, true)
@@ -175,13 +183,13 @@ func TestResident_TaskRecycleBoundToCaller(t *testing.T) {
 		testutil.Equal(t, isErr, false)
 		testutil.Equal(t, len(*got), 1)
 	})
-	t.Run("any bound caller is limited to itself, with no resident lookup needed", func(t *testing.T) {
+	t.Run("a non-resident caller id is unbound, like no caller", func(t *testing.T) {
+		// Only the resident's verified connection is bound; any other caller
+		// value is ignored rather than trusted as an identity.
 		s, got := newSrv()
 		s.taskDB = &mockTaskDB{tasks: []*model.Task{{ID: "abc123", Worktree: "/w/a"}, {ID: "def456", Worktree: "/w/d"}}} // no ResidentTask lookup
 		_, isErr := postTool(t, s, "/mcp?caller=abc123", "task_recycle", `{"id":"def456",`+note+`}`)
-		testutil.Equal(t, isErr, true)
-		testutil.Equal(t, len(*got), 0)
-		_, isErr = postTool(t, s, "/mcp?caller=abc123", "task_recycle", `{"id":"abc123",`+note+`}`)
 		testutil.Equal(t, isErr, false)
+		testutil.Equal(t, len(*got), 1)
 	})
 }

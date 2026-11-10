@@ -59,6 +59,9 @@ func SandboxDenyReadPaths(task *model.Task, cfg config.Config) []string {
 	for _, rel := range sandboxBuiltinDenyRead {
 		out = append(out, evalSymlinksOrKeep(filepath.Join(homeDir, rel)))
 	}
+	// The resident's private launch dir (its MCP token config): non-resident
+	// profiles deny it, and the daemon reads nothing there for any caller.
+	out = append(out, evalSymlinksOrKeep(residentLaunchDirPath(homeDir)))
 	// Global deny_read plus EVERY project's, not just the task's: the caller
 	// names its task itself, so a spoofed id must not narrow the deny list.
 	denies := append([]string{}, cfg.Sandbox.DenyRead...)

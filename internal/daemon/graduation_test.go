@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
@@ -16,6 +17,10 @@ type graduationSession struct {
 	agent.SessionHandle
 	idle bool
 	pid  int
+	// newPID, once refreshed by IsIdle/PTYSize, replaces pid: models a
+	// RemoteSession whose cached PID is stale until refreshInfo runs.
+	newPID    int
+	refreshed bool
 }
 
 type graduationNotice struct {
@@ -37,10 +42,22 @@ func TestGraduationOrientationOutboxSurvivesBounce(t *testing.T) {
 	g.sweep()
 	testutil.Equal(t, n.id, "graduation:"+w.ID)
 	testutil.Equal(t, n.body, "[argus] orientation")
+	meta, err := d.ListMetaByNamespace(db.HeraMetaNamespace)
+	testutil.NoError(t, err)
+	testutil.Equal(t, meta[w.ID]["graduation_orientation"], "[argus] orientation")
+	n.id, n.body = "", ""
+	g = newGraduationWatcher(d, &graduationRunner{}, d.Config, n)
+	n.state = notify.StatePending
+	g.sweep()
+	testutil.Equal(t, n.id, "graduation:"+w.ID)
+	testutil.Equal(t, n.body, "[argus] orientation")
+	meta, err = d.ListMetaByNamespace(db.HeraMetaNamespace)
+	testutil.NoError(t, err)
+	testutil.Equal(t, meta[w.ID]["graduation_orientation"], "[argus] orientation")
 	g = newGraduationWatcher(d, &graduationRunner{}, d.Config, n)
 	n.state = notify.StateSubmitted
 	g.sweep()
-	meta, err := d.ListMetaByNamespace(db.HeraMetaNamespace)
+	meta, err = d.ListMetaByNamespace(db.HeraMetaNamespace)
 	testutil.NoError(t, err)
 	testutil.Equal(t, meta[w.ID]["graduation_orientation"], "")
 	msgs, err := d.Inbox(w.ID, db.InboxFilter{})
@@ -81,9 +98,14 @@ func TestGraduationPreflightAndNoJobsOnRefusal(t *testing.T) {
 }
 
 func (s *graduationSession) Alive() bool         { return true }
-func (s *graduationSession) IsIdle() bool        { return s.idle }
-func (s *graduationSession) PID() int            { return s.pid }
-func (s *graduationSession) PTYSize() (int, int) { return 100, 30 }
+func (s *graduationSession) IsIdle() bool        { s.refreshed = true; return s.idle }
+func (s *graduationSession) PTYSize() (int, int) { s.refreshed = true; return 100, 30 }
+func (s *graduationSession) PID() int {
+	if s.newPID != 0 && s.refreshed {
+		return s.newPID
+	}
+	return s.pid
+}
 
 type graduationRunner struct {
 	agent.SessionRunner
@@ -92,6 +114,7 @@ type graduationRunner struct {
 	kicks, starts int
 	recycles      int
 	launched      model.Task
+	onKick        func()
 }
 
 func (r *graduationRunner) Recycle(t *model.Task, _ config.Config, _, _ uint16) error {
@@ -121,6 +144,9 @@ func (r *graduationRunner) Get(string) agent.SessionHandle {
 func (r *graduationRunner) HasPendingRestart(string) bool { return r.pending }
 func (r *graduationRunner) KickRerender(task *model.Task, _ config.Config, _, _ uint16) error {
 	r.kicks++
+	if r.onKick != nil {
+		r.onKick()
+	}
 	r.launched = *task
 	r.pending = true
 	return nil
@@ -147,7 +173,7 @@ func graduatedFixture(t *testing.T) (*db.DB, *model.Task, *db.MoveHeraBindingRes
 	testutil.NoError(t, err)
 	w := &model.Task{ID: "work", Name: "work", Backend: "claude", SessionID: "same-conversation", Project: "p", Worktree: t.TempDir(), Branch: "argus/resident/work", Account: "routed", AccountRouted: true}
 	testutil.NoError(t, d.Add(w))
-	_, b, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "work", Kind: db.HeraKindWorker, ArgusProject: "p", Prompt: "mission"}, w.ID, w.Worktree)
+	_, b, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "work", Kind: db.HeraKindWorker, ArgusProject: "p", Prompt: "mission"}, w.ID, w.Worktree)
 	testutil.NoError(t, err)
 	testutil.NoError(t, d.SetMeta(w.ID, db.HeraMetaNamespace, db.HeraMetaKeyResidentWorker, "true"))
 	result, err := d.GraduateHeraWorker(b.ID)
@@ -159,11 +185,23 @@ func TestGraduationRestartRetryAndBounce(t *testing.T) {
 	d, w, _ := graduatedFixture(t)
 	r := &graduationRunner{sess: &graduationSession{pid: 11}}
 	jobs := 0
+	flipBusy := false
 	newWatcher := func() *graduationWatcher {
 		g := newGraduationWatcher(d, r, d.Config, nil)
 		g.resumable = func(*model.Task, config.Config) (bool, error) { return true, nil }
-		g.stopJobs = func(*model.Task, config.Config, string) error { jobs++; return nil }
+		g.stopJobs = func(*model.Task, config.Config, string) error {
+			jobs++
+			if flipBusy {
+				r.sess.idle = false
+			}
+			return nil
+		}
 		return g
+	}
+	r.onKick = func() {
+		meta, err := d.ListMetaByNamespace(db.HeraMetaNamespace)
+		testutil.NoError(t, err)
+		testutil.Equal(t, meta[w.ID][db.HeraMetaKeyGraduationPendingRestart], "restart:11")
 	}
 	g := newWatcher()
 	for range 60 {
@@ -173,9 +211,18 @@ func TestGraduationRestartRetryAndBounce(t *testing.T) {
 	testutil.Equal(t, jobs, 0)
 	g = newWatcher() // daemon bounce: all retry state is in the DB
 	r.sess.idle = true
+	flipBusy = true // session turns busy while stray jobs are cleaned: no kick
+	g.sweep()
+	testutil.Equal(t, r.kicks, 0)
+	testutil.Equal(t, jobs, 1)
+	meta0, err := d.ListMetaByNamespace(db.HeraMetaNamespace)
+	testutil.NoError(t, err)
+	testutil.Equal(t, meta0[w.ID][db.HeraMetaKeyGraduationPendingRestart], "restart:11")
+	flipBusy = false
+	r.sess.idle = true
 	g.sweep()
 	testutil.Equal(t, r.kicks, 1)
-	testutil.Equal(t, jobs, 1)
+	testutil.Equal(t, jobs, 2)
 	testutil.Equal(t, r.launched.SessionID, w.SessionID)
 	testutil.Equal(t, r.launched.Worktree, w.Worktree)
 	testutil.Equal(t, r.launched.Branch, w.Branch)
@@ -189,6 +236,7 @@ func TestGraduationRestartRetryAndBounce(t *testing.T) {
 	r.sess.pid = 22
 	g.sweep()
 	g.sweep()
+	testutil.Equal(t, r.kicks, 1)
 	meta, err := d.ListMetaByNamespace(db.HeraMetaNamespace)
 	testutil.NoError(t, err)
 	testutil.Equal(t, meta[w.ID][db.HeraMetaKeyGraduationPendingRestart], "")
@@ -220,4 +268,50 @@ func TestGraduationCrashBeforeKickAndDeadResume(t *testing.T) {
 			testutil.Equal(t, r.launched.SessionID, w.SessionID)
 		})
 	}
+}
+
+func TestGraduationStalePIDDoesNotDoubleKick(t *testing.T) {
+	d, w, _ := graduatedFixture(t)
+	r := &graduationRunner{sess: &graduationSession{idle: true, pid: 11}}
+	jobs := 0
+	g := newGraduationWatcher(d, r, d.Config, nil)
+	g.resumable = func(*model.Task, config.Config) (bool, error) { return true, nil }
+	g.stopJobs = func(*model.Task, config.Config, string) error { jobs++; return nil }
+	g.sweep()
+	testutil.Equal(t, r.kicks, 1)
+	// The supervisor resumed the session under a new PID, but the handle's
+	// cached PID is stale until IsIdle/PTYSize refreshes it.
+	r.pending = false
+	r.sess.newPID, r.sess.refreshed = 22, false
+	g.sweep()
+	testutil.Equal(t, r.kicks, 1)
+	testutil.Equal(t, jobs, 1)
+	meta, err := d.ListMetaByNamespace(db.HeraMetaNamespace)
+	testutil.NoError(t, err)
+	testutil.Equal(t, meta[w.ID][db.HeraMetaKeyGraduationPendingRestart], "")
+	msgs, err := d.Inbox(w.ID, db.InboxFilter{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 1)
+}
+
+func TestGraduationDeadResumeBackoff(t *testing.T) {
+	d, _, _ := graduatedFixture(t)
+	r := &graduationRunner{}
+	g := newGraduationWatcher(d, r, d.Config, nil)
+	g.resumable = func(*model.Task, config.Config) (bool, error) { return true, nil }
+	g.stopJobs = func(*model.Task, config.Config, string) error { return nil }
+	clock := time.Unix(1000, 0)
+	g.now = func() time.Time { return clock }
+	g.sweep()
+	testutil.Equal(t, r.starts, 1)
+	// The resumed session dies at once: rapid sweeps must not re-resume.
+	r.sess = nil
+	for range 5 {
+		clock = clock.Add(time.Second)
+		g.sweep()
+	}
+	testutil.Equal(t, r.starts, 1)
+	clock = clock.Add(graduationResumeBackoff)
+	g.sweep()
+	testutil.Equal(t, r.starts, 2)
 }

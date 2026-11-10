@@ -29,7 +29,14 @@ type graduationWatcher struct {
 	done      chan struct{}
 	mu        sync.Mutex
 	deferred  map[string]string
+	// now and lastResume rate-limit dead-session resume attempts so a session
+	// that dies immediately is not restarted on every one-second sweep.
+	now        func() time.Time
+	lastResume map[string]time.Time
+	backoffLog map[string]bool
 }
+
+const graduationResumeBackoff = 10 * time.Second
 
 type graduationNotifier interface {
 	ReliableNotify(string, string, string, notify.NotifyOpts) func()
@@ -37,7 +44,7 @@ type graduationNotifier interface {
 }
 
 func newGraduationWatcher(d *db.DB, r agent.SessionRunner, cfg func() config.Config, n graduationNotifier) *graduationWatcher {
-	return &graduationWatcher{db: d, runner: r, cfgFn: cfg, notifier: n, resumable: agent.ResumableSessionAvailable, stopJobs: agent.StopStrayJobs, stop: make(chan struct{}), done: make(chan struct{}), deferred: make(map[string]string)}
+	return &graduationWatcher{db: d, runner: r, cfgFn: cfg, notifier: n, resumable: agent.ResumableSessionAvailable, stopJobs: agent.StopStrayJobs, stop: make(chan struct{}), done: make(chan struct{}), deferred: make(map[string]string), now: time.Now, lastResume: make(map[string]time.Time), backoffLog: make(map[string]bool)}
 }
 
 func (g *graduationWatcher) start() {
@@ -126,6 +133,10 @@ func (g *graduationWatcher) advance(taskID, phase string) error {
 	}
 	sess := g.runner.Get(taskID)
 	alive := sess != nil && sess.Alive()
+	// Read idleness first: for a daemon-client RemoteSession this refreshes the
+	// cached PID, so the restart-complete comparison below sees the live PID
+	// rather than the pre-kick one (a stale PID caused a second restart).
+	idle := alive && sess.IsIdle()
 	if strings.HasPrefix(phase, "restart:") && alive {
 		pid, err := strconv.Atoi(strings.TrimPrefix(phase, "restart:"))
 		if err != nil {
@@ -150,7 +161,7 @@ func (g *graduationWatcher) advance(taskID, phase string) error {
 		}
 	}
 	// Never clean up jobs or signal an active worker, however long it takes.
-	if alive && !sess.IsIdle() {
+	if alive && !idle {
 		if g.deferred[taskID] != "busy" {
 			uxlog.Log("[resident] graduation task=%s waiting for idle; no deadline", taskID)
 			g.deferred[taskID] = "busy"
@@ -158,6 +169,15 @@ func (g *graduationWatcher) advance(taskID, phase string) error {
 		return nil
 	}
 	delete(g.deferred, taskID)
+	if !alive {
+		if last, ok := g.lastResume[taskID]; ok && g.now().Sub(last) < graduationResumeBackoff {
+			if !g.backoffLog[taskID] {
+				uxlog.Log("[resident] graduation task=%s resume backoff %s after a recent attempt", taskID, graduationResumeBackoff)
+				g.backoffLog[taskID] = true
+			}
+			return nil
+		}
+	}
 	if err := g.preflight(t); err != nil {
 		return err
 	}
@@ -180,6 +200,8 @@ func (g *graduationWatcher) advance(taskID, phase string) error {
 		cols, rows := sess.PTYSize()
 		err = g.runner.KickRerender(t, g.cfgFn(), uint16(rows), uint16(cols)) //nolint:gosec // terminal cell counts
 	} else {
+		g.lastResume[taskID] = g.now()
+		delete(g.backoffLog, taskID)
 		_, _, err = g.runner.StartOrReattach(t, g.cfgFn(), 24, 80, true)
 	}
 	uxlog.Log("[resident] graduation resume task=%s session=%s alive=%t err=%v", taskID, t.SessionID, alive, err)

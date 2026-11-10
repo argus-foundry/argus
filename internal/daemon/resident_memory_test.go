@@ -31,16 +31,22 @@ func TestResidentOrientation_Rules(t *testing.T) {
 	cfg.Resident.Name = "Solo"
 	p := residentOrientationPrompt(cfg)
 	for name, want := range map[string]string{
-		"name":            "Solo",
-		"dream skip":      "dream: skip",
-		"frontmatter":     "title",
-		"search first":    "kb_search",
-		"update dupes":    "duplicate",
-		"outward confirm": "confirm",
-		"slack drafts":    "slack_send_message_draft",
-		"recycle":         "task_recycle",
-		"no pending work": "background",
-		"working files":   "log/",
+		"name":             "Solo",
+		"dream skip":       "dream: skip",
+		"frontmatter":      "title",
+		"search first":     "kb_search",
+		"update dupes":     "duplicate",
+		"outward confirm":  "confirm",
+		"slack drafts":     "slack_send_message_draft",
+		"recycle":          "task_recycle",
+		"no pending work":  "background",
+		"working files":    "log/",
+		"force report":     "REPORT EVERY FORCE DELETE",
+		"force same turn":  "SAME TURN",
+		"ask first":        "ask Aaron first",
+		"graduate tool":    "hera_graduate_worker",
+		"codex offer":      "OFFER a fresh Claude replacement",
+		"explicit project": "ALWAYS name an explicit registered project",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("%s: prompt missing %q", name, want)

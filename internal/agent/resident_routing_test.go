@@ -22,6 +22,10 @@ func TestResidentWorkerRouting(t *testing.T) {
 			choice, err := ResolveResidentWorker(cfg, "proj", tc.backend, tc.account)
 			if tc.want == "" {
 				testutil.True(t, err != nil)
+				if tc.name == "disabled" || tc.name == "unsupported" {
+					// spec: rejection names the enabled accounts
+					testutil.Contains(t, err.Error(), "work")
+				}
 			} else {
 				testutil.NoError(t, err)
 				testutil.Equal(t, choice.Account, tc.want)
@@ -40,21 +44,23 @@ func TestResidentWorkerRouting(t *testing.T) {
 
 func TestResidentRoutingHeadroom(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	used := map[string]float64{"default": 95, "work": 10}
 	restore := usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
-		pct := 95.0
-		if account == "work" {
-			pct = 10
-		}
-		return usagebudget.Reading{Percentage: pct}, true
+		return usagebudget.Reading{Percentage: used[account]}, true
 	})
 	defer restore()
 	cfg := config.DefaultConfig()
 	cfg.Accounts = map[string]config.Account{"work": {ClaudeConfigDir: t.TempDir()}}
 	cfg.BackendRouting.Strategy = config.StrategyHeadroom
-	cfg.BackendRouting.Tiers = []config.BackendTier{{Backend: "claude", Account: "default", Probe: config.ProbeClaudeUsage, ThresholdPct: 90}}
+	// Threshold 99 keeps both accounts eligible, so only headroom ranking decides.
+	cfg.BackendRouting.Tiers = []config.BackendTier{{Backend: "claude", Account: "default", Probe: config.ProbeClaudeUsage, ThresholdPct: 99}}
 	choice, err := ResolveResidentWorker(cfg, "proj", "", "")
 	testutil.NoError(t, err)
 	testutil.Equal(t, choice.Account, "work")
+	used["default"], used["work"] = 10, 95
+	choice, err = ResolveResidentWorker(cfg, "proj", "", "")
+	testutil.NoError(t, err)
+	testutil.Equal(t, choice.Account, "default")
 }
 
 func TestResidentRoutingFiltersBeforeRanking(t *testing.T) {

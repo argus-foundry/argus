@@ -24,7 +24,7 @@ func TestResident_RESTHeraExcludesStandingTeam(t *testing.T) {
 	testutil.NoError(t, err)
 	task := &model.Task{ID: "errand", Name: "errand", Status: model.StatusInProgress, Project: "p"}
 	testutil.NoError(t, d.Add(task))
-	_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "errand", Kind: db.HeraKindWorker}, task.ID, "/wt/errand")
+	_, _, err = d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "errand", Kind: db.HeraKindWorker}, task.ID, "/wt/errand")
 	testutil.NoError(t, err)
 	w := serve(srv.routes(), "GET", "/api/hera", "")
 	testutil.Equal(t, w.Code, http.StatusOK)

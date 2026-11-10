@@ -10,8 +10,9 @@ type Request struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 
 	// caller is the task ID the connection was bound to at spawn (the
-	// `?caller=` query on the task's own MCP URL), never read from the body.
-	// Empty for unbound connections. See toolTaskRecycle.
+	// `?caller=` query on the resident's MCP URL), never read from the body,
+	// and kept only when the per-launch resident token verifies
+	// (verifiedCaller). Empty for unbound connections. See toolTaskRecycle.
 	caller string
 }
 

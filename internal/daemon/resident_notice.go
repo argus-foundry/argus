@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/argus-foundry/argus/internal/db"
 )
@@ -14,8 +15,10 @@ const residentNoticeBatch = 20
 // the standing resident's workers by anyone but the resident) into one Hera
 // message each, sent from the affected worker's role to the resident
 // coordinator. The notices come from db choke points that may run in the TUI
-// process, so the daemon is the only deliverer. Each notice is claimed before
-// the send and deleted after it; a retryable failure releases the claim.
+// process, so the daemon is the only deliverer. The handoff is crash-safe:
+// db.DeliverResidentNotice deletes the outbox row and inserts the message in
+// one transaction, so a crash leaves either the queued row or the committed
+// message, never neither or both; the doorbell rings after the commit.
 func (m *residentManager) deliverNotices() {
 	notices, err := m.db.PendingResidentNotices(residentNoticeBatch)
 	if err != nil {
@@ -23,35 +26,60 @@ func (m *residentManager) deliverNotices() {
 		return
 	}
 	for _, n := range notices {
-		claimed, err := m.db.ClaimResidentNotice(n.ID)
-		if err != nil || !claimed {
-			continue
-		}
 		from, to, body, tldr, ok := m.composeNotice(n)
 		if !ok {
 			_ = m.db.CompleteResidentNotice(n.ID)
 			continue
 		}
-		send := m.sendNotice
-		if send == nil {
-			send = func(from, to int64, body, tldr string) error {
-				_, err := m.db.SendHeraMessage(from, to, body, tldr, nil)
-				return err
-			}
+		commit := m.commitNotice
+		if commit == nil {
+			commit = m.db.DeliverResidentNotice
 		}
-		if err := send(from, to, body, tldr); err != nil {
-			if errors.Is(err, db.ErrHeraMessageRecipientInvalid) {
-				residentLog("[resident] notice %d dropped: resident recipient unavailable: %v", n.ID, err)
+		msg, err := commit(n.ID, from, to, body, tldr)
+		if err != nil {
+			if permanentNoticeError(err) {
+				// A row that can never be sent must not wedge every later notice.
+				residentLog("[resident] notice %d dropped (permanent): %v", n.ID, err)
 				_ = m.db.CompleteResidentNotice(n.ID)
 				continue
 			}
 			residentLog("[resident] notice %d delivery failed, will retry: %v", n.ID, err)
-			_ = m.db.ReleaseResidentNotice(n.ID)
 			return // one failure (inbox full, rate limit) ends the pass; the next tick retries in order
 		}
-		_ = m.db.CompleteResidentNotice(n.ID)
+		if msg != nil && m.ringNotice != nil {
+			m.ringNotice(msg)
+		}
 		residentLog("[resident] notice %d delivered kind=%s worker_role=%d", n.ID, n.Kind, n.WorkerRoleID)
 	}
+}
+
+// permanentNoticeError reports a failure no retry can fix.
+func permanentNoticeError(err error) bool {
+	for _, perm := range []error{
+		db.ErrHeraMessageRecipientInvalid, db.ErrHeraMessageTldrTooLong, db.ErrHeraMessageTldrMultiline,
+		db.ErrHeraMessageTldrRequired, db.ErrHeraMessageBodyTooLarge, db.ErrHeraMessageSelfSend,
+		db.ErrHeraMessageInvalidReplyTo,
+	} {
+		if errors.Is(err, perm) {
+			return true
+		}
+	}
+	return false
+}
+
+// boundedTldr makes s a single-line TLDR of at most db.HeraMaxTldrLen bytes,
+// cutting at a rune boundary with an ellipsis. The full text belongs in the body.
+func boundedTldr(s string) string {
+	s = strings.Join(strings.Fields(strings.NewReplacer("\r", " ", "\n", " ").Replace(s)), " ")
+	if len(s) <= db.HeraMaxTldrLen {
+		return s
+	}
+	const ell = "…"
+	cut := db.HeraMaxTldrLen - len(ell)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + ell
 }
 
 // composeNotice resolves the sender (the affected worker role) and recipient
@@ -96,7 +124,7 @@ func (m *residentManager) composeNotice(n db.ResidentNotice) (from, to int64, bo
 	default:
 		return 0, 0, "", "", false
 	}
-	return worker.ID, coord.ID, b.String(), tldr, true
+	return worker.ID, coord.ID, b.String(), boundedTldr(tldr), true
 }
 
 // nukeSummary is the cheap "what was unmerged" line for a nuke: the worker's

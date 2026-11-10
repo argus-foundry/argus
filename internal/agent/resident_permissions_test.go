@@ -338,29 +338,9 @@ func TestBuildCmd_ResidentMarkerEnvResidentOnly(t *testing.T) {
 	testutil.Equal(t, has(cmd2), false)
 }
 
-// The resident's Argus MCP connection is bound to its own task at spawn, which
-// is what lets task_recycle sit in the allow tier; other tasks carry no binding.
-func TestBuildCmd_ResidentMCPURLBoundToItself(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
-	cfg := residentCfg()
-	cfg.MCPPort = 7742
-	build := func(task *model.Task) string {
-		cmd, cleanup, err := BuildCmd(task, cfg, false)
-		testutil.NoError(t, err)
-		if cleanup != nil {
-			t.Cleanup(cleanup)
-		}
-		return strings.Join(cmd.Args, " ")
-	}
-	res := build(&model.Task{ID: "res-9", Name: "resident", Kind: model.KindResident, Worktree: db.ResidentWorkDir()})
-	testutil.Contains(t, res, "http://localhost:7742/mcp?caller=res-9")
-	plain := build(&model.Task{ID: "p1", Name: "plain", Worktree: t.TempDir()})
-	testutil.Contains(t, plain, "http://localhost:7742/mcp")
-	if strings.Contains(plain, "caller=") {
-		t.Fatalf("plain task must not be caller-bound: %s", plain)
-	}
-}
+// The resident's caller-bound MCP URL now rides only its private config file:
+// see TestBuildCmd_ResidentMCPTokenFileOnlyAndRotates and
+// TestBuildCmd_PlainTaskKeepsInlineUnboundMCP (resident_mcp_token_test.go).
 
 func TestBuildCmd_ResidentFailsClosedOnUnenforceableFamily(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

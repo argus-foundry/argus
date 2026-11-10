@@ -521,3 +521,17 @@ func readScreenRow(screen tcell.SimulationScreen, row, width int) string {
 	}
 	return string(runes)
 }
+
+func TestStatusBar_ResidentRailHintsComeFromSource(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetTab(TabResident)
+	hints := []ResidentHint{{"X", "rename"}, {"ctrl+d", "nuke"}}
+	sb.SetResidentRailHints(func() []ResidentHint { return hints })
+	sim := newSim(t, 140, 1)
+	sb.SetRect(0, 0, 140, 1)
+	sb.Draw(sim)
+	row := readAllScreenText(sim, 140, 1)
+	testutil.Contains(t, row, "X rename")
+	testutil.Contains(t, row, "ctrl+d nuke")
+	testutil.Equal(t, strings.Contains(row, "r rename"), false)
+}

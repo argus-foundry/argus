@@ -443,14 +443,10 @@ func (p *HeraPage) SetOwedFunc(fn terminal.OwedFunc, hint func() string) {
 	p.coordPane.SetOwedFunc(fn, hint)
 	p.agentPane.SetOwedFunc(fn, hint)
 	p.coordPane.OnOwedClick = func() {
-		if p.coordBound != "" && p.OnRerender != nil {
-			p.OnRerender(p.coordBound)
-		}
+		p.fireRerender(p.coordBound)
 	}
 	p.agentPane.OnOwedClick = func() {
-		if p.agentBound != "" && p.OnRerender != nil {
-			p.OnRerender(p.agentBound)
-		}
+		p.fireRerender(p.agentBound)
 	}
 }
 
@@ -748,6 +744,10 @@ func (p *HeraPage) reattachPane(tp *terminal.TerminalPane) {
 		return
 	}
 	sel := p.sel
+	if p.residentMode && tp == p.agentPane && ResidentRowInert(sel) {
+		uxlog.Log("[resident-view] pane reattach skipped: row has no live binding")
+		return
+	}
 	if tp == p.coordPane {
 		orch := p.sel.Orch
 		if p.detailsMode {

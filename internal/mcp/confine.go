@@ -22,7 +22,7 @@ import (
 // confinedOpen, for every task, sandboxed or not:
 //
 //   - the caller's task is self-reported (id/cwd; the resident's ?caller=
-//     URL binding is resident-only and unauthenticated, and global-config MCP
+//     URL binding is resident-only and token-verified, and global-config MCP
 //     families share one URL), so confinement is to THAT task's own roots:
 //     naming another task only reaches that task's worktree;
 //   - make a relative path absolute against the request's cwd (else the task

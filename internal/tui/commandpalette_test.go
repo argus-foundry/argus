@@ -383,7 +383,7 @@ func TestPaletteApplicableActions_ResidentTabFollowsKeymapPolicy(t *testing.T) {
 	testutil.NoError(t, d.Add(&model.Task{ID: "w1", Name: "w1", Status: model.StatusInProgress, Project: "p", CreatedAt: time.Now()}))
 	orchs, err := d.ListResidentOrchestrators(false)
 	testutil.NoError(t, err)
-	_, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orchs[0].ID, Name: "w1", Kind: db.HeraKindWorker, ArgusProject: "p"}, "w1", t.TempDir())
+	_, _, err = d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orchs[0].ID, Name: "w1", Kind: db.HeraKindWorker, ArgusProject: "p"}, "w1", t.TempDir())
 	testutil.NoError(t, err)
 	a.switchTab(widget.TabResident)
 	a.heraPage.Machine().ToRail()

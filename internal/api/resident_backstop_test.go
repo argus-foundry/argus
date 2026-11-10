@@ -19,7 +19,7 @@ func TestResidentBackstopEpisodes(t *testing.T) {
 	testutil.NoError(t, err)
 	w := &model.Task{ID: "worker", Name: "errand", Worktree: t.TempDir()}
 	testutil.NoError(t, d.Add(w))
-	role, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "errand", Kind: db.HeraKindWorker}, w.ID, w.Worktree)
+	role, _, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "errand", Kind: db.HeraKindWorker}, w.ID, w.Worktree)
 	testutil.NoError(t, err)
 	state := newIdleWatcherState()
 	tail := func(string) []byte { return []byte("Choose one\n❯ 1. yes\n  2. no") }

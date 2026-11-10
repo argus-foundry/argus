@@ -111,8 +111,12 @@ func TestResOldSup(t *testing.T) {
 	testutil.Equal(t, rec.recycle.TaskID, "")
 	rec.mu.Unlock()
 
-	// Control: a supervisor at the resident protocol accepts the same task.
+	// Control: a supervisor at the resident protocol and the per-launch
+	// identity spawn surface (44) accepts the same task.
 	setPeer(residentProtocolVersion)
+	c.mu.Lock()
+	c.peerSpawnSurface = 44
+	c.mu.Unlock()
 	_, err = c.Start(res, configZero(), 24, 80, false)
 	testutil.NoError(t, err)
 	rec.mu.Lock()

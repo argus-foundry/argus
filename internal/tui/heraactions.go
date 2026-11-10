@@ -437,6 +437,9 @@ func (a *App) heraTaskSolelyBoundTo(r *hera.RoleView) bool {
 // not-yet-ended binding, and skip the delete for good (nothing in a bare TUI/test
 // process retries it — only the daemon's periodic reconciliation sweep would).
 func (a *App) heraNukeRole(r *hera.RoleView) {
+	if r.TaskID != "" && a.graduationPendingBlocked(r.TaskID, "nuke") {
+		return
+	}
 	reclaim := r.Live && r.TaskID != "" && a.heraTaskSolelyBoundTo(r)
 	if err := a.heraOps.NukeRole(r); err != nil {
 		a.statusbar.SetError("Nuke role failed: " + err.Error())
@@ -836,6 +839,9 @@ func (a *App) heraDoCascadeNuke(subtree []*hera.OrchView, subtreeIDs map[int64]b
 	for _, o := range subtree {
 		for i := range o.Roles {
 			r := &o.Roles[i]
+			if r.TaskID != "" && a.graduationPendingBlocked(r.TaskID, "nuke") {
+				continue
+			}
 			reclaimTask := ""
 			if r.Live && r.TaskID != "" && !reclaimed[r.TaskID] && !a.heraTaskBoundOutside(r.TaskID, subtreeIDs) {
 				reclaimed[r.TaskID] = true
@@ -951,6 +957,9 @@ func (a *App) heraCountReclaimable(roles []hera.RoleView) (reclaim, preserved in
 // the reclaim's async prune step while the binding is still live races its own
 // no-live-hera-binding re-check at delete time.
 func (a *App) heraNukeArchivedRole(r *hera.RoleView) (reclaimed bool) {
+	if r.TaskID != "" && a.graduationPendingBlocked(r.TaskID, "clear archive") {
+		return false
+	}
 	taskID := roleReclaimTask(r)
 	doReclaim := taskID != "" && a.heraTaskReclaimable(taskID, r.RoleID)
 	if err := a.heraOps.NukeRole(r); err != nil {
@@ -1724,4 +1733,18 @@ func heraSelName(sel hera.Selection) string {
 		return "orchestrator " + sel.Orch.Name
 	}
 	return "selection"
+}
+
+// graduationPendingBlocked reports whether taskID is a graduate whose restart
+// is still pending; if so it logs and flashes a notice and the caller must
+// abandon the destructive flow BEFORE any side effect. Remote mode (no local
+// DB) cannot see the marker; the daemon refuses at its own choke points.
+func (a *App) graduationPendingBlocked(taskID, what string) bool {
+	p, ok := a.db.(interface{ GraduationPending(string) bool })
+	if !ok || !p.GraduationPending(taskID) {
+		return false
+	}
+	uxlog.Log("[resident] tui %s refused task=%s: graduation pending", what, taskID)
+	a.flashNotice(db.ErrGraduationPending.Error())
+	return true
 }

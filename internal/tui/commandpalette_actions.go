@@ -288,11 +288,15 @@ func (a *App) heraLiteralRows() []paletteRow {
 		if b, ok := a.activeKeymap().BindingFor(keymap.CtxAgent, keymap.ActAgentRerender); ok {
 			key = b.String()
 		}
-		rows = append(rows, paletteRow{
-			Label:  a.activeKeymap().ActionLabel(keymap.ActAgentRerender),
-			Key:    key,
-			invoke: func() { a.rerenderHotkeyHera(taskID) },
-		})
+		if a.heraPage.RerenderAllowed(taskID) {
+			rows = append(rows, paletteRow{
+				Label:  a.activeKeymap().ActionLabel(keymap.ActAgentRerender),
+				Key:    key,
+				invoke: func() { a.heraPage.FireRerender(taskID) },
+			})
+		} else {
+			uxlog.Log("[resident] palette rerender row hidden for task=%s", taskID)
+		}
 		rows = append(rows, paletteRow{
 			Label: "copy staged clipboard",
 			Key:   "ctrl+y",

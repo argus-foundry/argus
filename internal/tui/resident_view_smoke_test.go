@@ -9,6 +9,7 @@ import (
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/argus-foundry/argus/internal/tui/hera"
+	"github.com/argus-foundry/argus/internal/tui/keymap"
 	"github.com/argus-foundry/argus/internal/tui/widget"
 	"github.com/gdamore/tcell/v2"
 )
@@ -33,7 +34,7 @@ func newResidentViewFixture(t *testing.T) *residentViewFixture {
 	for _, name := range []string{"alpha", "beta"} {
 		id := "rw-" + name
 		testutil.NoError(t, d.Add(&model.Task{ID: id, Name: name, Status: model.StatusInProgress, Project: "p", CreatedAt: time.Now()}))
-		role, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orchs[0].ID, Name: name, Kind: db.HeraKindWorker, ArgusProject: "p"}, id, t.TempDir())
+		role, _, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orchs[0].ID, Name: name, Kind: db.HeraKindWorker, ArgusProject: "p"}, id, t.TempDir())
 		testutil.NoError(t, err)
 		f.workers = append(f.workers, id)
 		f.roles = append(f.roles, role.ID)
@@ -316,4 +317,30 @@ func TestSmoke_ResidentView_HideUnhideStaysOnRail(t *testing.T) {
 	yes, err := f.d.IsResidentWorker(f.workers[0])
 	testutil.NoError(t, err)
 	testutil.True(t, yes)
+}
+
+// The command palette must not offer the forced re-render row on the resident
+// pane (it would race the daemon's ensure loop), but still offers it for a
+// worker pane.
+func TestSmoke_ResidentView_PaletteRerenderRowHiddenForResident(t *testing.T) {
+	f := newResidentViewFixture(t)
+	defer f.stop()
+	label := f.a.activeKeymap().ActionLabel(keymap.ActAgentRerender)
+	has := func() bool {
+		for _, r := range f.a.heraLiteralRows() {
+			if r.Label == label {
+				return true
+			}
+		}
+		return false
+	}
+	readUI(t, f.a.tapp, func() {
+		f.a.heraPage.Machine().SetRegion(hera.FocusCoord)
+		testutil.False(t, has())
+	})
+	f.selectWorker(t, 0)
+	readUI(t, f.a.tapp, func() {
+		f.a.heraPage.Machine().SetRegion(hera.FocusAgent)
+		testutil.True(t, has())
+	})
 }

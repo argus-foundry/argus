@@ -49,7 +49,7 @@ func TestResidentWorkerMembershipAndCount(t *testing.T) {
 	testutil.NoError(t, err)
 	o, err := d.EnsureResidentOrchestrator(task.ID)
 	testutil.NoError(t, err)
-	_, b, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{OrchestratorID: o.ID, Name: "w", Kind: HeraKindWorker}, "worker", t.TempDir())
+	_, b, err := d.CreateResidentWorkerRoleWithBinding(CreateHeraRoleInput{OrchestratorID: o.ID, Name: "w", Kind: HeraKindWorker}, "worker", t.TempDir())
 	testutil.NoError(t, err)
 	n, err := d.ResidentWorkerCount()
 	testutil.NoError(t, err)

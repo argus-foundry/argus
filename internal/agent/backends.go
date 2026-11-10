@@ -172,6 +172,12 @@ type Family struct {
 	// MCPFlag returns the per-launch flag wiring Argus's MCP server, or nil
 	// when the CLI only reads MCP servers from global config (see InjectGlobal).
 	MCPFlag func(url string) string
+	// MCPConfigFile renders a file-deliverable MCP config whose argus server
+	// sends headers on every request, and MCPConfigFileFlag loads such a file.
+	// Nil means the family cannot; the resident then refuses to launch with
+	// MCP, because its per-launch secret must never ride argv or env.
+	MCPConfigFile     func(url string, headers map[string]string) []byte
+	MCPConfigFileFlag func(path string) string
 	// PermissionFlags maps defaults.permission_mode to CLI flags; nil injects
 	// nothing. Skipped when the command already contains any
 	// PermissionFlagTokens.
@@ -243,11 +249,25 @@ func mustSpec(k backendkind.Kind) backendkind.Spec {
 	return s
 }
 
+// claudeMCPConfig renders Claude's --mcp-config JSON for the argus server;
+// headers (nil omits them) are sent on every request.
+func claudeMCPConfig(url string, headers map[string]string) []byte {
+	server := map[string]any{"type": "http", "url": url, "timeout": mcplimits.ClientTimeoutMilliseconds}
+	if len(headers) > 0 {
+		server["headers"] = headers
+	}
+	mcpConfig, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"argus": server}})
+	return mcpConfig
+}
+
 func claudeMCPFlag(url string) string {
-	mcpConfig, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		"argus": map[string]any{"type": "http", "url": url, "timeout": mcplimits.ClientTimeoutMilliseconds},
-	}})
-	return " --mcp-config " + shellQuote(string(mcpConfig))
+	return " --mcp-config " + shellQuote(string(claudeMCPConfig(url, nil)))
+}
+
+// claudeMCPConfigFileFlag loads an MCP config from a file (Claude accepts a
+// path or inline JSON for --mcp-config).
+func claudeMCPConfigFileFlag(path string) string {
+	return " --mcp-config " + shellQuote(path)
 }
 
 // ResidentPolicy is everything a family needs to make the resident's launch
@@ -637,6 +657,8 @@ var families = []*Family{
 		SkillDelivery:        SkillsAddDir,
 		RoutingDelivery:      RoutingSystemPromptFile,
 		MCPFlag:              claudeMCPFlag,
+		MCPConfigFile:        claudeMCPConfig,
+		MCPConfigFileFlag:    claudeMCPConfigFileFlag,
 		PermissionFlags:      config.PermissionModeFlags,
 		PermissionRulesFlag:  claudePermissionRulesFlag,
 		StripPermissionFlags: stripClaudePermissionFlags,

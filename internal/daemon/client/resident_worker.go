@@ -20,6 +20,12 @@ func (c *Client) checkResidentWorkerSupported(task *model.Task, cfg config.Confi
 	c.mu.Lock()
 	identity, peer, surface := c.residentWorker, c.peerProtocol, c.peerSpawnSurface
 	c.mu.Unlock()
+	if task.IsResident() && peer != 0 && surface < 44 {
+		// Surface 44 delivers the resident's per-launch MCP token; an older
+		// supervisor would launch it unverified (no delete/graduate/recycle).
+		uxlog.Log("[resident] refusing resident task=%s: supervisor spawn surface %d < 44", task.ID, surface)
+		return fmt.Errorf("the resident requires a supervisor with per-launch identity support; restart the supervisor and retry")
+	}
 	worker, err := agent.PreflightResidentWorkerLaunch(task, cfg, identity)
 	if err != nil {
 		return err

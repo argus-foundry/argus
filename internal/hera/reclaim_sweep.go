@@ -95,6 +95,10 @@ func ReconcileHeraReclaims(d *db.DB, runner SessionChecker) (Summary, error) {
 	tipVerdicts := make(map[string]mergesafety.Verdict)
 
 	for _, t := range candidates {
+		if d.GraduationPending(t.ID) {
+			uxlog.Log("[resident] reclaim sweep: skipped task=%s: graduation pending", t.ID)
+			continue
+		}
 		repoDir := agent.ResolveDir(t, cfg)
 		if t.Worktree != "" && agent.DirExists(t.Worktree) {
 			agent.RemoveWorktreeAndBranch(t.Worktree, t.Branch, repoDir)

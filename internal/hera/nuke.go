@@ -119,6 +119,10 @@ func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (re
 		}
 		for i := range o.Roles {
 			r := &o.Roles[i]
+			if r.TaskID != "" && d.GraduationPending(r.TaskID) {
+				uxlog.Log("[resident] nuke subtree: skipped role %d task=%s: graduation pending", r.RoleID, r.TaskID)
+				continue
+			}
 			reclaim := ""
 			if r.Live && r.TaskID != "" && !seen[r.TaskID] && !TaskBoundOutside(d, r.TaskID, ids) {
 				seen[r.TaskID] = true
@@ -152,6 +156,11 @@ func NukeSingleRole(d *db.DB, runner NukeRunner, r *heramodel.RoleView) (backgro
 // resident is not told about its own delete (6.4), everything else is human.
 func NukeSingleRoleAs(d *db.DB, runner NukeRunner, r *heramodel.RoleView, actor db.HeraActor) (background func()) {
 	if t, err := d.Get(r.TaskID); err == nil && t.IsResident() {
+		return func() {}
+	}
+
+	if r.TaskID != "" && d.GraduationPending(r.TaskID) {
+		uxlog.Log("[resident] nuke role %d skipped task=%s: graduation pending", r.RoleID, r.TaskID)
 		return func() {}
 	}
 

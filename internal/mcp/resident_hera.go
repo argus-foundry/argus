@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/hera"
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
@@ -22,7 +24,7 @@ import (
 // through the destructive mutation. Never hold this during a restart wait.
 var residentWorkerMutationMu sync.Mutex
 
-var residentDeleteTool = Tool{Name: "hera_delete_worker", Description: "Resident only: delete a live worker of your standing team. Refuses unmerged non-empty work unless force=true. Force returns the unmerged summary; REPORT it to Aaron in your own conversation in this turn.", InputSchema: map[string]interface{}{
+var residentDeleteTool = Tool{Name: "hera_delete_worker", Description: "Resident only: delete a live worker of your standing team. Refuses unmerged non-empty work, and any uncommitted or untracked files, unless force=true. Force returns the unmerged summary; REPORT it to Aaron in your own conversation in this turn.", InputSchema: map[string]interface{}{
 	"type": "object", "properties": map[string]interface{}{"role": map[string]interface{}{"type": "string", "description": "Worker name or numeric role id"}, "force": map[string]interface{}{"type": "boolean"}}, "required": []string{"role"},
 }}
 
@@ -164,9 +166,21 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 		if err != nil {
 			return residentToolError(id, fmt.Sprintf("not safe: classifier failed: %v", err))
 		}
+		// A safe verdict speaks only for the branch: uncommitted or untracked
+		// files would be destroyed with the worktree. Unknown counts as dirty.
+		if summary.DirtyCount != "0" {
+			return residentToolError(id, fmt.Sprintf("not safe: worktree has uncommitted or untracked changes (dirty files: %s); commit them, or pass force=true", summary.DirtyCount))
+		}
 		if !v.Safe && !summary.Empty() {
 			return residentToolError(id, fmt.Sprintf("not safe: %s; commits ahead: %s; dirty files: %s", v.Reason, summary.CommitsAhead, summary.DirtyCount))
 		}
+	}
+	if p.Force {
+		// The tool result is the summary's only delivery to the resident, and the
+		// nuke below can outlast a client-side MCP timeout. Persist it first.
+		raw, _ := json.Marshal(summary)
+		uxlog.Log("[resident] force delete worker=%s task=%s summary=%s", role.Name, task.ID, raw)
+		slog.Warn("[resident] force delete", "worker", role.Name, "task", task.ID, "summary", string(raw))
 	}
 	// Synchronous closure execution ensures the result follows the reclaim work.
 	// The shared primitive preserves multi-bound tasks and rechecks reclaim safety.
@@ -190,4 +204,27 @@ func residentToolError(id interface{}, message string) *Response {
 	uxlog.Log("[resident] tool refused: %s", message)
 	slog.Warn("[resident] tool refused", "reason", message)
 	return toolError(id, message)
+}
+
+// verifiedCaller returns the connection-bound caller only when it is the
+// resident presenting the current launch's token; every other connection,
+// including the resident's id with a missing, wrong or superseded token, is
+// unbound (""). The token is never logged.
+func (s *Server) verifiedCaller(r *http.Request) string {
+	caller := r.URL.Query().Get("caller")
+	if caller == "" {
+		return ""
+	}
+	token := r.Header.Get(agent.ResidentMCPTokenHeader)
+	hashPath := s.residentTokenHashPath
+	if hashPath == nil {
+		hashPath = agent.ResidentMCPTokenHashPath
+	}
+	path, err := hashPath()
+	if err == nil && s.boundResident(caller) && agent.VerifyResidentMCPToken(path, token) {
+		return caller
+	}
+	uxlog.Log("[resident] unverified caller refused: caller=%q token_present=%t", caller, token != "")
+	slog.Warn("[resident] unverified caller refused", "caller", caller, "token_present", token != "") //nolint:gosec // G706: slog encodes attributes, escaping control characters; the token itself is never logged
+	return ""
 }

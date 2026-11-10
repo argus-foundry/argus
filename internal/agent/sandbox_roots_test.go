@@ -79,6 +79,7 @@ func TestSandboxDenyReadPaths(t *testing.T) {
 	for _, rel := range sandboxBuiltinDenyRead {
 		want = append(want, filepath.Join(rhome, rel))
 	}
+	want = append(want, filepath.Join(rhome, ".argus", "resident-launch"))
 	want = append(want, filepath.Join(rhome, "private"), "/opt/secret", "/opt/other")
 	// Every project's denials apply whatever task is named, so a spoofed
 	// task id can't narrow the list.

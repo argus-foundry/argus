@@ -237,6 +237,13 @@ func (d *DB) updateLocked(t *model.Task) (*model.Task, error) {
 	if err := residentUpdateGuard(old, t); err != nil {
 		return old, err
 	}
+	// Archiving through Update (REST archive, MCP task_archive, raw PUT) must
+	// honour the same pending-graduation block as SetArchived.
+	if old != nil && !old.Archived && t.Archived {
+		if err := graduationPendingGuard(d.conn, t.ID); err != nil {
+			return old, err
+		}
+	}
 
 	sandboxedInt := 0
 	if t.Sandboxed {
@@ -457,6 +464,11 @@ func (d *DB) SetArchived(id string, archived bool) error {
 		if gerr := residentGuard(tx, id); gerr != nil {
 			return gerr
 		}
+		if archived {
+			if gerr := graduationPendingGuard(tx, id); gerr != nil {
+				return gerr
+			}
+		}
 		if qerr := tx.QueryRow(`SELECT archived, pinned FROM tasks WHERE id=?`, id).Scan(&oldArchived, &oldPinned); qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
 			return qerr
 		}
@@ -650,6 +662,9 @@ func (d *DB) Delete(id string) error {
 	// surviving peer's unread cap).
 	return d.WithTx(func(tx *sql.Tx) error {
 		if err := residentGuard(tx, id); err != nil {
+			return err
+		}
+		if err := graduationPendingGuard(tx, id); err != nil {
 			return err
 		}
 		res, err := tx.Exec(`DELETE FROM tasks WHERE id=?`, id)
@@ -881,7 +896,9 @@ func (d *DB) pruneTasksLocked(ids []string) (pruned []*model.Task, skippedHeraBo
 		args[i] = id
 	}
 	inClause := `kind='' AND id IN (` + strings.Join(placeholders, ",") + `)`
-	const notLiveHeraBound = `id NOT IN (SELECT argus_task_id FROM hera_bindings WHERE ended_at IS NULL)`
+	// A pending graduate is also kept: deleting it would drop the restart intent
+	// (see graduationPendingGuard).
+	const notLiveHeraBound = `id NOT IN (SELECT argus_task_id FROM hera_bindings WHERE ended_at IS NULL) AND id NOT IN (SELECT task_id FROM task_meta WHERE namespace='hera' AND key='` + HeraMetaKeyGraduationPendingRestart + `')`
 
 	//nolint:gosec // G202: inClause is a fixed list of `?` literals and notLiveHeraBound is a constant; ids are bound parameters.
 	selectQ := `SELECT ` + taskColumns + ` FROM tasks WHERE ` + inClause + ` AND ` + notLiveHeraBound

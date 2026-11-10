@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -972,7 +973,10 @@ func (a *App) buildUI() {
 		// orphan messages in remote mode because apistore can't expose the
 		// DeleteMessagesForTask endpoint and PUT /api/tasks/{id}/raw doesn't
 		// trigger server-side cleanup.
-		a.db.SetArchived(t.ID, t.Archived) //nolint:errcheck // best-effort; display is source of truth
+		if err := a.db.SetArchived(t.ID, t.Archived); errors.Is(err, db.ErrGraduationPending) {
+			uxlog.Log("[resident] tui archive refused task=%s: graduation pending", t.ID)
+			a.flashNotice(db.ErrGraduationPending.Error())
+		} // other errors: best-effort; display is source of truth
 		a.refreshTasksAsync()
 	}
 	a.tasklist.OnPin = func(t *model.Task) {
@@ -1145,6 +1149,7 @@ func (a *App) buildUI() {
 	// changes state (keyboard or mouse). The statusbar renders different hint
 	// sets for rail vs pane focus so the operator always sees relevant keys.
 	// The int passed matches hera.Focus iota: 0=rail, 1=coord, 2=agent.
+	a.statusbar.SetResidentRailHints(a.residentRailStatusHints)
 	a.heraPage.OnFocusChange = func(f hera.Focus) {
 		a.statusbar.SetHeraFocus(int(f))
 	}
@@ -6260,6 +6265,45 @@ func (a *App) rerenderHotkeyHera(taskID string) {
 	a.rerenderNow(taskID, cols, func() bool { return a.heraPage.TaskScrolledUp(taskID) }, func() {})
 }
 
+// residentRailStatusHints derives the resident tab's status-bar management
+// hints from the live keymap (residentRailPolicy), so a rebind is reflected
+// instead of the stale defaults. Step-forward/back status keys render as one
+// "k1/k2" hint.
+func (a *App) residentRailStatusHints() []widget.ResidentHint {
+	km := a.activeKeymap()
+	key := func(act keymap.Action) string {
+		if b, ok := km.BindingFor(keymap.CtxHeraRail, act); ok {
+			return b.String()
+		}
+		return ""
+	}
+	short := map[keymap.Action]string{
+		keymap.ActHeraInbox:   "inbox",
+		keymap.ActHeraRename:  "rename",
+		keymap.ActHeraStatAdv: "status",
+		keymap.ActHeraArchive: "hide",
+		keymap.ActHeraDelete:  "nuke",
+	}
+	var out []widget.ResidentHint
+	for _, act := range keymap.ResidentRailActions() {
+		label, ok := short[act]
+		if !ok {
+			continue // StatRev folded into StatAdv; unknown future actions skipped
+		}
+		k := key(act)
+		if k == "" {
+			continue
+		}
+		if act == keymap.ActHeraStatAdv {
+			if rk := key(keymap.ActHeraStatRev); rk != "" {
+				k += "/" + rk
+			}
+		}
+		out = append(out, widget.ResidentHint{Key: k, Label: label})
+	}
+	return out
+}
+
 // rerenderKeyHint is the live agent.rerender binding for the owed notice
 // ("" when unbound; the notice then points at the palette).
 func (a *App) rerenderKeyHint() string {
@@ -8650,6 +8694,9 @@ func (a *App) closeConfirmDeleteProject() {
 // deleteTask stops the agent, cleans up the worktree/branch, and removes the task from DB.
 // Worktree/branch cleanup runs in a background goroutine to avoid blocking the UI.
 func (a *App) deleteTask(t *model.Task) {
+	if a.graduationPendingBlocked(t.ID, "delete") {
+		return
+	}
 	uxlog.Log("[tui] deleting task %s (%s)", t.ID, t.Name)
 
 	// Stop the agent if running.

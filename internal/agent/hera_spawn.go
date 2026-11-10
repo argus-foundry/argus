@@ -348,7 +348,13 @@ func SpawnHeraWorker(database *db.DB, runner SessionProvider, in HeraWorkerSpawn
 			if mErr := database.SetMeta(t.ID, db.HeraMetaNamespace, db.HeraMetaKeyRole, string(db.HeraKindWorker)); mErr != nil {
 				slog.Warn("[hera] spawn: meta role stamp failed (continuing)", "task", t.ID, "err", mErr)
 			}
-			r, b, cErr := database.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
+			// Ordinary binding inserts refuse the standing team; resident spawn
+			// is the one privileged path that adds a member to it.
+			createRole := database.CreateHeraRoleWithBinding
+			if residentWorker {
+				createRole = database.CreateResidentWorkerRoleWithBinding
+			}
+			r, b, cErr := createRole(db.CreateHeraRoleInput{
 				OrchestratorID: in.OrchestratorID,
 				Name:           uniqueName,
 				Kind:           db.HeraKindWorker,

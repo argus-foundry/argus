@@ -18,7 +18,7 @@ func graduationFixture(t *testing.T) (*DB, *HeraBinding) {
 	testutil.NoError(t, err)
 	task := &model.Task{ID: "graduate", Name: "graduate", Project: "project", Worktree: t.TempDir(), Branch: "argus/resident/work", SessionID: "conversation", Account: "routed", AccountRouted: true}
 	testutil.NoError(t, d.Add(task))
-	_, b, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{OrchestratorID: o.ID, Name: "work", Kind: HeraKindWorker, ArgusProject: "project", Prompt: "mission"}, task.ID, task.Worktree)
+	_, b, err := d.CreateResidentWorkerRoleWithBinding(CreateHeraRoleInput{OrchestratorID: o.ID, Name: "work", Kind: HeraKindWorker, ArgusProject: "project", Prompt: "mission"}, task.ID, task.Worktree)
 	testutil.NoError(t, err)
 	testutil.NoError(t, d.SetMeta(task.ID, HeraMetaNamespace, HeraMetaKeyResidentWorker, "true"))
 	coord, err := d.HeraLiveBindingByTask(res.ID)
@@ -93,4 +93,59 @@ func TestGraduateHeraWorkerAtomic(t *testing.T) {
 			testutil.True(t, yes)
 		})
 	}
+}
+
+func TestGraduateHeraWorkerMetaAndLinks(t *testing.T) {
+	d, b := graduationFixture(t)
+	for _, k := range []string{"ready_to_close", "pending_recycle"} {
+		testutil.NoError(t, d.SetMeta(b.ArgusTaskID, HeraMetaNamespace, k, "x"))
+	}
+	var linksBefore int
+	testutil.NoError(t, d.conn.QueryRow(`SELECT COUNT(*) FROM hera_orch_links`).Scan(&linksBefore))
+	_, err := d.GraduateHeraWorker(b.ID)
+	testutil.NoError(t, err)
+	meta, err := d.ListMetaByNamespace(HeraMetaNamespace)
+	testutil.NoError(t, err)
+	kv := meta[b.ArgusTaskID]
+	testutil.Equal(t, kv[HeraMetaKeyRole], string(HeraKindCoordinator))
+	for _, k := range []string{HeraMetaKeyResidentWorker, "ready_to_close", "pending_recycle"} {
+		_, present := kv[k]
+		testutil.False(t, present)
+	}
+	var linksAfter int
+	testutil.NoError(t, d.conn.QueryRow(`SELECT COUNT(*) FROM hera_orch_links`).Scan(&linksAfter))
+	testutil.Equal(t, linksAfter, linksBefore)
+}
+
+func TestGraduateHeraWorkerResidentNameBase(t *testing.T) {
+	d, b := graduationFixture(t)
+	_, err := d.conn.Exec(`UPDATE hera_roles SET name='resident-coord' WHERE name=?`, ResidentOrchestratorName)
+	testutil.NoError(t, err)
+	_, err = d.conn.Exec(`UPDATE hera_roles SET name=? WHERE id=?`, ResidentOrchestratorName, b.RoleID)
+	testutil.NoError(t, err)
+	result, err := d.GraduateHeraWorker(b.ID)
+	testutil.NoError(t, err)
+	o, err := d.HeraOrchestrator(result.NewBinding.OrchestratorID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, o.Name, "resident-graduate")
+}
+
+func TestGraduateHeraWorkerMultiBindingRefused(t *testing.T) {
+	d, b := graduationFixture(t)
+	other, err := d.CreateHeraOrchestrator("other", "")
+	testutil.NoError(t, err)
+	_, _, err = d.CreateHeraRoleWithBinding(CreateHeraRoleInput{OrchestratorID: other.ID, Name: "second", Kind: HeraKindFreelance, ArgusProject: "project"}, b.ArgusTaskID, b.WorktreePath)
+	testutil.NoError(t, err)
+	_, err = d.GraduateHeraWorker(b.ID)
+	testutil.ErrorIs(t, err, ErrHeraAmbiguous)
+	live, err := d.HeraLiveBindingByRole(b.RoleID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, live.ID, b.ID)
+	yes, err := d.IsResidentWorker(b.ArgusTaskID)
+	testutil.NoError(t, err)
+	testutil.True(t, yes)
+	meta, err := d.ListMetaByNamespace(HeraMetaNamespace)
+	testutil.NoError(t, err)
+	_, present := meta[b.ArgusTaskID][HeraMetaKeyGraduationPendingRestart]
+	testutil.False(t, present)
 }

@@ -632,13 +632,14 @@ func (d *DB) ArchiveHeraRole(id int64) error {
 // resident worker's hide by anyone but the resident itself queues the resident
 // a notice (see resident_notice.go).
 func (d *DB) ArchiveHeraRoleAs(id int64, actor HeraActor) error {
-	notice := d.residentNoticeCandidate(id, actor, ResidentNoticeHidden)
-	if err := d.heraSetFlag(`UPDATE hera_roles SET archived_at=?, pinned_at=NULL WHERE id=? AND archived_at IS NULL`,
-		heraRoleExistsProbe, id, formatTime(time.Now())); err != nil {
-		return err
-	}
-	d.enqueueResidentNotice(notice)
-	return nil
+	return d.heraRoleMutation(id, actor, ResidentNoticeHidden, func(tx *sql.Tx, cur *HeraRole) (bool, string, error) {
+		res, err := tx.Exec(`UPDATE hera_roles SET archived_at=?, pinned_at=NULL WHERE id=? AND archived_at IS NULL`, formatTime(time.Now()), id)
+		if err != nil {
+			return false, "", fmt.Errorf("hera set flag: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		return n > 0, "", nil
+	})
 }
 
 // UnarchiveHeraRole clears archived_at. Idempotent. Returns ErrHeraNotFound if
@@ -676,60 +677,49 @@ func (d *DB) NukeHeraRole(id int64) error {
 // worker's nuke by anyone but the resident (HeraActorResident, its own
 // hera_delete_worker) queues the resident a notice.
 func (d *DB) NukeHeraRoleAs(id int64, actor HeraActor) error {
-	notice := d.residentNoticeCandidate(id, actor, ResidentNoticeNuked)
-	now := formatTime(time.Now())
-	if err := d.heraSetFlag(
-		`UPDATE hera_roles SET nuked_at=COALESCE(nuked_at, ?), archived_at=COALESCE(archived_at, ?), pinned_at=NULL WHERE id=?`,
-		heraRoleExistsProbe, id, now, now); err != nil {
-		return err
-	}
-	d.enqueueResidentNotice(notice)
-	return nil
+	return d.heraRoleMutation(id, actor, ResidentNoticeNuked, func(tx *sql.Tx, cur *HeraRole) (bool, string, error) {
+		now := formatTime(time.Now())
+		// The transition is nuked_at NULL -> set; the archive/pin side effects
+		// ride the same statement, and a repeat only re-asserts them.
+		res, err := tx.Exec(`UPDATE hera_roles SET nuked_at=?, archived_at=COALESCE(archived_at, ?), pinned_at=NULL WHERE id=? AND nuked_at IS NULL`, now, now, id)
+		if err != nil {
+			return false, "", fmt.Errorf("hera set flag: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			return true, "", nil
+		}
+		if _, err := tx.Exec(`UPDATE hera_roles SET archived_at=COALESCE(archived_at, ?), pinned_at=NULL WHERE id=?`, now, id); err != nil {
+			return false, "", fmt.Errorf("hera set flag: %w", err)
+		}
+		return false, "", nil
+	})
 }
 
 // RenameHeraRole updates a role's name. The new name must be free among active
 // roles under the SAME orchestrator; archived siblings and roles in other
 // orchestrators do not block. Returns ErrHeraNotFound or ErrHeraNameConflict.
 func (d *DB) RenameHeraRole(id int64, newName string) error {
-	notice, err := d.renameHeraRole(id, newName)
-	if err != nil {
-		return err
-	}
-	d.enqueueResidentNotice(notice)
-	return nil
-}
-
-// renameHeraRole performs the rename and returns the resident notice to queue
-// (nil unless a resident worker was actually renamed).
-func (d *DB) renameHeraRole(id int64, newName string) (*pendingResidentNotice, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if err := d.residentHeraGuard("role", id); err != nil {
-		return nil, err
-	}
-
-	cur, err := d.heraRoleByID(id)
-	if err != nil {
-		return nil, err
-	}
-	if cur.Name == newName {
-		return nil, nil
-	}
-	var existsID int64
-	err = d.conn.QueryRow(
-		`SELECT id FROM hera_roles WHERE orchestrator_id=? AND name=? AND archived_at IS NULL AND id!=?`,
-		cur.OrchestratorID, newName, id).Scan(&existsID)
-	if err == nil {
-		return nil, fmt.Errorf("%w: %q held by role id=%d under orchestrator %d",
-			ErrHeraNameConflict, newName, existsID, cur.OrchestratorID)
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("rename hera role: %w", err)
-	}
-	if _, err := d.conn.Exec(`UPDATE hera_roles SET name=? WHERE id=?`, newName, id); err != nil {
-		return nil, fmt.Errorf("rename hera role: %w", err)
-	}
-	return d.residentNoticeLocked(cur, HeraActorHuman, ResidentNoticeRenamed, cur.Name+" → "+newName), nil
+	// The renamer here is always the human (the resident renames nothing).
+	return d.heraRoleMutation(id, HeraActorHuman, ResidentNoticeRenamed, func(tx *sql.Tx, cur *HeraRole) (bool, string, error) {
+		if cur.Name == newName {
+			return false, "", nil
+		}
+		var existsID int64
+		err := tx.QueryRow(
+			`SELECT id FROM hera_roles WHERE orchestrator_id=? AND name=? AND archived_at IS NULL AND id!=?`,
+			cur.OrchestratorID, newName, id).Scan(&existsID)
+		if err == nil {
+			return false, "", fmt.Errorf("%w: %q held by role id=%d under orchestrator %d",
+				ErrHeraNameConflict, newName, existsID, cur.OrchestratorID)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return false, "", fmt.Errorf("rename hera role: %w", err)
+		}
+		if _, err := tx.Exec(`UPDATE hera_roles SET name=? WHERE id=?`, newName, id); err != nil {
+			return false, "", fmt.Errorf("rename hera role: %w", err)
+		}
+		return true, cur.Name + " → " + newName, nil
+	})
 }
 
 // DeleteHeraRole permanently removes a role. Its bindings and role_status row
@@ -920,6 +910,9 @@ func (d *DB) MoveHeraBinding(oldBindingID int64, roleIn CreateHeraRoleInput, tas
 			`SELECT name, orchestrator_id FROM hera_roles WHERE id=?`, oldRoleID,
 		).Scan(&oldRoleName, &oldOrchID); err != nil {
 			return fmt.Errorf("move hera binding: lookup old role: %w", err)
+		}
+		if err := refuseStandingTeamExit(tx, oldOrchID, taskID); err != nil {
+			return err
 		}
 		var oldOrchName string
 		if err := tx.QueryRow(
@@ -1569,9 +1562,6 @@ func (d *DB) UniqueHeraRoleName(orchID int64, base string) (string, error) {
 // create a genuinely NEW top-level orchestrator instead of idempotently
 // re-fetching an existing one with the same name.
 func (d *DB) UniqueHeraOrchestratorName(base string) (string, error) {
-	if base == ResidentOrchestratorName {
-		return "", fmt.Errorf("%w: orchestrator name resident is reserved", ErrResidentProtected)
-	}
 	if base == "" {
 		base = "orchestrator"
 	}
@@ -1599,7 +1589,9 @@ func uniqueHeraOrchestratorName(q interface {
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("unique hera orchestrator name: rows: %w", err)
 	}
-	if !used[base] {
+	// The reserved resident name is never handed out: de-collide to
+	// resident-2, resident-3, ... even when no resident orchestrator exists.
+	if !used[base] && base != ResidentOrchestratorName {
 		return base, nil
 	}
 	for i := 2; i <= len(used)+2; i++ {
@@ -1785,26 +1777,12 @@ func deriveHeraOrchestratorID(ex interface {
 	return orchID, nil
 }
 
+// insertHeraBinding is every ordinary binding insert (join, adopt, rebind,
+// plan materialization, move, graduation's fresh orchestrator). It refuses the
+// resident's standing team with ErrResidentProtected; see
+// insertHeraBindingGuarded and the privileged resident-only paths.
 func insertHeraBinding(ex execer, in CreateHeraBindingInput, now string) (*HeraBinding, error) {
-	res, err := ex.Exec(
-		`INSERT INTO hera_bindings (role_id, orchestrator_id, argus_task_id, worktree_path, started_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		in.RoleID, in.OrchestratorID, in.ArgusTaskID, in.WorktreePath, now)
-	if err != nil {
-		return nil, fmt.Errorf("insert hera binding: %w", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("insert hera binding: last insert id: %w", err)
-	}
-	return &HeraBinding{
-		ID:             id,
-		RoleID:         in.RoleID,
-		OrchestratorID: in.OrchestratorID,
-		ArgusTaskID:    in.ArgusTaskID,
-		WorktreePath:   in.WorktreePath,
-		StartedAt:      parseTime(now),
-	}, nil
+	return insertHeraBindingGuarded(ex, in, now)
 }
 
 // --- Role status ---

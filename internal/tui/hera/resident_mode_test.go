@@ -32,7 +32,7 @@ func newResidentFixture(t *testing.T) *residentFixture {
 	for _, name := range []string{"alpha", "beta"} {
 		id := "task-" + name
 		testutil.NoError(t, d.Add(&model.Task{ID: id, Name: name, Status: model.StatusInProgress, Project: "p", CreatedAt: time.Now()}))
-		_, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: name, Kind: db.HeraKindWorker, ArgusProject: "p"}, id, "/wt/"+id)
+		_, _, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: name, Kind: db.HeraKindWorker, ArgusProject: "p"}, id, "/wt/"+id)
 		testutil.NoError(t, err)
 		testutil.NoError(t, d.SetMeta(id, "hera", db.HeraMetaKeyResidentWorker, "true"))
 		f.workers = append(f.workers, id)

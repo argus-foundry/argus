@@ -1227,7 +1227,7 @@ func (p *HeraPage) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 		if p.terminalPaneFocused() && p.OnRerender != nil {
 			if act, ok := p.keys().Resolve(keymap.CtxAgent, event); ok && act == keymap.ActAgentRerender {
 				if id := p.FocusedTerminalTaskID(); id != "" {
-					p.OnRerender(id)
+					p.fireRerender(id)
 					return
 				}
 			}
@@ -1570,6 +1570,12 @@ func (p *HeraPage) handleRailMutation(event *tcell.EventKey) bool {
 		if p.residentMode && sel.IsCoordinator() {
 			taskID = ""
 		}
+		// A graduation-pending / ended row has no live binding: its task now
+		// belongs to the graduate (a standalone coordinator), so Enter on it is
+		// navigate-only rather than a revive/kick.
+		if p.residentMode && ResidentRowInert(sel) {
+			taskID = ""
+		}
 		if taskID != "" && p.OnReattach != nil {
 			live := p.sessionLive(taskID)
 			if !live || !sel.IsCoordinator() {
@@ -1689,10 +1695,43 @@ func ResidentRailAllows(act keymap.Action, sel heramodel.Selection) bool {
 	case keymap.ResidentAnywhere:
 		return true
 	case keymap.ResidentWorkerOnly:
-		return sel.IsWorkerOrFreelance()
+		return sel.IsWorkerOrFreelance() && !ResidentRowInert(sel)
 	default:
 		return false
 	}
+}
+
+// ResidentRowInert reports whether the selected rail row is one the resident
+// tab must not act on: a role with no live binding (including the "graduation
+// pending restart" row, the ended worker role of a just-graduated worker whose
+// task now belongs to the graduate). Management keys and Enter are inert there.
+func ResidentRowInert(sel heramodel.Selection) bool {
+	r := sel.Role
+	return r != nil && (r.GraduationPendingRestart || !r.Live)
+}
+
+// fireRerender forwards a forced re-render request to OnRerender, except for
+// the standing resident: its restart path would race the daemon's ensure loop,
+// so every forced-rerender entry point (key, owed-notice click, palette) is
+// inert for the resident-mode coordinator pane.
+func (p *HeraPage) fireRerender(taskID string) {
+	if p.OnRerender == nil || taskID == "" {
+		return
+	}
+	if p.residentMode && taskID == p.coordBound {
+		uxlog.Log("[resident] forced rerender skipped for task=%s: the daemon owns the resident session", taskID)
+		return
+	}
+	p.OnRerender(taskID)
+}
+
+// FireRerender is the exported entry for callers outside the page (palette).
+func (p *HeraPage) FireRerender(taskID string) { p.fireRerender(taskID) }
+
+// RerenderAllowed reports whether a forced re-render may target taskID (false
+// for the resident's coordinator pane in resident mode).
+func (p *HeraPage) RerenderAllowed(taskID string) bool {
+	return taskID != "" && (!p.residentMode || taskID != p.coordBound)
 }
 
 // notifyFocusChange fires OnFocusChange with the current focus state. Called

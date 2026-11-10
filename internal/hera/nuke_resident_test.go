@@ -45,7 +45,7 @@ func TestNukeStaleWorkerPreservesGraduate(t *testing.T) {
 	testutil.NoError(t, err)
 	old, err := d.EnsureResidentOrchestrator(res.ID)
 	testutil.NoError(t, err)
-	role, b, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: old.ID, Name: "w", Kind: db.HeraKindWorker}, task.ID, "")
+	role, b, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: old.ID, Name: "w", Kind: db.HeraKindWorker}, task.ID, "")
 	testutil.NoError(t, err)
 	graduated, err := d.GraduateHeraWorker(b.ID)
 	testutil.NoError(t, err)
@@ -57,4 +57,47 @@ func TestNukeStaleWorkerPreservesGraduate(t *testing.T) {
 	b, err = d.HeraLiveBindingByTask(task.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, b.ID, live.ID)
+}
+
+func TestNukeSkipsPendingGraduate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	task := &model.Task{ID: "g", Name: "g", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	res, _, err := d.EnsureResidentTask(t.TempDir())
+	testutil.NoError(t, err)
+	old, err := d.EnsureResidentOrchestrator(res.ID)
+	testutil.NoError(t, err)
+	_, b, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: old.ID, Name: "g", Kind: db.HeraKindWorker}, task.ID, "")
+	testutil.NoError(t, err)
+	grad, err := d.GraduateHeraWorker(b.ID)
+	testutil.NoError(t, err)
+	view := &heramodel.RoleView{RoleID: grad.NewRole.ID, TaskID: task.ID, Live: true, Kind: db.HeraKindCoordinator}
+	orch := &heramodel.OrchView{ID: grad.NewRole.OrchestratorID, Name: "g", Roles: []heramodel.RoleView{*view}}
+
+	assertIntact := func(t *testing.T) {
+		t.Helper()
+		after, err := d.Get(task.ID)
+		testutil.NoError(t, err)
+		testutil.False(t, after.Archived)
+		live, err := d.HeraLiveBindingByTask(task.ID)
+		testutil.NoError(t, err)
+		testutil.Equal(t, live.ID, grad.NewBinding.ID)
+		testutil.True(t, d.GraduationPending(task.ID))
+	}
+
+	NukeSingleRole(d, nil, view)()
+	assertIntact(t)
+	ids, bg := NukeSubtree(d, nil, []*heramodel.OrchView{orch})
+	bg()
+	testutil.Equal(t, len(ids), 0)
+	assertIntact(t)
+
+	testutil.NoError(t, d.CompleteHeraGraduation(task.ID, "orientation"))
+	NukeSingleRole(d, nil, view)()
+	after, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, after.Archived)
 }

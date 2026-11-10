@@ -837,6 +837,13 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A graduate's restart intent must survive: refuse before any side effect.
+	if s.db.GraduationPending(id) {
+		uxlog.Log("[resident] api delete refused task=%s: graduation pending", id)
+		writeErr(w, http.StatusConflict, "", db.ErrGraduationPending)
+		return
+	}
+
 	// Stop the session if running.
 	_ = s.runner.Stop(id)
 
@@ -855,6 +862,10 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	os.RemoveAll(agent.ArtifactsDir(id)) //nolint:errcheck,gosec // G304: id validated by db.Get; ArtifactsDir roots at ~/.argus/artifacts/<id>
 
 	if err := s.db.Delete(id); err != nil {
+		if errors.Is(err, db.ErrGraduationPending) {
+			writeErr(w, http.StatusConflict, "", err)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
@@ -902,6 +913,10 @@ func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived boo
 	}
 	task.SetArchived(archived)
 	if err := s.db.Update(task); err != nil {
+		if errors.Is(err, db.ErrGraduationPending) {
+			writeErr(w, http.StatusConflict, "", err)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}

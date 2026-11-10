@@ -238,6 +238,9 @@ type Server struct {
 	pathPolicy func(task *model.Task) (write, deny []string)
 	heraSvc    *hera.Service // optional; set via SetHeraService
 	heraStore  HeraStore     // optional; set via SetHeraService
+	// residentTokenHashPath locates the current resident token hash
+	// (nil = agent.ResidentMCPTokenHashPath). A seam so tests never touch ~/.argus.
+	residentTokenHashPath func() (string, error)
 	// residentClassify is the hera_delete_worker merge-safety seam (nil = real classifier).
 	residentClassify func(context.Context, *model.Task) (mergesafety.Verdict, error)
 	heraSpawn        HeraSpawner // optional; set via SetHeraService (born-bound spawn)
@@ -505,7 +508,7 @@ func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 		writeError(w, nil, -32700, "parse error")
 		return
 	}
-	req.caller = r.URL.Query().Get("caller")
+	req.caller = s.verifiedCaller(r)
 
 	if !hasID {
 		// Notification: dispatch for any side effect; the returned
@@ -1213,6 +1216,9 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		args["from_orchestrator"] = db.ResidentOrchestratorName
 		params.Arguments, _ = json.Marshal(args)
 	}
+	if refused := s.residentHeraCallGuard(req, params.Name, params.Arguments); refused != nil {
+		return refused
+	}
 
 	switch params.Name {
 	case "kb_search":
@@ -1357,6 +1363,93 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		}
 		return errorResp(req.ID, -32601, "unknown tool: "+params.Name)
 	}
+}
+
+// residentSelfIDTools take `id` as the CALLER's own identity (the messaging
+// tools' sender/reader, task_set_result's self, the artifact tools' owning
+// task), so naming the resident there acts as the resident.
+var residentSelfIDTools = map[string]bool{
+	"task_message_send": true, "task_inbox": true, "task_message_ack": true, "task_ask": true,
+	"task_set_result": true, "artifact_register": true, "artifact_publish": true, "artifact_open": true,
+}
+
+// residentHeraCallGuard fails closed, before dispatch, on two resident-team
+// escalations:
+//
+//   - Impersonation (EVERY tool): resolveTask falls back to the resident for
+//     its working directory, so a connection other than the verified resident
+//     naming the resident's cwd, caller_id, or self-identifying id would
+//     otherwise act with the resident's identity (spawn unattended workers,
+//     forge a recycle handoff, read its inbox, send or set results as it).
+//   - Enrollment: attach-mode hera_join, hera_move and hera_rebind into the
+//     standing team are refused here with a clear error (the db layer refuses
+//     the insert regardless; rebind would otherwise end the old binding first).
+func (s *Server) residentHeraCallGuard(req *Request, name string, raw json.RawMessage) *Response {
+	var args map[string]interface{}
+	if json.Unmarshal(raw, &args) != nil || args == nil {
+		return nil // the tool reports its own decode error
+	}
+	if field := s.residentIdentityArg(req.caller, name, args); field != "" {
+		log.Printf("[resident] %s refused: caller=%q named the resident's %s", name, req.caller, field)
+		return residentToolError(req.ID, name+": resident identity requires the resident's own bound connection")
+	}
+	if !strings.HasPrefix(name, "hera_") {
+		return nil
+	}
+	switch name {
+	case "hera_join":
+		if rn, _ := args["role_name"].(string); rn == "" {
+			return nil // lookup mode: reads the caller's own binding, binds nothing
+		}
+	case "hera_move", "hera_rebind":
+	default:
+		return nil
+	}
+	orchName, _ := args["orchestrator"].(string)
+	if orchName == "" || s.heraStore == nil {
+		return nil
+	}
+	standing := orchName == db.ResidentOrchestratorName
+	if o, err := s.heraStore.HeraOrchestratorByName(orchName); err == nil && o != nil {
+		if st, ok := s.heraStore.(interface {
+			IsStandingTeamOrchestrator(int64) (bool, error)
+		}); ok {
+			yes, stErr := st.IsStandingTeamOrchestrator(o.ID)
+			standing = yes || stErr != nil
+		}
+	}
+	if standing {
+		return residentToolError(req.ID, fmt.Sprintf("%s: orchestrator %q is the resident's standing team; members are added only by resident spawn and leave only by graduation", name, orchName))
+	}
+	return nil
+}
+
+// residentIdentityArg returns the argument ("cwd", "caller_id" or "id") by
+// which a call on a connection that is not the verified resident identifies
+// the resident, or "" when it does not.
+func (s *Server) residentIdentityArg(caller, name string, args map[string]interface{}) string {
+	if s.taskDB == nil || s.boundResident(caller) {
+		return ""
+	}
+	isResident := func(id string) bool {
+		if id == "" {
+			return false
+		}
+		t, err := s.taskDB.Get(id)
+		return err == nil && t != nil && t.IsResident()
+	}
+	if cwd, _ := args["cwd"].(string); cwd != "" {
+		if t, err := s.resolveTask("", cwd); err == nil && t != nil && t.IsResident() {
+			return "cwd"
+		}
+	}
+	if v, _ := args["caller_id"].(string); isResident(v) {
+		return "caller_id"
+	}
+	if v, _ := args["id"].(string); residentSelfIDTools[name] && isResident(v) {
+		return "id"
+	}
+	return ""
 }
 
 func (s *Server) toolKBSearch(id interface{}, args json.RawMessage) *Response {

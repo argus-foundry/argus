@@ -25,7 +25,7 @@ func TestUnattendedHideRestart(t *testing.T) {
 	w.Backend, w.Worktree = "claude", t.TempDir()
 	w.SessionID = "known-session"
 	testutil.NoError(t, d.Add(w))
-	_, binding, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "worker", Kind: db.HeraKindWorker}, w.ID, w.Worktree)
+	_, binding, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Name: "worker", Kind: db.HeraKindWorker}, w.ID, w.Worktree)
 	testutil.NoError(t, err)
 	testutil.NoError(t, d.SetMeta(w.ID, "hera", db.HeraMetaKeyResidentWorker, "true"))
 	testutil.NoError(t, d.SetArchived(w.ID, true))

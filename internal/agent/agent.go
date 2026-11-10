@@ -919,12 +919,22 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 	if cfg.MCPPort > 0 && fam.MCPFlag != nil {
 		mcpURL := fmt.Sprintf("http://localhost:%d/mcp", cfg.MCPPort)
 		if task.IsResident() {
-			// Bind this connection to the resident so task_recycle can refuse to
-			// target any other task; the agent cannot alter its own spawn flags.
+			// Bind this connection to the resident. The caller id alone is
+			// forgeable, so every launch mints a fresh secret delivered only
+			// through a private config file (never argv/env); the MCP server
+			// treats a caller without the current token as unbound.
 			mcpURL += "?caller=" + url.QueryEscape(task.ID)
+			flag, err := writeResidentMCPConfig(fam, mcpURL)
+			if err != nil {
+				return nil, nil, fmt.Errorf("resident MCP identity: %w", err)
+			}
+			mcpFlag = flag
+		} else {
+			mcpFlag = fam.MCPFlag(mcpURL)
 		}
-		mcpFlag = fam.MCPFlag(mcpURL)
 		uxlog.Log("[mcp] configured task=%s family=%s client_timeout=%ds", task.ID, fam.Kind, mcplimits.ClientTimeoutSeconds)
+	} else if task.IsResident() {
+		retireResidentMCPToken()
 	}
 	cmdStr += mcpFlag
 	// Families without a per-launch MCP flag read Argus's registration (and,
@@ -1207,6 +1217,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 	// Wrap with sandbox if enabled (effective config merges global + per-project overrides).
 	var sandboxCleanup func()
 	effectiveSandbox := sandboxWithCodexHome(sandboxWithClaudeConfigDir(ResolveSandboxConfig(task, cfg), claudeConfigDir), codexAccountHome)
+	effectiveSandbox = sandboxWithResidentLaunchDenied(effectiveSandbox, task)
 	// The single shared predicate (also used for the resident's sandbox-carry
 	// decision above). effectiveSandbox only adds write paths, never Enabled.
 	if argusWrapsSandbox(task, cfg) {
