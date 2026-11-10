@@ -72,13 +72,19 @@ func TestSandboxDenyReadPaths(t *testing.T) {
 		Sandbox: config.SandboxConfig{DenyRead: []string{"~/private", " "}},
 		Projects: map[string]config.Project{
 			"p": {Sandbox: config.ProjectSandboxConfig{DenyRead: []string{"/opt/secret"}}},
+			"q": {Sandbox: config.ProjectSandboxConfig{DenyRead: []string{"/opt/other"}}},
 		},
 	}
-	got := SandboxDenyReadPaths(&model.Task{Project: "p"}, cfg)
 	var want []string
 	for _, rel := range sandboxBuiltinDenyRead {
 		want = append(want, filepath.Join(rhome, rel))
 	}
-	want = append(want, filepath.Join(rhome, "private"), "/opt/secret")
-	testutil.DeepEqual(t, got, want)
+	want = append(want, filepath.Join(rhome, "private"), "/opt/secret", "/opt/other")
+	// Every project's denials apply whatever task is named, so a spoofed
+	// task id can't narrow the list.
+	for _, project := range []string{"p", "q", "", "unknown"} {
+		t.Run("task project "+project, func(t *testing.T) {
+			testutil.DeepEqual(t, SandboxDenyReadPaths(&model.Task{Project: project}, cfg), want)
+		})
+	}
 }
