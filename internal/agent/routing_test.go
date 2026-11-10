@@ -319,6 +319,9 @@ func TestDynamicBackendSelection(t *testing.T) {
 			testutil.Equal(t, got, tc.want)
 		})
 	}
+	name, err := ResolveBackendName(&model.Task{Backend: config.DynamicBackend}, base)
+	testutil.NoError(t, err)
+	testutil.Equal(t, name, "codex")
 }
 
 func TestResolveBackend_DynamicFallsBackToConcreteDefaultWhenTiersAreUnavailable(t *testing.T) {

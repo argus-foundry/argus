@@ -183,18 +183,25 @@ func resolveDefaultBackendName(explicit, project string, cfg config.Config, acco
 // project backend is never overridden by usage-based routing — the tiered
 // resolver is consulted only once neither is set.
 func ResolveBackend(task *model.Task, cfg config.Config) (config.Backend, error) {
+	name, err := ResolveBackendName(task, cfg)
+	if err != nil {
+		return config.Backend{}, err
+	}
+	return cfg.Backends[name], nil
+}
+
+// ResolveBackendName returns the concrete backend name selected for a task.
+// Creation paths that persist tasks without calling CreateAndStart use it to
+// ensure reserved selectors such as dynamic never become stored task values.
+func ResolveBackendName(task *model.Task, cfg config.Config) (string, error) {
 	name := resolveDefaultBackendName(task.Backend, task.Project, cfg, task.Account)
-
 	if name == "" {
-		return config.Backend{}, fmt.Errorf("no backend configured")
+		return "", fmt.Errorf("no backend configured")
 	}
-
-	backend, ok := cfg.Backends[name]
-	if !ok {
-		return config.Backend{}, fmt.Errorf("backend %q not found in config", name)
+	if _, ok := cfg.Backends[name]; !ok {
+		return "", fmt.Errorf("backend %q not found in config", name)
 	}
-
-	return backend, nil
+	return name, nil
 }
 
 // ResolvedProfile is the daemon-side outcome of diligence-profile resolution at

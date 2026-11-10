@@ -81,6 +81,45 @@ func TestCreateAndStart_DynamicPinnedAccountSkipsIncompatibleTier(t *testing.T) 
 	testutil.Equal(t, task.Account, "work")
 }
 
+func TestSpawnHeraCoordinator_DynamicPreservesAccountPin(t *testing.T) {
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo)
+	testutil.NoError(t, d.SetBackendTiers([]config.BackendTier{
+		{Backend: "codex", Probe: config.ProbeNone},
+		{Backend: "test", Probe: config.ProbeNone},
+	}))
+	result, err := SpawnHeraCoordinator(d, &fakeRunner{sessionPID: 1}, HeraCoordinatorSpawnInput{
+		OrchestratorBaseName: "dynamic-coordinator-account",
+		TaskPrompt:           "coordinate",
+		Project:              "proj",
+		Backend:              config.DynamicBackend,
+		Account:              "work",
+	})
+	testutil.NoError(t, err)
+	testutil.Equal(t, result.Task.Backend, "test")
+	testutil.Equal(t, result.Task.Account, "work")
+}
+
+func TestSpawnHeraCoordinator_IncompatibleDynamicFallbackLeavesNoOrchestrator(t *testing.T) {
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo, "default_account = \"cx\"\n")
+	testutil.NoError(t, d.SetProject("proj", config.Project{Path: repo, Branch: "HEAD", Backend: config.DynamicBackend}))
+	testutil.NoError(t, d.SetBackendTiers([]config.BackendTier{{Backend: "test", Probe: "unknown"}}))
+	before, err := d.ListHeraOrchestrators(true)
+	testutil.NoError(t, err)
+
+	_, err = SpawnHeraCoordinator(d, &fakeRunner{sessionPID: 1}, HeraCoordinatorSpawnInput{
+		OrchestratorBaseName: "incompatible-dynamic-coordinator",
+		TaskPrompt:           "coordinate",
+		Project:              "proj",
+		Backend:              config.DynamicBackend,
+	})
+	testutil.Error(t, err)
+	after, listErr := d.ListHeraOrchestrators(true)
+	testutil.NoError(t, listErr)
+	testutil.Equal(t, len(after), len(before))
+}
+
 func TestCreateAndStart_DynamicWithoutTierOrConcreteDefaultFailsBeforeWorktree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := initGitRepo(t)

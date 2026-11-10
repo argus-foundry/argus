@@ -6744,6 +6744,27 @@ func (a *App) reapStaleRerenderRestart(taskID string, sess agent.SessionHandle) 
 	a.statusbar.ClearInfo()
 }
 
+// resolveInlineDynamicBackend resolves a dynamic selector before the no-path
+// inline create flow persists its task directly.
+func resolveInlineDynamicBackend(task *model.Task, project config.Project, cfg config.Config) (string, bool, error) {
+	selected := task.Backend
+	if selected == "" {
+		selected = project.Backend
+		if selected == "" {
+			selected = cfg.Defaults.Backend
+		}
+	}
+	if selected != config.DynamicBackend {
+		return "", false, nil
+	}
+	backend, err := agent.ResolveBackendName(task, cfg)
+	if err != nil {
+		return "", true, err
+	}
+	task.Backend = backend
+	return backend, true, nil
+}
+
 // buildNewTaskForm constructs a NewTaskForm defaulted to defaultProject and
 // wires its async branch loader. Shared by the Tasks-tab new-task flow and the
 // Hera rail's `w`/`n` keys (which reuse the SAME modal).
@@ -6959,6 +6980,16 @@ func (a *App) handleNewTaskKey(event *tcell.EventKey) {
 
 		if projCfg.Path == "" {
 			// No project path — no worktree needed, persist and start inline.
+			cfg := a.db.Config()
+			backend, resolvedDynamic, err := resolveInlineDynamicBackend(task, projCfg, cfg)
+			if err != nil {
+				uxlog.Log("[tui] dynamic backend resolution failed for task %q: %v", task.Name, err)
+				a.statusbar.SetError("Could not resolve dynamic backend: " + err.Error())
+				return
+			}
+			if resolvedDynamic {
+				uxlog.Log("[tui] dynamic backend resolved for task %q: %q", task.Name, backend)
+			}
 			task.Sandboxed = a.resolveSandboxed(task)
 			a.db.Add(task)
 			uxlog.Log("[tui] created task %s (%s)", task.ID, task.Name)

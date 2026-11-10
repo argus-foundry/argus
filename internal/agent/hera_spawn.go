@@ -716,6 +716,7 @@ type HeraCoordinatorSpawnInput struct {
 	Project              string // resolved argus project
 	Branch               string // optional base branch
 	Backend              string // optional backend override
+	Account              string // optional named account pin
 	Model                string // optional model override (empty = backend default)
 	Archetype            string // optional diligence archetype; defaults to orchestrator when empty
 }
@@ -745,6 +746,10 @@ type HeraCoordinatorSpawnResult struct {
 // (hera_new_orchestrator) keeps its own task-resolution path because it binds an
 // EXISTING task rather than creating one.
 func SpawnHeraCoordinator(database *db.DB, runner SessionProvider, in HeraCoordinatorSpawnInput) (*HeraCoordinatorSpawnResult, error) {
+	backend := resolveCoordinatorBackend(in.Backend, in.Project, database.Config(), in.Account)
+	if backend == "" {
+		return nil, fmt.Errorf("no Claude-capable backend supports account %q", in.Account)
+	}
 	orchName, err := database.UniqueHeraOrchestratorName(in.OrchestratorBaseName)
 	if err != nil {
 		return nil, err
@@ -780,10 +785,6 @@ func SpawnHeraCoordinator(database *db.DB, runner SessionProvider, in HeraCoordi
 
 	var role *db.HeraRole
 	var binding *db.HeraBinding
-	backend := resolveCoordinatorBackend(in.Backend, in.Project, database.Config())
-	if backend == "" {
-		return nil, fmt.Errorf("no Claude-capable backend supports the effective account")
-	}
 	task, _, err := CreateAndStart(database, runner, CreateInput{
 		Name:    taskName,
 		PTYRole: db.HeraKindCoordinator,
@@ -792,6 +793,7 @@ func SpawnHeraCoordinator(database *db.DB, runner SessionProvider, in HeraCoordi
 		// Coordinators route among Claude-capable tiers, including accounts.
 		Backend:         backend,
 		Model:           in.Model,
+		Account:         in.Account,
 		Archetype:       archetype,
 		BaseBranch:      in.Branch,
 		BranchNamespace: orchName,
