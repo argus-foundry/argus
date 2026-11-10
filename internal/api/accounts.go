@@ -43,7 +43,49 @@ type accountJSON struct {
 	Org             string              `json:"org,omitempty"`
 	Plan            string              `json:"plan,omitempty"`
 	CodexLoggedIn   *bool               `json:"codex_logged_in,omitempty"`
+	Source          accountSourceJSON   `json:"source"`
+	Editable        bool                `json:"editable"`
 	Usage           *accountUsageJSON   `json:"usage,omitempty"`
+}
+
+// accountSourceJSON names where each editable account field comes from:
+// "builtin" (the default account), "database" (Settings/REST edited) or
+// "config_file" (config.toml, which replaces the whole account and is read-only).
+type accountSourceJSON struct {
+	Label           string `json:"label"`
+	ClaudeConfigDir string `json:"claude_config_dir"`
+	CodexHome       string `json:"codex_home"`
+}
+
+func sourceFor(name string, sources config.AccountSources) (accountSourceJSON, bool) {
+	src := "database"
+	switch {
+	case name == config.DefaultAccountName:
+		src = "builtin"
+	case sources.Accounts[name]:
+		src = "config_file"
+	}
+	return accountSourceJSON{Label: src, ClaudeConfigDir: src, CodexHome: src}, src == "database"
+}
+
+// accountEntry is the credential-free, lookup-free view of one valid account.
+func accountEntry(cfg config.Config, sources config.AccountSources, name, defName string) accountJSON {
+	label := cfg.Accounts[name].Label
+	if label == "" {
+		label = name
+	}
+	claudeDir, _, claudeErr := cfg.ClaudeConfigDir(name)
+	codexHome, _, codexErr := cfg.CodexHome(name)
+	a := accountJSON{
+		Name:            name,
+		Label:           label,
+		ClaudeConfigDir: claudeDir,
+		CodexHome:       codexHome,
+		Supports:        accountSupportsJSON{Claude: claudeErr == nil, Codex: codexErr == nil},
+		IsDefault:       name == defName,
+	}
+	a.Source, a.Editable = sourceFor(name, sources)
+	return a
 }
 
 // accountUsageJSON is an account's currently valid Claude usage (bridge
@@ -84,6 +126,7 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 	cfg := s.db.Config()
 	names := cfg.AccountNames()
 	defName := cfg.ResolveAccount("", r.URL.Query().Get("project"))
+	sources := s.db.AccountsFromConfigToml()
 	out := make([]accountJSON, len(names))
 
 	ctx, cancel := context.WithTimeout(r.Context(), claudeAuthLookupTimeout)
@@ -95,20 +138,9 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 			uxlog.Log("[account] list: skipping %q: %v", name, err)
 			continue
 		}
-		label := cfg.Accounts[name].Label
-		if label == "" {
-			label = name
-		}
+		out[i] = accountEntry(cfg, sources, name, defName)
 		claudeDir, _, claudeErr := cfg.ClaudeConfigDir(name)
 		codexHome, _, codexErr := cfg.CodexHome(name)
-		out[i] = accountJSON{
-			Name:            name,
-			Label:           label,
-			ClaudeConfigDir: claudeDir,
-			CodexHome:       codexHome,
-			Supports:        accountSupportsJSON{Claude: claudeErr == nil, Codex: codexErr == nil},
-			IsDefault:       name == defName,
-		}
 		if codexErr == nil {
 			source := ""
 			if name != config.DefaultAccountName {
