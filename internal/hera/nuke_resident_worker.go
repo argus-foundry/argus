@@ -199,7 +199,8 @@ func NukeResidentWorkerChecked(d *db.DB, runner NukeRunner, r *heramodel.RoleVie
 		}
 	}
 	// The worktree removal needs the per-repo cleanup lock, which other
-	// cleanups (the reclaim sweep, TUI nukes) hold across an untimed origin
+	// daemon-side cleanups (the reclaim sweep, REST/bulk delete, prune; the
+	// lock is in-process, so TUI-process nukes never contend) hold across an untimed origin
 	// push. Take it now, before the first change, with a wait bounded by
 	// MutateBy, and hold it through the stop, exit wait, recheck and local
 	// removal, so nothing after the stop can block on it.
@@ -298,8 +299,10 @@ func residentRemoteBranchDelete(opts ResidentDeleteOptions, taskID, repoDir, bra
 	defer cancel()
 	err := del(ctx, repoDir, branch, leaseTip)
 	switch {
+	case errors.Is(err, agent.ErrRemoteBranchGone):
+		residentDeleteLog("[resident] delete: remote branch already gone task=%s branch=%s", taskID, branch)
 	case errors.Is(err, agent.ErrRemoteBranchChanged):
-		residentDeleteLog("[resident] delete: remote branch changed since delete; left in place task=%s branch=%s: %v", taskID, branch, err)
+		residentDeleteLog("[resident] delete: remote branch changed on origin; left in place task=%s branch=%s: %v", taskID, branch, err)
 	case err != nil:
 		residentDeleteLog("[resident] delete: remote branch delete failed task=%s branch=%s: %v", taskID, branch, err)
 	default:

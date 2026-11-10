@@ -101,10 +101,15 @@ func revParseCommit(dir, ref string) string {
 }
 
 // ErrRemoteBranchChanged reports that DeleteRemoteBranchContext's lease
-// failed: origin's branch no longer points at the expected commit (a new
-// worker of the same name pushed it, or it was already deleted), so it was
-// left in place. Not a failure to retry.
-var ErrRemoteBranchChanged = errors.New("remote branch changed since delete; left in place")
+// failed and origin still has the branch at a different commit (a new worker
+// of the same name pushed it, or it moved server-side), so it was left in
+// place. Not a failure to retry; a fetch-and-retry with an ancestry-checked
+// lease is a named follow-up (gotchas/resident.md).
+var ErrRemoteBranchChanged = errors.New("remote branch changed on origin; left in place")
+
+// ErrRemoteBranchGone reports that origin no longer has the branch at all
+// (typically merged and auto-deleted): nothing to do.
+var ErrRemoteBranchGone = errors.New("remote branch already gone")
 
 // DeleteRemoteBranchContext deletes branch on origin, bounded by ctx, and
 // reports the outcome (DeleteRemoteBranch is best-effort and silent). The
@@ -130,10 +135,36 @@ func DeleteRemoteBranchContext(ctx context.Context, repoDir, branch, expectTip s
 			return fmt.Errorf("git push origin --delete %s: %w", branch, ctxErr)
 		}
 		msg := strings.TrimSpace(string(out))
-		if strings.Contains(msg, "stale info") {
+		if strings.Contains(msg, "stale info") || strings.Contains(msg, "remote ref does not exist") {
+			present, lsErr := remoteBranchExists(ctx, repoDir, ref)
+			switch {
+			case lsErr == nil && !present:
+				return fmt.Errorf("%w: origin has no %s", ErrRemoteBranchGone, branch)
+			case lsErr != nil:
+				return fmt.Errorf("%w: origin %s is no longer at %s (could not confirm it still exists: %w)", ErrRemoteBranchChanged, branch, expectTip, lsErr)
+			}
 			return fmt.Errorf("%w: origin %s is no longer at %s", ErrRemoteBranchChanged, branch, expectTip)
 		}
 		return fmt.Errorf("git push origin --delete %s: %w: %s", branch, err, msg)
 	}
 	return nil
+}
+
+// remoteBranchExists asks origin whether ref exists (git ls-remote), bounded
+// by ctx. It only classifies a failed lease for logging; it never decides a
+// delete.
+func remoteBranchExists(ctx context.Context, repoDir, ref string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--exit-code", "origin", ref)
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &exitErr) && exitErr.ExitCode() == 2:
+		return false, nil // --exit-code: no matching ref
+	default:
+		return false, err
+	}
 }

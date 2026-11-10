@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,11 +26,76 @@ func residentStateGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// residentStateGitFails runs a git command that is expected to stop part-way
+// (a conflict, an empty pick, a patch that does not apply), leaving its
+// in-progress state behind.
+func residentStateGitFails(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("git %v should have stopped part-way: %s", args, out)
+	}
+}
+
+// residentStateWrite commits content to file in dir.
+func residentStateWrite(t *testing.T, dir, file, content, msg string) {
+	t.Helper()
+	testutil.NoError(t, os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644))
+	residentStateGit(t, dir, "add", file)
+	residentStateGit(t, dir, "commit", "-m", msg)
+}
+
+// residentStateRows are the paused-operation setups shared by the refusal
+// and the force-override tests. Each leaves a clean tree (so only the
+// worktree-state check, not the dirty-file check, can see it).
+var residentStateRows = []struct {
+	name  string
+	setup func(t *testing.T, repo, wt string)
+	want  string
+}{
+	{"rebase in progress", func(t *testing.T, _, wt string) {
+		residentStateGit(t, wt, "commit", "--allow-empty", "-m", "to rebase")
+		cmd := exec.Command("git", "rebase", "--exec", "false", "HEAD~1")
+		cmd.Dir = wt
+		if err := cmd.Run(); err == nil {
+			t.Fatal("rebase should have paused at the failing exec")
+		}
+	}, "a rebase is in progress"},
+	{"merge in progress", func(t *testing.T, repo, wt string) {
+		residentStateGit(t, repo, "commit", "--allow-empty", "-m", "on master")
+		residentStateGit(t, wt, "merge", "--no-ff", "--no-commit", "master")
+	}, "a merge is in progress"},
+	{"cherry-pick in progress", func(t *testing.T, repo, wt string) {
+		residentStateGit(t, repo, "commit", "--allow-empty", "-m", "empty on master")
+		// An empty pick stops with CHERRY_PICK_HEAD and a clean tree.
+		residentStateGitFails(t, wt, "cherry-pick", "master")
+	}, "a cherry-pick is in progress"},
+	{"revert in progress", func(t *testing.T, _, wt string) {
+		residentStateWrite(t, wt, "state.txt", "1\n", "add")
+		residentStateWrite(t, wt, "state.txt", "2\n", "bump")
+		residentStateWrite(t, wt, "state.txt", "3\n", "bump again")
+		residentStateGitFails(t, wt, "revert", "--no-edit", "HEAD~1")
+		// Drop the conflict markers; REVERT_HEAD stays.
+		residentStateGit(t, wt, "checkout", "HEAD", "--", "state.txt")
+	}, "a revert is in progress"},
+	{"am (rebase-apply) in progress", func(t *testing.T, _, wt string) {
+		residentStateWrite(t, wt, "state.txt", "1\n", "add")
+		patches := t.TempDir()
+		residentStateGit(t, wt, "format-patch", "-1", "-o", patches)
+		// The patch's change is already on the branch, so it does not apply.
+		entries, err := os.ReadDir(patches)
+		testutil.NoError(t, err)
+		testutil.Equal(t, len(entries), 1)
+		residentStateGitFails(t, wt, "am", filepath.Join(patches, entries[0].Name()))
+	}, "a rebase (or am) is in progress"},
+}
+
 // Commits on a detached HEAD and a paused rebase/merge/cherry-pick are not
 // on the branch and not dirt in the tree, yet die with the worktree: a
 // non-force delete refuses them before the stop, naming the reason.
 func TestResidentDelete_WorktreeStateRefusedBeforeStop(t *testing.T) {
-	for _, tc := range []struct {
+	cases := append([]struct {
 		name  string
 		setup func(t *testing.T, repo, wt string)
 		want  string
@@ -42,19 +108,8 @@ func TestResidentDelete_WorktreeStateRefusedBeforeStop(t *testing.T) {
 			residentStateGit(t, wt, "checkout", "-b", "side")
 			residentStateGit(t, wt, "commit", "--allow-empty", "-m", "on side")
 		}, "HEAD is on side, not the worker's branch"},
-		{"rebase in progress", func(t *testing.T, _, wt string) {
-			residentStateGit(t, wt, "commit", "--allow-empty", "-m", "to rebase")
-			cmd := exec.Command("git", "rebase", "--exec", "false", "HEAD~1")
-			cmd.Dir = wt
-			if err := cmd.Run(); err == nil {
-				t.Fatal("rebase should have paused at the failing exec")
-			}
-		}, "a rebase is in progress"},
-		{"merge in progress", func(t *testing.T, repo, wt string) {
-			residentStateGit(t, repo, "commit", "--allow-empty", "-m", "on master")
-			residentStateGit(t, wt, "merge", "--no-ff", "--no-commit", "master")
-		}, "a merge is in progress"},
-	} {
+	}, residentStateRows...)
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, d, task, role, runner, caller := busyDeleteFixture(t, true)
 			repo := d.Config().Projects["p"].Path
@@ -165,6 +220,18 @@ func TestResidentDelete_HostBusyInFlight(t *testing.T) {
 				return old(ctx, cfg, tk, pr)
 			}
 		}, "the work summary ran out"},
+		{"worktree state", 300 * time.Millisecond, true, func(t *testing.T, s *Server, _ *busyFakeSession) {
+			old := residentSummarize
+			oldState := residentWorktreeStateFn
+			t.Cleanup(func() { residentSummarize = old; residentWorktreeStateFn = oldState })
+			residentSummarize = func(_ context.Context, cfg config.Config, tk *model.Task, pr string) mergesafety.WorkSummary {
+				return old(context.Background(), cfg, tk, pr)
+			}
+			residentWorktreeStateFn = func(ctx context.Context, _ *model.Task) error {
+				<-ctx.Done()
+				return fmt.Errorf("x: %w", ctx.Err())
+			}
+		}, "the worktree state check ran out"},
 		{"classifier", 2 * time.Second, true, func(t *testing.T, s *Server, _ *busyFakeSession) {
 			old := residentSummarize
 			t.Cleanup(func() { residentSummarize = old })
@@ -211,6 +278,34 @@ func TestResidentDelete_HostBusyInFlight(t *testing.T) {
 			testutil.Equal(t, got.Status, model.StatusInProgress)
 			_, err = os.Stat(task.Worktree)
 			testutil.NoError(t, err)
+		})
+	}
+}
+
+// force=true skips the worktree-state refusal: detached commits and paused
+// operations are the caller's explicit loss to accept.
+func TestResidentDelete_ForceOverridesWorktreeState(t *testing.T) {
+	cases := append([]struct {
+		name  string
+		setup func(t *testing.T, repo, wt string)
+		want  string
+	}{
+		{"detached head with a commit", func(t *testing.T, _, wt string) {
+			residentStateGit(t, wt, "checkout", "--detach")
+			residentStateGit(t, wt, "commit", "--allow-empty", "-m", "on a detached head")
+		}, ""},
+	}, residentStateRows...)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, d, task, role, _, caller := busyDeleteFixture(t, true)
+			repo := d.Config().Projects["p"].Path
+			tc.setup(t, repo, task.Worktree)
+			text, isErr := postTool(t, s, "/mcp?caller="+caller, "hera_delete_worker", `{"role":"work","force":true}`)
+			testutil.False(t, isErr)
+			testutil.Contains(t, text, "Deleted worker work")
+			r, err := d.HeraRole(role.ID)
+			testutil.NoError(t, err)
+			testutil.True(t, r.NukedAt != nil)
 		})
 	}
 }

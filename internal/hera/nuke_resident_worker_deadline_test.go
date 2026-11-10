@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -331,7 +332,13 @@ func TestResidentRemoteBranchDelete(t *testing.T) {
 		return fmt.Errorf("%w: moved", agent.ErrRemoteBranchChanged)
 	}
 	residentRemoteBranchDelete(opts, "w", "/repo", "argus/z", "abc123")
-	testutil.Contains(t, logs.String(), "remote branch changed since delete; left in place task=w branch=argus/z")
+	testutil.Contains(t, logs.String(), "remote branch changed on origin; left in place task=w branch=argus/z")
+	opts.RemoteBranchDelete = func(context.Context, string, string, string) error {
+		return fmt.Errorf("%w: origin has no argus/g", agent.ErrRemoteBranchGone)
+	}
+	residentRemoteBranchDelete(opts, "w", "/repo", "argus/g", "abc123")
+	testutil.Contains(t, logs.String(), "remote branch already gone task=w branch=argus/g")
+	testutil.False(t, strings.Contains(logs.String(), "left in place task=w branch=argus/g"))
 }
 
 // syncBuffer is a goroutine-safe log sink.

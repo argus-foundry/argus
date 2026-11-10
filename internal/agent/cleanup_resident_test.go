@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,9 +69,11 @@ func TestRemoveWorktreeAndLocalBranch(t *testing.T) {
 	testutil.NoError(t, DeleteRemoteBranchContext(context.Background(), dir, remote, tip))
 	testutil.Equal(t, residentCleanupGit(t, origin, "branch", "--list", branch), "")
 
-	// The outcome is reported, not swallowed: gone already is "changed".
+	// The outcome is reported, not swallowed: a branch already gone from
+	// origin is "gone", distinct from "changed; left in place".
 	err = DeleteRemoteBranchContext(context.Background(), dir, remote, tip)
-	testutil.ErrorIs(t, err, ErrRemoteBranchChanged)
+	testutil.ErrorIs(t, err, ErrRemoteBranchGone)
+	testutil.False(t, errors.Is(err, ErrRemoteBranchChanged))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err = DeleteRemoteBranchContext(ctx, dir, "argus/other", tip)
@@ -104,6 +107,7 @@ func TestDeleteRemoteBranchContext_RecreatedBranchLeftInPlace(t *testing.T) {
 
 	err := DeleteRemoteBranchContext(context.Background(), dir, remote, tip)
 	testutil.ErrorIs(t, err, ErrRemoteBranchChanged)
+	testutil.False(t, errors.Is(err, ErrRemoteBranchGone))
 	testutil.Equal(t, strings.TrimSpace(residentCleanupGit(t, origin, "rev-parse", "refs/heads/"+branch)), newTip)
 }
 

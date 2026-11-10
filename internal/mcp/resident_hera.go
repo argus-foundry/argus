@@ -218,7 +218,7 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 		}
 		// Commits on a detached HEAD and a paused rebase/merge are invisible
 		// to the clean-tree and branch-tip checks but die with the worktree.
-		if err := residentWorktreeState(ctx, task); err != nil {
+		if err := residentWorktreeStateFn(ctx, task); err != nil {
 			if ctx.Err() != nil {
 				return residentHostBusy(id, role.Name, task.ID, "the worktree state check ran out of the call's time budget")
 			}
@@ -484,7 +484,7 @@ func residentRecheckTree(ctx context.Context, cfg config.Config, t *model.Task, 
 		}
 		return errors.New(msg)
 	}
-	if err := residentWorktreeState(ctx, t); err != nil {
+	if err := residentWorktreeStateFn(ctx, t); err != nil {
 		return err
 	}
 	if tip := residentBranchTip(ctx, t); tip != tipBefore {
@@ -502,6 +502,9 @@ var residentWorktreeOps = []struct{ path, name string }{
 	{"CHERRY_PICK_HEAD", "cherry-pick"},
 	{"REVERT_HEAD", "revert"},
 }
+
+// residentWorktreeStateFn is a test seam for residentWorktreeState.
+var residentWorktreeStateFn = residentWorktreeState
 
 // residentWorktreeState refuses (as dirty) a worktree whose work the
 // clean-tree and branch-tip checks cannot see: a rebase, merge, cherry-pick

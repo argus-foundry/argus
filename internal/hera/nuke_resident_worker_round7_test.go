@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -227,9 +228,23 @@ func TestNukeResidentWorkerChecked_RepoLockHeldAcrossStop(t *testing.T) {
 		return nil
 	}
 	f.opts.MutateBy = f.clk.Now().Add(time.Minute)
-	followUp, err := NukeResidentWorkerChecked(f.d, f.runner, f.view, f.opts)
+	// reclaimResidentWorkerTask probes session presence just before and just
+	// after the local removal; both probes must still see the lock held.
+	probes := 0
+	runner := &probingNukeRunner{
+		recordingNukeRunner: f.runner,
+		probeErr: func(bool) error {
+			if slices.Contains(*f.events, "recheck") {
+				probes++
+				heldAt("local removal")
+			}
+			return nil
+		},
+	}
+	followUp, err := NukeResidentWorkerChecked(f.d, runner, f.view, f.opts)
 	testutil.NoError(t, err)
 	testutil.DeepEqual(t, *f.events, []string{"stop", "recheck"})
+	testutil.True(t, probes >= 2)
 	testutil.True(t, f.nuked(t))
 	unlock, ok := agent.TryLockRepo(f.repo)
 	testutil.True(t, ok) // released before followUp
