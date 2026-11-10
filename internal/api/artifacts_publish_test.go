@@ -200,3 +200,12 @@ func TestPublishArtifact_NotConfigured(t *testing.T) {
 	srv.routes().ServeHTTP(w, req)
 	testutil.Equal(t, w.Code, http.StatusServiceUnavailable)
 }
+
+func TestPublishArtifact_BodyTooLarge(t *testing.T) {
+	h, n := testPublishAPI(t)
+	big := apiPublishPage + strings.Repeat("x", maxPublishBody)
+	w := doPublish(t, h, "test-token", map[string]string{"account": "personal"}, "r.html", big)
+	testutil.Equal(t, w.Code, http.StatusRequestEntityTooLarge)
+	testutil.Contains(t, w.Body.String(), "16 MiB")
+	testutil.Equal(t, n.Load(), int32(0))
+}

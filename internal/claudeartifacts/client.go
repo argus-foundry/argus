@@ -209,16 +209,20 @@ func (c *Client) callTool(ctx context.Context, token, name string, args, out any
 }
 
 func (c *Client) doCallTool(ctx context.Context, token, name string, args, out any) error {
-	reqBody, err := json.Marshal(map[string]any{
+	// HTML pages are mostly <, > and &: send them as-is rather than as
+	// six-byte \u003c escapes, which would inflate the body several-fold.
+	var reqBody bytes.Buffer
+	enc := json.NewEncoder(&reqBody)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      c.nextID.Add(1),
 		"method":  "tools/call",
 		"params":  map[string]any{"name": name, "arguments": args},
-	})
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("encode %s request: %w", name, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), &reqBody)
 	if err != nil {
 		return fmt.Errorf("build %s request: %w", name, err)
 	}

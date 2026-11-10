@@ -81,7 +81,7 @@ func ParseArtifactSlug(link string) (string, error) {
 		return link, nil
 	}
 	u, err := url.Parse(link)
-	if err != nil || u.Host != "claude.ai" {
+	if err != nil || (u.Host != "claude.ai" && u.Host != "www.claude.ai") {
 		return "", fmt.Errorf("%w: %q is not a claude.ai artifact link", ErrInvalidInput, link)
 	}
 	path := strings.Trim(u.Path, "/")

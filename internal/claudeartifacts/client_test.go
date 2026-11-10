@@ -19,6 +19,7 @@ const fakeBearer = "fixture-bearer-0001"
 
 // rpcCall is one JSON-RPC request the fake endpoint received.
 type rpcCall struct {
+	Raw    []byte
 	Ctx    context.Context
 	Header http.Header
 	Path   string
@@ -53,6 +54,7 @@ func newFakeEndpoint(t *testing.T, handle func(w http.ResponseWriter, c rpcCall)
 		c.Path = r.URL.Path
 		c.Method = r.Method
 		body, _ := io.ReadAll(r.Body)
+		c.Raw = body
 		_ = json.Unmarshal(body, &c.Body)
 		f.mu.Lock()
 		f.calls = append(f.calls, c)
@@ -146,6 +148,10 @@ func TestClientPublish_RequestShape(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { testutil.Equal(t, tc.got, tc.want) })
 	}
 	t.Run("id present", func(t *testing.T) { testutil.True(t, c.Body.ID != nil) })
+	t.Run("html sent unescaped", func(t *testing.T) {
+		testutil.Contains(t, string(c.Raw), "<!DOCTYPE html><html>")
+		testutil.False(t, strings.Contains(string(c.Raw), `\u003c`))
+	})
 	t.Run("create sends no slug", func(t *testing.T) {
 		_, has := c.Body.Params.Arguments["slug"]
 		testutil.False(t, has)
@@ -401,6 +407,7 @@ func TestParseArtifactSlug(t *testing.T) {
 	}{
 		{"https://claude.ai/artifact/7RWP9zApYzozg95RP78ERg", "7RWP9zApYzozg95RP78ERg", true},
 		{"https://claude.ai/code/artifact/abc_DEF-1/", "abc_DEF-1", true},
+		{"https://www.claude.ai/artifact/wwwSlug", "wwwSlug", true},
 		{"https://claude.ai/artifact/abc#frag", "abc", true},
 		{"  https://claude.ai/artifact/abc  ", "abc", true},
 		{"abc123", "abc123", true},

@@ -54,6 +54,10 @@ func (s *Server) handlePublishArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxPublishBody)
 	if err := r.ParseMultipartForm(1 << 20); err != nil {
+		if tooBig := new(http.MaxBytesError); errors.As(err, &tooBig) {
+			writeErr(w, http.StatusRequestEntityTooLarge, "request body exceeds the 16 MiB page limit", nil)
+			return
+		}
 		writeErr(w, http.StatusBadRequest, "expected a multipart/form-data body", err)
 		return
 	}
