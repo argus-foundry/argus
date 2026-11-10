@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/sandboxprop"
 	"github.com/argus-foundry/argus/internal/todo"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // KBQuerier is the interface the MCP server needs from the database.
@@ -243,8 +246,13 @@ type Server struct {
 	residentTokenHashPath func() (string, error)
 	// residentClassify is the hera_delete_worker merge-safety seam (nil = real classifier).
 	residentClassify func(context.Context, *model.Task) (mergesafety.Verdict, error)
-	heraSpawn        HeraSpawner // optional; set via SetHeraService (born-bound spawn)
-	heraRevive       HeraReviver // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
+	// residentFleetReconcile is the fleet-wide reclaim sweep hera_delete_worker
+	// runs asynchronously after its role-scoped work (nil = hera.ReconcileHeraReclaims).
+	residentFleetReconcile func(*db.DB, hera.SessionChecker) (hera.Summary, error)
+	// residentBackground tracks those async sweeps so tests can wait for them.
+	residentBackground sync.WaitGroup
+	heraSpawn          HeraSpawner // optional; set via SetHeraService (born-bound spawn)
+	heraRevive         HeraReviver // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
 	// heraGraduationPreflight is set via SetHeraGraduationPreflight.
 	heraGraduationPreflight func(*model.Task) error
 	profileCfg              ConfigStore  // optional; set via SetProfileResolver
@@ -1200,6 +1208,11 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errorResp(req.ID, -32602, "invalid params")
 	}
+	// Must precede the resident pinning and identity guard: both read exact
+	// lower-case keys, while every tool's encoding/json decode folds case.
+	if refused := s.canonicalArgKeysGuard(req, params.Name, params.Arguments); refused != nil {
+		return refused
+	}
 	// A bound resident cannot impersonate another team's coordinator by
 	// supplying a different cwd/orchestrator to an otherwise allowed tool.
 	if strings.HasPrefix(params.Name, "hera_") && s.boundResident(req.caller) {
@@ -1365,22 +1378,109 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	}
 }
 
-// residentSelfIDTools take `id` as the CALLER's own identity (the messaging
-// tools' sender/reader, task_set_result's self, the artifact tools' owning
-// task), so naming the resident there acts as the resident.
-var residentSelfIDTools = map[string]bool{
-	"task_message_send": true, "task_inbox": true, "task_message_ack": true, "task_ask": true,
-	"task_set_result": true, "artifact_register": true, "artifact_publish": true, "artifact_open": true,
+// canonicalArgKeysGuard refuses a call whose top-level argument names are
+// not canonical. The resident pinning and residentHeraCallGuard read exact
+// keys ("cwd", "caller_id", "id", "orchestrator", "role_name"), but every
+// tool decodes into tagged structs with encoding/json, which matches keys
+// case-insensitively (including the Unicode folds U+017F→s and U+212A→k). A
+// key the guard does not see but the tool does ({"CWD": ...},
+// {"orcheſtrator": ...}) would otherwise bypass the identity guard or
+// override a pinned value. Every built-in schema declares only
+// ^[a-z0-9_]+$ names (TestBuiltinToolSchemasUseCanonicalKeys), so any other
+// key is refused outright. Plugin tools own their schemas, which may use
+// other spellings, and receive no Argus identity: for them only keys that
+// fold onto each other (an ambiguous decode) are refused.
+func (s *Server) canonicalArgKeysGuard(req *Request, name string, raw json.RawMessage) *Response {
+	var args map[string]json.RawMessage
+	if json.Unmarshal(raw, &args) != nil || len(args) == 0 {
+		return nil // not an object: the tool reports its own decode error
+	}
+	plugin := false
+	if s.registry != nil && !builtinToolNames()[name] {
+		if pt, _ := s.registry.Get(name); pt != nil {
+			plugin = true
+		}
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for i, k := range keys {
+		bad := false
+		if plugin {
+			for _, other := range keys[i+1:] {
+				if strings.EqualFold(k, other) {
+					bad = true
+				}
+			}
+		} else {
+			bad = !canonicalArgKey(k)
+		}
+		if bad {
+			uxlog.Log("[mcp] %s refused: non-canonical argument key %q caller=%q", name, k, req.caller)
+			slog.Warn("[mcp] non-canonical argument key refused", "tool", name, "key", k, "caller", req.caller) //nolint:gosec // G706: slog encodes attributes, escaping control characters
+			return toolError(req.ID, fmt.Sprintf("invalid argument key %q: argument names must be canonical lower-case", k))
+		}
+	}
+	return nil
 }
+
+// canonicalArgKey reports whether k matches ^[a-z0-9_]+$.
+func canonicalArgKey(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i := 0; i < len(k); i++ {
+		c := k[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// builtinToolDefs lists every built-in tool definition, regardless of which
+// are enabled on this server.
+func builtinToolDefs() []Tool {
+	var out []Tool
+	for _, defs := range [][]Tool{toolDefs, taskToolDefs, taskRecycleToolDefs, todoToolDefs, clipboardToolDefs,
+		sandboxProposalToolDefs, scheduleToolDefs, messagingToolDefs, artifactToolDefs, artifactOpenToolDefs,
+		artifactPublishToolDefs, heraToolDefs, profileToolDefs, apiGetToolDefs, accountMoveToolDefs} {
+		out = append(out, defs...)
+	}
+	return append(out, residentDeleteTool, residentGraduateTool)
+}
+
+var builtinToolNames = sync.OnceValue(func() map[string]bool {
+	names := map[string]bool{}
+	for _, t := range builtinToolDefs() {
+		names[t.Name] = true
+	}
+	return names
+})
+
+// residentTaskIDArgs are the string arguments by which a tool names a task
+// (task_get/stop/archive/rename/complete/set_result/recycle, clipboard,
+// sandbox proposals, messaging, artifacts: "id"; task_move_account:
+// "task_id"; task_create/task_move_account: "caller_id"). Hera board and
+// message ids are integers, so they never match a task id string (a string
+// id there fails the tool's own int decode anyway); schedule and to-do ids
+// live in other id spaces and cannot equal the resident's random task id
+// unless deliberately forged, which fails closed.
+var residentTaskIDArgs = []string{"id", "task_id", "caller_id"}
 
 // residentHeraCallGuard fails closed, before dispatch, on two resident-team
 // escalations:
 //
 //   - Impersonation (EVERY tool): resolveTask falls back to the resident for
 //     its working directory, so a connection other than the verified resident
-//     naming the resident's cwd, caller_id, or self-identifying id would
-//     otherwise act with the resident's identity (spawn unattended workers,
-//     forge a recycle handoff, read its inbox, send or set results as it).
+//     naming the resident's cwd, or naming the resident's task id in ANY
+//     task-id argument (residentTaskIDArgs), would otherwise act as or on the
+//     resident (spawn unattended workers, forge a recycle handoff, read its
+//     inbox, send or set results as it, stop, archive, rename or complete it).
+//     There is deliberately no read-only allowlist: task_get already hides
+//     the resident, and no other tool needs to name it.
 //   - Enrollment: attach-mode hera_join, hera_move and hera_rebind into the
 //     standing team are refused here with a clear error (the db layer refuses
 //     the insert regardless; rebind would otherwise end the old binding first).
@@ -1389,7 +1489,7 @@ func (s *Server) residentHeraCallGuard(req *Request, name string, raw json.RawMe
 	if json.Unmarshal(raw, &args) != nil || args == nil {
 		return nil // the tool reports its own decode error
 	}
-	if field := s.residentIdentityArg(req.caller, name, args); field != "" {
+	if field := s.residentIdentityArg(req.caller, args); field != "" {
 		log.Printf("[resident] %s refused: caller=%q named the resident's %s", name, req.caller, field)
 		return residentToolError(req.ID, name+": resident identity requires the resident's own bound connection")
 	}
@@ -1424,10 +1524,11 @@ func (s *Server) residentHeraCallGuard(req *Request, name string, raw json.RawMe
 	return nil
 }
 
-// residentIdentityArg returns the argument ("cwd", "caller_id" or "id") by
-// which a call on a connection that is not the verified resident identifies
-// the resident, or "" when it does not.
-func (s *Server) residentIdentityArg(caller, name string, args map[string]interface{}) string {
+// residentIdentityArg returns the argument ("cwd" or one of
+// residentTaskIDArgs) by which a call on a connection that is not the
+// verified resident identifies the resident, or "" when it does not. Keys are
+// exact: canonicalArgKeysGuard has already refused every folded spelling.
+func (s *Server) residentIdentityArg(caller string, args map[string]interface{}) string {
 	if s.taskDB == nil || s.boundResident(caller) {
 		return ""
 	}
@@ -1443,11 +1544,10 @@ func (s *Server) residentIdentityArg(caller, name string, args map[string]interf
 			return "cwd"
 		}
 	}
-	if v, _ := args["caller_id"].(string); isResident(v) {
-		return "caller_id"
-	}
-	if v, _ := args["id"].(string); residentSelfIDTools[name] && isResident(v) {
-		return "id"
+	for _, key := range residentTaskIDArgs {
+		if v, _ := args[key].(string); isResident(v) {
+			return key
+		}
 	}
 	return ""
 }

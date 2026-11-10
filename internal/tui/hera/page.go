@@ -1718,8 +1718,8 @@ func (p *HeraPage) fireRerender(taskID string) {
 	if p.OnRerender == nil || taskID == "" {
 		return
 	}
-	if p.residentMode && taskID == p.coordBound {
-		uxlog.Log("[resident] forced rerender skipped for task=%s: the daemon owns the resident session", taskID)
+	if p.rerenderInert(taskID) {
+		uxlog.Log("[resident] forced rerender skipped for task=%s: the daemon owns the session (resident or pending graduate)", taskID)
 		return
 	}
 	p.OnRerender(taskID)
@@ -1731,7 +1731,25 @@ func (p *HeraPage) FireRerender(taskID string) { p.fireRerender(taskID) }
 // RerenderAllowed reports whether a forced re-render may target taskID (false
 // for the resident's coordinator pane in resident mode).
 func (p *HeraPage) RerenderAllowed(taskID string) bool {
-	return taskID != "" && (!p.residentMode || taskID != p.coordBound)
+	return taskID != "" && !p.rerenderInert(taskID)
+}
+
+// rerenderInert reports whether a kill+resume of taskID must be refused in
+// resident mode: the resident's own coordinator session, and the agent pane's
+// task while the selected row is inert (a graduation-pending / ended row whose
+// task now belongs to the graduate). A forced or size-drift restart there would
+// race the daemon-owned graduation restart into a double restart.
+func (p *HeraPage) rerenderInert(taskID string) bool {
+	if !p.residentMode || taskID == "" {
+		return false
+	}
+	if taskID == p.coordBound {
+		return true
+	}
+	if r := p.sel.Role; r != nil && ResidentRowInert(p.sel) && (taskID == p.agentBound || taskID == r.TaskID) {
+		return true
+	}
+	return false
 }
 
 // notifyFocusChange fires OnFocusChange with the current focus state. Called

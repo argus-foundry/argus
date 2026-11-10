@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/model"
@@ -12,6 +13,11 @@ import (
 
 const HeraEndReasonGraduated = "graduated"
 const HeraMetaKeyGraduationPendingRestart = "graduation_pending_restart"
+
+// HeraMetaKeyGraduationBindingID records the new coordinator binding id so the
+// restart watcher resolves the graduate by id, not by a (possibly ambiguous)
+// by-task lookup.
+const HeraMetaKeyGraduationBindingID = "graduation_binding_id"
 
 // GraduateHeraWorker transfers a standing worker into an independent team.
 // The launch-policy change and durable restart intent commit with membership:
@@ -73,7 +79,7 @@ func (d *DB) GraduateHeraWorker(bindingID int64) (*MoveHeraBindingResult, error)
 		if _, err = tx.Exec(`DELETE FROM task_meta WHERE task_id=? AND namespace='hera' AND key IN ('resident_worker','ready_to_close','pending_recycle')`, taskID); err != nil {
 			return err
 		}
-		for _, kv := range [][2]string{{HeraMetaKeyGraduationPendingRestart, "true"}, {"graduated_from", ResidentOrchestratorName}, {HeraMetaKeyRole, string(HeraKindCoordinator)}} {
+		for _, kv := range [][2]string{{HeraMetaKeyGraduationPendingRestart, "true"}, {HeraMetaKeyGraduationBindingID, strconv.FormatInt(b.ID, 10)}, {"graduated_from", ResidentOrchestratorName}, {HeraMetaKeyRole, string(HeraKindCoordinator)}} {
 			if _, err = tx.Exec(`INSERT INTO task_meta(task_id,namespace,key,value,updated_at) VALUES (?,'hera',?,?,?) ON CONFLICT(task_id,namespace,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`, taskID, kv[0], kv[1], now); err != nil {
 				return err
 			}
@@ -102,7 +108,7 @@ func (d *DB) CompleteHeraGraduation(taskID, body string) error {
 		if _, err := tx.Exec(`INSERT INTO task_messages(id,from_task_id,to_task_id,kind,body,in_reply_to,created_at,read_at) VALUES (?,?,?,'note',?,'',?,'') ON CONFLICT(id) DO NOTHING`, id, model.SystemTaskID, taskID, body, now); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM task_meta WHERE task_id=? AND namespace='hera' AND key=?`, taskID, HeraMetaKeyGraduationPendingRestart); err != nil {
+		if _, err := tx.Exec(`DELETE FROM task_meta WHERE task_id=? AND namespace='hera' AND key IN (?,?)`, taskID, HeraMetaKeyGraduationPendingRestart, HeraMetaKeyGraduationBindingID); err != nil {
 			return err
 		}
 		_, err := tx.Exec(`INSERT INTO task_meta(task_id,namespace,key,value,updated_at) VALUES (?,'hera','graduation_orientation',?,?) ON CONFLICT(task_id,namespace,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`, taskID, body, now)

@@ -47,6 +47,7 @@ func TestResidentOrientation_Rules(t *testing.T) {
 		"graduate tool":    "hera_graduate_worker",
 		"codex offer":      "OFFER a fresh Claude replacement",
 		"explicit project": "ALWAYS name an explicit registered project",
+		"dirty refused":    "refuses ANY uncommitted or untracked files even when the branch is merged",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("%s: prompt missing %q", name, want)

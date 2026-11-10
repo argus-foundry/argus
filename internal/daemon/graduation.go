@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -112,14 +113,48 @@ func (g *graduationWatcher) sweep() {
 	}
 }
 
+// resolveGraduate finds the graduate's coordinator binding via the binding id
+// recorded at graduation (a task holding a second live binding would make the
+// by-task lookup ambiguous forever). A recorded binding that has ended, or no
+// longer exists, abandons the pending state instead of retrying forever. A
+// legacy pending row without a recorded id falls back to the by-task lookup.
+func (g *graduationWatcher) resolveGraduate(taskID string) (b *db.HeraBinding, abandoned bool, err error) {
+	meta, err := g.db.ListMetaByNamespace(db.HeraMetaNamespace)
+	if err != nil {
+		return nil, false, err
+	}
+	raw := meta[taskID][db.HeraMetaKeyGraduationBindingID]
+	if raw == "" {
+		b, err = g.db.HeraLiveBindingByTask(taskID)
+		return b, false, err
+	}
+	id, perr := strconv.ParseInt(raw, 10, 64)
+	if perr != nil {
+		return nil, false, fmt.Errorf("graduation binding id %q: %w", raw, perr)
+	}
+	b, err = g.db.HeraBindingByID(id)
+	if errors.Is(err, db.ErrHeraNotFound) || (err == nil && b.EndedAt != nil) {
+		if aerr := g.db.ClearGraduationState(taskID); aerr != nil {
+			return nil, false, aerr
+		}
+		uxlog.Log("[resident] graduation abandoned: graduate binding ended task=%s", taskID)
+		delete(g.deferred, taskID)
+		return nil, true, nil
+	}
+	return b, false, err
+}
+
 func (g *graduationWatcher) advance(taskID, phase string) error {
 	t, err := g.db.Get(taskID)
 	if err != nil {
 		return err
 	}
-	b, err := g.db.HeraLiveBindingByTask(taskID)
+	b, abandoned, err := g.resolveGraduate(taskID)
 	if err != nil {
 		return err
+	}
+	if abandoned {
+		return nil
 	}
 	r, err := g.db.HeraRole(b.RoleID)
 	if err != nil {

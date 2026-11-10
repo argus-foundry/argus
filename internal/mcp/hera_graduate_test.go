@@ -18,6 +18,8 @@ func TestResidentGraduateGuards(t *testing.T) {
 		{"spoof", residentOnly},
 		// cwd naming the resident is refused centrally before dispatch.
 		{"spoof cwd", "resident identity requires the resident's own bound connection"},
+		// Naming the resident's task id in any task-id argument is refused centrally.
+		{"spoof id", "resident identity requires the resident's own bound connection"},
 		// Non-resident bound callers target a SIBLING so only boundResident's
 		// IsResident check refuses (a worker's own binding would pass the
 		// standing-binding lookup and the self-target checks).
@@ -54,7 +56,7 @@ func TestResidentGraduateGuards(t *testing.T) {
 				return nil
 			})
 			caller, target := res.ID, "work"
-			args := map[string]interface{}{"id": res.ID}
+			args := map[string]interface{}{}
 			switch tc.name {
 			case "unbound":
 				caller = ""
@@ -63,6 +65,9 @@ func TestResidentGraduateGuards(t *testing.T) {
 			case "spoof cwd":
 				caller = ""
 				args["cwd"] = res.Worktree
+			case "spoof id":
+				caller = ""
+				args["id"] = res.ID
 			case "worker targets sibling":
 				caller, target = w.ID, "sibling"
 			case "worker targets itself":

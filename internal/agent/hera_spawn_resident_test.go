@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"os"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/config"
@@ -76,4 +77,47 @@ func TestResidentSpawnAccountProvenance(t *testing.T) {
 			testutil.Equal(t, stored.AccountRouted, tc.routed)
 		})
 	}
+}
+
+// TestSpawnHeraWorkerAccountPinOrdinaryOrch pins the hera_spawn_worker account
+// pin for NON-resident orchestrators: a valid pin lands on the stored task as an
+// explicit (non-routed) account, and an invalid one fails before any task, role,
+// binding or worktree exists.
+func TestSpawnHeraWorkerAccountPinOrdinaryOrch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := createTestDB(t, initGitRepo(t))
+	testutil.NoError(t, d.SetAccount("work", config.Account{ClaudeConfigDir: t.TempDir()}))
+	testutil.NoError(t, d.SetBackend("claude", config.Backend{Command: "claude"}))
+	orch, err := d.CreateHeraOrchestrator("ordinary", "")
+	testutil.NoError(t, err)
+
+	t.Run("configured account is pinned", func(t *testing.T) {
+		spawned, err := SpawnHeraWorker(d, &fakeRunner{}, HeraWorkerSpawnInput{
+			OrchestratorID: orch.ID, BaseName: "pinned", Project: "proj", TaskPrompt: "x", Account: "work", Backend: "claude",
+		})
+		testutil.NoError(t, err)
+		stored, err := d.Get(spawned.Task.ID)
+		testutil.NoError(t, err)
+		testutil.Equal(t, stored.Account, "work")
+		testutil.Equal(t, stored.AccountRouted, false)
+	})
+
+	t.Run("unknown account fails with no side effects", func(t *testing.T) {
+		tasksBefore, err := d.Tasks()
+		testutil.NoError(t, err)
+		rolesBefore, err := d.ListHeraRoles(orch.ID, true)
+		testutil.NoError(t, err)
+		_, err = SpawnHeraWorker(d, &fakeRunner{}, HeraWorkerSpawnInput{
+			OrchestratorID: orch.ID, BaseName: "bogus", Project: "proj", TaskPrompt: "x", Account: "nope", Backend: "claude",
+		})
+		testutil.ErrorIs(t, err, ErrAccount)
+		tasksAfter, err := d.Tasks()
+		testutil.NoError(t, err)
+		rolesAfter, err := d.ListHeraRoles(orch.ID, true)
+		testutil.NoError(t, err)
+		testutil.Equal(t, len(tasksAfter), len(tasksBefore))
+		testutil.Equal(t, len(rolesAfter), len(rolesBefore))
+		_, statErr := os.Stat(WorktreeDir("proj", "bogus"))
+		testutil.True(t, os.IsNotExist(statErr))
+	})
 }

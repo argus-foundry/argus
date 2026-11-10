@@ -97,7 +97,7 @@ The system SHALL provide an MCP tool `hera_delete_worker(role, force?)` usable o
 
 ### Requirement: The resident's connection identity is a per-launch secret
 
-The connection-bound `caller` that identifies the resident SHALL NOT be self-asserted: every resident launch (start, resume, restart, kick or recycle) SHALL generate a fresh unguessable token, deliver it to the resident's Argus MCP connection only through a private launch file under `~/.argus/resident-launch` that is readable by no other sandboxed task and never through the command line or environment, and persist only its hash. The MCP server SHALL treat a connection as bound to the resident only when its `caller` names the resident AND its token matches the current hash; any other connection, including one presenting the resident's task id with a missing, wrong or superseded token, SHALL be treated as unbound. The token SHALL never be logged, listed or returned by any tool, REST endpoint or Hera read. Every resident-only behavior keyed on the bound caller (`hera_delete_worker`, `hera_graduate_worker`, the resident's own `task_recycle`, the resident's Hera argument pinning and tool listing) SHALL use this verified identity. Any `hera_*` call from a connection that is not the verified resident whose arguments identify the resident (for example by the resident's `cwd`) SHALL be refused before dispatch.
+The connection-bound `caller` that identifies the resident SHALL NOT be self-asserted: every resident launch (start, resume, restart, kick or recycle) SHALL generate a fresh unguessable token, deliver it to the resident's Argus MCP connection only through a private launch file under `~/.argus/resident-launch` that is readable by no other sandboxed task and never through the command line or environment, and persist only its hash. The MCP server SHALL treat a connection as bound to the resident only when its `caller` names the resident AND its token matches the current hash; any other connection, including one presenting the resident's task id with a missing, wrong or superseded token, SHALL be treated as unbound. The token SHALL never be logged, listed or returned by any tool, REST endpoint or Hera read. Every resident-only behavior keyed on the bound caller (`hera_delete_worker`, `hera_graduate_worker`, the resident's own `task_recycle`, the resident's Hera argument pinning and tool listing) SHALL use this verified identity. Any tool call from a connection that is not the verified resident whose arguments identify the resident (its `cwd`, or its task id as `id`, `task_id` or `caller_id`) SHALL be refused before dispatch. Built-in tool argument names SHALL be canonical lower-case (`[a-z0-9_]`), and a call carrying any other top-level argument name SHALL be refused, so a case-folded key cannot slip past the identity checks while still reaching the tool.
 
 #### Scenario: Spoofed caller id is refused
 
@@ -111,8 +111,18 @@ The connection-bound `caller` that identifies the resident SHALL NOT be self-ass
 
 #### Scenario: Resident cwd is not an identity
 
-- **WHEN** a connection that is not the verified resident calls `hera_spawn_worker`, `hera_status` or `hera_send` with the resident's `cwd`
+- **WHEN** a connection that is not the verified resident calls `hera_spawn_worker`, `hera_status`, `hera_send` or any other tool with the resident's `cwd`
 - **THEN** the call is refused and nothing is spawned, stamped or sent
+
+#### Scenario: Case-folded keys are refused
+
+- **WHEN** any connection calls a built-in tool with an argument named `CWD`, `Caller_ID`, `ID` or another non-canonical spelling
+- **THEN** the call is refused before dispatch and nothing is created, sent or changed
+
+#### Scenario: Resident task id is not an identity
+
+- **WHEN** a connection that is not the verified resident calls `task_stop`, `task_rename`, `task_complete`, `task_archive` or any other tool with the resident's task id as `id`, `task_id` or `caller_id`
+- **THEN** the call is refused and the resident is unchanged
 
 #### Scenario: Token never surfaces
 

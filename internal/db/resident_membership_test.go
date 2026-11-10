@@ -158,3 +158,54 @@ func TestEnsureResidentOrchestratorStillBindsResident(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.True(t, yes)
 }
+
+// TestStandingTeamMembershipSurvivesRename pins the live-resident-binding arm of
+// standingTeamWhere: the team row is renamed so the name arm no longer matches,
+// and every binding path into or out of it must still refuse.
+func TestStandingTeamMembershipSurvivesRename(t *testing.T) {
+	setup := func(t *testing.T) (*DB, *HeraOrchestrator, *HeraOrchestrator) {
+		d, team, other := membershipFixture(t)
+		_, err := d.conn.Exec(`UPDATE hera_orchestrators SET name='team-x' WHERE id=?`, team.ID)
+		testutil.NoError(t, err)
+		return d, team, other
+	}
+	t.Run("create role with binding", func(t *testing.T) {
+		d, team, _ := setup(t)
+		roles, bindings := countRows(t, d, "hera_roles"), countRows(t, d, "hera_bindings")
+		_, _, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{OrchestratorID: team.ID, Name: "x", Kind: HeraKindWorker}, "outsider", "/wt/outsider")
+		testutil.ErrorIs(t, err, ErrResidentProtected)
+		testutil.Equal(t, countRows(t, d, "hera_roles"), roles)
+		testutil.Equal(t, countRows(t, d, "hera_bindings"), bindings)
+	})
+	t.Run("bind existing role", func(t *testing.T) {
+		d, team, _ := setup(t)
+		r, err := d.CreateHeraRole(CreateHeraRoleInput{OrchestratorID: team.ID, Name: "planned", Kind: HeraKindWorker})
+		testutil.NoError(t, err)
+		bindings := countRows(t, d, "hera_bindings")
+		_, err = d.CreateHeraBinding(CreateHeraBindingInput{RoleID: r.ID, ArgusTaskID: "outsider", WorktreePath: "/wt/outsider"})
+		testutil.ErrorIs(t, err, ErrResidentProtected)
+		testutil.Equal(t, countRows(t, d, "hera_bindings"), bindings)
+	})
+	t.Run("move into", func(t *testing.T) {
+		d, team, other := setup(t)
+		_, b, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{OrchestratorID: other.ID, Name: "x", Kind: HeraKindWorker}, "outsider", "/wt/outsider")
+		testutil.NoError(t, err)
+		_, err = d.MoveHeraBinding(b.ID, CreateHeraRoleInput{OrchestratorID: team.ID, Name: "x", Kind: HeraKindWorker}, "outsider", "/wt/outsider")
+		testutil.ErrorIs(t, err, ErrResidentProtected)
+		live, err := d.HeraLiveBindingByTask("outsider")
+		testutil.NoError(t, err)
+		testutil.Equal(t, live.ID, b.ID)
+	})
+	t.Run("move out", func(t *testing.T) {
+		d, team, other := membershipFixture(t)
+		_, b, err := d.CreateResidentWorkerRoleWithBinding(CreateHeraRoleInput{OrchestratorID: team.ID, Name: "w", Kind: HeraKindWorker}, "outsider", "/wt/outsider")
+		testutil.NoError(t, err)
+		_, err = d.conn.Exec(`UPDATE hera_orchestrators SET name='team-x' WHERE id=?`, team.ID)
+		testutil.NoError(t, err)
+		_, err = d.MoveHeraBinding(b.ID, CreateHeraRoleInput{OrchestratorID: other.ID, Name: "w", Kind: HeraKindWorker}, "outsider", "/wt/outsider")
+		testutil.ErrorIs(t, err, ErrResidentProtected)
+		live, err := d.HeraLiveBindingByTask("outsider")
+		testutil.NoError(t, err)
+		testutil.Equal(t, live.ID, b.ID)
+	})
+}

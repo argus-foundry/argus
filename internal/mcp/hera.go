@@ -746,6 +746,37 @@ func (s *Server) toolHeraNewOrchestrator(id interface{}, args json.RawMessage) *
 	return toolResult(id, b.String())
 }
 
+// graduationPendingRefusal returns a non-empty refusal message when the caller
+// task (resolved from cwd) is a graduate whose restart is still pending, or
+// when that state cannot be read (fail closed). A pending graduate must not
+// change membership: the restart watcher is tracking its coordinator binding.
+// Adoption by the human happens in the TUI.
+func (s *Server) graduationPendingRefusal(tool, cwd string) string {
+	if s.taskDB == nil {
+		return ""
+	}
+	chk, ok := s.taskDB.(interface {
+		GraduationPendingErr(string) (bool, error)
+	})
+	if !ok {
+		return ""
+	}
+	task, err := s.resolveTask("", cwd)
+	if err != nil || task == nil {
+		return ""
+	}
+	pending, err := chk.GraduationPendingErr(task.ID)
+	if err != nil {
+		uxlog.Log("[resident] %s refused task=%s: graduation check failed: %v", tool, task.ID, err)
+		return fmt.Sprintf("%s refused: could not verify graduation state (%v)", tool, err)
+	}
+	if pending {
+		uxlog.Log("[resident] %s refused task=%s: graduation pending", tool, task.ID)
+		return fmt.Sprintf("%s refused: this task's graduation restart is still pending; wait for it to finish restarting before changing membership", tool)
+	}
+	return ""
+}
+
 func (s *Server) toolHeraJoin(id interface{}, args json.RawMessage) *Response {
 	if !s.heraEnabled() {
 		return toolError(id, "hera not configured")
@@ -762,6 +793,9 @@ func (s *Server) toolHeraJoin(id interface{}, args json.RawMessage) *Response {
 
 	if p.Cwd == "" {
 		return toolError(id, "cwd is required")
+	}
+	if msg := s.graduationPendingRefusal("hera_join", p.Cwd); msg != "" {
+		return toolError(id, msg)
 	}
 
 	if p.RoleName == "" {
@@ -913,6 +947,9 @@ func (s *Server) toolHeraMove(id interface{}, args json.RawMessage) *Response {
 
 	if p.Cwd == "" {
 		return toolError(id, "cwd is required")
+	}
+	if msg := s.graduationPendingRefusal("hera_move", p.Cwd); msg != "" {
+		return toolError(id, msg)
 	}
 	if p.Orchestrator == "" {
 		return toolError(id, "orchestrator is required")

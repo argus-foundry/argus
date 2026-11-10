@@ -437,7 +437,7 @@ func (a *App) heraTaskSolelyBoundTo(r *hera.RoleView) bool {
 // not-yet-ended binding, and skip the delete for good (nothing in a bare TUI/test
 // process retries it — only the daemon's periodic reconciliation sweep would).
 func (a *App) heraNukeRole(r *hera.RoleView) {
-	if r.TaskID != "" && a.graduationPendingBlocked(r.TaskID, "nuke") {
+	if r.TaskID != "" && a.graduationPendingEscape(r.TaskID, "nuke", false, func() { a.heraNukeRole(r) }) {
 		return
 	}
 	reclaim := r.Live && r.TaskID != "" && a.heraTaskSolelyBoundTo(r)
@@ -835,13 +835,15 @@ func (a *App) heraTaskBoundOutside(taskID string, subtreeIDs map[int64]bool) boo
 // function. May be nil/empty (the common case: no not-safe candidate had a
 // rescuable base_branch stack).
 func (a *App) heraDoCascadeNuke(subtree []*hera.OrchView, subtreeIDs map[int64]bool, extra []stackedBranchCandidate) {
+	// Refuse the WHOLE cascade before any side effect (session stops included)
+	// when any role in the subtree is a pending graduate.
+	if a.graduationPendingAny(subtreeTaskIDs(subtree), "cascade nuke") {
+		return
+	}
 	reclaimed := make(map[string]bool)
 	for _, o := range subtree {
 		for i := range o.Roles {
 			r := &o.Roles[i]
-			if r.TaskID != "" && a.graduationPendingBlocked(r.TaskID, "nuke") {
-				continue
-			}
 			reclaimTask := ""
 			if r.Live && r.TaskID != "" && !reclaimed[r.TaskID] && !a.heraTaskBoundOutside(r.TaskID, subtreeIDs) {
 				reclaimed[r.TaskID] = true
@@ -1004,6 +1006,13 @@ func (a *App) heraClearArchive(sel hera.Selection) {
 		a.statusbar.SetInfo("Nothing to clear")
 		return
 	}
+	var pendingIDs []string
+	for i := range workers {
+		pendingIDs = append(pendingIDs, workers[i].TaskID)
+	}
+	if a.graduationPendingAny(pendingIDs, "clear archive") {
+		return
+	}
 	reclaim, preserved := a.heraCountReclaimable(workers)
 	// Collect the task IDs that WILL actually be reclaimed (mirrors
 	// heraCountReclaimable's own reclaimable check) so the merge-safety
@@ -1043,6 +1052,13 @@ func (a *App) heraClearArchive(sel hera.Selection) {
 
 // heraDoClearArchive nukes each hidden role in the set and refreshes.
 func (a *App) heraDoClearArchive(roles []hera.RoleView) {
+	var ids []string
+	for i := range roles {
+		ids = append(ids, roles[i].TaskID)
+	}
+	if a.graduationPendingAny(ids, "clear archive") {
+		return
+	}
 	n, wt := 0, 0
 	for i := range roles {
 		if a.heraNukeArchivedRole(&roles[i]) {
@@ -1504,6 +1520,9 @@ func heraCoordReparentTarget(sel hera.Selection) (childOrchID int64, name, coord
 // selection, creates the worker role + binding. Project + worktree are resolved
 // from the freelancer's task row (authoritative — matches heraSpawnWorker).
 func (a *App) heraAdoptFreelancer(r *hera.RoleView) {
+	if r.TaskID != "" && a.graduationPendingBlocked(r.TaskID, "adopt") {
+		return
+	}
 	if r.TaskID == "" {
 		a.statusbar.SetError("J: this freelancer has no argus task to adopt")
 		return
@@ -1552,6 +1571,9 @@ var heraDetachSentinel = &db.HeraOrchestrator{Name: "— Detach (make top-level)
 // coordinator (the detach option is always available), so there is no
 // "no eligible target" bail on this path.
 func (a *App) heraAdoptCoordinator(childOrchID int64, name, coordTaskID string) {
+	if coordTaskID != "" && a.graduationPendingBlocked(coordTaskID, "adopt") {
+		return
+	}
 	project := ""
 	if coordTaskID != "" {
 		if t, err := a.db.Get(coordTaskID); err == nil && t != nil {
@@ -1720,6 +1742,13 @@ func (a *App) closeHeraConfirm() {
 	a.heraConfirmDo = nil
 	a.heraConfirmOnCancel = nil
 	a.pages.RemovePage("heraconfirm")
+	if a.heraConfirmReturnTasks {
+		// Opened from the Tasks tab (graduation-pending escape): go back there.
+		a.heraConfirmReturnTasks = false
+		a.showTasksPage()
+		a.tapp.SetFocus(a.tasklist)
+		return
+	}
 	a.pages.SwitchToPage("hera")
 	a.tapp.SetFocus(a.heraPage)
 }
@@ -1740,11 +1769,77 @@ func heraSelName(sel hera.Selection) string {
 // abandon the destructive flow BEFORE any side effect. Remote mode (no local
 // DB) cannot see the marker; the daemon refuses at its own choke points.
 func (a *App) graduationPendingBlocked(taskID, what string) bool {
-	p, ok := a.db.(interface{ GraduationPending(string) bool })
-	if !ok || !p.GraduationPending(taskID) {
+	if !a.graduationPendingQuiet(taskID) {
 		return false
 	}
 	uxlog.Log("[resident] tui %s refused task=%s: graduation pending", what, taskID)
 	a.flashNotice(db.ErrGraduationPending.Error())
+	return true
+}
+
+// graduationPendingQuiet is graduationPendingBlocked without the notice/log
+// (for automatic paths such as the size-drift kick that must not spam).
+func (a *App) graduationPendingQuiet(taskID string) bool {
+	p, ok := a.db.(interface{ GraduationPending(string) bool })
+	return ok && taskID != "" && p.GraduationPending(taskID)
+}
+
+// graduationPendingAny reports whether any of the task IDs is a pending
+// graduate. Whole-operation pre-scan: bulk flows (cascade nuke, clear archive)
+// call it BEFORE any side effect so they refuse as a whole instead of
+// half-executing around the one protected role.
+func (a *App) graduationPendingAny(taskIDs []string, what string) bool {
+	for _, id := range taskIDs {
+		if id != "" && a.graduationPendingBlocked(id, what) {
+			return true
+		}
+	}
+	return false
+}
+
+// subtreeTaskIDs lists every role task id in a nuke subtree.
+func subtreeTaskIDs(subtree []*hera.OrchView) []string {
+	var ids []string
+	for _, o := range subtree {
+		for i := range o.Roles {
+			ids = append(ids, o.Roles[i].TaskID)
+		}
+	}
+	return ids
+}
+
+// graduationPendingEscape is the human's deliberate way out of the
+// graduation-pending refusal for a SINGLE task (delete / archive / nuke of one
+// role). It refuses (notice) and, in local mode only, offers a two-step
+// confirmation to abandon the pending restart; only after the second explicit
+// confirmation is the marker cleared and proceed() re-run. Cancel at either
+// step changes nothing. Remote mode (store lacks AbandonGraduationPending)
+// keeps the plain refusal. Never exposed over MCP/REST. Returns true when the
+// caller must stop (always, when a graduation is pending).
+func (a *App) graduationPendingEscape(taskID, what string, tasksTab bool, proceed func()) bool {
+	if !a.graduationPendingBlocked(taskID, what) {
+		return false
+	}
+	ab, ok := a.db.(interface{ AbandonGraduationPending(string) error })
+	if !ok || proceed == nil {
+		return true
+	}
+	a.heraConfirmReturnTasks = tasksTab
+	a.openHeraConfirm("Graduation restart still pending",
+		"This graduate's restart has not happened yet. Deleting or archiving it now would drop that pending restart. Abandon the pending restart and continue?",
+		func() {
+			a.heraConfirmReturnTasks = tasksTab
+			a.openHeraConfirm("Really abandon the pending restart?",
+				"Second confirmation: the graduation restart is abandoned for good and "+what+" proceeds. This cannot be undone.",
+				func() {
+					if err := ab.AbandonGraduationPending(taskID); err != nil {
+						uxlog.Log("[resident] tui abandon pending graduation task=%s failed: %v", taskID, err)
+						a.statusbar.SetError("Abandon pending restart failed: " + err.Error())
+						return
+					}
+					uxlog.Log("[resident] tui abandoned pending graduation restart task=%s (%s)", taskID, what)
+					proceed()
+				})
+		})
 	return true
 }

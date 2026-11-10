@@ -315,3 +315,58 @@ func TestGraduationDeadResumeBackoff(t *testing.T) {
 	g.sweep()
 	testutil.Equal(t, r.starts, 2)
 }
+
+func TestGraduationRecordedBindingSurvivesSecondLiveBinding(t *testing.T) {
+	d, w, res := graduatedFixture(t)
+	meta, err := d.ListMetaByNamespace(db.HeraMetaNamespace)
+	testutil.NoError(t, err)
+	testutil.Equal(t, meta[w.ID][db.HeraMetaKeyGraduationBindingID], fmt.Sprint(res.NewBinding.ID))
+	// A second live binding makes the by-task lookup ambiguous forever.
+	o2, err := d.CreateHeraOrchestrator("other", "")
+	testutil.NoError(t, err)
+	r2, err := d.CreateHeraRole(db.CreateHeraRoleInput{OrchestratorID: o2.ID, Name: "w2", Kind: db.HeraKindWorker, ArgusProject: "p", Prompt: "x"})
+	testutil.NoError(t, err)
+	_, err = d.CreateHeraBinding(db.CreateHeraBindingInput{RoleID: r2.ID, OrchestratorID: o2.ID, ArgusTaskID: w.ID, WorktreePath: w.Worktree})
+	testutil.NoError(t, err)
+	_, err = d.HeraLiveBindingByTask(w.ID)
+	testutil.ErrorIs(t, err, db.ErrHeraAmbiguous)
+
+	r := &graduationRunner{sess: &graduationSession{idle: true, pid: 11}}
+	g := newGraduationWatcher(d, r, d.Config, nil)
+	g.resumable = func(*model.Task, config.Config) (bool, error) { return true, nil }
+	g.stopJobs = func(*model.Task, config.Config, string) error { return nil }
+	g.sweep()
+	testutil.Equal(t, r.kicks, 1)
+	r.pending = false
+	r.sess.pid = 22
+	g.sweep()
+	testutil.False(t, d.GraduationPending(w.ID))
+}
+
+func TestGraduationEndedBindingAbandonsState(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprint("legacy=", legacy), func(t *testing.T) {
+			d, w, res := graduatedFixture(t)
+			if legacy {
+				testutil.NoError(t, d.SetMeta(w.ID, db.HeraMetaNamespace, db.HeraMetaKeyGraduationBindingID, ""))
+			} else {
+				testutil.NoError(t, d.EndHeraBinding(res.NewBinding.ID, db.HeraEndReasonUserDeleted))
+			}
+			r := &graduationRunner{sess: &graduationSession{idle: true, pid: 11}}
+			g := newGraduationWatcher(d, r, d.Config, nil)
+			g.resumable = func(*model.Task, config.Config) (bool, error) { return true, nil }
+			g.stopJobs = func(*model.Task, config.Config, string) error { return nil }
+			g.sweep()
+			if legacy {
+				testutil.Equal(t, r.kicks, 1) // old lookup still drives the restart
+				testutil.True(t, d.GraduationPending(w.ID))
+				return
+			}
+			testutil.Equal(t, r.kicks, 0)
+			testutil.False(t, d.GraduationPending(w.ID))
+			meta, err := d.ListMetaByNamespace(db.HeraMetaNamespace)
+			testutil.NoError(t, err)
+			testutil.Equal(t, meta[w.ID][db.HeraMetaKeyGraduationBindingID], "")
+		})
+	}
+}

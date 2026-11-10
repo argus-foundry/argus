@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -182,9 +183,13 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 		uxlog.Log("[resident] force delete worker=%s task=%s summary=%s", role.Name, task.ID, raw)
 		slog.Warn("[resident] force delete", "worker", role.Name, "task", task.ID, "summary", string(raw))
 	}
-	// Synchronous closure execution ensures the result follows the reclaim work.
-	// The shared primitive preserves multi-bound tasks and rechecks reclaim safety.
-	hera.NukeSingleRoleAs(d, runner, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true}, db.HeraActorResident)()
+	// Role-scoped stop and reclaim are synchronous so the result follows them;
+	// the fleet-wide sweep is not, so a slow sweep never delays the summary.
+	followUp, err := hera.NukeResidentWorker(d, runner, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})
+	if err != nil {
+		return residentToolError(id, fmt.Sprintf("worker nuke did not complete: %v", err))
+	}
+	s.runResidentFleetReconcile(d, runner, role.Name, followUp)
 	updated, err := d.HeraRole(role.ID)
 	if err != nil || updated.NukedAt == nil {
 		return residentToolError(id, "worker nuke did not complete")
@@ -198,6 +203,48 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 		fmt.Fprintf(&out, "\nUnmerged summary (REPORT to Aaron now):\n%s\n", raw)
 	}
 	return toolResult(id, out.String())
+}
+
+// residentReconcileMu serializes the resident-triggered async reclaim sweeps
+// so a burst of deletes cannot run overlapping sweeps over the same
+// candidates. It is never held with residentWorkerMutationMu.
+var residentReconcileMu sync.Mutex
+
+// runResidentFleetReconcile runs followUp and then the fleet-wide reclaim
+// sweep in the background, recovering panics and logging the outcome. Safe
+// against a concurrent graduate or delete: the sweep's candidates are tasks
+// whose bindings ended user_deleted and hold no live binding (a graduate
+// always holds one, and its pending marker is skipped), the deleted task's
+// own row was already pruned in the role-scoped section, and PruneTasks
+// re-checks for a live binding at delete time.
+func (s *Server) runResidentFleetReconcile(d *db.DB, runner hera.SessionChecker, worker string, followUp func()) {
+	reconcile := s.residentFleetReconcile
+	if reconcile == nil {
+		reconcile = hera.ReconcileHeraReclaims
+	}
+	s.residentBackground.Add(1)
+	go func() {
+		defer s.residentBackground.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				uxlog.Log("[resident] PANIC in async reclaim sweep after delete worker=%s: %v\n%s", worker, r, debug.Stack())
+				slog.Error("[resident] async reclaim sweep panicked", "worker", worker, "panic", fmt.Sprint(r))
+			}
+		}()
+		residentReconcileMu.Lock()
+		defer residentReconcileMu.Unlock()
+		if followUp != nil {
+			followUp()
+		}
+		sum, err := reconcile(d, runner)
+		if err != nil {
+			uxlog.Log("[resident] async reclaim sweep after delete worker=%s failed: %v", worker, err)
+			slog.Warn("[resident] async reclaim sweep failed", "worker", worker, "err", err)
+			return
+		}
+		uxlog.Log("[resident] async reclaim sweep after delete worker=%s: candidates=%d pruned=%d skipped_live=%d", worker, sum.Candidates, sum.Pruned, sum.SkippedLiveSession)
+		slog.Info("[resident] async reclaim sweep done", "worker", worker, "candidates", sum.Candidates, "pruned", sum.Pruned, "skipped_live_session", sum.SkippedLiveSession)
+	}()
 }
 
 func residentToolError(id interface{}, message string) *Response {

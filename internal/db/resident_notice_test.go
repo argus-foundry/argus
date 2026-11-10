@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -244,14 +245,32 @@ func TestResidentNotice_ConcurrentHidesAcrossHandlesQueueOnce(t *testing.T) {
 	w, _, err := d1.CreateResidentWorkerRoleWithBinding(CreateHeraRoleInput{OrchestratorID: o.ID, Name: "alpha", Kind: HeraKindWorker, ArgusProject: "p"}, "wt", t.TempDir())
 	testutil.NoError(t, err)
 
-	errs := make(chan error, 2)
-	start := make(chan struct{})
-	for _, d := range []*DB{d1, d2} {
-		go func() { <-start; errs <- d.ArchiveHeraRole(w.ID) }()
-	}
-	close(start)
+	// Deterministic interleave: d2 holds the write lock (BEGIN IMMEDIATE) while
+	// d1's hide starts, then commits a write. With the write-lock-first no-op
+	// UPDATE in heraRoleMutation, d1 blocks on the lock before it reads and then
+	// proceeds; without it d1 reads a snapshot first and its later write fails
+	// with SQLITE_BUSY_SNAPSHOT once d2 commits in between.
+	ctx := context.Background()
+	holder, err := d2.conn.Conn(ctx)
+	testutil.NoError(t, err)
+	_, err = holder.ExecContext(ctx, `BEGIN IMMEDIATE`)
+	testutil.NoError(t, err)
+	_, err = holder.ExecContext(ctx, `UPDATE hera_roles SET id=id WHERE id=?`, w.ID)
+	testutil.NoError(t, err)
+
+	errs := make(chan error, 1)
+	go func() { errs <- d1.ArchiveHeraRole(w.ID) }()
+	// Give d1 time to begin its transaction and reach the lock (or, on the
+	// mutated code, to finish its snapshot read). The pause only widens the
+	// window; correct code passes at any timing.
+	time.Sleep(200 * time.Millisecond)
+	_, err = holder.ExecContext(ctx, `COMMIT`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, holder.Close())
 	testutil.NoError(t, <-errs)
-	testutil.NoError(t, <-errs)
+
+	// A second hide from the other handle is a no-op: still exactly one notice.
+	testutil.NoError(t, d2.ArchiveHeraRole(w.ID))
 	ns, err := d1.PendingResidentNotices(10)
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(ns), 1)

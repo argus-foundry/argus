@@ -158,7 +158,7 @@ func TestResidentNotice_LongNamesDoNotPoisonQueue(t *testing.T) {
 				testutil.True(t, len(m.Tldr) <= db.HeraMaxTldrLen)
 				testutil.False(t, strings.ContainsAny(m.Tldr, "\r\n"))
 			}
-			testutil.True(t, strings.Contains(msgs[0].Body, long1+" → ") || strings.Contains(msgs[0].Body, long1))
+			testutil.Contains(t, msgs[0].Body, "alpha → "+long1)
 			testutil.True(t, strings.Contains(msgs[1].Body, long1+" → "+long2))
 		})
 	}

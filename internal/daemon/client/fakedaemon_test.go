@@ -31,6 +31,7 @@ type fakeDaemon struct {
 	ln        net.Listener
 	zeroExit  bool   // GetExitInfo answers an all-zero ExitInfo (old server, nothing recorded)
 	alive     bool   // SessionStatus.Alive value
+	statusPID int    // SessionStatus.PID value (0 = unset)
 	dropAfter int    // how many bytes to send before dropping the stream
 	streamMsg []byte // bytes to send on stream before drop
 
@@ -136,6 +137,7 @@ func (s *FakeRPCService) SessionStatus(req *daemon.TaskIDReq, resp *daemon.Sessi
 	defer s.fd.mu.Unlock()
 	resp.TaskID = req.TaskID
 	resp.Alive = s.fd.alive
+	resp.PID = s.fd.statusPID
 	return nil
 }
 

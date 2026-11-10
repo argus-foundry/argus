@@ -1,6 +1,8 @@
 package db
 
 import (
+	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/testutil"
@@ -63,4 +65,52 @@ func TestGraduationPendingUnarchiveUnaffected(t *testing.T) {
 	_, err := d.GraduateHeraWorker(b.ID)
 	testutil.NoError(t, err)
 	testutil.NoError(t, d.SetArchived(b.ArgusTaskID, false))
+}
+
+func TestGraduationPendingFailsClosed(t *testing.T) {
+	d, b := graduationFixture(t)
+	_, err := d.GraduateHeraWorker(b.ID)
+	testutil.NoError(t, err)
+	id := b.ArgusTaskID
+	testutil.NoError(t, d.Close())
+
+	pending, err := d.GraduationPendingErr(id)
+	testutil.True(t, err != nil)
+	testutil.False(t, pending)
+	// Fail-closed wrapper: an unreadable state reads as pending.
+	testutil.True(t, d.GraduationPending(id))
+	gerr := graduationPendingGuard(d.conn, id)
+	testutil.True(t, gerr != nil)
+	testutil.False(t, errors.Is(gerr, ErrGraduationPending))
+}
+
+func TestAbandonGraduationPending(t *testing.T) {
+	d, b := graduationFixture(t)
+	res, err := d.GraduateHeraWorker(b.ID)
+	testutil.NoError(t, err)
+	id := b.ArgusTaskID
+	meta, err := d.ListMetaByNamespace(HeraMetaNamespace)
+	testutil.NoError(t, err)
+	testutil.Equal(t, meta[id][HeraMetaKeyGraduationBindingID], strconv.FormatInt(res.NewBinding.ID, 10))
+	testutil.NoError(t, d.SetMeta(id, HeraMetaNamespace, "graduation_orientation", "body"))
+
+	testutil.NoError(t, d.AbandonGraduationPending(id))
+	meta, err = d.ListMetaByNamespace(HeraMetaNamespace)
+	testutil.NoError(t, err)
+	testutil.Equal(t, meta[id][HeraMetaKeyGraduationPendingRestart], "")
+	testutil.Equal(t, meta[id]["graduation_orientation"], "")
+	testutil.Equal(t, meta[id][HeraMetaKeyGraduationBindingID], "")
+	testutil.Equal(t, meta[id]["graduated_from"], ResidentOrchestratorName)
+	testutil.False(t, d.GraduationPending(id))
+	testutil.NoError(t, d.SetArchived(id, true))
+}
+
+func TestCompleteHeraGraduationClearsBindingID(t *testing.T) {
+	d, b := graduationFixture(t)
+	_, err := d.GraduateHeraWorker(b.ID)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.CompleteHeraGraduation(b.ArgusTaskID, "orientation"))
+	meta, err := d.ListMetaByNamespace(HeraMetaNamespace)
+	testutil.NoError(t, err)
+	testutil.Equal(t, meta[b.ArgusTaskID][HeraMetaKeyGraduationBindingID], "")
 }

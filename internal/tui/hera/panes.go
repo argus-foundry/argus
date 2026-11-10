@@ -370,6 +370,9 @@ func (p *HeraPage) maybeKickPaneRerender(bound string, kickedFor *string, cols i
 	if p.kickRerender == nil || bound == "" || cols <= 0 {
 		return
 	}
+	if p.rerenderInert(bound) {
+		return // pending graduate / resident: the daemon owns the restart
+	}
 	// resize-without-restart: with ui.auto_rerender_on_resize off no automatic
 	// evaluation is scheduled at all (no dwell, no zoom re-arm, no RPCs); the
 	// pane's owed notice and the hotkey cover it. Nil means on (tests, remote).

@@ -171,6 +171,9 @@ func residentHeraFixture(t *testing.T) (*Server, *db.DB, *model.Task, *db.HeraOr
 	s.taskStopper = agent.NewRunner(nil)
 	s.heraSpawn = residentAwareFakeSpawn(d)
 	armResidentToken(t, s)
+	// Registered after the DB's own cleanup, so it runs first: async reclaim
+	// sweeps finish before the DB closes.
+	t.Cleanup(s.residentBackground.Wait)
 	return s, d, res, o
 }
 
@@ -233,7 +236,8 @@ func TestResidentDeleteIdentityAndScope(t *testing.T) {
 	const residentOnly = "is resident only"
 	for _, tc := range []struct{ name, reason string }{
 		{"unbound", residentOnly},
-		{"spoofed id", residentOnly},
+		// Naming the resident's task id in any task-id argument is refused centrally.
+		{"spoofed id", "resident identity requires the resident's own bound connection"},
 		// cwd naming the resident is refused centrally before dispatch.
 		{"spoofed cwd", "resident identity requires the resident's own bound connection"},
 		// Each non-resident bound caller targets a SIBLING, so only

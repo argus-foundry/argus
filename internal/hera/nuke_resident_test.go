@@ -25,7 +25,8 @@ func TestResidentExcludedFromNuke(t *testing.T) {
 	p := PreviewNukeSubtree(d, subtree)
 	testutil.Equal(t, p.Orchestrators, 0)
 	testutil.Equal(t, p.Worktrees, 0)
-	ids, background := NukeSubtree(d, nil, subtree)
+	ids, background, nerr := NukeSubtree(d, nil, subtree)
+	testutil.NoError(t, nerr)
 	background()
 	testutil.Equal(t, len(ids), 0)
 	NukeSingleRole(d, nil, view)()
@@ -90,10 +91,37 @@ func TestNukeSkipsPendingGraduate(t *testing.T) {
 
 	NukeSingleRole(d, nil, view)()
 	assertIntact(t)
-	ids, bg := NukeSubtree(d, nil, []*heramodel.OrchView{orch})
+	testutil.ErrorIs(t, CheckNukeTask(d, task.ID), db.ErrGraduationPending)
+	ids, bg, nerr := NukeSubtree(d, nil, []*heramodel.OrchView{orch})
+	testutil.ErrorIs(t, nerr, db.ErrGraduationPending)
 	bg()
 	testutil.Equal(t, len(ids), 0)
 	assertIntact(t)
+
+	// The cascade refuses AS A WHOLE: a sibling role/task in the same
+	// orchestrator and the orchestrator itself are untouched.
+	sib := &model.Task{ID: "sib", Name: "sib", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(sib))
+	sibRole, err := d.CreateHeraRole(db.CreateHeraRoleInput{OrchestratorID: grad.NewRole.OrchestratorID, Name: "sib", Kind: db.HeraKindWorker})
+	testutil.NoError(t, err)
+	_, err = d.CreateHeraBinding(db.CreateHeraBindingInput{RoleID: sibRole.ID, OrchestratorID: grad.NewRole.OrchestratorID, ArgusTaskID: sib.ID, WorktreePath: t.TempDir()})
+	testutil.NoError(t, err)
+	orch.Roles = append(orch.Roles, heramodel.RoleView{RoleID: sibRole.ID, TaskID: sib.ID, Live: true, Kind: db.HeraKindWorker})
+	_, _, nerr = NukeSubtree(d, nil, []*heramodel.OrchView{orch})
+	testutil.ErrorIs(t, nerr, db.ErrGraduationPending)
+	o, err := d.HeraOrchestrator(orch.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, o.NukedAt == nil)
+	testutil.True(t, o.ArchivedAt == nil)
+	sr, err := d.HeraRole(sibRole.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, sr.NukedAt == nil)
+	sibAfter, err := d.Get(sib.ID)
+	testutil.NoError(t, err)
+	testutil.False(t, sibAfter.Archived)
+	_, err = d.HeraLiveBindingByRole(sibRole.ID)
+	testutil.NoError(t, err)
+	orch.Roles = orch.Roles[:1]
 
 	testutil.NoError(t, d.CompleteHeraGraduation(task.ID, "orientation"))
 	NukeSingleRole(d, nil, view)()

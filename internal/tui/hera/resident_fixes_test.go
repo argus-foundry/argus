@@ -95,3 +95,83 @@ func TestResidentMode_GraduationPendingRowInert(t *testing.T) {
 	h(key('r'), noFocus)
 	testutil.Equal(t, calls.n["rename"], 1)
 }
+
+// selectPendingGraduate graduates the first worker and selects its ended
+// "graduation pending restart" row, returning the graduate's task id.
+func selectPendingGraduate(t *testing.T, f *residentFixture) string {
+	t.Helper()
+	role := roleForTask(t, f.d, f.orchID, f.workers[0])
+	binds, err := f.d.ListHeraBindingsByRole(role.ID)
+	testutil.NoError(t, err)
+	_, err = f.d.GraduateHeraWorker(binds[0].ID)
+	testutil.NoError(t, err)
+	f.p.Refresh()
+	f.p.SetResidentMode(false)
+	f.p.SetResidentMode(true)
+	f.p.Machine().ToRail()
+	nav := f.p.InputHandler()
+	for i := 0; i < 20; i++ {
+		if r := f.p.Rail().Selection().Role; r != nil && r.GraduationPendingRestart {
+			break
+		}
+		nav(key('j'), noFocus)
+	}
+	r := f.p.Rail().Selection().Role
+	testutil.True(t, r != nil && r.GraduationPendingRestart)
+	return f.workers[0]
+}
+
+// The graduation-pending row's task belongs to the daemon-owned graduation
+// restart: ctrl+n, the owed-notice click, the palette row and the automatic
+// size-drift kick must all refuse it (a double restart otherwise), while a live
+// worker row keeps every one of them.
+func TestResidentMode_PendingGraduateNoForcedRerenderOrKick(t *testing.T) {
+	f := newResidentFixture(t)
+	f.enter(t)
+	grad := selectPendingGraduate(t, f)
+	var got []string
+	f.p.OnRerender = func(id string) { got = append(got, id) }
+	kicks, advance := newKickRecorder(f.p)
+	f.p.agentBound = grad // the pane still binds the pending row's task
+
+	f.p.Machine().SetRegion(FocusAgent)
+	f.p.InputHandler()(tcell.NewEventKey(tcell.KeyCtrlN, 0, tcell.ModCtrl), noFocus)
+	f.p.SetOwedFunc(nil, nil)
+	f.p.agentPane.OnOwedClick()
+	f.p.FireRerender(grad)
+	testutil.Equal(t, len(got), 0)
+	testutil.False(t, f.p.RerenderAllowed(grad))
+
+	advance(KickDebounce)
+	f.p.maybeKickPaneRerender(f.p.agentBound, &f.p.agentKickedFor, 100, &f.p.agentKickPending, false)
+	advance(KickDebounce * 2)
+	f.p.maybeKickPaneRerender(f.p.agentBound, &f.p.agentKickedFor, 100, &f.p.agentKickPending, false)
+	testutil.Equal(t, len(*kicks), 0)
+
+	// Control: a live worker row still kicks and rerenders.
+	f.selectTask(t, f.workers[1])
+	f.p.agentBound = f.workers[1]
+	testutil.True(t, f.p.RerenderAllowed(f.workers[1]))
+	advance(KickDebounce)
+	f.p.maybeKickPaneRerender(f.p.agentBound, &f.p.agentKickedFor, 100, &f.p.agentKickPending, false)
+	advance(KickDebounce * 2)
+	f.p.maybeKickPaneRerender(f.p.agentBound, &f.p.agentKickedFor, 100, &f.p.agentKickPending, false)
+	testutil.Equal(t, len(kicksFor(*kicks, f.workers[1])), 1)
+}
+
+// The pane-level reattach (click / Enter in the agent pane) is skipped for the
+// pending row; it still fires for a live worker.
+func TestResidentMode_PendingGraduatePaneReattachSkipped(t *testing.T) {
+	f := newResidentFixture(t)
+	f.enter(t)
+	grad := selectPendingGraduate(t, f)
+	calls := f.wire()
+	f.p.agentBound = grad
+	f.p.reattachPane(f.p.agentPane)
+	testutil.Equal(t, calls.n["reattach"], 0)
+
+	f.selectTask(t, f.workers[1])
+	before := calls.n["reattach"]
+	f.p.reattachPane(f.p.agentPane)
+	testutil.Equal(t, calls.n["reattach"], before+1)
+}

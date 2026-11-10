@@ -53,9 +53,12 @@ func TestResident_TaskListOmitsIt(t *testing.T) {
 
 func TestResident_TaskGetIsNotFound(t *testing.T) {
 	s, _ := residentServer(t)
+	// Any non-resident connection naming the resident's id is refused before
+	// dispatch, so task_get never reveals the row.
 	text, isErr := callTool(t, s, "task_get", `{"id":"res-1"}`)
 	testutil.Equal(t, isErr, true)
-	testutil.Contains(t, text, "task not found")
+	testutil.Contains(t, text, "resident identity requires the resident's own bound connection")
+	testutil.False(t, strings.Contains(text, "/home/x/.argus/resident"))
 }
 
 func TestResident_LifecycleToolsReject(t *testing.T) {
@@ -168,7 +171,7 @@ func TestResident_TaskRecycleBoundToCaller(t *testing.T) {
 		testutil.Equal(t, len(*got), 0)
 		text, isErr = postTool(t, s, "/mcp", "task_recycle", `{"id":"res-1",`+note+`}`)
 		testutil.Equal(t, isErr, true)
-		testutil.Contains(t, text, "only the resident agent may recycle itself")
+		testutil.Contains(t, text, "resident identity requires the resident's own bound connection")
 		testutil.Equal(t, len(*got), 0)
 	})
 	t.Run("another bound task cannot recycle the resident", func(t *testing.T) {

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -51,14 +52,15 @@ func TestBuildCmd_ResidentMCPTokenFileOnlyAndRotates(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, hashPath, filepath.Join(evalSymlinksOrKeep(filepath.Join(home, ".argus")), "resident-launch", "mcp-token.sha256"))
 
-	launch := func() string {
+	launch := func(resume bool) string {
 		t.Helper()
-		cmd, cleanup, err := BuildCmd(res, cfg, false)
+		cmd, cleanup, err := BuildCmd(res, cfg, resume)
 		testutil.NoError(t, err)
 		if cleanup != nil {
 			t.Cleanup(cleanup)
 		}
 		argv := strings.Join(cmd.Args, " ")
+		testutil.Equal(t, strings.Contains(argv, "--resume"), resume)
 		url, token := residentMCPConfigToken(t, configPath)
 		testutil.Equal(t, url, "http://localhost:7742/mcp?caller=res-9")
 		testutil.True(t, regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(token))
@@ -87,12 +89,42 @@ func TestBuildCmd_ResidentMCPTokenFileOnlyAndRotates(t *testing.T) {
 		return token
 	}
 
-	first := launch()
+	first := launch(false)
 	testutil.True(t, VerifyResidentMCPToken(hashPath, first))
-	second := launch() // resume / kick / recycle all rebuild through BuildCmd
+	// Resume is the path every resume / kick / recycle takes.
+	res.SessionID = "11111111-2222-3333-4444-555555555555"
+	second := launch(true)
 	testutil.True(t, first != second)
 	testutil.False(t, VerifyResidentMCPToken(hashPath, first))
 	testutil.True(t, VerifyResidentMCPToken(hashPath, second))
+	third := launch(true)
+	testutil.True(t, third != second)
+	testutil.False(t, VerifyResidentMCPToken(hashPath, first))
+	testutil.False(t, VerifyResidentMCPToken(hashPath, second))
+	testutil.True(t, VerifyResidentMCPToken(hashPath, third))
+}
+
+// The unattended-worker sandbox gate trusts IsSandboxAvailable; the seam that
+// overrides it must refuse to run outside a test binary.
+func TestForceSandboxAvailableForTest_RefusesOutsideTestBinary(t *testing.T) {
+	ResetSandboxCache()
+	t.Cleanup(ResetSandboxCache)
+	real := IsSandboxAvailable()
+	prev := sandboxSeamInTest
+	sandboxSeamInTest = func() bool { return false }
+	t.Cleanup(func() { sandboxSeamInTest = prev })
+	func() {
+		defer func() {
+			r := recover()
+			testutil.Contains(t, fmt.Sprint(r), "outside a test binary")
+		}()
+		ForceSandboxAvailableForTest(t, !real)
+	}()
+	testutil.Equal(t, IsSandboxAvailable(), real)
+
+	sandboxSeamInTest = prev
+	ForceSandboxAvailableForTest(t, !real)
+	testutil.Equal(t, IsSandboxAvailable(), !real)
 }
 
 func TestBuildCmd_ResidentMCPConfigReplacesPlantedSymlink(t *testing.T) {

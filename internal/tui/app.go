@@ -145,6 +145,9 @@ type App struct {
 	heraConfirmModal *modal.ConfirmModal
 	heraInputSubmit  func(string) // called with the field value on input-modal submit
 	heraConfirmDo    func()       // called on confirm-modal accept
+	// heraConfirmReturnTasks makes closeHeraConfirm return to the Tasks tab
+	// (graduation-pending abandon escape opened from Tasks-list delete/archive).
+	heraConfirmReturnTasks bool
 	// heraConfirmOnCancel is openHeraConfirmChoice's sibling to heraConfirmDo
 	// (Stage 5's per-branch stacked-branch review, heraReviewStackedBranchesStep):
 	// called on confirm-modal decline/cancel instead of the plain no-op every
@@ -976,6 +979,15 @@ func (a *App) buildUI() {
 		if err := a.db.SetArchived(t.ID, t.Archived); errors.Is(err, db.ErrGraduationPending) {
 			uxlog.Log("[resident] tui archive refused task=%s: graduation pending", t.ID)
 			a.flashNotice(db.ErrGraduationPending.Error())
+			if t.Archived {
+				id := t.ID
+				a.graduationPendingEscape(id, "archive", true, func() {
+					if err := a.db.SetArchived(id, true); err != nil {
+						a.statusbar.SetError("Archive failed: " + err.Error())
+					}
+					a.refreshTasksAsync()
+				})
+			}
 		} // other errors: best-effort; display is source of truth
 		a.refreshTasksAsync()
 	}
@@ -6257,6 +6269,9 @@ func (a *App) rerenderHotkeyHera(taskID string) {
 	if a.heraPage == nil {
 		return
 	}
+	if a.graduationPendingBlocked(taskID, "rerender") {
+		return // the daemon owns a pending graduate's restart
+	}
 	_, cols, ok := a.heraPage.PaneSizeForTask(taskID)
 	if !ok {
 		a.hotkeyOutcome(taskID, 0, "no-pane", "")
@@ -6327,6 +6342,10 @@ func (a *App) rerenderKeyHint() string {
 // (BUG-077 — see gotchas/hera-view.md).
 func (a *App) heraKickRerender(taskID string, panelCols uint16, onDeferred func()) {
 	if !a.autoRerenderOn() {
+		return
+	}
+	if a.graduationPendingQuiet(taskID) {
+		uxlog.Log("[resident] size-drift kick skipped task=%s: graduation restart pending", taskID)
 		return
 	}
 	task, err := a.db.Get(taskID)
@@ -7799,8 +7818,10 @@ func (a *App) handleConfirmDeleteKey(event *tcell.EventKey) {
 
 	if a.confirmDeleteModal.Confirmed() {
 		t := a.confirmDeleteModal.Task()
-		a.deleteTask(t)
+		// Close first: a graduation-pending delete opens its own abandon
+		// confirm, which must not be torn down by this modal's close.
 		a.closeConfirmDelete()
+		a.deleteTask(t)
 	}
 }
 
@@ -8694,7 +8715,7 @@ func (a *App) closeConfirmDeleteProject() {
 // deleteTask stops the agent, cleans up the worktree/branch, and removes the task from DB.
 // Worktree/branch cleanup runs in a background goroutine to avoid blocking the UI.
 func (a *App) deleteTask(t *model.Task) {
-	if a.graduationPendingBlocked(t.ID, "delete") {
+	if a.graduationPendingEscape(t.ID, "delete", true, func() { a.deleteTask(t) }) {
 		return
 	}
 	uxlog.Log("[tui] deleting task %s (%s)", t.ID, t.Name)
