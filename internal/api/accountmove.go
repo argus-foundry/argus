@@ -56,7 +56,7 @@ func (s *Server) moveTaskAccount(in agent.AccountMoveInput) (agent.AccountMoveRe
 	switch {
 	case errors.Is(err, db.ErrTaskNotFound):
 		return res, http.StatusNotFound, err
-	case errors.Is(err, agent.ErrAccountMoveBusy):
+	case errors.Is(err, agent.ErrAccountMoveBusy), errors.Is(err, db.ErrGraduationPending):
 		return res, http.StatusConflict, err
 	case errors.Is(err, agent.ErrAccount):
 		return res, http.StatusBadRequest, err

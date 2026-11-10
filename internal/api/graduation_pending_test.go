@@ -18,7 +18,8 @@ func TestRestartRoutesRefusePendingGraduate(t *testing.T) {
 	routes := []struct {
 		name, method, path, body string
 	}{
-		{"runtime", "PATCH", "/api/tasks/g1/runtime", `{"apply":"now","model":"opus"}`},
+		{"runtime/next_resume", "PATCH", "/api/tasks/g1/runtime", `{"apply":"next_resume","model":"opus"}`},
+		{"runtime/restart", "PATCH", "/api/tasks/g1/runtime", `{"apply":"restart","model":"opus"}`},
 		{"session switch", "POST", "/api/tasks/g1/claude-session", `{"session_id":"other"}`},
 	}
 	for _, rt := range routes {
@@ -29,7 +30,13 @@ func TestRestartRoutesRefusePendingGraduate(t *testing.T) {
 			testutil.NoError(t, d.Add(&model.Task{ID: "g1", Name: "g1", Status: model.StatusInProgress, Project: "p", Backend: "claude", SessionID: "orig"}))
 			testutil.NoError(t, d.SetMeta("g1", db.HeraMetaNamespace, db.HeraMetaKeyGraduationPendingRestart, "true"))
 			w := httptest.NewRecorder()
-			srv.routes().ServeHTTP(w, authedReq(rt.method, rt.path, rt.body))
+			req := authedReq(rt.method, rt.path, rt.body)
+			stored, err := d.Get("g1")
+			testutil.NoError(t, err)
+			// A valid precondition and a real field change: only the guard
+			// stands between this request and the persist/restart.
+			req.Header.Set("If-Match", runtimeRevision(stored))
+			srv.routes().ServeHTTP(w, req)
 			testutil.Equal(t, w.Code, http.StatusConflict)
 			testutil.Contains(t, w.Body.String(), "graduation restart pending")
 			testutil.Equal(t, len(rec.stopped), 0)

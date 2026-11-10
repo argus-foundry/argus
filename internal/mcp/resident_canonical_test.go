@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -401,10 +403,16 @@ func TestResidentIdentityGuard_PluginTools(t *testing.T) {
 		{"iris exact task_id", "iris_push", `{"task_id":"res-1"}`},
 		{"iris ID", "iris_push", `{"ID":"res-1"}`},
 		{"iris Caller_Id", "iris_push", `{"Caller_Id":"res-1"}`},
-		{"iris Kelvin tasK_id", "iris_push", `{"tasK_id":"res-1"}`},
+		// U+212A KELVIN SIGN folds to 'k' under Unicode simple folding but is
+		// not ASCII: an ASCII-only fold would let it through.
+		{"iris Kelvin tasK_id", "iris_push", `{"tas\u212a_id":"res-1"}`},
 		{"iris second identity key", "iris_push", `{"id":"abc123","Task_ID":"res-1"}`},
 		{"plannotator CWD tilde", "plannotator_annotate", `{"CWD":"~/.argus/resident"}`},
 		{"plannotator Cwd padded", "plannotator_annotate", `{"Cwd":" /home/x/.argus/resident/notes "}`},
+		// U+017F LONG S folds to 's'. Every identity key (task_id, id,
+		// caller_id, ...) lacks an 's' except the cwd value path, so the fold is
+		// exercised on the value (and never needs an ASCII-only compare).
+		{"plannotator cwd long-s", "plannotator_annotate", `{"cwd":"/home/x/.argus/re\u017fident"}`},
 		{"plannotator cwd case-folded", "plannotator_annotate", `{"cwd":"/home/x/.ARGUS/resident"}`},
 	} {
 		for _, conn := range []string{"unbound", "forged caller"} {
@@ -435,6 +443,43 @@ func TestResidentIdentityGuard_PluginTools(t *testing.T) {
 			testutil.False(t, isErr)
 			testutil.Equal(t, text, "ok")
 			testutil.Equal(t, calls, before+1)
+		})
+	}
+}
+
+// A symlink to the resident's real worktree identifies the resident: the
+// symlink-resolved form of the cwd must be compared, not just the literal.
+func TestResidentIdentityGuard_PluginCwdSymlink(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "resident")
+	testutil.NoError(t, os.MkdirAll(filepath.Join(real, "sub"), 0o755))
+	link := filepath.Join(t.TempDir(), "alias")
+	testutil.NoError(t, os.Symlink(real, link))
+
+	calls := 0
+	plugin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"isError":false}`))
+	}))
+	t.Cleanup(plugin.Close)
+
+	for _, cwd := range []string{link, filepath.Join(link, "sub")} {
+		t.Run(cwd, func(t *testing.T) {
+			s, rdb := residentServer(t)
+			rdb.resident.Worktree = real
+			d, err := db.OpenInMemory()
+			testutil.NoError(t, err)
+			t.Cleanup(func() { _ = d.Close() })
+			reg := NewRegistry(d)
+			s.SetPluginRegistry(reg)
+			testutil.NoError(t, reg.Register("plannotator", ToolRegistration{Name: "plannotator_annotate", InputSchema: json.RawMessage(`{}`), CallbackURL: plugin.URL}))
+			args, err := json.Marshal(map[string]string{"cwd": cwd})
+			testutil.NoError(t, err)
+			before := calls
+			cr := callResult(t, postRaw(t, s, "/mcp", "", "tools/call", ToolCallParams{Name: "plannotator_annotate", Arguments: args}))
+			testutil.True(t, cr.IsError)
+			testutil.Contains(t, cr.Content[0].Text, "plannotator_annotate: "+residentIdentityRefusal)
+			testutil.Equal(t, calls, before)
 		})
 	}
 }

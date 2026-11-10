@@ -6426,6 +6426,19 @@ func (a *App) kickRerenderCore(task *model.Task, sess agent.SessionHandle, panel
 		return
 	}
 	taskID := task.ID
+	if a.graduationPendingQuiet(taskID) {
+		// Single choke point for every kick path (automatic, hotkey, and the
+		// deferred forced retry): the daemon watcher owns a pending graduate's
+		// kill+resume. Drop any armed retry state so it cannot fire later.
+		uxlog.Log("[resident] rerender kick dropped task=%s forced=%t: graduation restart pending", taskID, forced)
+		a.dropKickWait(taskID)
+		if forced {
+			// The user pressed the hotkey: say why nothing happened. Automatic
+			// kicks stay quiet (no notice spam).
+			a.flashNotice(db.ErrGraduationPending.Error())
+		}
+		return
+	}
 	pid := sess.PID()
 	previousPID, observed := a.committedColsPID[taskID]
 	if !observed || previousPID != pid {
@@ -7602,6 +7615,9 @@ func (a *App) openSessionPicker() {
 		return
 	}
 
+	if a.graduationPendingBlocked(taskID, "session switch") {
+		return
+	}
 	cfg := a.db.Config()
 	backend, berr := agent.ResolveBackend(task, cfg)
 	if berr != nil {
@@ -7763,6 +7779,9 @@ func (a *App) switchSession(newID, title string) {
 	a.mu.Unlock()
 	if taskID == "" || newID == "" {
 		return
+	}
+	if a.graduationPendingBlocked(taskID, "session switch") {
+		return // a different SessionID breaks the graduate's same-conversation resume
 	}
 	task, err := a.db.Get(taskID)
 	if err != nil || task == nil {

@@ -3,9 +3,11 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os/exec"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/hera"
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
@@ -25,7 +28,7 @@ import (
 // through the destructive mutation. Never hold this during a restart wait.
 var residentWorkerMutationMu sync.Mutex
 
-var residentDeleteTool = Tool{Name: "hera_delete_worker", Description: "Resident only: delete a live worker of your standing team. Refuses unmerged non-empty work, and any uncommitted or untracked files, unless force=true. Force returns the unmerged summary; REPORT it to Aaron in your own conversation in this turn.", InputSchema: map[string]interface{}{
+var residentDeleteTool = Tool{Name: "hera_delete_worker", Description: "Resident only: delete a live worker of your standing team. Refuses a busy worker, unmerged non-empty work, and any uncommitted or untracked files, unless force=true (a refusal found after stopping the session leaves it stopped but resumable). Force returns the unmerged summary; REPORT it to Aaron in your own conversation in this turn.", InputSchema: map[string]interface{}{
 	"type": "object", "properties": map[string]interface{}{"role": map[string]interface{}{"type": "string", "description": "Worker name or numeric role id"}, "force": map[string]interface{}{"type": "boolean"}}, "required": []string{"role"},
 }}
 
@@ -86,6 +89,9 @@ func (s *Server) toolHeraNewOrchestratorAs(id interface{}, args json.RawMessage,
 }
 
 func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, caller string) *Response {
+	// One overall deadline for the whole call, started before queueing on the
+	// mutation lock so the wait for another resident mutation counts.
+	deadline := residentClock.Now().Add(residentDeleteDeadline)
 	// Identity comes only from the transport's caller binding. Ignore cwd/id.
 	if !s.boundResident(caller) {
 		return residentToolError(id, "hera_delete_worker is resident only (connection-bound caller required)")
@@ -141,8 +147,6 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 	if task.IsResident() || task.ID == caller {
 		return residentToolError(id, "resident delete must never target itself")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	cfg := d.Config()
 	pr := ""
 	entries, metaErr := d.ListMeta(task.ID, "pr")
@@ -155,8 +159,61 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 	} else {
 		pr = fmt.Sprintf("unknown (%v)", metaErr)
 	}
-	summary := mergesafety.SummarizeTask(ctx, cfg, task, pr)
+	// Non-force order: idle check, branch-tip capture, summary + clean-tree
+	// check, classification, stop, wait for exit, re-check, delete. Everything
+	// before the stop runs while the session may still be live, so the
+	// re-check after the exit is what guarantees nothing written meanwhile is
+	// destroyed unseen. The tip is captured FIRST: a commit landing after it
+	// (even between the summary and classification, where a stale empty
+	// summary would wave an unsafe verdict through) moves the tip and the
+	// re-check refuses.
+	//
+	// Deadline: everything before the first change (the stop; the nuke for a
+	// force delete) must leave the worst-case remainder of the call inside
+	// the overall deadline (mutateBy), so idle sampling and classification
+	// are capped by it, and past it the call refuses "host busy; retry" with
+	// nothing changed. After the stop everything is local and bounded; the
+	// origin branch delete runs in the background (see residentDeleteDeadline).
+	reserve := residentForceReserve
 	if !p.Force {
+		reserve = residentPostStopReserve()
+	}
+	mutateBy := deadline.Add(-reserve)
+	if now := residentClock.Now(); !now.Before(mutateBy) {
+		return residentHostBusy(id, role.Name, task.ID, fmt.Sprintf("waited %s for another resident worker mutation or session queries", now.Sub(deadline.Add(-residentDeleteDeadline)).Round(time.Millisecond)))
+	}
+	if !p.Force {
+		if err := residentWorkerIdle(runner, task.ID, mutateBy); err != nil {
+			if errors.Is(err, hera.ErrHostBusy) {
+				return residentHostBusy(id, role.Name, task.ID, "the idle check ran out of the call's time budget")
+			}
+			uxlog.Log("[resident] delete worker=%s task=%s refused: %v", role.Name, task.ID, err)
+			return residentToolError(id, err.Error())
+		}
+	}
+	ctxDeadline := residentClock.Now().Add(residentClassifyBudget)
+	if mutateBy.Before(ctxDeadline) {
+		ctxDeadline = mutateBy
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ctxDeadline.Sub(residentClock.Now()))
+	defer cancel()
+	tip := ""
+	if !p.Force {
+		tip = residentBranchTip(ctx, task)
+	}
+	summary := residentSummarize(ctx, cfg, task, pr)
+	var recheck func(*model.Task) error
+	if !p.Force {
+		// An expired budget makes the summary's fields unknown; that is not
+		// dirt, and saying so would mislead.
+		if ctx.Err() != nil {
+			return residentHostBusy(id, role.Name, task.ID, "the work summary ran out of the call's time budget")
+		}
+		// A safe verdict speaks only for the branch: uncommitted or untracked
+		// files would be destroyed with the worktree. Unknown counts as dirty.
+		if summary.DirtyCount != "0" {
+			return residentToolError(id, fmt.Sprintf("not safe: worktree has uncommitted or untracked changes (dirty files: %s); commit them, or pass force=true", summary.DirtyCount))
+		}
 		classify := s.residentClassify
 		if classify == nil {
 			classify = func(ctx context.Context, t *model.Task) (mergesafety.Verdict, error) {
@@ -165,15 +222,21 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 		}
 		v, err := classify(ctx, task)
 		if err != nil {
+			if ctx.Err() != nil {
+				return residentHostBusy(id, role.Name, task.ID, fmt.Sprintf("the merge-safety check ran out of the call's time budget (%v)", err))
+			}
 			return residentToolError(id, fmt.Sprintf("not safe: classifier failed: %v", err))
-		}
-		// A safe verdict speaks only for the branch: uncommitted or untracked
-		// files would be destroyed with the worktree. Unknown counts as dirty.
-		if summary.DirtyCount != "0" {
-			return residentToolError(id, fmt.Sprintf("not safe: worktree has uncommitted or untracked changes (dirty files: %s); commit them, or pass force=true", summary.DirtyCount))
 		}
 		if !v.Safe && !summary.Empty() {
 			return residentToolError(id, fmt.Sprintf("not safe: %s; commits ahead: %s; dirty files: %s", v.Reason, summary.CommitsAhead, summary.DirtyCount))
+		}
+		recheck = func(t *model.Task) error {
+			// Fresh deadline: classification may have used up ctx, and an
+			// expired re-check would refuse for the wrong reason. It is part
+			// of the post-stop reserve.
+			rctx, rcancel := context.WithTimeout(context.Background(), residentRecheckBudget)
+			defer rcancel()
+			return residentRecheckTree(rctx, cfg, t, tip)
 		}
 	}
 	if p.Force {
@@ -185,7 +248,35 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 	}
 	// Role-scoped stop and reclaim are synchronous so the result follows them;
 	// the fleet-wide sweep is not, so a slow sweep never delays the summary.
-	followUp, err := hera.NukeResidentWorker(d, runner, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})
+	var refusal error
+	if recheck != nil {
+		inner := recheck
+		recheck = func(t *model.Task) error {
+			refusal = inner(t)
+			return refusal
+		}
+	}
+	followUp, err := hera.NukeResidentWorkerChecked(d, runner, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true}, hera.ResidentDeleteOptions{
+		Recheck:  recheck,
+		Wait:     residentStopWait,
+		MutateBy: mutateBy,
+		// The exit wait must leave the re-check and the local nuke their time.
+		GiveUpBy:           deadline.Add(-(residentRecheckBudget + residentLocalNukeReserve)),
+		Clock:              residentClock,
+		RemoteBranchDelete: residentRemoteBranchDelete,
+	})
+	if errors.Is(err, hera.ErrHostBusy) {
+		return residentHostBusy(id, role.Name, task.ID, "too little of the call's time budget was left to stop and delete safely")
+	}
+	if refusal != nil {
+		return residentToolError(id, fmt.Sprintf("not deleted: %v; worker %s's session was stopped and can be resumed (it is not marked finished); its role, binding and worktree are kept; commit the work, or pass force=true", refusal, role.Name))
+	}
+	if errors.Is(err, hera.ErrWorkerSessionStillRunning) {
+		return residentToolError(id, fmt.Sprintf("not deleted: %v; worker %s was told to stop and can be resumed once it exits; its role, binding and worktree are kept; retry, or pass force=true", err, role.Name))
+	}
+	if errors.Is(err, hera.ErrWorkerStopFailed) {
+		return residentToolError(id, fmt.Sprintf("not deleted: %v; worker %s's role, binding and worktree are kept and it can be resumed (it is not marked finished); retry, or pass force=true", err, role.Name))
+	}
 	if err != nil {
 		return residentToolError(id, fmt.Sprintf("worker nuke did not complete: %v", err))
 	}
@@ -204,6 +295,219 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 	}
 	return toolResult(id, out.String())
 }
+
+// residentSessionReader is the runner surface the non-force delete needs to
+// tell a busy worker from an idle or absent one. Both the in-process runner
+// and the daemon's supervisor client provide it.
+type residentSessionReader interface {
+	Get(taskID string) agent.SessionHandle
+	HasPendingRestart(taskID string) bool
+}
+
+// hera_delete_worker time budget. The MCP client deadline is 60s
+// (gotchas/daemon-rpc.md). The whole call — force or not, INCLUDING time
+// queued on residentWorkerMutationMu — runs under residentDeleteDeadline,
+// measured from handler entry. The post-stop section is local and bounded:
+// the stop's exit wait (residentStopWait.Max, which covers the Stop RPC),
+// the re-check (residentRecheckBudget) and the local nuke
+// (residentLocalNukeReserve: DB rows, presence probes, worktree and local
+// branch removal); the origin branch delete runs asynchronously after the
+// result. Whatever precedes the first change (queueing, idle sampling,
+// tip/summary/classification, at most residentClassifyBudget) gets what is
+// left, and past that point the call refuses "host busy; retry" with nothing
+// changed. A force delete reserves only its nuke (residentForceReserve).
+const (
+	residentDeleteDeadline   = 45 * time.Second
+	residentClassifyBudget   = 24 * time.Second
+	residentRecheckBudget    = 10 * time.Second
+	residentLocalNukeReserve = 8 * time.Second
+	residentForceReserve     = residentLocalNukeReserve + 4*time.Second // + the reclaim's Stop RPC and presence probes
+)
+
+// residentPostStopReserve is what a non-force delete must still have left
+// when it stops the worker's session.
+func residentPostStopReserve() time.Duration {
+	return residentStopWait.Max + residentRecheckBudget + residentLocalNukeReserve
+}
+
+// residentStopWait is the stop exit wait; tests shorten it.
+var residentStopWait = hera.DefaultResidentStopWait
+
+// residentClock drives the delete's deadline, idle sampling and exit wait;
+// zero = real clock, tests substitute a fake one.
+var residentClock hera.Clock
+
+// residentRemoteBranchDelete deletes the deleted worker's branch on origin in
+// the background (nil = agent.DeleteRemoteBranchContext); tests block it.
+var residentRemoteBranchDelete func(ctx context.Context, repoDir, branch string) error
+
+// residentHostBusy refuses a delete that ran out of its time budget before
+// changing anything.
+func residentHostBusy(id interface{}, worker, taskID, why string) *Response {
+	uxlog.Log("[resident] delete worker=%s task=%s refused: host busy (%s); nothing changed", worker, taskID, why)
+	return residentToolError(id, fmt.Sprintf("not deleted: host busy; retry (%s); worker %s is unchanged", why, worker))
+}
+
+// residentSummarize is SummarizeTask; tests wrap it to land work mid-delete.
+var residentSummarize = mergesafety.SummarizeTask
+
+// residentIdleSampling bounds the content-aware idle check: a session whose
+// raw PTY output never goes quiet (an animated parked prompt, BUG-083) is
+// sampled every Interval for up to Window (on residentClock), and never past
+// the delete's time budget. Interval*ticks within Window must reach both
+// agent's 3s content-stability threshold and the NeedsInputEscalationTicks
+// (8) parked-selection escalation.
+type residentIdleSamplingCfg struct {
+	Window   time.Duration
+	Interval time.Duration
+}
+
+const residentIdleWindow = 6 * time.Second
+
+var residentIdleSampling = residentIdleSamplingCfg{Window: residentIdleWindow, Interval: 500 * time.Millisecond}
+
+// residentWorkerIdle refuses unless taskID's session is idle or absent. It
+// fails closed when the runner cannot report session state (including an
+// unreadable presence: a supervisor RPC error is never "absent"), and treats
+// a queued restart (a session about to come back) as busy. A session that is
+// not raw-idle gets a bounded content-aware second look (residentContentIdle)
+// so a parked prompt that keeps animating is not refused forever; that look
+// never runs past until, and one the budget cut short returns
+// hera.ErrHostBusy.
+func residentWorkerIdle(runner hera.NukeRunner, taskID string, until time.Time) error {
+	const busy = "worker is busy; wait, or force"
+	sr, ok := runner.(residentSessionReader)
+	if !ok {
+		return fmt.Errorf("%s (cannot read the worker's session state)", busy)
+	}
+	if sr.HasPendingRestart(taskID) {
+		return fmt.Errorf("%s (a session restart is pending)", busy)
+	}
+	sess := sr.Get(taskID)
+	if sess == nil {
+		present, err := hera.SessionPresent(runner, taskID)
+		if err != nil {
+			return fmt.Errorf("%s (cannot read the worker's session state: %w)", busy, err)
+		}
+		if present {
+			return fmt.Errorf("%s (cannot read the worker's session state)", busy)
+		}
+		return nil
+	}
+	if !sess.Alive() || sess.IsIdle() {
+		return nil
+	}
+	idle, err := residentContentIdle(taskID, sess, until)
+	if err != nil {
+		return err
+	}
+	if !idle {
+		return errors.New(busy)
+	}
+	return nil
+}
+
+// residentContentIdle samples sess with a fresh agent.ContentIdleTracker over
+// residentIdleSampling.Window and reports whether it became raw-idle,
+// content-idle (stable emulated screen, no working affordance, or an escalated
+// parked selection prompt), or exited. A session whose content keeps changing
+// never converges and stays busy. The window is capped at until; when that
+// cap (not the window) ends an unconverged sample, the result is
+// hera.ErrHostBusy rather than a busy verdict, since the worker was not given
+// a full look.
+func residentContentIdle(taskID string, sess agent.SessionHandle, until time.Time) (bool, error) {
+	cfg := residentIdleSampling
+	clk := residentClock
+	var tracker agent.ContentIdleTracker
+	start := clk.Now()
+	window, capped := cfg.Window, false
+	if left := until.Sub(start); left < window {
+		window, capped = left, true
+	}
+	for {
+		now := clk.Now()
+		if tracker.IsIdle(taskID, sess, now) {
+			uxlog.Log("[resident] delete: worker content-idle task=%s after %s", taskID, now.Sub(start).Round(time.Millisecond))
+			return true, nil
+		}
+		if !sess.Alive() {
+			return true, nil
+		}
+		if now.Sub(start) >= window {
+			if capped {
+				uxlog.Log("[resident] delete: content sampling cut to %s by the time budget task=%s", window.Round(time.Millisecond), taskID)
+				return false, fmt.Errorf("%w: idle sampling cut short by the time budget", hera.ErrHostBusy)
+			}
+			uxlog.Log("[resident] delete: worker still busy task=%s after %s of content sampling", taskID, cfg.Window)
+			return false, nil
+		}
+		clk.Sleep(cfg.Interval)
+	}
+}
+
+// residentBranchTip records the worker branch's commit before classification;
+// an unreadable tip is recorded as "" and must stay unreadable to compare equal.
+func residentBranchTip(ctx context.Context, t *model.Task) string {
+	if t.Worktree == "" || t.Branch == "" {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "--end-of-options", t.Branch+"^{commit}")
+	cmd.Dir = t.Worktree
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// residentRecheckTree runs after the worker's session is stopped: the tree
+// must still be clean (unknown counts as dirty) and the branch must not have
+// moved since classification, or the verdict no longer covers the work.
+func residentRecheckTree(ctx context.Context, cfg config.Config, t *model.Task, tipBefore string) error {
+	sum := mergesafety.SummarizeTask(ctx, cfg, t, "")
+	if sum.DirtyCount != "0" {
+		msg := fmt.Sprintf("worktree became dirty while the delete was classifying (dirty files: %s)", sum.DirtyCount)
+		if names := residentDirtyFiles(ctx, t.Worktree); len(names) > 0 {
+			msg += ": " + strings.Join(names, ", ")
+		}
+		return errors.New(msg)
+	}
+	if tip := residentBranchTip(ctx, t); tip != tipBefore {
+		return fmt.Errorf("branch %s moved while the delete was classifying", t.Branch)
+	}
+	return nil
+}
+
+// residentDirtyFiles names up to residentDirtyNameLimit dirty paths, best
+// effort (nil on any error). Names are %q-quoted so a crafted filename cannot
+// inject text into the resident's tool result.
+func residentDirtyFiles(ctx context.Context, wt string) []string {
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	cmd.Dir = wt
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var names []string
+	entries := strings.Split(string(out), "\x00")
+	for i := 0; i < len(entries); i++ {
+		e := entries[i]
+		if len(e) < 4 {
+			continue
+		}
+		if len(names) == residentDirtyNameLimit {
+			names = append(names, "...")
+			break
+		}
+		names = append(names, strconv.Quote(e[3:]))
+		if e[0] == 'R' || e[0] == 'C' || e[1] == 'R' || e[1] == 'C' {
+			i++ // skip the rename/copy source path
+		}
+	}
+	return names
+}
+
+const residentDirtyNameLimit = 10
 
 // residentReconcileMu serializes the resident-triggered async reclaim sweeps
 // so a burst of deletes cannot run overlapping sweeps over the same

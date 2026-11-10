@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/events"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
@@ -99,19 +100,81 @@ func (d *DB) GraduateHeraWorker(bindingID int64) (*MoveHeraBindingResult, error)
 }
 
 // CompleteHeraGraduation commits the orientation exactly once with clearing
-// the restart intent. A separate durable outbox key survives a crash before
-// notifier registration; the task inbox retains the full orientation.
+// the restart intent, without touching the task row. Thin form of
+// CompleteHeraGraduationAt (any observed phase, no PID/status write).
 func (d *DB) CompleteHeraGraduation(taskID, body string) error {
-	return d.WithTx(func(tx *sql.Tx) error {
+	_, err := d.CompleteHeraGraduationAt(taskID, "", body, -1)
+	return err
+}
+
+// CompleteHeraGraduationAt is the daemon watcher's compare-and-set completion.
+// In ONE transaction it deletes the pending-restart marker only WHERE its value
+// still equals phase ("" = any value), and only when that removed a row does it
+// write the PID/in_progress status (targeted UPDATE, never a stale full-row
+// Update that would un-archive the task) and insert the orientation message and
+// outbox key. A human abandon (+archive/delete) between the watcher's snapshot
+// and this call removes the marker, so it returns (false, nil) and changes
+// nothing. pid < 0 skips the task-row write. A separate durable outbox key
+// survives a crash before notifier registration; the task inbox retains the
+// full orientation.
+func (d *DB) CompleteHeraGraduationAt(taskID, phase, body string, pid int) (bool, error) {
+	var completed bool
+	var statusFrom, statusTo model.Status
+	err := d.WithTx(func(tx *sql.Tx) error {
+		q := `DELETE FROM task_meta WHERE task_id=? AND namespace='hera' AND key=?`
+		args := []any{taskID, HeraMetaKeyGraduationPendingRestart}
+		if phase != "" {
+			q += ` AND value=?`
+			args = append(args, phase)
+		}
+		res, err := tx.Exec(q, args...)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil
+		}
+		if pid >= 0 {
+			var stStr, startedStr, endedStr string
+			if err := tx.QueryRow(`SELECT status, started_at, ended_at FROM tasks WHERE id=?`, taskID).Scan(&stStr, &startedStr, &endedStr); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					// Task row gone: nothing to complete. Returning nil COMMITS the
+					// marker delete above on purpose, so the watcher stops looping on
+					// a dead task; completed stays false and no orientation is written.
+					return nil
+				}
+				return err
+			}
+			statusFrom, _ = model.ParseStatus(stStr)
+			tmp := &model.Task{Status: statusFrom, StartedAt: parseTime(startedStr), EndedAt: parseTime(endedStr)}
+			tmp.SetStatus(model.StatusInProgress)
+			statusTo = tmp.Status
+			if _, err := tx.Exec(`UPDATE tasks SET agent_pid=?, status=?, started_at=?, ended_at=? WHERE id=?`, pid, tmp.Status.String(), formatTime(tmp.StartedAt), formatTime(tmp.EndedAt), taskID); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`DELETE FROM task_meta WHERE task_id=? AND namespace='hera' AND key=?`, taskID, HeraMetaKeyGraduationBindingID); err != nil {
+			return err
+		}
 		id := "graduation:" + taskID
 		now := formatTime(time.Now())
 		if _, err := tx.Exec(`INSERT INTO task_messages(id,from_task_id,to_task_id,kind,body,in_reply_to,created_at,read_at) VALUES (?,?,?,'note',?,'',?,'') ON CONFLICT(id) DO NOTHING`, id, model.SystemTaskID, taskID, body, now); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM task_meta WHERE task_id=? AND namespace='hera' AND key IN (?,?)`, taskID, HeraMetaKeyGraduationPendingRestart, HeraMetaKeyGraduationBindingID); err != nil {
+		if _, err := tx.Exec(`INSERT INTO task_meta(task_id,namespace,key,value,updated_at) VALUES (?,'hera','graduation_orientation',?,?) ON CONFLICT(task_id,namespace,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`, taskID, body, now); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO task_meta(task_id,namespace,key,value,updated_at) VALUES (?,'hera','graduation_orientation',?,?) ON CONFLICT(task_id,namespace,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`, taskID, body, now)
-		return err
+		completed = true
+		return nil
 	})
+	if err != nil || !completed {
+		if err == nil {
+			uxlog.Log("[resident] graduation completion skipped task=%s: pending marker changed or cleared (or task gone)", taskID)
+		}
+		return false, err
+	}
+	if statusFrom != statusTo {
+		events.Emit(model.EventTypeTaskStatusChanged, taskID, map[string]string{"from": statusFrom.String(), "to": statusTo.String()})
+	}
+	return true, nil
 }

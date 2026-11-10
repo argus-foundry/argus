@@ -51,6 +51,34 @@ func releaseAccountMove(id string) {
 	accountMovesInFlight.Unlock()
 }
 
+// AccountMoveInFlight reports whether an account or backend move of id is in
+// progress in this process. Graduation refuses while one is, which (with the
+// move's own pending-graduate check, made after it claims the task) closes
+// most of the move-vs-graduation race; the residual cross-lock window is a
+// named follow-up (see gotchas/resident.md).
+func AccountMoveInFlight(id string) bool {
+	accountMovesInFlight.Lock()
+	defer accountMovesInFlight.Unlock()
+	return accountMovesInFlight.ids[id]
+}
+
+// refuseMoveOfPendingGraduate fails closed for a pending graduate: it restarts
+// only through the daemon watcher, and an account move would kill+resume it
+// alongside (account) or clear its session ID so the watcher's resume
+// preflight fails forever (backend). Called after claimAccountMove so a
+// concurrent graduation preflight sees the move as in flight.
+func refuseMoveOfPendingGraduateImpl(database *db.DB, taskID string) error {
+	if pending, perr := database.GraduationPendingErr(taskID); perr != nil || pending {
+		uxlog.Log("[resident] refused account/backend move of task %s: graduation pending (check err=%v)", taskID, perr)
+		return fmt.Errorf("%w (task %s)", db.ErrGraduationPending, taskID)
+	}
+	return nil
+}
+
+// refuseMoveOfPendingGraduate is a seam so a test can observe that the move
+// is already claimed in flight when the check runs.
+var refuseMoveOfPendingGraduate = refuseMoveOfPendingGraduateImpl
+
 // AutoMoveTarget asks a move to pick the other account with the lowest usage.
 const AutoMoveTarget = "auto"
 
@@ -108,6 +136,9 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 		return nil, AccountMoveResult{}, errAccountMovePending
 	}
 	defer releaseAccountMove(in.TaskID)
+	if err := refuseMoveOfPendingGraduate(database, in.TaskID); err != nil {
+		return nil, AccountMoveResult{}, err
+	}
 	task, err := database.Get(in.TaskID)
 	if err != nil {
 		return nil, AccountMoveResult{}, err

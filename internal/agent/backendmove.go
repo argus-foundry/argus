@@ -51,6 +51,9 @@ func MoveTaskBackend(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 		return nil, AccountMoveResult{}, errAccountMovePending
 	}
 	defer releaseAccountMove(in.TaskID)
+	if err := refuseMoveOfPendingGraduate(database, in.TaskID); err != nil {
+		return nil, AccountMoveResult{}, err
+	}
 	task, err := database.Get(in.TaskID)
 	if err != nil {
 		return nil, AccountMoveResult{}, err

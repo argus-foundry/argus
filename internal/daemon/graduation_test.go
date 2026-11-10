@@ -272,6 +272,7 @@ func TestGraduationCrashBeforeKickAndDeadResume(t *testing.T) {
 
 func TestGraduationStalePIDDoesNotDoubleKick(t *testing.T) {
 	d, w, _ := graduatedFixture(t)
+	testutil.NoError(t, d.SetStatus(w.ID, model.StatusInReview))
 	r := &graduationRunner{sess: &graduationSession{idle: true, pid: 11}}
 	jobs := 0
 	g := newGraduationWatcher(d, r, d.Config, nil)
@@ -292,6 +293,11 @@ func TestGraduationStalePIDDoesNotDoubleKick(t *testing.T) {
 	msgs, err := d.Inbox(w.ID, db.InboxFilter{})
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(msgs), 1)
+	// Completion records the NEW pid and flips the row back to in_progress.
+	got, err := d.Get(w.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.AgentPID, 22)
+	testutil.Equal(t, got.Status, model.StatusInProgress)
 }
 
 func TestGraduationDeadResumeBackoff(t *testing.T) {
@@ -382,7 +388,8 @@ func TestGraduationAbandonBetweenSnapshotAndAdvance(t *testing.T) {
 	testutil.False(t, d.GraduationPending(w.ID))
 }
 
-// Abandon after resolveGraduate but before the phase write: the CAS refuses.
+// Abandon after the phase write, inside job cleanup: the post-stopJobs
+// recheck (not the CAS, which already succeeded) refuses the kick.
 func TestGraduationAbandonDuringJobCleanup(t *testing.T) {
 	d, w, _ := graduatedFixture(t)
 	r := &graduationRunner{sess: &graduationSession{idle: true, pid: 11}}
@@ -394,6 +401,28 @@ func TestGraduationAbandonDuringJobCleanup(t *testing.T) {
 	g.sweep()
 	testutil.Equal(t, r.kicks, 0)
 	testutil.False(t, d.GraduationPending(w.ID))
+}
+
+// Abandon after resolveGraduate and preflight but before the phase write: the
+// compare-and-set refuses, so nothing is kicked, no jobs are stopped and the
+// marker is not re-created.
+func TestGraduationAbandonBeforeCompareAndSet(t *testing.T) {
+	d, w, _ := graduatedFixture(t)
+	r := &graduationRunner{sess: &graduationSession{idle: true, pid: 11}}
+	g := newGraduationWatcher(d, r, d.Config, nil)
+	g.resumable = func(*model.Task, config.Config) (bool, error) {
+		return true, d.AbandonGraduationPending(w.ID)
+	}
+	stops := 0
+	g.stopJobs = func(*model.Task, config.Config, string) error { stops++; return nil }
+	g.sweep()
+	testutil.Equal(t, r.kicks, 0)
+	testutil.Equal(t, r.starts, 0)
+	testutil.Equal(t, stops, 0)
+	testutil.False(t, d.GraduationPending(w.ID))
+	meta, err := d.ListMetaByNamespace(db.HeraMetaNamespace)
+	testutil.NoError(t, err)
+	testutil.Equal(t, meta[w.ID][db.HeraMetaKeyGraduationPendingRestart], "")
 }
 
 func TestGraduationPersistentPreflightFailureIsBackedOffAndLoggedOnce(t *testing.T) {

@@ -323,6 +323,9 @@ func (a *App) closeAccountPicker() {
 // restarts in place through the runner; an exited one is started here through
 // startSession. Remotely the daemon does both.
 func (a *App) runAccountMove(t *model.Task, target string, force bool) {
+	if a.graduationPendingBlocked(t.ID, "account move") {
+		return
+	}
 	toBackend, toAccount, handoff := parseHandoffTarget(target)
 	if handoff {
 		a.statusbar.SetInfo(fmt.Sprintf("Moving %s to %s (%s) with handoff…", t.Name, toBackend, toAccount))
@@ -389,6 +392,11 @@ func (a *App) runAccountMove(t *model.Task, target string, force bool) {
 
 func (a *App) accountMoveFailed(t *model.Task, err error) {
 	uxlog.Log("[account] move failed task=%s: %v", t.ID, err)
+	if graduationPendingErr(err) {
+		a.statusbar.ClearInfo()
+		a.flashNotice(db.ErrGraduationPending.Error())
+		return
+	}
 	msg := err.Error()
 	if i := strings.Index(msg, ": "); strings.HasPrefix(msg, agent.ErrAccount.Error()+": ") && i >= 0 {
 		msg = msg[i+2:]

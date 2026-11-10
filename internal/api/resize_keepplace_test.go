@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -205,7 +206,12 @@ func TestResizeKick_SkippedForPendingGraduate(t *testing.T) {
 			if tc == "pending" {
 				testutil.NoError(t, srv.db.SetMeta(task.ID, db.HeraMetaNamespace, db.HeraMetaKeyGraduationPendingRestart, "true"))
 			} else {
-				testutil.NoError(t, srv.db.Close())
+				// Only the marker is unreadable: the task row still loads, so a
+				// fail-open guard would fall through to the kick.
+				testutil.NoError(t, srv.db.WithTx(func(tx *sql.Tx) error {
+					_, err := tx.Exec(`DROP TABLE task_meta`)
+					return err
+				}))
 			}
 			kicked, deferred := srv.evalKickRerender(task.ID, 24, 120, kickClientState{})
 			testutil.False(t, kicked)

@@ -84,6 +84,9 @@ func (g *graduationWatcher) preflight(t *model.Task) error {
 	if g.runner.HasPendingRestart(t.ID) {
 		return fmt.Errorf("graduation refused: restart already pending")
 	}
+	if agent.AccountMoveInFlight(t.ID) {
+		return fmt.Errorf("graduation refused: an account or backend move of this worker is in progress")
+	}
 	if sess := g.runner.Get(t.ID); sess != nil && sess.Alive() && !sess.IsIdle() {
 		return fmt.Errorf("graduation refused: session is busy")
 	}
@@ -210,18 +213,22 @@ func (g *graduationWatcher) advance(taskID, phase string) error {
 			return err
 		}
 		if sess.PID() != pid {
-			t.AgentPID = sess.PID()
-			t.SetStatus(model.StatusInProgress)
-			if err := g.db.Update(t); err != nil {
-				return err
-			}
 			o, err := g.db.HeraOrchestrator(b.OrchestratorID)
 			if err != nil {
 				return err
 			}
 			body := lastexchange.SystemTurnPrefix + "You were graduated from the resident's team. You are now a top-level coordinator. The resident is not your coordinator and cannot message you. Report to Aaron through the normal channels and dispatch work with hera_spawn_worker.\n\n" + agent.HeraCoordinatorOrientation(o.Name)
-			if err := g.db.CompleteHeraGraduation(taskID, body); err != nil {
+			// Compare-and-set on the observed phase with targeted PID/status
+			// writes: a human abandon (+archive/delete) since this sweep's
+			// snapshot must not be overwritten from stale row fields.
+			done, err := g.db.CompleteHeraGraduationAt(taskID, phase, body, sess.PID())
+			if err != nil {
 				return err
+			}
+			if !done {
+				uxlog.Log("[resident] graduation task=%s completion skipped: pending marker changed or cleared", taskID)
+				g.forget(taskID)
+				return nil
 			}
 			uxlog.Log("[resident] graduation restart complete task=%s session=%s", taskID, t.SessionID)
 			return nil

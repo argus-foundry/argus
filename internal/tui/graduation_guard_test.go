@@ -82,6 +82,7 @@ func TestDeleteTask_RefusedDeleteStopsCleanup(t *testing.T) {
 				testutil.Contains(t, app.header.Notice(), "graduation restart pending")
 			} else {
 				testutil.Equal(t, app.header.Notice(), "")
+				testutil.Contains(t, app.statusbar.Error(), "Delete failed: boom")
 			}
 		})
 	}

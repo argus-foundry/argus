@@ -26,3 +26,18 @@ func ForceSandboxAvailableForTest(t TestingT, available bool) {
 	sandboxOnce.Do(func() { sandboxExists = available })
 	t.Cleanup(ResetSandboxCache)
 }
+
+// HoldAccountMoveForTest marks taskID as having an account move in flight for
+// the rest of the test (released via t.Cleanup), so cross-package tests can
+// pin guards keyed on AccountMoveInFlight. TEST-ONLY: panics outside a test
+// binary, like ForceSandboxAvailableForTest.
+func HoldAccountMoveForTest(t TestingT, taskID string) {
+	t.Helper()
+	if !sandboxSeamInTest() {
+		panic("agent.HoldAccountMoveForTest called outside a test binary")
+	}
+	if !claimAccountMove(taskID) {
+		panic("agent.HoldAccountMoveForTest: move already in flight for " + taskID)
+	}
+	t.Cleanup(func() { releaseAccountMove(taskID) })
+}
