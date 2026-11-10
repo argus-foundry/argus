@@ -2,7 +2,7 @@
 
 ### Requirement: Artifact publish routing guidance
 
-The system SHALL inject builtin routing guidance into every agent whose backend family receives builtin routing content. The guidance SHALL be inert when `ARGUS_ARTIFACT_ACCOUNT` is unset. When the variable is set, the guidance SHALL instruct the agent to publish and update claude.ai artifacts by calling the Argus `artifact_publish` MCP tool with `account` set to the value of `ARGUS_ARTIFACT_ACCOUNT` (and the existing artifact's link when updating), instead of the built-in artifact tool. When the result reports the account as unavailable, the guidance SHALL instruct the agent to ask the user, with its question tool, to choose between: publishing to one of the reported available accounts, opening the page in the browser with `artifact_open`, revealing it in Finder with `artifact_open` and `reveal`, or parking it for later. Parking for later means telling the user the local artifact name and the `argus artifact publish` command to republish. The guidance SHALL instruct the agent never to fall back to the built-in artifact tool on its own initiative.
+The system SHALL inject builtin routing guidance into every agent whose backend family receives builtin routing content. The guidance SHALL be inert when `ARGUS_ARTIFACT_ACCOUNT` is unset. When the variable is set, the guidance SHALL instruct the agent to publish and update claude.ai artifacts by calling the Argus `artifact_publish` MCP tool with `account` set to the value of `ARGUS_ARTIFACT_ACCOUNT` (and the existing artifact's link when updating), instead of the built-in artifact tool. When the result reports the account as unavailable, the guidance SHALL instruct the agent to ask the user, with its question tool, to choose between: publishing to one of the reported available accounts, opening the page in the browser with `artifact_open`, revealing it in Finder with `artifact_open` and `reveal`, or parking it for later. Parking for later means giving the user the saved copy's absolute path (`artifact_path`) and the exact `argus artifact publish <artifact_path> --account <home>` command to publish it later, with `--update <link>` added when the original call was an update. The guidance SHALL instruct the agent never to fall back to the built-in artifact tool on its own initiative.
 
 #### Scenario: Guidance names the artifact_publish tool
 
@@ -12,7 +12,7 @@ The system SHALL inject builtin routing guidance into every agent whose backend 
 #### Scenario: Guidance describes the unavailable-account question
 
 - **WHEN** the builtin routing content is rendered for an agent
-- **THEN** it instructs the agent, on an unavailable result, to ask the user to choose between publishing to an available account, opening in the browser, revealing in Finder, and parking for later
+- **THEN** it instructs the agent, on an unavailable result, to ask the user to choose between publishing to an available account, opening in the browser, revealing in Finder, and parking for later, where parking gives the user the saved copy's `artifact_path` and the exact `argus artifact publish` command for it (with `--update <link>` for an update)
 
 #### Scenario: Guidance self-gates when unset
 

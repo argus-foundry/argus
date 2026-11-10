@@ -137,7 +137,9 @@ func TestBuiltinContent_ContainsArtifactsSection(t *testing.T) {
 		"Reveal in Finder",
 		"`reveal: true`",
 		"Park it for later",
-		"argus artifact publish <file> --account $ARGUS_ARTIFACT_ACCOUNT",
+		"`artifact_path`",
+		"argus artifact publish <artifact_path> --account $ARGUS_ARTIFACT_ACCOUNT",
+		"`--update <link>` when your call was an update",
 		"leave out the first option",
 		// No silent fallback.
 		"Never fall back to the built-in artifact tool on your own",

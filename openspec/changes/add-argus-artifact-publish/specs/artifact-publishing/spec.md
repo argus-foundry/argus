@@ -45,12 +45,12 @@ The system SHALL publish a single HTML file to the claude.ai artifacts endpoint 
 
 ### Requirement: Unavailable account handling
 
-The system SHALL treat an HTTP 404 response to a tool call whose body says the artifact tools "aren't available to this session" as the account being unavailable. When the account is unavailable, the system SHALL register the HTML file as an artifact of the calling task. It SHALL probe every other account in `[artifact_tokens]` with a real tool call, and SHALL return a non-error result containing `status: "unavailable"`, the requested account, the registered artifact filename, and the accounts whose probe succeeded.
+The system SHALL treat an HTTP 404 response to a tool call whose body says the artifact tools "aren't available to this session" as the account being unavailable. When the account is unavailable, the system SHALL register the HTML file as an artifact of the calling task. It SHALL probe every other account in `[artifact_tokens]` with a real tool call, and SHALL return a non-error result containing `status: "unavailable"`, the requested account, the registered artifact filename, the saved copy's absolute path (`artifact_path`), the call's `update` link when there was one, and the accounts whose probe succeeded.
 
 #### Scenario: Exhausted home account
 
 - **WHEN** `artifact_publish` is called for account `default` from a task and the endpoint refuses with the "aren't available to this session" 404
-- **THEN** the HTML file is registered as an artifact of that task, and the result has `status: "unavailable"`, account `default`, the artifact filename, and the list of other accounts that can publish
+- **THEN** the HTML file is registered as an artifact of that task, and the result has `status: "unavailable"`, account `default`, the artifact filename, its absolute `artifact_path`, and the list of other accounts that can publish
 
 #### Scenario: Other account also unavailable
 
@@ -59,9 +59,11 @@ The system SHALL treat an HTTP 404 response to a tool call whose body says the a
 
 ### Requirement: Confine agent-supplied paths
 
-The daemon runs outside the agent sandbox, so it SHALL NOT read a file on an agent's behalf from outside that agent's own task. `artifact_publish` SHALL require a resolvable calling task and SHALL fail, before reading any file or making any request, when none resolves. For every task, sandboxed or not, `artifact_publish` and `artifact_register` (single files and every member of a folder) SHALL:
+The daemon runs outside the agent sandbox, so it SHALL NOT read a file on an agent's behalf from outside that agent's own task. `artifact_publish` SHALL require a resolvable calling task and SHALL fail, before reading any file or making any request, when none resolves. For every task, sandboxed or not, `artifact_publish` and `artifact_register` (single files, a registered folder itself, and every member of a folder) SHALL:
 
-- open the file without following a symlink in its final component, and refuse a symlink;
+- make a relative path absolute against the request's `cwd`, or the task worktree when `cwd` is empty, never the daemon's working directory;
+- open the path once without following a symlink in its final component, and refuse a symlink (including a symlinked folder);
+- decide file versus folder from that open descriptor, never from a lookup by name before confinement;
 - require, from the open descriptor, a regular file with exactly one hard link;
 - take the file's location from the open descriptor (on macOS, the filesystem's canonical path and case) and refuse it unless it lies inside the task's worktree, the sandbox profile's writable temp directories or the task's configured `extra_write` paths, and outside the sandbox's built-in and configured deny-read paths, with those roots and paths canonicalized the same way;
 - require the open descriptor and that location to be the same file, check the descriptor again (still a regular file with one link), and read only from that descriptor, enforcing the size cap while reading.
@@ -112,8 +114,13 @@ The calling task is self-reported (`id` or `cwd`): the MCP endpoint is shared an
 
 #### Scenario: Refusals reveal nothing about the file
 
-- **WHEN** one call names an existing file outside the task's writable directories and another names a nonexistent path there
-- **THEN** both fail with the identical generic error, and the specific reason is only logged by the daemon
+- **WHEN** calls name an existing file, an existing folder, a hidden folder and nonexistent paths outside the task's writable directories
+- **THEN** all fail with the identical generic error, and the specific reason is only logged by the daemon
+
+#### Scenario: Relative path resolved against the agent's directory
+
+- **WHEN** an agent passes a relative path with a `cwd`, or with no `cwd`
+- **THEN** it resolves against that `cwd`, or the task worktree, and is confined from there; the daemon's own working directory is never used
 
 #### Scenario: Spoofed task id confined to that task
 

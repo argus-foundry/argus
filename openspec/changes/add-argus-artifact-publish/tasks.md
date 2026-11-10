@@ -49,6 +49,7 @@
 - [x] 3.6 Security review: `artifact_publish` requires a calling task; for a sandboxed task, `artifact_publish` and `artifact_register` confine the path's real location to the task's writable roots (`agent.SandboxWriteRoots`) before reading
 - [x] 3.7 Security review 2: always confine (not just sandboxed tasks) through one `confinedOpen`/`confinedRead` helper: `O_NOFOLLOW`, fstat regular + single link, roots and deny-read check on the resolved path, same-file check, read from the checked descriptor; per-member for folders; self-reported caller identity documented
 - [x] 3.8 Security review 3: location from the descriptor (darwin `F_GETPATH`, canonical case; roots and deny paths canonicalized the same way), re-fstat after the location check, one generic refusal error with the reason logged daemon-side
+- [x] 3.9 Independent review: `artifact_register` opens once and branches file/folder on the descriptor (no pre-confinement stat oracle); relative paths resolve against cwd or the worktree; unavailable result carries `artifact_path` and `update`; every project's deny-read applies; unescaped HTML in requests; `www.claude.ai` links; 413 on an oversized REST body
 
 ## 4. REST and CLI
 
@@ -63,7 +64,7 @@
 **Depends on:** Stage 1
 
 - [x] 5.1 Rewrite `internal/routing/builtin/argus-artifacts.md` per design D6
-- [x] 5.2 Replace every `artpush` mention: code comments in `internal/agent` and `internal/daemon/surface.go`, `context/knowledge/backends.md`, `gotchas/misc.md`, `index.md` and `README.md`. Confirm whether the spawn surface digest changes (comments only, so it should not).
+- [x] 5.2 Replace every `artpush` mention: code comments in `internal/agent` and `internal/daemon/surface.go`, `context/knowledge/backends.md`, `gotchas/misc.md`, `index.md` and `README.md`. The routing snippet is supervisor-injected, so `SupervisorSpawnSurface` was bumped to 41, `argus-artifacts.md` added to `SupervisorSpawnPaths`, and the spawn digest re-recorded.
 - [x] 5.3 Test 1.7 passes
 
 ## 6. Docs and gate

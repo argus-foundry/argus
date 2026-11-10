@@ -677,9 +677,9 @@ At every spawn, resume, restart and account move, Argus exports `ARGUS_ARTIFACT_
    default = "keychain://argus-artifacts/default"
    ```
 
-3. Restart the daemon (`argus daemon restart`).
+3. That's it: `[artifact_tokens]` is read live. A daemon restart is needed only when you rotate a secret the daemon has already resolved (resolved secrets are cached for its lifetime).
 
-If the home account can't publish right now (its usage is exhausted, so claude.ai switches its artifact tools off), `artifact_publish` saves the page as a task artifact, probes the other `[artifact_tokens]` accounts, and returns `status: "unavailable"` with the accounts that can publish. The agent then asks you whether to publish to one of those, open the page in the browser, reveal it in Finder, or park it; publish it later with `argus artifact publish <file> --account <name> [--title <t>] [--update <link>]` (exit `0` prints the link, `3` = account unavailable and lists the accounts that can publish, anything else non-zero). A rejected token (HTTP 401) means it expired or was revoked: re-run `claude setup-token`, update the secret, and restart the daemon (resolved secrets are cached for its lifetime). Only single self-contained HTML pages (≤16 MiB) are supported. Publish buttons in the TUI, web and macOS apps are a named follow-up; `POST /api/artifacts/publish` is the parity surface.
+If the home account can't publish right now (its usage is exhausted, so claude.ai switches its artifact tools off), `artifact_publish` saves the page as a task artifact, probes the other `[artifact_tokens]` accounts, and returns `status: "unavailable"` with the saved copy's `artifact_path` and the accounts that can publish. The agent then asks you whether to publish to one of those, open the page in the browser, reveal it in Finder, or park it; publish it later with `argus artifact publish <file> --account <name> [--title <t>] [--update <link>]` (exit `0` prints the link, `3` = account unavailable and lists the accounts that can publish, anything else non-zero). A rejected token (HTTP 401) means it expired or was revoked: re-run `claude setup-token`, update the secret, and restart the daemon so the cached old value is dropped. Only single self-contained HTML pages (≤16 MiB) are supported. Publish buttons in the TUI, web and macOS apps are a named follow-up; `POST /api/artifacts/publish` is the parity surface.
 
 #### Clients and API
 
@@ -1211,7 +1211,7 @@ Named work / personal accounts for Claude Code and Codex. How resolution, first 
 | `default_account` | string | `""` | Account used when the task, project, and routed tier name none. Empty = `default`. |
 | `project_accounts` | table | `{}` | Top-level map of project name to default account, e.g. `[project_accounts] acme-api = "work"`. Recommended for every work repo. |
 | `project_artifact_accounts` | table | `{}` | Top-level map of project name to its [artifact home account](#artifact-home-account), e.g. `[project_artifact_accounts] history = "personal"`. Must be `default` or an account with `claude_config_dir`. Falls back to `project_accounts`; never to `default_account`. `config.toml` only. |
-| `artifact_tokens` | table | `{}` | Top-level map of account name to the secret source of its `claude setup-token` token (`op://`, `keychain://` or `env://`; a literal token is rejected), e.g. `[artifact_tokens] personal = "op://claude/shell-env/CLAUDE_SETUP_TOKEN_PERSONAL"`. Resolved inside the daemon when [publishing artifacts](#artifact-home-account); restart the daemon after rotating a token. `config.toml` only. |
+| `artifact_tokens` | table | `{}` | Top-level map of account name to the secret source of its `claude setup-token` token (`op://`, `keychain://` or `env://`; a literal token is rejected), e.g. `[artifact_tokens] personal = "op://claude/shell-env/CLAUDE_SETUP_TOKEN_PERSONAL"`. Read live and resolved inside the daemon when [publishing artifacts](#artifact-home-account); only rotating a secret the daemon has already resolved needs a daemon restart. `config.toml` only. |
 
 #### `[projects.<name>]`
 

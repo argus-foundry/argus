@@ -13,12 +13,12 @@ When it is set, this project's claude.ai artifacts live on that account, and thi
 
 On `status: "published"`, give the user the `url`.
 
-On `status: "unavailable"`, the home account can't publish right now; Argus saved the page as the task artifact named in `artifact` and listed `available_accounts`. Ask the user with your question tool which of these to do:
+On `status: "unavailable"`, the home account can't publish right now; Argus saved the page as the task artifact named in `artifact` (at the absolute path `artifact_path`) and listed `available_accounts`. Ask the user with your question tool which of these to do:
 
 1. Publish to an available account: one option per account in `available_accounts`; call `artifact_publish` again with that `account`.
 2. Open in the browser: call `artifact_open` with the `artifact` file name.
 3. Reveal in Finder: call `artifact_open` with the file name and `reveal: true`.
-4. Park it for later: do nothing more. Tell the user the saved artifact's name and that they can publish it later with `argus artifact publish <file> --account $ARGUS_ARTIFACT_ACCOUNT`.
+4. Park it for later: do nothing more. Give the user the saved copy's `artifact_path` and the exact command to publish it later: `argus artifact publish <artifact_path> --account $ARGUS_ARTIFACT_ACCOUNT`, with the real path and account filled in, plus `--update <link>` when your call was an update of an existing artifact.
 
 If `available_accounts` is empty, leave out the first option. If `artifact_publish` fails with an error, report the error to the user.
 

@@ -38,6 +38,6 @@ So the publisher belongs in Argus, and it needs an explicit path for when the ho
 - `cmd/argus`: the `artifact publish` subcommand.
 - `internal/routing/builtin/argus-artifacts.md`.
 - Docs: README Reference (MCP tools, REST endpoints, config), `gotchas/misc.md`, `backends.md`.
-- Comments in `internal/agent` and `internal/daemon/surface.go` that mention artpush. The routing snippet is not in the supervisor spawn surface, so no digest change is expected; confirm during implementation.
+- Comments in `internal/agent` and `internal/daemon/surface.go` that mention artpush. The routing snippet is injected by the supervisor at spawn, so `SupervisorSpawnSurface` was bumped to 41, `internal/routing/builtin/argus-artifacts.md` was added to `SupervisorSpawnPaths`, and the spawn digest was re-recorded (and is re-recorded whenever the snippet text changes).
 - Frontend parity: the publish endpoint is reachable over REST. A Publish button in the TUI, web and macOS clients is a **named follow-up**. No client gets one in this change.
 - External: Anthropic's undocumented artifacts endpoint. It may change without notice, so failures must be loud.
