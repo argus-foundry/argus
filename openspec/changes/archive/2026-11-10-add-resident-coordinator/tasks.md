@@ -54,6 +54,6 @@
 
 ## 7. Docs and parity
 
-- [ ] 7.1 README Reference: `hera_delete_worker`, `hera_graduate_worker`, `[resident] worker_accounts`, `[resident] max_workers`, `[resident]` hera tiers; `gotchas/resident.md`, `gotchas/hera-view.md`, `backends.md` (unattended-worker row); knowledge index rows.
-- [ ] 7.2 Record the named web and macOS follow-ups; if the roster exclusion changes any REST field, bump `SW_VERSION` only if static assets change.
-- [ ] 7.3 `make pre-pr` clean; archive the change into base specs in the same PR before merge.
+- [x] 7.1 README Reference: `hera_delete_worker`, `hera_graduate_worker`, `[resident] worker_accounts`, `[resident] max_workers`, `[resident]` hera tiers; `gotchas/resident.md`, `gotchas/hera-view.md`, `backends.md` (unattended-worker row); knowledge index rows.
+- [x] 7.2 Record the named web and macOS follow-ups (`resident-web-view`, `resident-macos-view`, `resident-worker-account-controls-parity`); no static assets changed, so no `SW_VERSION` bump.
+- [x] 7.3 `GOFLAGS=-p=3 make pre-pr` clean (89.2% filtered Go coverage, 739 workspace tests; TUI 230s, no timeout rerun); archived into base specs in this PR. All six affected base specs validate strictly. Full strict validation retains only the byte-identical master failures in `desktop-web-workspace` and `rest-api`.

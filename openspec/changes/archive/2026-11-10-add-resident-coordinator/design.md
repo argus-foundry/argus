@@ -22,7 +22,7 @@ Constraints from AGENTS.md: breaking changes are fine (one user); never branch o
 
 - **Resident worker-account controls on web and macOS:** named follow-up `resident-worker-account-controls-parity`; the local TUI edits these settings, while the shared daemon enforces eligibility, sandbox gates and backstop notices for every launch surface.
 
-- **Web SPA and macOS app surfaces.** The resident has no web/macOS surface today (TUI only, per `add-resident-agent`). Named follow-ups: a web resident view and a macOS resident view that render the team rail, pane and inbox; until then the resident's workers appear on those clients only as ordinary tasks. The standing orchestrator is excluded from `/api/hera` (D7), so web/macOS Hera tabs do not show it. The macOS Hera tab stays read-only per AGENTS.md.
+- **Web SPA and macOS app surfaces.** The resident has no web/macOS surface today (TUI only, per `add-resident-agent`). Named follow-ups: `resident-web-view` and `resident-macos-view` render the team rail, pane and inbox; until then the resident's workers appear on those clients only as ordinary tasks. The standing orchestrator is excluded from `/api/hera` (D7), so web/macOS Hera tabs do not show it. The macOS Hera tab stays read-only per AGENTS.md.
 - Sub-coordinators, plan-DAG nodes (`hera_plan*`, `hera_block`) and multiple resident orchestrators. v1 is one flat team.
 - Human **creation** actions (spawn, new coordinator, move, join, detach) and pin/kanban from the resident rail. Nuke, hide, rename and role status ARE allowed (D8).
 - Nesting sub-coordinators under the resident. Graduation (D11) makes a worker a top-level coordinator instead.
