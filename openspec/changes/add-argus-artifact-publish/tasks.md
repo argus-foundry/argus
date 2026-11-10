@@ -79,5 +79,5 @@
   - tokens are daemon-only
 
   Update the index row.
-- [ ] 6.3 `make pre-pr` passes clean
+- [x] 6.3 `make pre-pr` passes clean
 - [ ] 6.4 Archive the change on the branch before merge
