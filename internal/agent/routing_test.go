@@ -309,6 +309,31 @@ func TestDynamicBackendRoutingSkipsTiersUnsupportedByPinnedAccount(t *testing.T)
 	}
 }
 
+func TestDynamicBackendDoesNotFallbackToBackendUnsupportedByPinnedAccount(t *testing.T) {
+	cfg := config.Config{
+		Defaults: config.Defaults{Backend: "codex"},
+		Backends: map[string]config.Backend{
+			"claude": {Command: "claude"},
+			"codex":  {Command: "codex"},
+		},
+		Accounts: map[string]config.Account{"work": {ClaudeConfigDir: t.TempDir()}},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+		}},
+	}
+	restore := usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
+		return usagebudget.Reading{Percentage: 95}, account == "work"
+	})
+	defer restore()
+
+	choice := resolveTaskChoice(config.DynamicBackend, "", cfg, "work", false)
+	testutil.Equal(t, choice.Backend, "")
+	testutil.Equal(t, choice.Account, "work")
+	_, err := ResolveBackend(&model.Task{Backend: config.DynamicBackend, Account: "work"}, cfg)
+	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "no backend configured")
+}
+
 func TestUnpinnedLandingOnDefaultIsStoredBlankAndRouted(t *testing.T) {
 	repo := initGitRepo(t)
 	d := accountFileDB(t, repo) // no tiers: nothing to route to, default account

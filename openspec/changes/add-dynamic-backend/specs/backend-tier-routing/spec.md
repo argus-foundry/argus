@@ -34,6 +34,11 @@ The system SHALL recognize the reserved backend name `dynamic` in default, proje
 - **WHEN** a task selects `dynamic`, pins a named account, and earlier tiers use backends that account cannot run
 - **THEN** routing skips those tiers and selects the first eligible compatible tier, if one exists
 
+#### Scenario: Pinned account rejects an incompatible fallback
+
+- **WHEN** no dynamic tier resolves for a pinned account and the concrete default backend is unsupported by that account
+- **THEN** routing fails with the existing no-backend-configured error instead of pairing the account with an incompatible backend
+
 #### Scenario: Real backend pins remain pinned
 
 - **WHEN** a task or project selects a concrete backend other than `dynamic`

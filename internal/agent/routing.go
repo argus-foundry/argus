@@ -74,7 +74,7 @@ func resolveTaskChoiceLocked(explicit, project string, cfg config.Config, accoun
 	}
 	if dynamic {
 		return backendtier.Choice{
-			Backend: concreteDefaultBackend(cfg), Account: pin,
+			Backend: dynamicFallbackBackend(cfg, pin), Account: pin,
 			Reason: "dynamic tiers unavailable; concrete default fallback", Step: step,
 		}
 	}
@@ -88,7 +88,19 @@ func resolveDynamicBackendName(cfg config.Config, account string) string {
 	if backend := backendtier.ResolveBackend(cfg, account); backend != "" {
 		return backend
 	}
-	return concreteDefaultBackend(cfg)
+	return dynamicFallbackBackend(cfg, account)
+}
+
+func dynamicFallbackBackend(cfg config.Config, account string) string {
+	backend := concreteDefaultBackend(cfg)
+	if backend == "" || account == "" {
+		return backend
+	}
+	b, ok := cfg.Backends[backend]
+	if !ok || !cfg.AccountSupports(account, b.Command) {
+		return ""
+	}
+	return backend
 }
 
 func concreteDefaultBackend(cfg config.Config) string {
