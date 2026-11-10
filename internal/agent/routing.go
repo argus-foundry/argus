@@ -47,7 +47,20 @@ func resolveTaskChoiceLocked(explicit, project string, cfg config.Config, accoun
 			step = "project-account"
 		}
 	}
-	choice := backendtier.ResolveChoice(cfg, backend, pin)
+	routingCfg := cfg
+	if dynamic && pin != "" {
+		// A dynamic account pin must be able to run the candidate backend. Filter
+		// incompatible tiers before scoring so an earlier Codex tier cannot hide
+		// a later Claude tier compatible with a Claude-only account (and vice versa).
+		routingCfg.BackendRouting.Tiers = make([]config.BackendTier, 0, len(cfg.BackendRouting.Tiers))
+		for _, tier := range cfg.BackendRouting.Tiers {
+			b, ok := cfg.Backends[tier.Backend]
+			if ok && cfg.AccountSupports(pin, b.Command) {
+				routingCfg.BackendRouting.Tiers = append(routingCfg.BackendRouting.Tiers, tier)
+			}
+		}
+	}
+	choice := backendtier.ResolveChoice(routingCfg, backend, pin)
 	if choice.Backend == "" && pin == "" && explicit == "" && backend != "" && !dynamic {
 		if overall := backendtier.ResolveChoice(cfg, "", ""); overall.Backend != "" {
 			overall.Step = "best-overall"

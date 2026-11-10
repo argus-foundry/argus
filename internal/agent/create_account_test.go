@@ -66,6 +66,21 @@ func TestCreateAndStart_DynamicUnavailableTierUsesConcreteDefault(t *testing.T) 
 	testutil.Equal(t, stored.Backend, "test")
 }
 
+func TestCreateAndStart_DynamicPinnedAccountSkipsIncompatibleTier(t *testing.T) {
+	repo := initGitRepo(t)
+	d := accountFileDB(t, repo)
+	testutil.NoError(t, d.SetBackendTiers([]config.BackendTier{
+		{Backend: "codex", Probe: config.ProbeNone},
+		{Backend: "test", Probe: config.ProbeNone},
+	}))
+	task, _, err := CreateAndStart(d, &fakeRunner{sessionPID: 1}, CreateInput{
+		Name: "dynamic-account-pin", Project: "proj", Backend: config.DynamicBackend, Account: "work",
+	})
+	testutil.NoError(t, err)
+	testutil.Equal(t, task.Backend, "test")
+	testutil.Equal(t, task.Account, "work")
+}
+
 func TestCreateAndStart_DynamicWithoutTierOrConcreteDefaultFailsBeforeWorktree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := initGitRepo(t)

@@ -115,8 +115,10 @@ type NewTaskForm struct {
 	accountDefault func(project string) string
 	accountLabels  map[string]string
 
-	projects map[string]config.Project
-	backends map[string]config.Backend
+	projects             map[string]config.Project
+	backends             map[string]config.Backend
+	backendTiers         []config.BackendTier
+	globalDefaultBackend string
 
 	// project typeahead state
 	projInput     []rune   // typed text for project filter
@@ -189,18 +191,19 @@ func NewNewTaskForm(projects map[string]config.Project, defaultProject string, b
 	}
 
 	f := &NewTaskForm{
-		Box:             tview.NewBox(),
-		title:           " New Task ",
-		projectNames:    projNames,
-		projInput:       []rune(defaultProject),
-		projCursorPos:   len([]rune(defaultProject)),
-		branchInput:     []rune(defaultBranch),
-		branchCursorPos: len([]rune(defaultBranch)),
-		backendNames:    backNames,
-		backendIdx:      backIdx,
-		focused:         ntFieldPrompt,
-		projects:        projects,
-		backends:        backends,
+		Box:                  tview.NewBox(),
+		title:                " New Task ",
+		projectNames:         projNames,
+		projInput:            []rune(defaultProject),
+		projCursorPos:        len([]rune(defaultProject)),
+		branchInput:          []rune(defaultBranch),
+		branchCursorPos:      len([]rune(defaultBranch)),
+		backendNames:         backNames,
+		backendIdx:           backIdx,
+		focused:              ntFieldPrompt,
+		projects:             projects,
+		backends:             backends,
+		globalDefaultBackend: defaultBackend,
 	}
 
 	// Load skills for the default project
@@ -211,6 +214,14 @@ func NewNewTaskForm(projects map[string]config.Project, defaultProject string, b
 	// later supplies the valid on-disk names via SetProfileOptions).
 	f.rebuildProfileOptions()
 	return f
+}
+
+// SetBackendRoutingTiers supplies the tier candidates used by the reserved
+// dynamic selector, so its account picker can offer identities supported by
+// at least one routed backend (or the concrete default fallback).
+func (f *NewTaskForm) SetBackendRoutingTiers(tiers []config.BackendTier) {
+	f.backendTiers = append([]config.BackendTier(nil), tiers...)
+	f.rebuildAccountOptions(true)
 }
 
 // SetTitle overrides the modal title (e.g. "Spawn worker", "New coordinator"
@@ -475,7 +486,7 @@ func (f *NewTaskForm) rebuildAccountOptions(keep bool) {
 	tool := f.accountTool()
 	names := []string{config.DefaultAccountName}
 	for _, o := range f.accountCatalog {
-		if o.Name != config.DefaultAccountName && o.supports(tool) {
+		if o.Name != config.DefaultAccountName && f.accountSupportsCurrentBackend(o, tool) {
 			names = append(names, o.Name)
 		}
 	}
@@ -489,6 +500,30 @@ func (f *NewTaskForm) rebuildAccountOptions(keep bool) {
 		if idx := indexOf(names, f.accountDefault(f.resolveProject())); idx >= 0 {
 			f.accountIdx = idx
 		}
+	}
+}
+
+func (f *NewTaskForm) accountSupportsCurrentBackend(account AccountOption, tool string) bool {
+	if f.backendIdx < 0 || f.backendIdx >= len(f.backendNames) || f.backendNames[f.backendIdx] != config.DynamicBackend {
+		return account.supports(tool)
+	}
+	for _, tier := range f.backendTiers {
+		if b, ok := f.backends[tier.Backend]; ok && account.supports(accountToolForBackend(b)) {
+			return true
+		}
+	}
+	if b, ok := f.backends[f.globalDefaultBackend]; ok && account.supports(accountToolForBackend(b)) {
+		return true
+	}
+	return false
+}
+
+func accountToolForBackend(b config.Backend) string {
+	switch k := backendkind.Of(b.Command); k {
+	case backendkind.Claude, backendkind.Codex:
+		return string(k)
+	default:
+		return ""
 	}
 }
 

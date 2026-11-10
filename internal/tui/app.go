@@ -6750,6 +6750,7 @@ func (a *App) reapStaleRerenderRestart(taskID string, sess agent.SessionHandle) 
 func (a *App) buildNewTaskForm(defaultProject string) *NewTaskForm {
 	cfg := a.db.Config()
 	f := NewNewTaskForm(cfg.Projects, defaultProject, cfg.Backends, cfg.Defaults.Backend)
+	f.SetBackendRoutingTiers(cfg.BackendRouting.Tiers)
 	// Supply the valid on-disk profile names for the per-spawn override cycler
 	// (add-diligence-profiles forms-and-modals), scoped to the default project's
 	// in-repo dir + the per-user library.

@@ -188,6 +188,7 @@ func TestHandleBackends_ModelRoundTrip(t *testing.T) {
 	}
 	testutil.True(t, found)
 	testutil.True(t, dynamicFound)
+	testutil.Equal(t, resp.Backends[len(resp.Backends)-1].Name, config.DynamicBackend)
 }
 
 // GET /api/backends exposes the per-backend model option list (built-in

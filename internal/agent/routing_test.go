@@ -279,6 +279,36 @@ func TestResolveBackend_DynamicFallsBackToConcreteDefaultWhenTiersAreUnavailable
 	testutil.Equal(t, backend.Command, "claude")
 }
 
+func TestDynamicBackendRoutingSkipsTiersUnsupportedByPinnedAccount(t *testing.T) {
+	workDir, codexHome := t.TempDir(), t.TempDir()
+	cfg := config.Config{
+		Defaults: config.Defaults{Backend: config.DynamicBackend},
+		Backends: map[string]config.Backend{"codex": {Command: "codex"}, "claude": {Command: "claude"}},
+		Accounts: map[string]config.Account{
+			"work": {ClaudeConfigDir: workDir},
+			"cx":   {CodexHome: codexHome},
+		},
+		ProjectAccounts: map[string]string{"p": "work"},
+		Projects:        map[string]config.Project{"p": {}},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "codex", Probe: config.ProbeNone},
+			{Backend: "claude", Probe: config.ProbeNone},
+		}},
+	}
+	for _, tc := range []struct {
+		name, explicitAccount string
+	}{
+		{name: "explicit account", explicitAccount: "work"},
+		{name: "project account"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			choice := resolveTaskChoice(config.DynamicBackend, "p", cfg, tc.explicitAccount, false)
+			testutil.Equal(t, choice.Backend, "claude")
+			testutil.Equal(t, choice.Account, "work")
+		})
+	}
+}
+
 func TestUnpinnedLandingOnDefaultIsStoredBlankAndRouted(t *testing.T) {
 	repo := initGitRepo(t)
 	d := accountFileDB(t, repo) // no tiers: nothing to route to, default account

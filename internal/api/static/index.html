@@ -5509,9 +5509,10 @@ async function loadBackends() {
     // Default selection priority: configured global default → 'claude' if
     // configured → first backend. Matches the user's expectation that the
     // form opens to Claude when both Claude and Codex are configured.
+    const concreteBackends = createBackendsCache.filter(b => b.name !== 'dynamic');
     const preferred = createDefaultBackend
       || (createBackendsCache.find(b => b.name === 'claude') ? 'claude' : '')
-      || (createBackendsCache[0] && createBackendsCache[0].name)
+      || (concreteBackends[0] && concreteBackends[0].name)
       || '';
     if (preferred) sel.value = preferred;
     // Rebuild the per-backend model <select> whenever the backend changes.
@@ -5557,6 +5558,7 @@ function backendTool(b) {
 function accountSupportsTool(a, tool) {
   if (a.name === 'default') return true;
   const s = a.supports || {};
+  if (tool === 'dynamic') return !!(s.claude || s.codex);
   if (tool === 'claude') return !!s.claude;
   if (tool === 'codex') return !!s.codex;
   return false;

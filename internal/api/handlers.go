@@ -2106,12 +2106,12 @@ func (s *Server) handleListBackends(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, newBackendJSON(name, b))
 	}
-	out = append(out, backendJSON{Name: config.DynamicBackend, Kind: config.DynamicBackend, Label: "Dynamic"})
 	for i := 1; i < len(out); i++ {
 		for j := i; j > 0 && out[j].Name < out[j-1].Name; j-- {
 			out[j], out[j-1] = out[j-1], out[j]
 		}
 	}
+	out = append(out, backendJSON{Name: config.DynamicBackend, Kind: config.DynamicBackend, Label: "Dynamic"})
 	writeJSON(w, http.StatusOK, map[string]any{"backends": out})
 }
 
