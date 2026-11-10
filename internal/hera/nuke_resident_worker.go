@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
@@ -13,6 +14,14 @@ import (
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
+
+// residentDeleteLog writes a resident delete line to both the uxlog and slog:
+// the delete runs in the daemon, which never calls uxlog.Init, so uxlog alone
+// is a silent no-op there (same dual-write as internal/daemon's residentLog).
+func residentDeleteLog(format string, args ...any) {
+	uxlog.Log(format, args...)
+	slog.Info(fmt.Sprintf(format, args...)) //nolint:gosec // G706: internal diagnostics, not a user-controlled log-forging surface
+}
 
 // NukeResidentWorker is the resident's hera_delete_worker variant of
 // NukeSingleRoleAs (actor = resident). It finishes the ROLE-SCOPED local work
@@ -131,9 +140,9 @@ type ResidentDeleteOptions struct {
 	// Clock drives every wait; zero = real clock.
 	Clock Clock
 	// RemoteBranchDelete deletes the worker's branch on origin from followUp
-	// (nil = agent.DeleteRemoteBranchContext), bounded by RemoteBranchTimeout
-	// (zero = DefaultRemoteBranchDeleteTimeout).
-	RemoteBranchDelete  func(ctx context.Context, repoDir, branch string) error
+	// (nil = agent.DeleteRemoteBranchContext), leased on expectTip and
+	// bounded by RemoteBranchTimeout (zero = DefaultRemoteBranchDeleteTimeout).
+	RemoteBranchDelete  func(ctx context.Context, repoDir, branch, expectTip string) error
 	RemoteBranchTimeout time.Duration
 }
 
@@ -149,7 +158,9 @@ type ResidentDeleteOptions struct {
 // is the only side effect, and a later resume recovers it — the stop never
 // leaves the worker looking finished (see stopCloseoutGuard). The recheck is
 // skipped when the task is preserved for another live binding, since nothing
-// is removed then. ErrHostBusy (opts.MutateBy passed) changes nothing.
+// is removed then. ErrHostBusy (opts.MutateBy passed, or the repository's
+// cleanup lock, which a reclaim takes before its first change, still held
+// at MutateBy) changes nothing, and so does an unreadable binding list.
 func NukeResidentWorkerChecked(d *db.DB, runner NukeRunner, r *heramodel.RoleView, opts ResidentDeleteOptions) (followUp func(), err error) {
 	noop := func() {}
 	if r == nil || r.TaskID == "" {
@@ -165,53 +176,114 @@ func NukeResidentWorkerChecked(d *db.DB, runner NukeRunner, r *heramodel.RoleVie
 	// CheckNukeTask surfaces the real error for an unreadable marker instead of
 	// reporting it as a pending graduation.
 	if err := CheckNukeTask(d, t.ID); err != nil {
-		uxlog.Log("[resident] delete role %d skipped task=%s: %v", r.RoleID, t.ID, err)
+		residentDeleteLog("[resident] delete role %d skipped task=%s: %v", r.RoleID, t.ID, err)
 		return noop, err
 	}
+	// Fail closed: an unreadable binding list must not read as "bound
+	// elsewhere", which would skip the stop and the recheck while the nuke
+	// still ends the only binding user_deleted, handing a possibly live
+	// worktree to the async reclaim sweep.
 	reclaim := false
 	if r.Live {
 		live, lErr := d.ListHeraLiveBindingsByTask(t.ID)
-		reclaim = lErr == nil && len(live) == 1 && live[0].RoleID == r.RoleID
+		if lErr != nil {
+			residentDeleteLog("[resident] delete role %d refused task=%s: live bindings unreadable: %v; nothing changed", r.RoleID, t.ID, lErr)
+			return noop, fmt.Errorf("read live bindings of task %s: %w; nothing changed", t.ID, lErr)
+		}
+		reclaim = len(live) == 1 && live[0].RoleID == r.RoleID
 	}
 	if !opts.MutateBy.IsZero() {
 		if now := opts.Clock.Now(); now.After(opts.MutateBy) {
-			uxlog.Log("[resident] delete role %d refused task=%s: host busy (first change due by %s, now %s late); nothing changed", r.RoleID, t.ID, opts.MutateBy.Format(time.RFC3339Nano), now.Sub(opts.MutateBy).Round(time.Millisecond))
+			residentDeleteLog("[resident] delete role %d refused task=%s: host busy (first change due by %s, now %s late); nothing changed", r.RoleID, t.ID, opts.MutateBy.Format(time.RFC3339Nano), now.Sub(opts.MutateBy).Round(time.Millisecond))
 			return noop, fmt.Errorf("%w: too little of the call's time budget left to stop and delete safely; nothing changed", ErrHostBusy)
 		}
 	}
+	// The worktree removal needs the per-repo cleanup lock, which other
+	// cleanups (the reclaim sweep, TUI nukes) hold across an untimed origin
+	// push. Take it now, before the first change, with a wait bounded by
+	// MutateBy, and hold it through the stop, exit wait, recheck and local
+	// removal, so nothing after the stop can block on it.
+	if reclaim && t.Worktree != "" {
+		unlock, lErr := lockResidentRepo(agent.ResolveDir(t, d.Config()), opts, r.RoleID, t.ID)
+		if lErr != nil {
+			return noop, lErr
+		}
+		// Released when this returns, before the caller runs followUp.
+		defer unlock()
+		return nukeResidentWorkerLocked(d, runner, r, t, reclaim, opts, true)
+	}
+	return nukeResidentWorkerLocked(d, runner, r, t, reclaim, opts, false)
+}
+
+// residentRepoLockPoll is how often the bounded repo-lock wait retries.
+const residentRepoLockPoll = 20 * time.Millisecond
+
+// lockResidentRepo takes repoDir's cleanup lock for the resident delete. With
+// a MutateBy the wait is bounded by it on opts.Clock and runs out as
+// ErrHostBusy with nothing changed; without one it waits.
+func lockResidentRepo(repoDir string, opts ResidentDeleteOptions, roleID int64, taskID string) (func(), error) {
+	if opts.MutateBy.IsZero() {
+		return agent.LockRepoContext(context.Background(), repoDir)
+	}
+	start := opts.Clock.Now()
+	for {
+		now := opts.Clock.Now()
+		if now.After(opts.MutateBy) {
+			residentDeleteLog("[resident] delete role %d refused task=%s: host busy (repo cleanup lock %q held by another cleanup for %s); nothing changed", roleID, taskID, repoDir, now.Sub(start).Round(time.Millisecond))
+			return nil, fmt.Errorf("%w: another worktree cleanup in this repository held its lock past the call's time budget; nothing changed", ErrHostBusy)
+		}
+		if unlock, ok := agent.TryLockRepo(repoDir); ok {
+			return unlock, nil
+		}
+		opts.Clock.Sleep(residentRepoLockPoll)
+	}
+}
+
+// nukeResidentWorkerLocked is NukeResidentWorkerChecked after its pre-change
+// checks; repoLocked reports whether the caller holds the task repo's cleanup
+// lock (always so when a worktree is reclaimed).
+func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView, t *model.Task, reclaim bool, opts ResidentDeleteOptions, repoLocked bool) (followUp func(), err error) {
+	noop := func() {}
 	if reclaim && opts.Recheck != nil {
 		guard := armStopCloseoutGuard(d, t.ID)
 		stopped, err := stopResidentWorkerSession(runner, t, opts.Wait.withDefaults(), opts.Clock, opts.GiveUpBy)
 		if err != nil {
 			guard.refused(stopped)
-			uxlog.Log("[resident] delete role %d refused task=%s: %v", r.RoleID, t.ID, err)
+			residentDeleteLog("[resident] delete role %d refused task=%s: %v", r.RoleID, t.ID, err)
 			return noop, err
 		}
 		if err := opts.Recheck(t); err != nil {
 			guard.refused(true)
-			uxlog.Log("[resident] delete role %d refused after session stop task=%s: %v (role, binding and worktree kept)", r.RoleID, t.ID, err)
+			residentDeleteLog("[resident] delete role %d refused after session stop task=%s: %v (role, binding and worktree kept)", r.RoleID, t.ID, err)
 			return noop, err
 		}
 	}
 	if err := nukeRoleRow(d, r.RoleID, db.HeraActorResident); err != nil {
+		residentDeleteLog("[resident] delete role %d: nuke failed task=%s: %v", r.RoleID, t.ID, err)
 		return noop, fmt.Errorf("nuke role %d: %w", r.RoleID, err)
 	}
 	if !reclaim {
-		uxlog.Log("[resident] delete role %d: task=%s preserved (bound elsewhere)", r.RoleID, t.ID)
+		residentDeleteLog("[resident] delete role %d: task=%s preserved (bound elsewhere)", r.RoleID, t.ID)
 		return noop, nil
 	}
 	archiveNukedTask(d, t.ID)
-	remoteDir, remoteBranch := reclaimResidentWorkerTask(d, runner, t)
+	remoteDir, remoteBranch, leaseTip := reclaimResidentWorkerTask(d, runner, t, repoLocked)
 	return func() {
-		residentRemoteBranchDelete(opts, t.ID, remoteDir, remoteBranch)
+		residentRemoteBranchDelete(opts, t.ID, remoteDir, remoteBranch, leaseTip)
 		residentWorkerStackFollowUp(d, t)
 	}, nil
 }
 
 // residentRemoteBranchDelete is followUp's origin branch delete: its own
-// timeout, outcome logged either way.
-func residentRemoteBranchDelete(opts ResidentDeleteOptions, taskID, repoDir, branch string) {
+// timeout, leased on the tip captured at local removal, outcome logged either
+// way. A lease that no longer matches (a same-named branch pushed since, or
+// already gone) leaves the branch in place; that is not retried.
+func residentRemoteBranchDelete(opts ResidentDeleteOptions, taskID, repoDir, branch, leaseTip string) {
 	if branch == "" || repoDir == "" {
+		return
+	}
+	if leaseTip == "" {
+		residentDeleteLog("[resident] delete: remote branch left in place task=%s branch=%s (its tip was unknown at local removal; an unleased delete could remove a re-created branch)", taskID, branch)
 		return
 	}
 	del := opts.RemoteBranchDelete
@@ -224,11 +296,15 @@ func residentRemoteBranchDelete(opts ResidentDeleteOptions, taskID, repoDir, bra
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if err := del(ctx, repoDir, branch); err != nil {
-		uxlog.Log("[resident] delete: remote branch delete failed task=%s branch=%s: %v", taskID, branch, err)
-		return
+	err := del(ctx, repoDir, branch, leaseTip)
+	switch {
+	case errors.Is(err, agent.ErrRemoteBranchChanged):
+		residentDeleteLog("[resident] delete: remote branch changed since delete; left in place task=%s branch=%s: %v", taskID, branch, err)
+	case err != nil:
+		residentDeleteLog("[resident] delete: remote branch delete failed task=%s branch=%s: %v", taskID, branch, err)
+	default:
+		residentDeleteLog("[resident] delete: remote branch deleted task=%s branch=%s", taskID, branch)
 	}
-	uxlog.Log("[resident] delete: remote branch deleted task=%s branch=%s", taskID, branch)
 }
 
 // stopCloseoutGuard keeps the delete's own stop from closing the worker out.
@@ -256,12 +332,12 @@ func armStopCloseoutGuard(d *db.DB, taskID string) *stopCloseoutGuard {
 	if err != nil {
 		// Unknown prior state: never clear a stamp we cannot prove is ours.
 		had = true
-		uxlog.Log("[resident] delete: ready_to_close read failed task=%s: %v (stamp left alone on refusal)", taskID, err)
+		residentDeleteLog("[resident] delete: ready_to_close read failed task=%s: %v (stamp left alone on refusal)", taskID, err)
 	}
 	g.hadStamp = had
 	flipped, err := d.RollHeraWorkerFailed(taskID)
 	if err != nil {
-		uxlog.Log("[resident] delete: pre-stop in_review flip failed task=%s: %v", taskID, err)
+		residentDeleteLog("[resident] delete: pre-stop in_review flip failed task=%s: %v", taskID, err)
 	}
 	g.flipped = flipped
 	return g
@@ -278,7 +354,7 @@ func armStopCloseoutGuard(d *db.DB, taskID string) *stopCloseoutGuard {
 func (g *stopCloseoutGuard) refused(stopped bool) {
 	if g.flipped && !stopped {
 		if _, err := g.d.ReviveHeraWorkerToInProgress(g.taskID); err != nil {
-			uxlog.Log("[resident] delete: revert pre-stop flip failed task=%s: %v", g.taskID, err)
+			residentDeleteLog("[resident] delete: revert pre-stop flip failed task=%s: %v", g.taskID, err)
 		}
 	}
 	if g.hadStamp {
@@ -289,10 +365,10 @@ func (g *stopCloseoutGuard) refused(stopped bool) {
 		return
 	}
 	if err := g.d.ClearHeraReadyToClose(g.taskID); err != nil {
-		uxlog.Log("[resident] delete: clear ready_to_close after refusal failed task=%s: %v", g.taskID, err)
+		residentDeleteLog("[resident] delete: clear ready_to_close after refusal failed task=%s: %v", g.taskID, err)
 		return
 	}
-	uxlog.Log("[resident] delete: cleared ready_to_close stamped by the delete's own stop task=%s", g.taskID)
+	residentDeleteLog("[resident] delete: cleared ready_to_close stamped by the delete's own stop task=%s", g.taskID)
 }
 
 func readyToCloseStamped(d *db.DB, taskID string) (bool, error) {
@@ -332,7 +408,7 @@ func stopResidentWorkerSession(runner NukeRunner, t *model.Task, wait StopWait, 
 		return true, nil
 	}
 	if perr != nil {
-		uxlog.Log("[resident] delete: session presence unreadable task=%s: %v (counted as present; stopping)", t.ID, perr)
+		residentDeleteLog("[resident] delete: session presence unreadable task=%s: %v (counted as present; stopping)", t.ID, perr)
 	}
 	start := clk.Now()
 	limit := start.Add(wait.Max)
@@ -345,7 +421,7 @@ func stopResidentWorkerSession(runner NukeRunner, t *model.Task, wait StopWait, 
 	}
 	returned := clk.Now()
 	if stopErr != nil {
-		uxlog.Log("[resident] delete: stop failed task=%s after %s: %v (waiting to see whether it took)", t.ID, returned.Sub(start).Round(time.Millisecond), stopErr)
+		residentDeleteLog("[resident] delete: stop failed task=%s after %s: %v (waiting to see whether it took)", t.ID, returned.Sub(start).Round(time.Millisecond), stopErr)
 	}
 	for {
 		present, perr := SessionPresent(runner, t.ID)
@@ -355,7 +431,7 @@ func stopResidentWorkerSession(runner NukeRunner, t *model.Task, wait StopWait, 
 			return true, fmt.Errorf("%w: %w (the session has since exited); nothing deleted", ErrWorkerStopFailed, stopErr)
 		}
 		if gone && now.Sub(returned) >= wait.Settle {
-			uxlog.Log("[resident] delete: session exited after stop task=%s waited=%s since stop returned", t.ID, now.Sub(returned).Round(time.Millisecond))
+			residentDeleteLog("[resident] delete: session exited after stop task=%s waited=%s since stop returned", t.ID, now.Sub(returned).Round(time.Millisecond))
 			return true, nil
 		}
 		if !now.Before(limit) {
@@ -384,45 +460,49 @@ func stopResidentWorkerSession(runner NukeRunner, t *model.Task, wait StopWait, 
 // the repo dir and branch to delete on origin. An unreadable session presence
 // counts as present: the session is stopped anyway and the prune is left to
 // the reclaim sweep.
-func reclaimResidentWorkerTask(d *db.DB, runner NukeRunner, t *model.Task) (remoteDir, remoteBranch string) {
+func reclaimResidentWorkerTask(d *db.DB, runner NukeRunner, t *model.Task, repoLocked bool) (remoteDir, remoteBranch, leaseTip string) {
 	if runner != nil {
 		present, perr := SessionPresent(runner, t.ID)
 		if perr != nil {
-			uxlog.Log("[resident] delete: session presence unreadable task=%s: %v (stopping anyway)", t.ID, perr)
+			residentDeleteLog("[resident] delete: session presence unreadable task=%s: %v (stopping anyway)", t.ID, perr)
 		}
 		if perr != nil || present {
 			if err := runner.Stop(t.ID); err != nil && !errors.Is(err, agent.ErrSessionNotFound) {
-				uxlog.Log("[resident] delete: stop session failed task=%s: %v", t.ID, err)
+				residentDeleteLog("[resident] delete: stop session failed task=%s: %v", t.ID, err)
 			}
 		}
 	}
 	if t.Worktree != "" && agent.DirExists(t.Worktree) {
-		remoteDir, remoteBranch = agent.RemoveWorktreeAndLocalBranch(t.Worktree, t.Branch, agent.ResolveDir(t, d.Config()))
-		uxlog.Log("[resident] delete: removed worktree+local branch task=%s (origin branch delete runs in the background)", t.ID)
+		remove := agent.RemoveWorktreeAndLocalBranch
+		if repoLocked {
+			remove = agent.RemoveWorktreeAndLocalBranchLocked
+		}
+		remoteDir, remoteBranch, leaseTip = remove(t.Worktree, t.Branch, agent.ResolveDir(t, d.Config()))
+		residentDeleteLog("[resident] delete: removed worktree+local branch task=%s (origin branch delete runs in the background)", t.ID)
 	}
 	if runner != nil {
 		present, perr := SessionPresent(runner, t.ID)
 		if perr != nil || present {
-			uxlog.Log("[resident] delete: prune deferred to reclaim sweep task=%s (session live or unreadable: %v)", t.ID, perr)
-			return remoteDir, remoteBranch
+			residentDeleteLog("[resident] delete: prune deferred to reclaim sweep task=%s (session live or unreadable: %v)", t.ID, perr)
+			return remoteDir, remoteBranch, leaseTip
 		}
 	}
 	pruned, _, err := d.PruneTasks([]string{t.ID})
 	switch {
 	case err != nil:
-		uxlog.Log("[resident] delete: prune failed task=%s: %v", t.ID, err)
+		residentDeleteLog("[resident] delete: prune failed task=%s: %v", t.ID, err)
 	case len(pruned) == 0:
-		uxlog.Log("[resident] delete: prune skipped task=%s (deferred to reclaim sweep)", t.ID)
+		residentDeleteLog("[resident] delete: prune skipped task=%s (deferred to reclaim sweep)", t.ID)
 	default:
-		uxlog.Log("[resident] delete: pruned task row %s", t.ID)
+		residentDeleteLog("[resident] delete: pruned task row %s", t.ID)
 	}
-	return remoteDir, remoteBranch
+	return remoteDir, remoteBranch, leaseTip
 }
 
 func residentWorkerStackFollowUp(d *db.DB, x *model.Task) {
 	all, err := d.Tasks()
 	if err != nil {
-		uxlog.Log("[resident] delete: stacked-branch follow-up skipped task=%s: %v", x.ID, err)
+		residentDeleteLog("[resident] delete: stacked-branch follow-up skipped task=%s: %v", x.ID, err)
 		return
 	}
 	byBase := make(map[string]*model.Task, len(all))
@@ -432,5 +512,5 @@ func residentWorkerStackFollowUp(d *db.DB, x *model.Task) {
 		}
 	}
 	n := reconcileStackedBranches(context.Background(), d, d.Config(), byBase, x, map[string]mergesafety.Verdict{})
-	uxlog.Log("[resident] delete: stacked-branch follow-up task=%s deleted=%d", x.ID, n)
+	residentDeleteLog("[resident] delete: stacked-branch follow-up task=%s deleted=%d", x.ID, n)
 }

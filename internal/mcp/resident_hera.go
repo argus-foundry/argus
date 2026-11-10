@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -28,7 +30,7 @@ import (
 // through the destructive mutation. Never hold this during a restart wait.
 var residentWorkerMutationMu sync.Mutex
 
-var residentDeleteTool = Tool{Name: "hera_delete_worker", Description: "Resident only: delete a live worker of your standing team. Refuses a busy worker, unmerged non-empty work, and any uncommitted or untracked files, unless force=true (a refusal found after stopping the session leaves it stopped but resumable). Force returns the unmerged summary; REPORT it to Aaron in your own conversation in this turn.", InputSchema: map[string]interface{}{
+var residentDeleteTool = Tool{Name: "hera_delete_worker", Description: "Resident only: delete a live worker of your standing team. Refuses a busy worker, unmerged non-empty work, any uncommitted or untracked files, and work on a detached HEAD or in a paused rebase/merge, unless force=true (a refusal found after stopping the session leaves it stopped but resumable). Force returns the unmerged summary; REPORT it to Aaron in your own conversation in this turn.", InputSchema: map[string]interface{}{
 	"type": "object", "properties": map[string]interface{}{"role": map[string]interface{}{"type": "string", "description": "Worker name or numeric role id"}, "force": map[string]interface{}{"type": "boolean"}}, "required": []string{"role"},
 }}
 
@@ -187,7 +189,7 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 			if errors.Is(err, hera.ErrHostBusy) {
 				return residentHostBusy(id, role.Name, task.ID, "the idle check ran out of the call's time budget")
 			}
-			uxlog.Log("[resident] delete worker=%s task=%s refused: %v", role.Name, task.ID, err)
+			residentMCPLog("[resident] delete worker=%s task=%s refused: %v", role.Name, task.ID, err)
 			return residentToolError(id, err.Error())
 		}
 	}
@@ -213,6 +215,14 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 		// files would be destroyed with the worktree. Unknown counts as dirty.
 		if summary.DirtyCount != "0" {
 			return residentToolError(id, fmt.Sprintf("not safe: worktree has uncommitted or untracked changes (dirty files: %s); commit them, or pass force=true", summary.DirtyCount))
+		}
+		// Commits on a detached HEAD and a paused rebase/merge are invisible
+		// to the clean-tree and branch-tip checks but die with the worktree.
+		if err := residentWorktreeState(ctx, task); err != nil {
+			if ctx.Err() != nil {
+				return residentHostBusy(id, role.Name, task.ID, "the worktree state check ran out of the call's time budget")
+			}
+			return residentToolError(id, fmt.Sprintf("not safe: %v; finish it on the worker's branch, or pass force=true", err))
 		}
 		classify := s.residentClassify
 		if classify == nil {
@@ -266,7 +276,7 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 		RemoteBranchDelete: residentRemoteBranchDelete,
 	})
 	if errors.Is(err, hera.ErrHostBusy) {
-		return residentHostBusy(id, role.Name, task.ID, "too little of the call's time budget was left to stop and delete safely")
+		return residentHostBusy(id, role.Name, task.ID, strings.TrimPrefix(err.Error(), hera.ErrHostBusy.Error()+": "))
 	}
 	if refusal != nil {
 		return residentToolError(id, fmt.Sprintf("not deleted: %v; worker %s's session was stopped and can be resumed (it is not marked finished); its role, binding and worktree are kept; commit the work, or pass force=true", refusal, role.Name))
@@ -315,7 +325,9 @@ type residentSessionReader interface {
 // result. Whatever precedes the first change (queueing, idle sampling,
 // tip/summary/classification, at most residentClassifyBudget) gets what is
 // left, and past that point the call refuses "host busy; retry" with nothing
-// changed. A force delete reserves only its nuke (residentForceReserve).
+// changed; that includes waiting for the repository's cleanup lock, which
+// the delete takes before its first change and holds through the local
+// removal. A force delete reserves only its nuke (residentForceReserve).
 const (
 	residentDeleteDeadline   = 45 * time.Second
 	residentClassifyBudget   = 24 * time.Second
@@ -339,12 +351,12 @@ var residentClock hera.Clock
 
 // residentRemoteBranchDelete deletes the deleted worker's branch on origin in
 // the background (nil = agent.DeleteRemoteBranchContext); tests block it.
-var residentRemoteBranchDelete func(ctx context.Context, repoDir, branch string) error
+var residentRemoteBranchDelete func(ctx context.Context, repoDir, branch, expectTip string) error
 
 // residentHostBusy refuses a delete that ran out of its time budget before
 // changing anything.
 func residentHostBusy(id interface{}, worker, taskID, why string) *Response {
-	uxlog.Log("[resident] delete worker=%s task=%s refused: host busy (%s); nothing changed", worker, taskID, why)
+	residentMCPLog("[resident] delete worker=%s task=%s refused: host busy (%s); nothing changed", worker, taskID, why)
 	return residentToolError(id, fmt.Sprintf("not deleted: host busy; retry (%s); worker %s is unchanged", why, worker))
 }
 
@@ -427,7 +439,7 @@ func residentContentIdle(taskID string, sess agent.SessionHandle, until time.Tim
 	for {
 		now := clk.Now()
 		if tracker.IsIdle(taskID, sess, now) {
-			uxlog.Log("[resident] delete: worker content-idle task=%s after %s", taskID, now.Sub(start).Round(time.Millisecond))
+			residentMCPLog("[resident] delete: worker content-idle task=%s after %s", taskID, now.Sub(start).Round(time.Millisecond))
 			return true, nil
 		}
 		if !sess.Alive() {
@@ -435,10 +447,10 @@ func residentContentIdle(taskID string, sess agent.SessionHandle, until time.Tim
 		}
 		if now.Sub(start) >= window {
 			if capped {
-				uxlog.Log("[resident] delete: content sampling cut to %s by the time budget task=%s", window.Round(time.Millisecond), taskID)
+				residentMCPLog("[resident] delete: content sampling cut to %s by the time budget task=%s", window.Round(time.Millisecond), taskID)
 				return false, fmt.Errorf("%w: idle sampling cut short by the time budget", hera.ErrHostBusy)
 			}
-			uxlog.Log("[resident] delete: worker still busy task=%s after %s of content sampling", taskID, cfg.Window)
+			residentMCPLog("[resident] delete: worker still busy task=%s after %s of content sampling", taskID, cfg.Window)
 			return false, nil
 		}
 		clk.Sleep(cfg.Interval)
@@ -472,8 +484,81 @@ func residentRecheckTree(ctx context.Context, cfg config.Config, t *model.Task, 
 		}
 		return errors.New(msg)
 	}
+	if err := residentWorktreeState(ctx, t); err != nil {
+		return err
+	}
 	if tip := residentBranchTip(ctx, t); tip != tipBefore {
 		return fmt.Errorf("branch %s moved while the delete was classifying", t.Branch)
+	}
+	return nil
+}
+
+// residentWorktreeOps are the in-progress operations whose state lives in the
+// worktree's git dir; work paused in one is not on the branch yet.
+var residentWorktreeOps = []struct{ path, name string }{
+	{"rebase-merge", "rebase"},
+	{"rebase-apply", "rebase (or am)"},
+	{"MERGE_HEAD", "merge"},
+	{"CHERRY_PICK_HEAD", "cherry-pick"},
+	{"REVERT_HEAD", "revert"},
+}
+
+// residentWorktreeState refuses (as dirty) a worktree whose work the
+// clean-tree and branch-tip checks cannot see: a rebase, merge, cherry-pick
+// or revert in progress, or a HEAD that is not refs/heads/<task branch>
+// (detached, or another branch), where commits never reach the branch and
+// become unreachable when the worktree is removed. Unreadable state fails
+// closed.
+func residentWorktreeState(ctx context.Context, t *model.Task) error {
+	if t.Worktree == "" {
+		return nil
+	}
+	args := []string{"rev-parse"}
+	for _, op := range residentWorktreeOps {
+		args = append(args, "--git-path", op.path)
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = t.Worktree
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("cannot read the worktree's git state: %w", err)
+	}
+	paths := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(paths) != len(residentWorktreeOps) {
+		return fmt.Errorf("cannot read the worktree's git state: unexpected rev-parse output %q", out)
+	}
+	for i, p := range paths {
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(t.Worktree, p)
+		}
+		_, sErr := os.Lstat(p)
+		if sErr == nil {
+			return fmt.Errorf("a %s is in progress in the worktree", residentWorktreeOps[i].name)
+		}
+		if !os.IsNotExist(sErr) {
+			return fmt.Errorf("cannot read the worktree's git state: %w", sErr)
+		}
+	}
+	cmd = exec.CommandContext(ctx, "git", "symbolic-ref", "--quiet", "HEAD")
+	cmd.Dir = t.Worktree
+	out, err = cmd.Output()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && ctx.Err() == nil {
+		return fmt.Errorf("the worktree's HEAD is detached (not on branch %s); commits made there would be lost", t.Branch)
+	}
+	if err != nil {
+		return fmt.Errorf("cannot read the worktree's HEAD: %w", err)
+	}
+	if head := strings.TrimSpace(string(out)); head != "refs/heads/"+t.Branch {
+		// An unborn branch (no commit yet) holds nothing the removal could
+		// lose; anything else is work off the worker's branch.
+		cmd = exec.CommandContext(ctx, "git", "rev-parse", "--verify", "--quiet", "HEAD")
+		cmd.Dir = t.Worktree
+		err = cmd.Run()
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && ctx.Err() == nil {
+			return nil
+		}
+		return fmt.Errorf("the worktree's HEAD is on %s, not the worker's branch %s", strings.TrimPrefix(head, "refs/heads/"), t.Branch)
 	}
 	return nil
 }
@@ -549,6 +634,14 @@ func (s *Server) runResidentFleetReconcile(d *db.DB, runner hera.SessionChecker,
 		uxlog.Log("[resident] async reclaim sweep after delete worker=%s: candidates=%d pruned=%d skipped_live=%d", worker, sum.Candidates, sum.Pruned, sum.SkippedLiveSession)
 		slog.Info("[resident] async reclaim sweep done", "worker", worker, "candidates", sum.Candidates, "pruned", sum.Pruned, "skipped_live_session", sum.SkippedLiveSession)
 	}()
+}
+
+// residentMCPLog writes a [resident] line to both the uxlog and slog. The
+// daemon never calls uxlog.Init, so uxlog.Log alone is a silent no-op there
+// (same dual-write as internal/daemon's residentLog).
+func residentMCPLog(format string, args ...any) {
+	uxlog.Log(format, args...)
+	slog.Info(fmt.Sprintf(format, args...)) //nolint:gosec // G706: internal diagnostics, not a user-controlled log-forging surface
 }
 
 func residentToolError(id interface{}, message string) *Response {

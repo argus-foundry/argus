@@ -46,6 +46,9 @@ func TestResidentRoutingHeadroom(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	used := map[string]float64{"default": 95, "work": 10}
 	restore := usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
+		if account == "" { // the default account is read under the empty key
+			account = "default"
+		}
 		return usagebudget.Reading{Percentage: used[account]}, true
 	})
 	defer restore()

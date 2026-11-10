@@ -1,12 +1,16 @@
 package hera
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -295,23 +299,66 @@ func TestNukeResidentWorkerChecked_GiveUpByCapsWait(t *testing.T) {
 	}
 }
 
-// The origin branch delete runs from followUp with its own timeout; a nil
-// target is skipped.
+// The origin branch delete runs from followUp with its own timeout, leased
+// on the tip captured at local removal; a nil target or an unknown tip is
+// skipped. Every outcome reaches slog (the daemon never initializes uxlog).
 func TestResidentRemoteBranchDelete(t *testing.T) {
-	var gotDir, gotBranch string
+	logs := captureResidentSlog(t)
+	var gotDir, gotBranch, gotTip string
 	var hadDeadline bool
-	opts := ResidentDeleteOptions{RemoteBranchTimeout: time.Minute, RemoteBranchDelete: func(ctx context.Context, dir, branch string) error {
+	opts := ResidentDeleteOptions{RemoteBranchTimeout: time.Minute, RemoteBranchDelete: func(ctx context.Context, dir, branch, tip string) error {
 		_, hadDeadline = ctx.Deadline()
-		gotDir, gotBranch = dir, branch
+		gotDir, gotBranch, gotTip = dir, branch, tip
 		return nil
 	}}
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/x")
+	residentRemoteBranchDelete(opts, "w", "/repo", "argus/x", "abc123")
 	testutil.Equal(t, gotDir, "/repo")
 	testutil.Equal(t, gotBranch, "argus/x")
+	testutil.Equal(t, gotTip, "abc123")
 	testutil.True(t, hadDeadline)
+	testutil.Contains(t, logs.String(), "remote branch deleted task=w branch=argus/x")
 	gotBranch = ""
-	residentRemoteBranchDelete(opts, "w", "/repo", "")
+	residentRemoteBranchDelete(opts, "w", "/repo", "", "abc123")
 	testutil.Equal(t, gotBranch, "")
-	opts.RemoteBranchDelete = func(context.Context, string, string) error { return errors.New("offline") }
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/x") // logged, never panics
+	// No lease tip: never an unleased delete.
+	residentRemoteBranchDelete(opts, "w", "/repo", "argus/y", "")
+	testutil.Equal(t, gotBranch, "")
+	testutil.Contains(t, logs.String(), "remote branch left in place task=w branch=argus/y")
+	opts.RemoteBranchDelete = func(context.Context, string, string, string) error { return errors.New("offline") }
+	residentRemoteBranchDelete(opts, "w", "/repo", "argus/x", "abc123") // logged, never panics
+	testutil.Contains(t, logs.String(), "remote branch delete failed task=w branch=argus/x: offline")
+	opts.RemoteBranchDelete = func(context.Context, string, string, string) error {
+		return fmt.Errorf("%w: moved", agent.ErrRemoteBranchChanged)
+	}
+	residentRemoteBranchDelete(opts, "w", "/repo", "argus/z", "abc123")
+	testutil.Contains(t, logs.String(), "remote branch changed since delete; left in place task=w branch=argus/z")
+}
+
+// syncBuffer is a goroutine-safe log sink.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// captureResidentSlog routes slog to a buffer for one test. uxlog is not
+// initialized, as in the daemon.
+func captureResidentSlog(t *testing.T) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	return buf
 }

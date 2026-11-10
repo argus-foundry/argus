@@ -105,11 +105,11 @@ func TestResidentDelete_RemoteBranchDeleteAsync(t *testing.T) {
 	old := residentRemoteBranchDelete
 	t.Cleanup(func() { residentRemoteBranchDelete = old })
 	started, release := make(chan struct{}), make(chan struct{})
-	var gotDir, gotBranch string
+	var gotDir, gotBranch, gotTip string
 	var hadDeadline bool
-	residentRemoteBranchDelete = func(ctx context.Context, dir, branch string) error {
+	residentRemoteBranchDelete = func(ctx context.Context, dir, branch, tip string) error {
 		_, hadDeadline = ctx.Deadline()
-		gotDir, gotBranch = dir, branch
+		gotDir, gotBranch, gotTip = dir, branch, tip
 		close(started)
 		<-release
 		return nil
@@ -143,6 +143,7 @@ func TestResidentDelete_RemoteBranchDeleteAsync(t *testing.T) {
 	s.residentBackground.Wait()
 	testutil.Equal(t, gotBranch, task.Branch)
 	testutil.True(t, gotDir != "")
+	testutil.True(t, gotTip != "") // the lease tip captured before the local branch went
 	testutil.True(t, hadDeadline)
 	raw, err := os.ReadFile(logPath)
 	testutil.NoError(t, err)
