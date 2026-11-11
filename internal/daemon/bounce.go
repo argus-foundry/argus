@@ -291,7 +291,7 @@ func (d *Daemon) reattachSupervised() {
 	// refresh above: classification reads the newest transcript. Off switch:
 	// [bounce_recovery] enabled=false skips this and restores the old behavior.
 	if d.cfgFn().BounceRecovery.Enabled {
-		recorded := bouncerecovery.Record(d.db, orphans, time.Now())
+		recorded := bouncerecovery.Record(d.db, orphans, func(id string) bool { return liveSet[id] }, time.Now())
 		slog.Info("[bounce-recovery] orphans recorded", "orphans", len(orphans), "recorded", recorded)
 	}
 

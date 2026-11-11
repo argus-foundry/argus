@@ -50,7 +50,14 @@ type block struct {
 	Input json.RawMessage `json:"input"`
 	// tool_result
 	ToolUseID string `json:"tool_use_id"`
+	Text      string `json:"text"`
 }
+
+// interruptPrefix starts the marker Claude Code writes as a user entry when
+// the human presses Esc ("[Request interrupted by user]" and "[Request
+// interrupted by user for tool use]"). Work stopped on purpose is not
+// "interrupted mid-turn by a bounce".
+const interruptPrefix = "[Request interrupted by user"
 
 type entry struct {
 	Type        string `json:"type"`
@@ -122,9 +129,18 @@ func Classify(r io.Reader) (State, error) {
 					} else {
 						lastKind = MidTurn
 						for _, b := range blocks {
-							if b.Type == "tool_result" {
+							switch {
+							case b.Type == "tool_result":
 								delete(pending, b.ToolUseID)
+							case b.Type == "text" && strings.HasPrefix(strings.TrimSpace(b.Text), interruptPrefix):
+								lastKind = Idle
+								clear(pending) // Esc dismisses any open question too
 							}
+						}
+						var plain string
+						if json.Unmarshal(e.Message.Content, &plain) == nil && strings.HasPrefix(strings.TrimSpace(plain), interruptPrefix) {
+							lastKind = Idle
+							clear(pending)
 						}
 					}
 				}
@@ -175,7 +191,7 @@ func askQuestion(raw json.RawMessage) (string, []string) {
 		qs = append(qs, q.Question)
 		for _, o := range q.Options {
 			if len(opts) < MaxOptions {
-				opts = append(opts, clean(o.Label, 200))
+				opts = append(opts, oneLine(clean(o.Label, 200)))
 			}
 		}
 	}
@@ -230,3 +246,6 @@ func readLine(br *bufio.Reader) ([]byte, error) {
 		return buf, err
 	}
 }
+
+// oneLine collapses all whitespace runs (including newlines) to single spaces.
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }

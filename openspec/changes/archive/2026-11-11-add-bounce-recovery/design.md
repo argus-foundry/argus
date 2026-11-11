@@ -26,6 +26,16 @@ Recommendation: A. Non-Claude backends classify as `unknown` and are treated as 
 
 Idle-between-turns non-hera tasks stay dormant because there is nothing in flight to lose: the work was handed back to the user, and resuming burns a relaunch and context for no result. They are still visible through the sibling disconnected-icon work and a manual Enter resumes them.
 
+### D2a. Amendments after review (2026-11-11)
+
+- **Sub-coordinators reverse the approved wording.** D2 said workers and sub-coordinators under a resumable coordinator are delegated to it. The shipped behavior resumes a sub-coordinator directly: it owns its own team (which only it can tell about its workers), and `StartOrReattach` makes the parent's `hera_revive` of an already-running session a safe no-op, so a double resume cannot happen. The base spec was updated to match.
+- **Idle workers rolled to in_review are recorded.** The orphan sweep only sees in_progress rows, but idle workers are routinely rolled to in_review, so the bounce killed them unrecorded and the coordinator note would have said none were killed. They are now recorded as `dormant` team members (listed, never auto-resumed).
+- **A Claude task with no transcript is never resumed** (it would fresh-launch with its original prompt and a coordinator would re-run its orchestration). Its workers fall back to being resumed directly.
+- **An archived or completed coordinator means its workers are superseded**, not promoted: the user abandoned that orchestration.
+- **A final Esc-interrupt entry classifies as idle**, not mid-turn: work stopped on purpose is not resumed.
+- **The note's delivery state is persisted** and re-queued under the same delivery ID after a daemon restart.
+- Known limit: the in-flight resume count lives in memory and resets when the daemon bounces; the "3 at a time" for coordinator-driven `hera_revive` stays advice (a hard cap is a named follow-up).
+
 ### D3. Throttle numbers
 
 - **A. `max_concurrent = 3`, `stagger_seconds = 4`, settle ceiling 60s, 3 attempts with backoff 10s/30s (recommended).** 30 agents take roughly 3-5 minutes. Coordinators first by orchestrator depth.

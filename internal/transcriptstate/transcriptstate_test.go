@@ -24,6 +24,9 @@ const (
 	asstThink  = `{"type":"assistant","message":{"role":"assistant","stop_reason":null,"content":[{"type":"thinking","thinking":"hmm"}]}}`
 	askUse     = `{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Where should it run?","options":[{"label":"Headless"},{"label":"Cloud"}]}]}}]}}`
 	askResult  = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q1","content":"Headless"}]}}`
+	interrupt  = `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`
+	interruptT = `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}`
+	interruptS = `{"type":"user","message":{"role":"user","content":"[Request interrupted by user]"}}`
 	trailer    = `{"type":"last-prompt","lastPrompt":"x"}`
 )
 
@@ -41,6 +44,11 @@ func TestClassify(t *testing.T) {
 		{"thinking only", []string{human, asstThink}, MidTurn},
 		{"user message unanswered", []string{human}, MidTurn},
 		{"end of turn", []string{human, asstEnd, trailer}, Idle},
+		{"esc interrupt is idle", []string{human, asstTool, interrupt}, Idle},
+		{"esc interrupt for tool use is idle", []string{human, asstTool, toolResult, interruptT}, Idle},
+		{"esc interrupt as plain string is idle", []string{human, asstThink, interruptS}, Idle},
+		{"esc dismisses an open question", []string{human, askUse, interrupt}, Idle},
+		{"work after an interrupt is mid turn again", []string{human, interrupt, human, asstTool}, MidTurn},
 		{"sidechain ignored", []string{human, asstEnd, `{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"tool_use","id":"s","name":"Bash","input":{}}]}}`}, Idle},
 	}
 	for _, tt := range tests {
@@ -54,6 +62,12 @@ func TestClassify_QuestionText(t *testing.T) {
 	st := classify(t, human, askUse)
 	testutil.Equal(t, st.Question, "Where should it run?")
 	testutil.DeepEqual(t, st.Options, []string{"Headless", "Cloud"})
+}
+
+func TestClassify_OptionsAreOneLine(t *testing.T) {
+	line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"q","name":"AskUserQuestion","input":{"questions":[{"question":"Q","options":[{"label":"multi\nline   label"}]}]}}]}}`
+	st := classify(t, human, line)
+	testutil.DeepEqual(t, st.Options, []string{"multi line label"})
 }
 
 func TestClassify_ExitPlanMode(t *testing.T) {

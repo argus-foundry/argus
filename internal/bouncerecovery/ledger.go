@@ -57,7 +57,20 @@ type Entry struct {
 	Attempts  int
 	NextAt    time.Time // earliest next attempt (zero = now)
 	BounceID  string
+	// NoteState tracks delivery of the resume note: "" (not yet delivered),
+	// NoteSent, or NoteAbandoned. Persisted so a daemon bounce inside the
+	// delivery window re-queues the note instead of losing it.
+	NoteState string
+	// Reason explains a terminal status the policy did not derive from state
+	// ("no_transcript", "coordinator_closed", "in_review").
+	Reason string
 }
+
+// Note delivery states.
+const (
+	NoteSent      = "sent"
+	NoteAbandoned = "abandoned"
+)
 
 func (e Entry) toMeta() map[string]string {
 	opts, _ := json.Marshal(e.Options)
@@ -76,6 +89,8 @@ func (e Entry) toMeta() map[string]string {
 		"attempts":   strconv.Itoa(e.Attempts),
 		"next_at":    "0",
 		"bounce_id":  e.BounceID,
+		"note_state": e.NoteState,
+		"reason":     e.Reason,
 	}
 	if !e.NextAt.IsZero() {
 		m["next_at"] = strconv.FormatInt(e.NextAt.Unix(), 10)
@@ -97,6 +112,8 @@ func entryFromMeta(taskID string, m map[string]string) (Entry, bool) {
 		TaskName:  m["task_name"],
 		CoordTask: m["coord_task"],
 		BounceID:  m["bounce_id"],
+		NoteState: m["note_state"],
+		Reason:    m["reason"],
 	}
 	if unix, err := strconv.ParseInt(m["killed_at"], 10, 64); err == nil {
 		e.KilledAt = time.Unix(unix, 0)
@@ -116,6 +133,7 @@ type Store interface {
 	SetMetaBatch(taskID, namespace string, entries map[string]string) error
 	SetMeta(taskID, namespace, key, value string) error
 	ListMetaByNamespace(namespace string) (map[string]map[string]string, error)
+	DeleteMetaNamespaceForTask(taskID, namespace string) (int, error)
 }
 
 // Save writes e as a whole.
@@ -154,4 +172,10 @@ func LoadAll(s Store) (map[string]*Entry, error) {
 		}
 	}
 	return out, nil
+}
+
+// SetNoteState persists the note delivery state of an entry.
+func SetNoteState(s Store, e *Entry, state string) error {
+	e.NoteState = state
+	return s.SetMeta(e.TaskID, Namespace, "note_state", state)
 }
