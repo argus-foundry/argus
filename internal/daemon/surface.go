@@ -585,7 +585,9 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "9618cf3c944b2865d2c7e9e7d06d4ab0b52b60c5191e772f807eebb1b7459ef8"
+	// Naming capabilities added to the family registry are daemon/TUI-only;
+	// BuildCmd and supervised session construction are unchanged (no version bump).
+	SpawnSurfaceDigest  = "97ff5bde6437c17bae9857fb40d7c643db816f7099efcc98fa25dbf54bff993d"
 	StreamSurfaceDigest = "a0b3efb1c129a7c3a3ba94ef8922d258e60d87907e1f599f17e8108ad97770f0"
 )
 

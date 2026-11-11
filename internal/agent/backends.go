@@ -21,6 +21,7 @@ import (
 	injectcursor "github.com/argus-foundry/argus/internal/inject/cursor"
 	injectopencode "github.com/argus-foundry/argus/internal/inject/opencode"
 	injectpi "github.com/argus-foundry/argus/internal/inject/pi"
+	"github.com/argus-foundry/argus/internal/llm"
 	"github.com/argus-foundry/argus/internal/mcplimits"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/routing"
@@ -159,6 +160,10 @@ type Family struct {
 	UsageReader                func(task *model.Task, cfg config.Config) (UsageReading, bool, error)
 	UsageProvider, UsageSource string
 
+	// Naming declares an isolated utility; nil means retain the fallback slug.
+	// NamingAccount resolves its auth directory and inherited credential denylist.
+	Naming        *llm.NamingBackend
+	NamingAccount func(*model.Task, config.Config) (string, []string, error)
 	// KnownModels is the curated model list for pickers; nil means
 	// custom-only (any typed id is accepted).
 	KnownModels []string
@@ -705,8 +710,16 @@ func injectAntigravityGlobal(port int, launching bool) error {
 
 var families = []*Family{
 	{
-		Spec:                 mustSpec(backendkind.Claude),
-		TrustWorktree:        trustClaudeWorktree,
+		Spec:          mustSpec(backendkind.Claude),
+		TrustWorktree: trustClaudeWorktree,
+		Naming:        &llm.NamingBackend{Binary: "claude"},
+		NamingAccount: func(t *model.Task, c config.Config) (string, []string, error) {
+			dir, err := resolveSpawnClaudeConfigDir(t, c, true)
+			if dir == "" {
+				return "", nil, err
+			}
+			return "CLAUDE_CONFIG_DIR=" + dir, claudeAuthOverrideEnv, err
+		},
 		PinsSessionID:        true,
 		ResumeFlag:           "--resume",
 		Capture:              captureClaude,
@@ -748,16 +761,24 @@ var families = []*Family{
 	{
 		Spec:              mustSpec(backendkind.Codex),
 		WorktreeTrustFlag: codexWorktreeTrustFlag,
-		Capture:           captureCodex,
-		TransferSession:   codexTransferSession,
-		ResumeCmd:         codexResumeCommand,
-		CostSource:        CostSourceCodexRollout,
-		ContextReader:     readCodexContext,
-		ContextProvider:   ContextProviderOpenAI,
-		ContextSource:     ContextSourceCodex,
-		UsageReader:       readCodexUsage,
-		UsageProvider:     ContextProviderOpenAI,
-		UsageSource:       ContextSourceCodex,
+		Naming:            &llm.NamingBackend{Binary: "codex", Args: llm.CodexNameArgs, JSONEvents: true, Prepare: llm.PrepareCodexNaming},
+		NamingAccount: func(t *model.Task, c config.Config) (string, []string, error) {
+			dir, err := resolveSpawnCodexHome(t, c, true)
+			if dir == "" {
+				return "", nil, err
+			}
+			return "CODEX_HOME=" + dir, codexAuthOverrideEnv, err
+		},
+		Capture:         captureCodex,
+		TransferSession: codexTransferSession,
+		ResumeCmd:       codexResumeCommand,
+		CostSource:      CostSourceCodexRollout,
+		ContextReader:   readCodexContext,
+		ContextProvider: ContextProviderOpenAI,
+		ContextSource:   ContextSourceCodex,
+		UsageReader:     readCodexUsage,
+		UsageProvider:   ContextProviderOpenAI,
+		UsageSource:     ContextSourceCodex,
 		// Keep this list synced with the Codex CLI's own `/model` picker and
 		// the seed diligence profiles' archetype.*.models.codex entries.
 		KnownModels:   []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"},
