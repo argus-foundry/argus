@@ -174,7 +174,8 @@ type Family struct {
 	// DefaultPromptFlag delivers the prompt when the backend config has no
 	// PromptFlag. Empty means `-- <prompt>` (or positional, see below).
 	DefaultPromptFlag string
-	// PromptPositional passes the prompt without a `--` separator.
+	// PromptPositional passes the prompt without a `--` separator, prefixing
+	// a newline to dash-leading prompts to avoid option parsing (Pi).
 	PromptPositional bool
 
 	// LaunchFlag is inserted right after the binary unless already present

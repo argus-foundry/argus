@@ -1279,10 +1279,13 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 			case fam.PromptFlagFor(backend) != "":
 				cmdStr += " " + fam.PromptFlagFor(backend) + " " + shellQuote(prompt)
 			case fam.PromptPositional:
-				// Pi's argv parser does not honor "--" as end-of-flags; pass the
-				// prompt as a positional argument. Prompts beginning with "-" or
-				// "@" trigger pi's flag/file-include parsing (the @ behavior is
-				// pi's documented file-inclusion feature, not a bug).
+				// Pi ignores "--" as end-of-options. A leading newline makes
+				// dash-prefixed text a message while preserving its content.
+				// Leave documented @file inclusion unchanged.
+				if strings.HasPrefix(prompt, "-") {
+					prompt = "\n" + prompt
+					uxlog.Log("[pi] prefixed newline to dash-leading positional prompt")
+				}
 				cmdStr += " " + shellQuote(prompt)
 			default:
 				// Use -- to separate options from the prompt argument.

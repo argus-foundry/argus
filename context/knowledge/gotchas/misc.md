@@ -85,7 +85,7 @@
 ## Pi Integration
 
 - **Pi's argv parser has no `--` end-of-flags separator.** `pi -- "<prompt>"` consumes `--` as an unknown flag and pairs it with the next arg. `BuildCmd` passes the prompt as a bare positional argument for pi only; other backends still use `--`.
-- **Pi treats `@<token>` as a file include and unknown `-<token>` as an error.** This is pi's documented behavior, not a bug — prompts starting with `@` will include that file. Prompts starting with `-` will fail in pi.
+- **Shell quoting does not stop Pi from parsing a dash-leading prompt as an option.** Pi can silently swallow an entire `---title:` handoff as an unknown long flag; `BuildCmd` prefixes a newline to dash-leading Pi positional prompts (not stored prompt content). Leading `@` retains Pi's documented file-inclusion behavior; configured prompt flags bypass this normalization.
 - **Pi has no `--session-id` flag for new sessions.** Like codex, pi mints its own UUID and Argus captures it post-exit via `CapturePiSessionID`. Resume uses `pi --session <UUID>` (partial UUIDs accepted).
 - **Pi session UUID lives in the filename, not stdout.** Files are at `~/.pi/agent/sessions/--<encoded-cwd>--/<timestamp>_<uuid>.jsonl`. `piEncodeCwd` must mirror pi's `getDefaultSessionDir` exactly: strip ONE leading `/` or `\` (single-char, NOT a TrimLeft), then replace remaining `/`, `\`, `:` with `-`, wrap in `--…--`. Adjacent special chars produce adjacent dashes (e.g. `C:\` → `C--`).
 - **Sandbox must allow writes under `~/.pi`** (mirroring the `~/.codex` rule). Without it, pi sessions are silently dropped under macOS sandbox and `CapturePiSessionID` always returns "no session files" → resume permanently broken. Pinned by `TestSandbox_PiBackendWritable`.
