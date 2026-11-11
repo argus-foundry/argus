@@ -420,8 +420,8 @@ func TestBuildCmd_ResidentIsSelfContainedUnderUserAllowAll(t *testing.T) {
 		"effortLevel": "high",
 		"permissions": {
 			"allow": ["mcp__claude_ai_Linear__*", "Bash(*)", "mcp__claude_ai_Slack__*"],
-			"ask": ["mcp__claude_ai_Notion__notion-fetch", "Bash(git push:*)"],
-			"deny": ["Bash(rm -rf:*)", "mcp__claude_ai_Slack__slack_send_message"]
+			"ask": ["mcp__claude_ai_Notion__notion-fetch", "Bash(git push:*)", "Bash", "Edit"],
+			"deny": ["Bash(rm -rf:*)", "mcp__claude_ai_Slack__slack_send_message", "Edit"]
 		},
 		"sandbox": {"enabled": true, "autoAllowBashIfSandboxed": true, "excludedCommands": ["git"], "network": {"allowedDomains": ["example.com"], "deniedDomains": ["blocked.test"]}},
 		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "auto-approve.sh"}]}]}
@@ -452,6 +452,10 @@ func TestBuildCmd_ResidentIsSelfContainedUnderUserAllowAll(t *testing.T) {
 			t.Fatalf("user allow rule %q leaked into the resident policy", userAllow)
 		}
 	}
+	// User restrictions override the widened allow; deny also beats ask.
+	testutil.Equal(t, residentRuleTier(t, perms, "Bash"), "ask")
+	testutil.Equal(t, residentRuleTier(t, perms, "Edit"), "deny")
+	testutil.Equal(t, residentRuleTier(t, perms, "mcp__claude_ai_Notion__notion-fetch"), "ask")
 	// User restrictions are re-supplied; the resident's own entries stay.
 	testutil.Contains(t, deny, "Bash(rm -rf:*)")
 	testutil.Contains(t, deny, "mcp__claude_ai_Slack__slack_send_message")
@@ -1427,5 +1431,76 @@ func TestBuildCmd_ResidentContinuationFlagsReachClaudeUnderSh(t *testing.T) {
 				t.Fatalf("appended flags were joined into one argument: %s", got)
 			}
 		})
+	}
+}
+
+// This models only the documented bare-name/server-glob rule subset shipped by
+// Argus, not Claude's full permission engine. Assertions inspect BuildCmd JSON.
+func residentRuleTier(t *testing.T, permissions map[string]any, tool string) string {
+	t.Helper()
+	for _, tier := range []string{"deny", "ask", "allow"} {
+		rules, _ := permissions[tier].([]any)
+		for _, rule := range rules {
+			pattern := rule.(string)
+			matched, err := filepath.Match(pattern, tool)
+			testutil.NoError(t, err)
+			if matched {
+				return tier
+			}
+		}
+	}
+	return "ask" // BuildCmd pins default mode, never bypass.
+}
+
+func TestBuildCmd_ResidentOrdinaryWorkPolicy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
+	task := &model.Task{ID: "r", Kind: model.KindResident, Worktree: db.ResidentWorkDir()}
+	cmd, cleanup, err := BuildCmd(task, residentCfg(), false)
+	testutil.NoError(t, err)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+	settings, ok := settingsArg(t, cmd.Args)
+	testutil.True(t, ok)
+	perms := settings["permissions"].(map[string]any)
+	testutil.Equal(t, perms["defaultMode"], any("default"))
+	testutil.Equal(t, perms["disableBypassPermissionsMode"], any("disable"))
+	cases := []struct{ tool, tier string }{
+		{"Bash", "allow"}, {"Read", "allow"}, {"Write", "allow"}, {"Edit", "allow"},
+		{"Glob", "allow"}, {"Grep", "allow"}, {"WebFetch", "allow"}, {"WebSearch", "allow"},
+		{"Skill", "allow"}, {"ToolSearch", "allow"}, {"Agent", "allow"}, {"Task", "allow"},
+		{"TodoWrite", "allow"}, {"NotebookEdit", "allow"},
+		{"mcp__argus__task_get", "allow"}, {"mcp__argus__schedule_create", "allow"},
+		{"mcp__argus__future_internal_tool", "allow"}, {"mcp__argus__task_message_send", "ask"},
+		{"mcp__argus__hera_new_orchestrator", "deny"}, {"mcp__argus__hera_graduate_worker", "ask"},
+		{"mcp__claude_ai_Keystone__approved_mcp_servers", "allow"},
+		{"mcp__claude_ai_Keystone__drata_policies", "allow"},
+		{"mcp__claude_ai_Keystone__list_directory", "allow"},
+		{"mcp__claude_ai_Keystone__list_repositories", "allow"},
+		{"mcp__claude_ai_Keystone__search_code", "allow"},
+		{"mcp__claude_ai_Keystone__circleci_rerun_workflow", "ask"},
+		{"mcp__claude_ai_Keystone__app_preview_refresh_merchants", "ask"},
+		{"mcp__claude_ai_Figma__get_design_context", "allow"},
+		{"mcp__claude_ai_Figma__send_code_to_figma", "ask"},
+		{"mcp__claude_ai_Sketch__blueprint_show", "allow"},
+		{"mcp__claude_ai_Sketch__blueprint_update", "ask"},
+		{"mcp__claude_ai_Claude_Docs__read", "allow"},
+		{"mcp__claude_ai_Claude_Docs__update", "ask"},
+		{"mcp__claude-artifacts__read_artifact", "allow"},
+		{"mcp__claude-artifacts__publish_version", "ask"},
+		{"mcp__claude_ai_Granola__get_meetings", "allow"},
+		{"mcp__claude_ai_Gmail__send_message", "ask"}, {"mcp__claude_ai_Gmail__reply", "ask"},
+		{"mcp__claude_ai_Gmail__forward", "ask"}, {"mcp__claude_ai_Gmail__trash_message", "ask"},
+		{"mcp__claude_ai_Google_Calendar__create_event", "ask"},
+		{"mcp__claude_ai_Slack__slack_send_message_draft", "allow"},
+		{"mcp__claude_ai_Slack__slack_send_message", "deny"},
+		{"mcp__claude_ai_Slack__slack_schedule_message", "deny"},
+		{"mcp__claude_ai_Figma__unknown_write", "ask"},
+		{"mcp__claude_ai_Figma__get_new_mutating_tool", "ask"},
+		{"mcp__unlisted_connector__write", "ask"}, {"mcp__unlisted_connector__read", "ask"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) { testutil.Equal(t, residentRuleTier(t, perms, tc.tool), tc.tier) })
 	}
 }
