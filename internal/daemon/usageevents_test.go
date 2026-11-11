@@ -9,10 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/backendtier"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/events"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 )
 
 type usageSink struct {
@@ -83,4 +85,48 @@ func TestUsageWatcher_EmitsOnChange(t *testing.T) {
 	testutil.Equal(t, len(got), 2)
 	_, hasAt := got[1]["measured_at"]
 	testutil.False(t, hasAt)
+}
+
+func (s *usageSink) tiers() []map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []map[string]string
+	for _, e := range s.evs {
+		if e.Type != model.EventTypeBackendTiersUsageChanged {
+			continue
+		}
+		m := map[string]string{}
+		_ = json.Unmarshal(e.Payload, &m)
+		out = append(out, m)
+	}
+	return out
+}
+
+func TestUsageWatcher_BackendTierReadings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sink := &usageSink{}
+	prev := events.SetSink(sink)
+	t.Cleanup(func() { events.SetSink(prev) })
+
+	cfg := config.Config{Backends: map[string]config.Backend{"claude": {Command: "claude"}}}
+	cfg.BackendRouting.Tiers = []config.BackendTier{{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 90}}
+	now := time.Now()
+	reading := func(pct float64) map[string]usagebudget.Reading {
+		return map[string]usagebudget.Reading{config.DefaultAccountName: {Percentage: pct, ResetAt: now.Add(time.Hour)}}
+	}
+	w := &usageWatcher{}
+
+	w.tickTiers(cfg, reading(10), now)
+	testutil.Equal(t, len(sink.tiers()), 0)
+	w.tickTiers(cfg, reading(10), now)
+	testutil.Equal(t, len(sink.tiers()), 0)
+
+	w.tickTiers(cfg, reading(20), now)
+	got := sink.tiers()
+	testutil.Equal(t, len(got), 1)
+	testutil.Equal(t, got[0]["revision"], backendtier.TierRevision(cfg.BackendRouting.Tiers))
+	testutil.Equal(t, len(got[0]), 1)
+
+	w.tickTiers(cfg, map[string]usagebudget.Reading{}, now)
+	testutil.Equal(t, len(sink.tiers()), 2)
 }
