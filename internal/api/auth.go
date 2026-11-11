@@ -84,7 +84,8 @@ func LoadOrCreateToken(path string) (string, error) {
 // EXCEPT for a small RCE/credential denylist that stays master-only. As of
 // this writing that denylist is: backends CRUD (command templates → arbitrary
 // command execution), account create/edit/delete (credential directory
-// references), self-update (source-path + rebuild/restart), and token
+// references), self-update (source-path + rebuild/restart), daemon restart,
+// host reveal (Finder launch), and token
 // list/mint/revoke (credential management). Everything else — tasks, projects,
 // schedules, settings, messages, push, raw endpoints, task_meta writes — is
 // open to any token.

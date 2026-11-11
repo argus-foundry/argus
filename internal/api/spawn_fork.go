@@ -12,9 +12,20 @@ import (
 // prevent. This file is listed in coverage-ignore.txt because the only way
 // to exercise it from tests is to break that invariant.
 func spawnSuccessorDaemonFork() error {
-	exe, err := os.Executable()
+	cmd, err := successorDaemonCommand()
 	if err != nil {
 		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+func successorDaemonCommand() (*exec.Cmd, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
 	}
 	// exe comes from os.Executable() — i.e. the path the daemon itself was
 	// started with, not user-supplied input.
@@ -22,9 +33,5 @@ func spawnSuccessorDaemonFork() error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.SysProcAttr = daemonSysProcAttr()
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	// Detach the child so we don't wait/reap it.
-	return cmd.Process.Release()
+	return cmd, nil
 }

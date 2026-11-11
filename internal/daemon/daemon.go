@@ -179,16 +179,17 @@ type Daemon struct {
 	// and stop (nil = the real agent functions). Test seams, set before Serve.
 	devStackScan       func() ([]agent.DevStackProc, error)
 	devStackStop       func(worktree string, o agent.StopOptions)
-	shutdownOnce       sync.Once     // closes done exactly once across concurrent Shutdown callers
-	ready              chan struct{} // closed when Serve has set listener (or failed)
-	sockPath           string        // set by Serve, used by cleanup
-	pidPath            string        // set by Serve, used by cleanup
-	lockFile           *os.File      // singleton flock held for the daemon's lifetime
-	mcpPort            int           // actual MCP HTTP port in use (set after listen)
-	apiPort            int           // actual REST API HTTP port in use (set after listen)
-	mcpServer          *mcp.Server   // set when KB is enabled, shut down in cleanup
-	kbIndexer          *kb.Indexer   // set when KB is enabled, stopped in cleanup
-	apiServer          *api.Server   // set when API is enabled, shut down in cleanup
+	shutdownOnce       sync.Once         // closes done exactly once across concurrent Shutdown callers
+	ready              chan struct{}     // closed when Serve has set listener (or failed)
+	sockPath           string            // set by Serve, used by cleanup
+	pidPath            string            // set by Serve, used by cleanup
+	lockFile           *os.File          // singleton flock held for the daemon's lifetime
+	mcpPort            int               // actual MCP HTTP port in use (set after listen)
+	apiPort            int               // actual REST API HTTP port in use (set after listen)
+	mcpServer          *mcp.Server       // set when KB is enabled, shut down in cleanup
+	kbIndexer          *kb.Indexer       // set when KB is enabled, stopped in cleanup
+	apiServer          *api.Server       // set when API is enabled, shut down in cleanup
+	runtimeSource      api.RuntimeSource // wired by main before Serve; backs /api/runtime
 	restoreBridgeUsage func()
 	scheduler          *scheduler.Scheduler // recurring scheduled-task firer; always started
 	heraGater          *heragater.Watcher   // hera plan-DAG gater; started when hera enabled
@@ -342,6 +343,18 @@ func (d *Daemon) UseSupervisorRunner(c SupervisorClient) {
 		return
 	}
 	c.OnSessionExit(d.handleSessionExit)
+}
+
+// SetRuntimeSource wires the /api/runtime identity source. Must be called before
+// Serve. It lives outside the daemon package's imports because the skew policy
+// itself imports daemon.
+func (d *Daemon) SetRuntimeSource(src api.RuntimeSource) { d.runtimeSource = src }
+
+// BootInfo returns this daemon's own boot identity, the same data the BootInfo RPC serves.
+func (d *Daemon) BootInfo() (BootInfoResp, error) {
+	var resp BootInfoResp
+	err := (&RPCService{daemon: d}).BootInfo(&Empty{}, &resp)
+	return resp, err
 }
 
 // New creates a new Daemon.
@@ -1775,6 +1788,9 @@ func (d *Daemon) Serve(sockPath string) error {
 			apiSrv.SetArtifactPublisher(artifactPublisher)
 			apiSrv.SetNotifier(d.notifier)
 			apiSrv.SetFocusTracker(d.focusTracker)
+			if d.runtimeSource != nil {
+				apiSrv.SetRuntimeSource(d.runtimeSource)
+			}
 			d.mu.Lock()
 			d.apiServer = apiSrv
 			d.mu.Unlock()

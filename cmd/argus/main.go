@@ -481,6 +481,8 @@ func runDaemon() {
 		}
 	}
 
+	d.SetRuntimeSource(skew.NewRuntimeSource(d.BootInfo))
+
 	if err := d.Serve(daemon.DefaultSocketPath()); err != nil {
 		if errors.Is(err, daemon.ErrDaemonAlreadyRunning) {
 			// Lost the singleton race — another daemon is already serving the

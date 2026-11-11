@@ -309,3 +309,7 @@ Status, branch-file, and per-file diff collection SHALL resolve the task's store
 #### Scenario: Tracked unchanged file
 - **WHEN** a per-file diff is requested for a tracked file with no change against the base or working tree
 - **THEN** the diff is empty
+
+## Related API contracts
+
+See `rest-api` for the task reveal contract, including master authorization, contained paths, Finder launch and error responses.

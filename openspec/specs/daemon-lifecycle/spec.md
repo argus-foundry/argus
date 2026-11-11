@@ -338,3 +338,7 @@ When the supervisor-restart reconcile flips true orphans to in_review and bounce
 - **WHEN** the supervisor live-set query returns nil
 - **THEN** no ledger entries are written
 
+
+## Related API contracts
+
+See `rest-api` for daemon-only restart, boot identity, single-flight recovery and supervisor-mode requirements.
