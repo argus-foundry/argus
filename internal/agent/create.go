@@ -406,6 +406,16 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	// setting active when the task was launched, not the current setting.
 	task.Sandboxed = IsTaskSandboxed(task, cfg)
 
+	if prepare := FamilyOf(cfg.Backends[backend].Command).TrustWorktree; prepare != nil && cfg.Claude.TrustWorktrees {
+		if err := prepare(task, cfg); err != nil {
+			uxlog.Log("[trust] seed failed (continuing) worktree=%q account=%q: %v", wtPath, account, err)
+			slog.Warn("[trust] seed failed (continuing)", "worktree", wtPath, "account", account, "err", err)
+		} else {
+			uxlog.Log("[trust] seeded worktree=%q account=%q", wtPath, account)
+			slog.Info("[trust] seeded", "worktree", wtPath, "account", account)
+		}
+	}
+
 	if err := database.Add(task); err != nil {
 		unwind("db.Add", err)
 		return nil, nil, fmt.Errorf("db add: %w", err)

@@ -98,6 +98,10 @@ type SandboxGrant struct {
 type Family struct {
 	backendkind.Spec
 
+	// TrustWorktree prepares persisted folder trust before a fresh task starts.
+	// Nil means this family does not need folder-trust preparation.
+	TrustWorktree func(task *model.Task, cfg config.Config) error
+
 	// PinsSessionID: the CLI accepts a start-time `--session-id <id>`, so the
 	// task's ID is minted before launch. False means capture-style: the ID is
 	// recovered post-exit via Capture.
@@ -699,6 +703,7 @@ func injectAntigravityGlobal(port int, launching bool) error {
 var families = []*Family{
 	{
 		Spec:                 mustSpec(backendkind.Claude),
+		TrustWorktree:        trustClaudeWorktree,
 		PinsSessionID:        true,
 		ResumeFlag:           "--resume",
 		Capture:              captureClaude,

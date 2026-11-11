@@ -76,9 +76,19 @@ const maxJSONSize = 16 << 20
 // planted by a sandboxed agent would otherwise block the daemon forever) is an
 // error so callers leave the user's file untouched.
 func ReadJSONObject(path, label string) (map[string]any, error) {
+	return readJSONObject[any](path, label, true)
+}
+
+// ReadRawJSONObject preserves unknown JSON values, including large numbers,
+// while applying the same safe file checks as ReadJSONObject.
+func ReadRawJSONObject(path, label string) (map[string]json.RawMessage, error) {
+	return readJSONObject[json.RawMessage](path, label, false)
+}
+
+func readJSONObject[V any](path, label string, nullAsEmpty bool) (map[string]V, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if os.IsNotExist(err) {
-		return map[string]any{}, nil
+		return map[string]V{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: read %s: %w", label, path, err)
@@ -98,12 +108,15 @@ func ReadJSONObject(path, label string) (map[string]any, error) {
 	if len(raw) > maxJSONSize {
 		return nil, fmt.Errorf("%s: read %s: larger than %d bytes", label, path, maxJSONSize)
 	}
-	var data map[string]any
+	var data map[string]V
 	if err := json.Unmarshal(raw, &data); err != nil {
 		return nil, fmt.Errorf("%s: cannot parse %s: %w", label, path, err)
 	}
 	if data == nil {
-		data = map[string]any{}
+		if !nullAsEmpty {
+			return nil, fmt.Errorf("%s: cannot parse %s: expected JSON object", label, path)
+		}
+		data = map[string]V{}
 	}
 	return data, nil
 }

@@ -26,6 +26,7 @@ type Config struct {
 	Argus       ArgusConfig        `toml:"argus"`
 	Secrets     SecretsConfig      `toml:"secrets"`
 	Git         GitConfig          `toml:"git"`
+	Claude      ClaudeConfig       `toml:"claude"`
 	// CacheDirs maps a TARGET environment-variable name to a subdirectory name
 	// under `~/.argus/cache/`, shared across every worktree of every task —
 	// the opt-in, project-configurable generalization of the GOCACHE /
@@ -69,6 +70,11 @@ type Config struct {
 	// or project backends restrict backend selection but still allow account
 	// routing. Coordinator creation filters tiers to Claude-capable backends.
 	BackendRouting BackendRoutingConfig `toml:"backend_routing"`
+}
+
+// ClaudeConfig controls preparation of Claude-family worktree sessions.
+type ClaudeConfig struct {
+	TrustWorktrees bool `toml:"trust_worktrees"`
 }
 
 // Probe kinds a BackendTier.Probe may name. Dispatch on these is a
@@ -510,6 +516,7 @@ func (u UIConfig) ShouldCleanupWorktrees() bool {
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
+		Claude:   ClaudeConfig{TrustWorktrees: true},
 		Git:      GitConfig{AgentCommitSigning: "inherit"},
 		Defaults: Defaults{Backend: "claude", PermissionMode: PermissionModeBypassActive},
 		Backends: map[string]Backend{
