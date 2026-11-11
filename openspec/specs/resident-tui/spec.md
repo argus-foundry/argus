@@ -9,6 +9,8 @@ When the resident is enabled the TUI header SHALL show the resident tab first, l
 
 The resident tab's own coordinator rail row SHALL display `resident.name`, validated with the same name rule as the tab label, falling back to `resident` if empty or invalid. It SHALL follow Settings renames live without restarting or reattaching the session. This display-only substitution SHALL NOT change orchestrator or role identities in DB, MCP, REST or worker prompts, worker row labels, Projects rail labels or jump-switcher labels.
 
+The resident tab SHALL expose the standing coordinator's human board in Details using the same controls as Projects: auto-show new unread items when coordinator-board auto-show is enabled, show the unread count in the title, `p` toggle plan/board from the rail or Details, `j`/`k` move, `r` compose a reply into the resident conversation without submitting, and `x` resolve the selected item as the human. Board keys SHALL appear in resident help and applicable palette entries without relaxing any existing rail restrictions.
+
 #### Scenario: Resident rail name follows a rename
 
 - **WHEN** the resident is named "Solo" and the human renames it to "Ari" in Settings → Resident
@@ -83,6 +85,31 @@ The resident tab's own coordinator rail row SHALL display `resident.name`, valid
 
 - **WHEN** cross-tab arrows are enabled in local mode
 - **THEN** the resident rail, conversation and worker panes precede Tasks in the continuous chain, with modified arrows intercepted before PTY input and hidden panes skipped; modal, filter and fullscreen guards still apply
+
+#### Scenario: Posted reminder is visible
+
+- **WHEN** the resident posts an unread reminder and coordinator-board auto-show is enabled
+- **THEN** the resident tab Details auto-shows the item, including arrivals while the tab is already open, and its title counts the unread item
+
+#### Scenario: Board toggle
+
+- **WHEN** the human presses `p` from the resident rail or Details
+- **THEN** Details toggles between board and plan; refreshing the same unread items preserves a deliberate toggle
+
+#### Scenario: Board navigation and reply
+
+- **WHEN** the human navigates the resident board with `j`/`k` and presses `r`
+- **THEN** the selected item's reply prefix is pasted into the resident conversation without submission and that conversation receives focus
+
+#### Scenario: Human dismissal
+
+- **WHEN** the human presses `x` on a resident board item
+- **THEN** the item is resolved as the human and disappears from the open board
+
+#### Scenario: Board keys discoverable
+
+- **WHEN** the human opens resident help or the applicable board command palette
+- **THEN** the live board bindings are listed and the existing creation and management restrictions remain unchanged
 
 ### Requirement: A global hotkey toggles the resident and returns exactly
 
@@ -168,7 +195,7 @@ When a live session is newly bound to the resident pane, the TUI SHALL schedule 
 
 ### Requirement: Rail box shows the resident's attention state beside needs-attention
 
-A `ResidentBox` SHALL be stacked with the existing attention box in the agent-view left column, the Hera rail summary area and the Tasks rail. It SHALL have height 0 when the resident is neither unread nor waiting; otherwise exactly one row showing the agent name, `●` for unread or `?` for waiting (waiting wins), and as much of the stored one-line preview as fits, truncated with `…`. Changing its height SHALL resize only the left column through the existing height-change flow and SHALL NOT resize or re-kick any PTY pane. It SHALL be hidden while the resident tab itself is showing.
+A `ResidentBox` SHALL be stacked with the existing attention box in the agent-view left column, the Hera rail summary area and the Tasks rail. It SHALL have height 0 when the resident is neither unread (reply or board item) nor waiting; otherwise exactly one row showing the agent name, `●` for an unread reply or board item or `?` for waiting (waiting wins), and as much of the stored one-line preview as fits, truncated with `…`. Changing its height SHALL resize only the left column through the existing height-change flow and SHALL NOT resize or re-kick any PTY pane. It SHALL be hidden while the resident tab itself is showing.
 
 #### Scenario: Unread reply appears beside needs-attention
 
@@ -190,9 +217,14 @@ A `ResidentBox` SHALL be stacked with the existing attention box in the agent-vi
 - **WHEN** the resident is read and not waiting
 - **THEN** the box occupies no rows
 
+#### Scenario: Unread board item raises the rail box
+
+- **WHEN** the resident has an unread board item and no unread reply while the human is outside the resident tab
+- **THEN** the resident box shows `●`; reading or dismissing the board item clears its contribution to attention
+
 ### Requirement: The tab label carries the marker on every screen
 
-The resident tab label in the header SHALL show `●` when unread and `?` when waiting, on every screen including screens with no left column such as the plain Tasks list and Settings. The marker SHALL clear when the resident pane is shown and focused.
+The resident tab label in the header SHALL show `●` when a reply or board item is unread and `?` when waiting, on every screen including screens with no left column such as the plain Tasks list and Settings. The marker SHALL be suppressed while the resident pane is shown and focused. Viewing the conversation SHALL acknowledge unread replies but SHALL NOT mark board items read; their unread attention SHALL return on leaving until they are read or dismissed.
 
 #### Scenario: Marker on a rail-less screen
 
@@ -203,6 +235,11 @@ The resident tab label in the header SHALL show `●` when unread and `?` when w
 
 - **WHEN** the user opens the resident tab
 - **THEN** the marker clears
+
+#### Scenario: Unread board item lights the resident marker
+
+- **WHEN** the resident posts an unread board item while the human is on another tab and there is no unread reply
+- **THEN** the header shows `●`, opening the resident tab suppresses it without acknowledging the board item, and leaving restores it until the item is read or dismissed
 
 ### Requirement: Settings has a Resident category
 

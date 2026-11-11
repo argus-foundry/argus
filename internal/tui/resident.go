@@ -212,6 +212,7 @@ const residentPollInterval = 2 * time.Second
 // drives the tab-label marker and the rail box.
 type residentAttention struct {
 	unread, waiting bool
+	boardUnread     int
 	preview         string
 	reason          string // daemon's "why isn't it running"; empty when healthy
 }
@@ -223,7 +224,7 @@ func (a *App) residentLabelWithMarker(label string) string {
 	if label == "" || a.header.ActiveTab() == widget.TabResident {
 		return label
 	}
-	if m := widget.ResidentMarker(a.residentSt.unread, a.residentSt.waiting); m != "" {
+	if m := widget.ResidentMarker(a.residentSt.unread || a.residentSt.boardUnread > 0, a.residentSt.waiting); m != "" {
 		return label + " " + m
 	}
 	return label
@@ -249,15 +250,61 @@ func (a *App) pollResidentState() {
 	a.residentPolledAt = time.Now()
 	go func() {
 		resp, err := fn()
+		boardUnread, boardErr := a.readResidentBoardUnread()
 		a.tapp.QueueUpdateDraw(func() {
 			a.residentPollPending = false
+			if boardErr != nil {
+				uxlog.Log("[board] resident attention poll failed: %v", boardErr)
+			} else {
+				if a.residentSt.boardUnread != boardUnread {
+					uxlog.Log("[board] resident attention unread=%d", boardUnread)
+				}
+				a.residentSt.boardUnread = boardUnread
+			}
 			if err != nil {
 				uxlog.Log("[resident] state poll failed: %v", err)
+				a.refreshResidentLabelOnly()
+				a.syncResidentBox()
 				return
 			}
 			a.applyResidentState(resp)
 		})
 	}()
+}
+
+// readResidentBoardUnread runs off the UI goroutine and uses binding-based
+// standing-team identity, never the generic orchestrator list (which hides it).
+func (a *App) readResidentBoardUnread() (int, error) {
+	d, ok := a.db.(*db.DB)
+	if !ok {
+		return 0, nil
+	}
+	orchs, err := d.ListResidentOrchestrators(false)
+	if err != nil {
+		return 0, err
+	}
+	unread := 0
+	for _, o := range orchs {
+		roles, err := d.ListHeraRoles(o.ID, false)
+		if err != nil {
+			return 0, err
+		}
+		for _, r := range roles {
+			if r.Kind != db.HeraKindCoordinator {
+				continue
+			}
+			items, err := d.ListHeraBoardItems(r.ID, false)
+			if err != nil {
+				return 0, err
+			}
+			for _, item := range items {
+				if !item.Read {
+					unread++
+				}
+			}
+		}
+	}
+	return unread, nil
 }
 
 // pollResidentUnread refreshes the resident view's unread-mail counts (the
@@ -332,7 +379,7 @@ func (a *App) applyResidentState(resp daemon.ResidentStateResp) {
 	if !resp.Running {
 		reason = sanitizeResidentReason(resp.Reason)
 	}
-	next := residentAttention{unread: unread, waiting: resp.Waiting, preview: resp.LastReply,
+	next := residentAttention{unread: unread, boardUnread: a.residentSt.boardUnread, waiting: resp.Waiting, preview: resp.LastReply,
 		reason: reason}
 	if next != a.residentSt {
 		uxlog.Log("[resident] attention state unread=%v waiting=%v reason=%q", next.unread, next.waiting, next.reason)
@@ -358,7 +405,7 @@ func (a *App) syncResidentBox() {
 		name = a.db.Config().Resident.Name
 	}
 	st := a.residentSt
-	a.residentBox.Set(name, st.unread, st.waiting, st.preview, suppressed)
+	a.residentBox.Set(name, st.unread || st.boardUnread > 0, st.waiting, st.preview, suppressed)
 }
 
 // refreshResidentLabelOnly re-derives display labels (including the header

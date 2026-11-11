@@ -207,6 +207,18 @@ func (a *App) heraRailActionRegistry() map[keymap.Action]func() {
 	return reg
 }
 
+func (a *App) heraBoardActionRegistry() map[keymap.Action]func() {
+	reg := map[keymap.Action]func(){}
+	for _, act := range a.heraPage.BoardActions() {
+		if b, ok := a.activeKeymap().BindingFor(keymap.CtxHeraBoard, act); ok {
+			reg[act] = func() {
+				a.heraPage.InputHandler()(tcell.NewEventKey(b.Key, b.Rune, b.Mods), func(tview.Primitive) {})
+			}
+		}
+	}
+	return reg
+}
+
 // taskListActionRegistry reuses TaskListView's OWN InputHandler dispatch
 // verbatim by synthesizing a tcell.EventKey for each action's bound key — the
 // case bodies live in the taskview package as a closed-over switch, not
@@ -341,6 +353,7 @@ func (a *App) paletteApplicableActions() []paletteRow {
 		// offered on worker rows only), then the small global set that applies.
 		rows := a.heraLiteralRows()
 		rows = append(rows, rowsForContext(km, keymap.CtxHeraRail, a.heraRailActionRegistry())...)
+		rows = append(rows, rowsForContext(km, keymap.CtxHeraBoard, a.heraBoardActionRegistry())...)
 		globals := rowsForContext(km, keymap.CtxGlobal, map[keymap.Action]func(){
 			keymap.ActGlobalResident:    a.toggleResident,
 			keymap.ActGlobalSwitcher:    a.openJumpSwitcher,

@@ -1386,10 +1386,10 @@ func (p *HeraPage) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 		}
 		switch p.focus.State() {
 		case FocusRail:
-			if p.detailsMode && !p.rail.Filtering() && !p.residentMode {
+			if p.detailsMode && !p.rail.Filtering() {
 				if act, _ := p.keys().Resolve(keymap.CtxHeraBoard, event); act == keymap.ActBoardToggle {
 					p.showBoard = !p.showBoard
-					uxlog.Log("[board] toggled orch=%d board=%v", p.boardOrchID, p.showBoard)
+					uxlog.Log("[board] toggled orch=%d board=%v resident=%v", p.boardOrchID, p.showBoard, p.residentMode)
 					return
 				}
 			}
@@ -1401,9 +1401,9 @@ func (p *HeraPage) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 			p.forwardKey(p.coordPane, event)
 		case FocusAgent:
 			if p.detailsMode {
-				if act, _ := p.keys().Resolve(keymap.CtxHeraBoard, event); act == keymap.ActBoardToggle && !p.residentMode {
+				if act, _ := p.keys().Resolve(keymap.CtxHeraBoard, event); act == keymap.ActBoardToggle {
 					p.showBoard = !p.showBoard
-					uxlog.Log("[board] toggled orch=%d board=%v", p.boardOrchID, p.showBoard)
+					uxlog.Log("[board] toggled orch=%d board=%v resident=%v", p.boardOrchID, p.showBoard, p.residentMode)
 					return
 				}
 				if p.showBoard {

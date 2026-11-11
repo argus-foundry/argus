@@ -285,7 +285,7 @@ The Projects tab (`2`) has three regions: a left **rail**, a middle **coordinato
 | `Cmd+↑` / `Cmd+↓` | Move the rail cursor up / down without changing the focused pane (the mod-7 escape sequence is consumed — the pane's PTY never sees it) |
 | `ctrl+q`        | Return focus to the rail                                                                |
 
-When a **worker** is selected the details region shows its live agent terminal. A **coordinator** shows its read-only Agents roster above the **plan DAG** or its durable **human board**. Selecting a coordinator with unread board items lands on the board; refreshes preserve your view. `p` toggles plan/board from the rail or details pane. An unread board changes that coordinator's marker to a mailbox. Set `[ui] coordinator_board = false` to disable automatic board landing and mailbox markers.
+When a **worker** is selected the details region shows its live agent terminal. A **coordinator** shows its read-only Agents roster above the **plan DAG** or its durable **human board**. Selecting a coordinator with unread board items lands on the board; refreshes preserve your view. `p` toggles plan/board from the rail or details pane. An unread board changes that coordinator's marker to a mailbox. The resident tab has the same board controls, with replies pasted into the resident conversation; new unread reminders also open its board during refresh, and unread board items light its header marker and rail box until read or dismissed. Set `[ui] coordinator_board = false` to disable automatic board landing and mailbox markers.
 
 | Key (coordinator board) | Action |
 | --- | --- |

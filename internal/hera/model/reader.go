@@ -83,3 +83,14 @@ func (r *ResidentReader) DataVersion() (int64, error) {
 	}
 	return 0, errNoDataVersion
 }
+
+// ListHeraBoardItems preserves the model builder's optional board read through
+// the scoped wrapper; embedding HeraReader alone hides optional methods.
+func (r *ResidentReader) ListHeraBoardItems(roleID int64, resolved bool) ([]*db.HeraBoardItem, error) {
+	if br, ok := r.HeraReader.(interface {
+		ListHeraBoardItems(int64, bool) ([]*db.HeraBoardItem, error)
+	}); ok {
+		return br.ListHeraBoardItems(roleID, resolved)
+	}
+	return nil, nil
+}
