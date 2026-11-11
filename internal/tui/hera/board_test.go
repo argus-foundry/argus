@@ -599,3 +599,31 @@ func TestBoardAccordionRefresh(t *testing.T) {
 		})
 	}
 }
+
+func TestBoardNestedAndNumberedLists(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		body  string
+		width int
+		want  []string
+	}{
+		{"nested bullet", "- top\n  - child\n    * grand", 30, []string{"  - top", "    - child", "      * grand"}},
+		{"numbered", "1. first\n2. second", 30, []string{"  1. first", "  2. second"}},
+		{"numbered hanging wrap", "10. alpha beta gamma", 14, []string{"  10. alpha", "      beta", "      gamma"}},
+		{"nested hanging wrap", "  - alpha beta gamma", 16, []string{"    - alpha beta", "      gamma"}},
+		{"indented prose stays literal", "  plain text\n1.5 not a list\n1.x no", 30, []string{"  plain text", "  1.5 not a list", "  1.x no"}},
+		{"bold in nested", "  - **Label:** detail", 30, []string{"    - Label: detail"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &boardView{items: []*db.HeraBoardItem{{ID: 1, Kind: "fyi", Subject: "S", Body: tc.body, Read: true}}, expandedID: 1}
+			_, rows := drawBoardRows(t, b, tc.width+2, 12)
+			testutil.DeepEqual(t, rows[1:1+len(tc.want)], tc.want)
+		})
+	}
+}
+
+func TestBoardListPrefixLen(t *testing.T) {
+	for in, want := range map[string]int{"- a": 2, "* a": 2, "  - a": 4, "1. a": 3, "12. a": 4, "  3. a": 5, "-a": 0, "1.a": 0, ". a": 0, "": 0, "  x": 0} {
+		t.Run(in, func(t *testing.T) { testutil.Equal(t, boardListPrefixLen(in), want) })
+	}
+}

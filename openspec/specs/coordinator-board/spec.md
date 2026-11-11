@@ -29,7 +29,7 @@ The TUI SHALL render collapsed entries with bold kind/id/subject headers, suppor
 
 Collapsed headers SHALL truncate with a trailing ellipsis when necessary, reserving space for the unread ` •` marker. Expanded headers SHALL show the full subject wrapped at word boundaries with continuation lines aligned under the subject's first character; all header lines SHALL be bold and only the selected first line SHALL be reverse-selected. The unread marker SHALL remain visible on the first header line. Indentation SHALL shrink in panes too narrow for the prefix.
 
-Bodies SHALL wrap at word boundaries in display columns, preserve interior blank lines, and hard-break only tokens longer than the available line. Paired `**bold**` spans SHALL render bold without markers. Lines beginning `- ` or `* ` SHALL wrap with a hanging indent under the bullet text. Unknown syntax SHALL stay literal. Wide runes SHALL not overwrite borders. Scrolling and cursor follow SHALL account for every wrapped header and body line while keeping the selected header visible after navigation.
+Bodies SHALL wrap at word boundaries in display columns, preserve interior blank lines, and hard-break only tokens longer than the available line. Paired `**bold**` spans SHALL render bold without markers. Lines beginning `- `, `* ` or a number then `. `, optionally preceded by spaces, SHALL wrap with a hanging indent under the item text, nesting one level per two leading spaces. Unknown syntax SHALL stay literal. Wide runes SHALL not overwrite borders. Scrolling and cursor follow SHALL account for every wrapped header and body line while keeping the selected header visible after navigation.
 
 #### Scenario: Reply composition
 
@@ -55,7 +55,7 @@ Bodies SHALL wrap at word boundaries in display columns, preserve interior blank
 #### Scenario: Bold and bullet body
 
 - **WHEN** a body contains paired bold spans, bullet lines, unmatched markers and other markdown syntax
-- **THEN** paired bold spans lose their markers and paint bold across wraps, bullet continuations align under their text, and unmatched markers and unknown syntax remain literal
+- **THEN** paired bold spans lose their markers and paint bold across wraps, bullet and numbered continuations align under their text, nested items indent one level per two spaces, and unmatched markers and unknown syntax remain literal
 
 #### Scenario: Collapsed unread subject
 
@@ -83,7 +83,7 @@ The default-on coordinator-board setting SHALL enable mailbox icons for unread c
 
 ### Requirement: Coordinator maintenance guidance
 
-Coordinator orientation and builtin Hera guidance SHALL instruct agents to put human decisions and attention on the board, rewrite superseded items, and resolve settled items including completed follow-up after a human reply.
+Coordinator orientation and builtin Hera guidance SHALL instruct agents to put human decisions and attention on the board, rewrite superseded items, and resolve settled items including completed follow-up after a human reply. The `hera_board_*` tool description, builtin skill and orientation SHALL also tell coordinators to format each body for scanning: one short lead sentence, a blank line, then one `- **Label:** detail` bullet per fact or option (two-space `  - ` sub-bullets, each decision option its own bullet plus a recommendation bullet, links on their own bullet), never a wall of prose.
 
 #### Scenario: Fresh coordinator
 
