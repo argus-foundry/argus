@@ -7,6 +7,18 @@ TBD - created by archiving change add-resident-agent. Update Purpose after archi
 
 When the resident is enabled the TUI header SHALL show the resident tab first, labelled with `resident.name`, for example `Solo | Tasks | Projects | Settings`. `1`, `2`, `3` SHALL continue to select Tasks, Projects and Settings; a new rebindable global action `global.tab_resident` (default `0`) SHALL select the resident tab. The tab SHALL be the Hera view with exactly one coordinator, the resident: a rail of the resident's workers, the resident's conversation pane bound to the resident session with input going straight to the PTY, and the resident's inbox. Selecting the resident row SHALL show the resident pane; selecting a worker row SHALL show that worker in the existing worker pane. The inbox SHALL be the existing read-only inbox viewer opened with `i`, and the rail SHALL show the unread count and the existing needs-input and ready-to-close markers per worker so a stuck agent is visible. The rail SHALL let the human manage workers but never create them: the existing nuke, hide, rename and role-status actions SHALL act on worker rows (and SHALL be inert on the resident's own row), while every creation or structure-changing action (new coordinator, spawn, move, join, detach, pin, kanban step, bounce) SHALL be inert in this tab and absent from its `?` overlay and ctrl+k palette. When the human nukes, hides or renames a worker the resident SHALL be notified (see the `resident-coordinator` capability). The resident tab SHALL NOT be restored by last-tab persistence; a launch whose persisted tab would be the resident SHALL land on Tasks. When the resident is disabled the tab and its marker SHALL NOT appear.
 
+The resident tab's own coordinator rail row SHALL display `resident.name`, validated with the same name rule as the tab label, falling back to `resident` if empty or invalid. It SHALL follow Settings renames live without restarting or reattaching the session. This display-only substitution SHALL NOT change orchestrator or role identities in DB, MCP, REST or worker prompts, worker row labels, Projects rail labels or jump-switcher labels.
+
+#### Scenario: Resident rail name follows a rename
+
+- **WHEN** the resident is named "Solo" and the human renames it to "Ari" in Settings → Resident
+- **THEN** its resident-tab rail row initially shows "Solo" and updates to "Ari" live without a session restart, while worker labels and stored Hera names remain unchanged
+
+#### Scenario: Invalid resident rail name falls back
+
+- **WHEN** the resident rail is rendered with an empty or invalid configured name
+- **THEN** its coordinator row shows `resident`
+
 #### Scenario: Tab order and digits
 
 - **WHEN** the resident is enabled and named "Solo"

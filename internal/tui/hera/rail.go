@@ -154,6 +154,9 @@ type Rail struct {
 	boardAuto bool
 	*tview.Box
 
+	// residentName overrides only the resident coordinator's drawn label. It is
+	// empty outside resident mode; model names remain fixed routing identities.
+	residentName string
 	// unread is the resident view's per-task unread-mail count (SetUnread).
 	unread map[string]int
 	// neverCollapse keeps every orchestrator expanded (the resident view's team
@@ -2416,6 +2419,9 @@ func (r *Rail) drawOrchRow(screen tcell.Screen, x, y, w int, row railRow, select
 	}
 	agents := r.model.SubtreeAgentCount(o.ID)
 	label := o.Name
+	if r.residentName != "" && o.Name == "resident" {
+		label = r.residentName
+	}
 	if coord := o.CoordRole(); coord != nil && coord.GraduationPendingRestart {
 		label = "graduation pending restart · " + label
 	}

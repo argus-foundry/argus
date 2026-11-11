@@ -36,6 +36,44 @@ func residentTestApp(t *testing.T) (*App, *db.DB) {
 	return New(d, agent.NewRunner(nil), false), d
 }
 
+func TestResidentRailRenameFollowsConfig(t *testing.T) {
+	for _, path := range []string{"settings", "tick", "label only"} {
+		t.Run(path, func(t *testing.T) {
+			a, d := residentTestApp(t)
+			a.switchTab(widget.TabResident)
+			sess := newRepaintSession()
+			residentSession(t, a, d, sess)
+			rail := a.heraPage.Rail()
+			sim := tcell.NewSimulationScreen("UTF-8")
+			testutil.NoError(t, sim.Init())
+			t.Cleanup(sim.Fini)
+			sim.SetSize(40, 12)
+			rail.SetRect(0, 0, 40, 12)
+			draw := func() string {
+				sim.Clear()
+				rail.Draw(sim)
+				sim.Show()
+				return screenText(sim, 40, 12)
+			}
+			testutil.Contains(t, draw(), "Solo")
+			switch path {
+			case "settings":
+				residentEditField(t, a.settings, resKeyName, "Ari")
+			case "tick":
+				testutil.NoError(t, d.SetConfigValue("resident.name", "Ari"))
+				a.refreshResidentTab()
+			case "label only":
+				testutil.NoError(t, d.SetConfigValue("resident.name", "Ari"))
+				a.refreshResidentLabelOnly()
+			}
+			text := draw()
+			testutil.Contains(t, text, "Ari")
+			testutil.False(t, strings.Contains(text, "Solo"))
+			testutil.Equal(t, a.heraPage.CoordPane().Session(), agentview.TerminalAdapter(sess))
+		})
+	}
+}
+
 // residentSession makes sess the live session the HeraPage resolver returns for
 // the resident task (the resident pane is the page's coordinator pane in
 // resident mode). When the page is already in resident mode it late-binds now.

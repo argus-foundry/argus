@@ -7,6 +7,7 @@ import (
 
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
+	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/tui/keymap"
@@ -435,6 +436,10 @@ func (p *HeraPage) SetResidentMode(on bool) {
 		p.rail.excursion = nil
 	}
 	p.residentMode = on
+	p.rail.residentName = ""
+	if on {
+		p.SetResidentTitle(p.residentTitle)
+	}
 	p.rail.SetNeverCollapse(on)
 	p.rail.SetUnread(nil) // counts are per-view; the next poll refills them
 	p.residentUnread, p.coordTitle = 0, ""
@@ -503,10 +508,19 @@ func (p *HeraPage) ProjectsModel() heramodel.Model {
 	return res.model
 }
 
-// SetResidentTitle sets the resident conversation pane's base border title (the
-// configured resident name); the unread count is appended to it.
+// SetResidentTitle sets the validated display name for the resident pane and
+// rail without changing any Hera identity or pane attachment.
 func (p *HeraPage) SetResidentTitle(name string) {
+	if config.ValidResidentName(name) != nil {
+		name = "resident"
+	}
+	if p.residentTitle != name {
+		uxlog.Log("[resident-view] display name updated: %q", name)
+	}
 	p.residentTitle = name
+	if p.residentMode {
+		p.rail.residentName = name
+	}
 	p.applyResidentTitle()
 }
 
