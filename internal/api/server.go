@@ -81,6 +81,18 @@ type Server struct {
 	// events.SetSink to the same broker that serves /api/events/stream.
 	eventBus *eventBus
 
+	// runtimeSource, bootID, restart and the reveal/restart seams back
+	// /api/runtime, /api/daemon/restart and /api/tasks/{id}/reveal. The func
+	// fields are test seams; zero values use the production implementation.
+	runtimeSource    RuntimeSource
+	bootID           string
+	restart          restartState
+	restartPreflight func() error
+	restartSpawn     func() (func() error, error)
+	restartDelay     time.Duration
+	revealLaunch     revealLauncher
+	revealGOOS       string
+
 	// stopCh is closed by Shutdown to signal background goroutines (idle
 	// watcher, push fan-out housekeeping) to terminate. Range over <-stopCh
 	// in select-loops to honour shutdown.
@@ -231,6 +243,8 @@ func New(database *db.DB, runner agent.SessionRunner, token string, creator Task
 		pluginSections:  settings.NewRegistry(),
 		metrics:         sysmetrics.New(db.DataDir()),
 		hostSleep:       hostsleep.NewMonitor(),
+		bootID:          newBootID(),
+		restartDelay:    spawnDelay,
 	}
 	srv.rehydratePluginSections()
 	// Start the idle watcher unconditionally. It fires session.idle events
