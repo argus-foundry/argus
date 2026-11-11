@@ -20,9 +20,9 @@
 
 - [x] 5.1 Tests, then worker: throttle, settle detection, retry/backoff, expiry, pre-action re-check, superseded skip, slog `[bounce-recovery]` logs on every path.
 - [x] 5.2 Hook the ledger write into `reattachSupervised` (after RefreshResumeSessionID, nil-live-set skip, off-switch) and start the worker after the daemon is serving.
-- [ ] 5.3 Verify against a copy of the `coord-superfans` transcript how Claude resumes a dangling AskUserQuestion; adjust note wording if needed.
+- [x] 5.3 Verify against a copy of the `coord-superfans` transcript how Claude resumes a dangling AskUserQuestion; adjust note wording if needed.
 
 ## 6. Docs and delivery
 
 - [x] 6.1 Gotchas in `daemon-rpc.md`/`orchestration.md` and index row; README config reference row.
-- [ ] 6.2 Announce, then run `make pre-pr` once. Commit, open PR with iris, archive the change in the PR, report to coord.
+- [x] 6.2 Announce, then run `make pre-pr` once. Commit, open PR with iris, archive the change in the PR, report to coord.

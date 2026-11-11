@@ -22,7 +22,7 @@ func BuildNote(e *Entry, team []*Entry) string {
 		if len(e.Options) > 0 {
 			b.WriteString("\nOptions offered: " + strings.Join(e.Options, "; ") + "\n")
 		}
-		b.WriteString("\nAsk it again now with AskUserQuestion (the user never saw an answer), then continue. Your conversation was restored.\n")
+		b.WriteString("\nAsk it again now with AskUserQuestion (it was never answered), then continue. Your conversation was restored.\n")
 	default:
 		fmt.Fprintf(&b, "A supervisor restart killed your session at %s", at)
 		if e.State == transcriptstate.MidTurn {

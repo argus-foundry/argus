@@ -52,7 +52,7 @@ Entries older than `expiry_hours = 6` are marked `expired`. Rationale: if the ma
 
 The agent gets its full conversation back via `--resume` and then the note as its first new turn.
 
-Open verification (before merge): how Claude Code resumes a session whose last entry is a dangling AskUserQuestion tool_use. I will verify on a copy of the `coord-superfans` transcript after approval and before the PR; the note wording assumes the resumed agent sees the dangling call as interrupted and can re-ask. If it does not, the fallback is the same note, which quotes the question text, so the agent can re-ask regardless.
+Verified (2026-11-11): a copy of the real `coord-superfans` transcript, resumed headless with the note as the prompt, re-asked the quoted question (headless lacks AskUserQuestion, so it asked in text). Not tested: an interactive pane or the idle-gated bridge delivery path.
 
 ### D7. Seed wording
 
