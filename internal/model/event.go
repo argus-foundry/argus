@@ -114,6 +114,12 @@ const (
 	// the global default).
 	EventTypeConfigChanged = "config.changed"
 
+	// EventTypeAccountUsageChanged fires when an account's projected provider
+	// usage changes. Payload is identity and timing only, no usage values:
+	// {"account":"work","kind":"codex","measured_at":"..."} (kind is "claude"
+	// or "codex"; measured_at omitted when usage became unavailable).
+	EventTypeAccountUsageChanged = "account.usage_changed"
+
 	// EventTypeResync is synthesised by the SSE handler when a client
 	// connects with a `since` cursor older than the oldest retained event.
 	// It is never persisted in the events table — clients seeing it should

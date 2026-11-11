@@ -1612,6 +1612,9 @@ func (d *Daemon) Serve(sockPath string) error {
 	// reads this cache, and the probe itself is fail-open on any error.
 	go d.runCodexProbePoller()
 
+	// Emits account.usage_changed when an account's projected usage changes.
+	go d.runUsageEventWatcher()
+
 	// Host-suspend watchdog (detect-host-suspend). Detects a laptop sleep /
 	// hibernate / VM pause from a large wall-clock gap between its own ticks and
 	// broadcasts an advisory ARGUS_HOST_SUSPENDED note to every running task, so a

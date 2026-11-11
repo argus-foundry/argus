@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/backendtier"
 	"github.com/argus-foundry/argus/internal/claudeaccount"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/usagebudget"
@@ -32,20 +33,74 @@ type accountSupportsJSON struct {
 // sign-in and stay empty for an account without a Claude config dir.
 // codex_logged_in is the Codex sign-in, absent when unknown or unsupported.
 type accountJSON struct {
-	Name            string              `json:"name"`
-	Label           string              `json:"label"`
-	ClaudeConfigDir string              `json:"claude_config_dir"`
-	CodexHome       string              `json:"codex_home"`
-	Supports        accountSupportsJSON `json:"supports"`
-	IsDefault       bool                `json:"is_default"`
-	LoggedIn        bool                `json:"logged_in"`
-	Email           string              `json:"email,omitempty"`
-	Org             string              `json:"org,omitempty"`
-	Plan            string              `json:"plan,omitempty"`
-	CodexLoggedIn   *bool               `json:"codex_logged_in,omitempty"`
-	Source          accountSourceJSON   `json:"source"`
-	Editable        bool                `json:"editable"`
-	Usage           *accountUsageJSON   `json:"usage,omitempty"`
+	Name            string               `json:"name"`
+	Label           string               `json:"label"`
+	ClaudeConfigDir string               `json:"claude_config_dir"`
+	CodexHome       string               `json:"codex_home"`
+	Supports        accountSupportsJSON  `json:"supports"`
+	IsDefault       bool                 `json:"is_default"`
+	LoggedIn        bool                 `json:"logged_in"`
+	Email           string               `json:"email,omitempty"`
+	Org             string               `json:"org,omitempty"`
+	Plan            string               `json:"plan,omitempty"`
+	CodexLoggedIn   *bool                `json:"codex_logged_in,omitempty"`
+	Source          accountSourceJSON    `json:"source"`
+	Editable        bool                 `json:"editable"`
+	Usage           *accountUsageJSON    `json:"usage,omitempty"`
+	Providers       accountProvidersJSON `json:"providers"`
+}
+
+type accountProvidersJSON struct {
+	Claude providerJSON `json:"claude"`
+	Codex  providerJSON `json:"codex"`
+}
+
+type providerIdentityJSON struct {
+	Email        *string `json:"email"`
+	Plan         *string `json:"plan"`
+	Organization *string `json:"organization"`
+}
+
+// providerJSON is one tool's execution provider, identity and quota for an
+// account. Unknown values are null, never zero or a guessed identity.
+type providerJSON struct {
+	Provider  *string                    `json:"provider"`
+	Supported bool                       `json:"supported"`
+	LoggedIn  *bool                      `json:"logged_in"`
+	Identity  providerIdentityJSON       `json:"identity"`
+	Usage     *backendtier.ProviderUsage `json:"usage"`
+}
+
+var reroutingEnv = map[string][]string{
+	"claude": {"ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"},
+	"codex":  {"OPENAI_BASE_URL"},
+}
+
+// executionProvider names the verified provider, or nil when unsupported or
+// when the backend's env_vars re-route the tool elsewhere.
+func executionProvider(cfg config.Config, tool, provider string, supported bool) *string {
+	if !supported {
+		return nil
+	}
+	for _, k := range reroutingEnv[tool] {
+		if _, ok := cfg.Backends[tool].EnvVars[k]; ok {
+			return nil
+		}
+	}
+	return &provider
+}
+
+// fillProviderUsage attaches account-scoped quota and the Codex plan; it reads
+// only cached readings and rollout rate_limits, never credentials.
+func fillProviderUsage(cfg config.Config, a *accountJSON, claude map[string]usagebudget.Reading, now time.Time) {
+	if r, ok := claude[a.Name]; ok {
+		a.Providers.Claude.Usage = backendtier.ClaudeProviderUsage(r, true, now)
+	}
+	if home, _, err := cfg.CodexHome(a.Name); err == nil {
+		snap := backendtier.CodexHomeUsage(home, now)
+		a.Providers.Codex.Usage = snap.Usage
+		a.Providers.Codex.Identity.Plan = strPtr(snap.Plan)
+	}
 }
 
 // accountSourceJSON names where each editable account field comes from:
@@ -85,6 +140,8 @@ func accountEntry(cfg config.Config, sources config.AccountSources, name, defNam
 		IsDefault:       name == defName,
 	}
 	a.Source, a.Editable = sourceFor(name, sources)
+	a.Providers.Claude = providerJSON{Provider: executionProvider(cfg, "claude", "anthropic", claudeErr == nil), Supported: claudeErr == nil}
+	a.Providers.Codex = providerJSON{Provider: executionProvider(cfg, "codex", "openai", codexErr == nil), Supported: codexErr == nil}
 	return a
 }
 
@@ -155,6 +212,7 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				out[i].CodexLoggedIn = &ok
+				out[i].Providers.Codex.LoggedIn = &ok
 			}(i, source)
 		}
 		if claudeErr != nil {
@@ -169,6 +227,10 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			out[i].LoggedIn, out[i].Email, out[i].Org, out[i].Plan = st.LoggedIn, st.Email, st.Org, st.Plan
+			c := &out[i].Providers.Claude
+			loggedIn := st.LoggedIn
+			c.LoggedIn = &loggedIn
+			c.Identity = providerIdentityJSON{Email: strPtr(st.Email), Plan: strPtr(st.Plan), Organization: strPtr(st.Org)}
 		}(i, claudeDir)
 	}
 	wg.Wait()
@@ -182,6 +244,7 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		r, ok := usage[a.Name]
 		a.Usage = usageJSON(r, ok, now)
+		fillProviderUsage(cfg, &a, usage, now)
 		res = append(res, a)
 	}
 	writeJSON(w, http.StatusOK, res)
