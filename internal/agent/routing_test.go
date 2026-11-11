@@ -126,6 +126,94 @@ func TestCoordinatorFiltersToClaudeAccountTiers(t *testing.T) {
 	testutil.Equal(t, resolveCoordinatorBackend("", "proj", cfg), "other-claude")
 }
 
+func TestCoordinatorDynamicBackendSelectsOnlyClaudeTier(t *testing.T) {
+	cfg := config.Config{
+		Defaults: config.Defaults{Backend: config.DynamicBackend},
+		Backends: map[string]config.Backend{
+			"codex":  {Command: "codex"},
+			"claude": {Command: "claude"},
+		},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "codex", Probe: config.ProbeNone},
+			{Backend: "claude", Probe: config.ProbeNone},
+		}},
+	}
+	testutil.Equal(t, resolveCoordinatorBackend(config.DynamicBackend, "", cfg), "claude")
+}
+
+func TestCoordinatorDynamicIgnoresConcreteProjectPreferenceWhenScoringTiers(t *testing.T) {
+	cfg := config.Config{
+		Projects: map[string]config.Project{"p": {Backend: "claude"}},
+		Accounts: map[string]config.Account{
+			"personal": {ClaudeConfigDir: t.TempDir()},
+			"work":     {ClaudeConfigDir: t.TempDir()},
+		},
+		Backends: map[string]config.Backend{
+			"claude":     {Command: "claude"},
+			"claude-alt": {Command: "claude"},
+		},
+		BackendRouting: config.BackendRoutingConfig{Strategy: config.StrategyHeadroom, Tiers: []config.BackendTier{
+			{Backend: "claude", Account: "personal", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+			{Backend: "claude-alt", Account: "work", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+		}},
+	}
+	restore := usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
+		if account == "personal" {
+			return usagebudget.Reading{Percentage: 95}, true
+		}
+		return usagebudget.Reading{Percentage: 10}, account == "work"
+	})
+	defer restore()
+	testutil.Equal(t, resolveCoordinatorBackend(config.DynamicBackend, "p", cfg), "claude-alt")
+}
+
+func TestCoordinatorDynamicRejectsClaudeFallbackUnsupportedByEffectiveAccount(t *testing.T) {
+	cfg := config.Config{
+		Defaults:       config.Defaults{Backend: config.DynamicBackend},
+		Projects:       map[string]config.Project{"p": {Backend: "claude"}},
+		DefaultAccount: "cx",
+		Accounts:       map[string]config.Account{"cx": {CodexHome: t.TempDir()}},
+		Backends:       map[string]config.Backend{"claude": {Command: "claude"}, "codex": {Command: "codex"}},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{{Backend: "claude", Probe: "unknown"}}},
+	}
+	testutil.Equal(t, resolveCoordinatorBackend(config.DynamicBackend, "p", cfg), "")
+}
+
+func TestCoordinatorDynamicDoesNotFallbackToProjectBackendWhenTierIsUnavailable(t *testing.T) {
+	cfg := config.Config{
+		Defaults: config.Defaults{Backend: config.DynamicBackend},
+		Projects: map[string]config.Project{"p": {Backend: "claude"}},
+		Backends: map[string]config.Backend{"claude": {Command: "claude"}},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "claude", Probe: "unknown"},
+		}},
+	}
+	testutil.Equal(t, resolveCoordinatorBackend(config.DynamicBackend, "p", cfg), "")
+	cfg = config.Config{
+		Defaults: config.Defaults{Backend: "codex"},
+		Backends: map[string]config.Backend{"codex": {Command: "codex"}},
+	}
+	testutil.Equal(t, resolveCoordinatorBackend(config.DynamicBackend, "", cfg), "")
+}
+
+func TestCoordinatorInheritedDynamicDoesNotUseImplicitClaudeFallback(t *testing.T) {
+	cfg := config.Config{
+		Defaults: config.Defaults{Backend: "codex"},
+		Projects: map[string]config.Project{"p": {Backend: config.DynamicBackend}},
+		Backends: map[string]config.Backend{
+			"claude": {Command: "claude"},
+			"codex":  {Command: "codex"},
+		},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "claude", Probe: "unknown"},
+		}},
+	}
+	testutil.Equal(t, resolveCoordinatorBackend("", "p", cfg), "")
+	cfg.Projects = nil
+	cfg.Defaults.Backend = config.DynamicBackend
+	testutil.Equal(t, resolveCoordinatorBackend("", "p", cfg), "")
+}
+
 func TestCoordinatorSpawnRoutesAccount(t *testing.T) {
 	for _, backend := range []string{"", "test"} {
 		t.Run(backend, func(t *testing.T) {
@@ -231,6 +319,153 @@ func TestResolveBackend_ExplicitBackendSkipsUsageReadings(t *testing.T) {
 	_, err = ResolveBackend(&model.Task{}, cfg)
 	testutil.NoError(t, err)
 	testutil.Equal(t, reads, 1) // blank backend still routes on readings
+}
+
+func TestDynamicBackendSelection(t *testing.T) {
+	base := config.Config{
+		Defaults: config.Defaults{Backend: config.DynamicBackend},
+		Backends: map[string]config.Backend{
+			"claude": {Command: "claude"}, "codex": {Command: "codex"}, "pi": {Command: "pi"},
+		},
+		Projects: map[string]config.Project{"p": {Backend: config.DynamicBackend}},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "codex", Probe: config.ProbeNone},
+			{Backend: "pi", Probe: config.ProbeNone},
+		}},
+	}
+	noTiersDynamic := base
+	noTiersDynamic.BackendRouting.Tiers = nil
+	for _, tc := range []struct {
+		name, explicit, project, want string
+		cfg                           config.Config
+	}{
+		{name: "dynamic default", project: "missing", want: "codex", cfg: base},
+		{name: "explicit dynamic", explicit: config.DynamicBackend, project: "p", want: "codex", cfg: base},
+		{name: "project dynamic", project: "p", want: "codex", cfg: base},
+		{name: "concrete backend stays pinned", explicit: "pi", project: "p", want: "pi", cfg: base},
+		{name: "concrete default fallback", explicit: config.DynamicBackend, project: "missing", want: "claude", cfg: config.Config{
+			Defaults: config.Defaults{Backend: "claude"}, Backends: base.Backends,
+			BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{{Backend: "codex", Probe: "unknown"}}},
+		}},
+		{name: "missing tier and dynamic default", explicit: config.DynamicBackend, project: "missing", want: "", cfg: noTiersDynamic},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveTaskChoice(tc.explicit, tc.project, tc.cfg, "", false).Backend
+			testutil.Equal(t, got, tc.want)
+		})
+	}
+	name, err := ResolveBackendName(&model.Task{Backend: config.DynamicBackend}, base)
+	testutil.NoError(t, err)
+	testutil.Equal(t, name, "codex")
+}
+
+func TestResolveBackend_DynamicFallsBackToConcreteDefaultWhenTiersAreUnavailable(t *testing.T) {
+	cfg := config.Config{
+		Defaults:       config.Defaults{Backend: "claude"},
+		Backends:       map[string]config.Backend{"claude": {Command: "claude"}, "codex": {Command: "codex"}},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{{Backend: "codex", Probe: "unknown"}}},
+	}
+	backend, err := ResolveBackend(&model.Task{Backend: config.DynamicBackend}, cfg)
+	testutil.NoError(t, err)
+	testutil.Equal(t, backend.Command, "claude")
+}
+
+func TestDynamicBackendRoutingSkipsTiersUnsupportedByPinnedAccount(t *testing.T) {
+	workDir, codexHome := t.TempDir(), t.TempDir()
+	cfg := config.Config{
+		Defaults: config.Defaults{Backend: config.DynamicBackend},
+		Backends: map[string]config.Backend{"codex": {Command: "codex"}, "claude": {Command: "claude"}},
+		Accounts: map[string]config.Account{
+			"work": {ClaudeConfigDir: workDir},
+			"cx":   {CodexHome: codexHome},
+		},
+		ProjectAccounts: map[string]string{"p": "work"},
+		Projects:        map[string]config.Project{"p": {}},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "codex", Probe: config.ProbeNone},
+			{Backend: "claude", Probe: config.ProbeNone},
+		}},
+	}
+	for _, tc := range []struct {
+		name, explicitAccount string
+	}{
+		{name: "explicit account", explicitAccount: "work"},
+		{name: "project account"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			choice := resolveTaskChoice(config.DynamicBackend, "p", cfg, tc.explicitAccount, false)
+			testutil.Equal(t, choice.Backend, "claude")
+			testutil.Equal(t, choice.Account, "work")
+			if tc.explicitAccount != "" {
+				backend, err := ResolveBackend(&model.Task{Backend: config.DynamicBackend, Account: "work"}, cfg)
+				testutil.NoError(t, err)
+				testutil.Equal(t, backend.Command, "claude")
+			}
+		})
+	}
+}
+
+func TestDynamicBackendDoesNotFallbackToBackendUnsupportedByPinnedAccount(t *testing.T) {
+	cfg := config.Config{
+		Defaults: config.Defaults{Backend: "codex"},
+		Backends: map[string]config.Backend{
+			"claude": {Command: "claude"},
+			"codex":  {Command: "codex"},
+		},
+		Accounts: map[string]config.Account{"work": {ClaudeConfigDir: t.TempDir()}},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "claude", Probe: config.ProbeClaudeUsage, ThresholdPct: 80},
+		}},
+	}
+	restore := usagebudget.SetBridgeReader(func(account string) (usagebudget.Reading, bool) {
+		return usagebudget.Reading{Percentage: 95}, account == "work"
+	})
+	defer restore()
+
+	choice := resolveTaskChoice(config.DynamicBackend, "", cfg, "work", false)
+	testutil.Equal(t, choice.Backend, "")
+	testutil.Equal(t, choice.Account, "work")
+	_, err := ResolveBackend(&model.Task{Backend: config.DynamicBackend, Account: "work"}, cfg)
+	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "no backend configured")
+}
+
+func TestDynamicBackendFiltersForConfiguredDefaultAccount(t *testing.T) {
+	cfg := config.Config{
+		DefaultAccount: "work",
+		Accounts:       map[string]config.Account{"work": {ClaudeConfigDir: t.TempDir()}},
+		Backends: map[string]config.Backend{
+			"codex":  {Command: "codex"},
+			"claude": {Command: "claude"},
+		},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "codex", Probe: config.ProbeNone},
+			{Backend: "claude", Probe: config.ProbeNone},
+		}},
+	}
+	choice := resolveTaskChoice(config.DynamicBackend, "", cfg, "", false)
+	testutil.Equal(t, choice.Backend, "claude")
+	testutil.Equal(t, choice.Account, "work")
+}
+
+func TestDynamicBackendFallbackRespectsEffectiveProjectAccount(t *testing.T) {
+	cfg := config.Config{
+		Defaults:        config.Defaults{Backend: "codex"},
+		Projects:        map[string]config.Project{"p": {Backend: config.DynamicBackend}},
+		ProjectAccounts: map[string]string{"p": "work"},
+		Accounts:        map[string]config.Account{"work": {ClaudeConfigDir: t.TempDir()}},
+		Backends: map[string]config.Backend{
+			"codex": {Command: "codex"},
+		},
+		BackendRouting: config.BackendRoutingConfig{Tiers: []config.BackendTier{
+			{Backend: "codex", Probe: "unknown"},
+		}},
+	}
+	choice := resolveTaskChoice("", "p", cfg, "", false)
+	testutil.Equal(t, choice.Backend, "")
+	_, err := ResolveBackend(&model.Task{Project: "p"}, cfg)
+	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "no backend configured")
 }
 
 func TestUnpinnedLandingOnDefaultIsStoredBlankAndRouted(t *testing.T) {

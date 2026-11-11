@@ -326,7 +326,7 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 // boundary instead of letting agent.CreateAndStart roll back the worktree
 // after the fact.
 func (s *Server) validateBackend(name string) error {
-	if name == "" {
+	if name == "" || name == config.DynamicBackend {
 		return nil
 	}
 	cfg := s.db.Config()
@@ -2111,6 +2111,7 @@ func (s *Server) handleListBackends(w http.ResponseWriter, r *http.Request) {
 			out[j], out[j-1] = out[j-1], out[j]
 		}
 	}
+	out = append(out, backendJSON{Name: config.DynamicBackend, Kind: config.DynamicBackend, Label: "Dynamic"})
 	writeJSON(w, http.StatusOK, map[string]any{"backends": out})
 }
 
@@ -2132,6 +2133,10 @@ func (s *Server) handleCreateBackend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "name and command are required", nil)
 		return
 	}
+	if req.Name == config.DynamicBackend {
+		writeErr(w, http.StatusBadRequest, "reserved backend name", nil)
+		return
+	}
 	b := config.Backend{Command: req.Command, PromptFlag: req.PromptFlag, Model: req.Model}
 	if err := s.db.SetBackend(req.Name, b); err != nil {
 		writeErr(w, http.StatusInternalServerError, "", err)
@@ -2147,6 +2152,10 @@ func (s *Server) handleUpdateBackend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
+	if name == config.DynamicBackend {
+		writeErr(w, http.StatusBadRequest, "reserved backend name", nil)
+		return
+	}
 	var req backendJSON
 	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -2171,6 +2180,10 @@ func (s *Server) handleDeleteBackend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
+	if name == config.DynamicBackend {
+		writeErr(w, http.StatusBadRequest, "reserved backend name", nil)
+		return
+	}
 	if err := s.db.DeleteBackend(name); err != nil {
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return

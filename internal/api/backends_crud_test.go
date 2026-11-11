@@ -44,6 +44,12 @@ func TestHandleCreateBackend(t *testing.T) {
 		mux.ServeHTTP(w, req)
 		testutil.Equal(t, w.Code, http.StatusBadRequest)
 	})
+	t.Run("reserves dynamic selector name", func(t *testing.T) {
+		req := masterReq("POST", "/api/backends", `{"name":"dynamic","command":"echo"}`)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		testutil.Equal(t, w.Code, http.StatusBadRequest)
+	})
 }
 
 func TestHandleUpdateBackend(t *testing.T) {
@@ -167,13 +173,22 @@ func TestHandleBackends_ModelRoundTrip(t *testing.T) {
 	}
 	testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	found := false
+	dynamicFound := false
 	for _, b := range resp.Backends {
 		if b.Name == "foo" {
 			found = true
 			testutil.Equal(t, b.Model, "opus")
 		}
+		if b.Name == config.DynamicBackend {
+			dynamicFound = true
+			testutil.Equal(t, b.Kind, config.DynamicBackend)
+			testutil.Equal(t, b.Label, "Dynamic")
+			testutil.Equal(t, b.Command, "")
+		}
 	}
 	testutil.True(t, found)
+	testutil.True(t, dynamicFound)
+	testutil.Equal(t, resp.Backends[len(resp.Backends)-1].Name, config.DynamicBackend)
 }
 
 // GET /api/backends exposes the per-backend model option list (built-in

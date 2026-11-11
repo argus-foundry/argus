@@ -76,6 +76,8 @@ type Config struct {
 // is not a config-load error — it surfaces as a skipped tier at resolution
 // time (see specs/backend-tier-routing/spec.md).
 const (
+	// DynamicBackend is a reserved selector resolved through backend tiers at task creation.
+	DynamicBackend   = "dynamic"
 	ProbeClaudeUsage = "claude_usage"
 	ProbeCodexUsage  = "codex_usage"
 	ProbeNone        = "none"

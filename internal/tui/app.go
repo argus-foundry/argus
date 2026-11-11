@@ -557,7 +557,8 @@ type App struct {
 	// computePTYSize bug). When `handleSessionExitUI` sees an entry in this
 	// map, it immediately restarts the session via `--session-id` so Claude
 	// re-renders the conversation history at the current (wider) PTY.
-	pendingRerenderRestart map[string]bool
+	pendingRerenderRestart  map[string]bool
+	inlineSpawnReservations map[string]agent.TaskRouting
 	// kickWait holds Tasks-view kicks deferred for scroll position or an unsent
 	// draft (kick-timing-keep-place): task ID -> when the pane+composer were
 	// first seen clear (zero while still blocked). Only touched on the tview
@@ -789,31 +790,32 @@ func New(database store.Store, runner agent.SessionProvider, daemonConnected boo
 	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDefault
 
 	app := &App{
-		tapp:                   tview.NewApplication(),
-		db:                     database,
-		runner:                 runner,
-		daemonConnected:        daemonConnected,
-		agentState:             agentview.New(),
-		tickDone:               make(chan struct{}),
-		recentStarts:           make(map[string]time.Time),
-		idleUnvisited:          make(map[string]bool),
-		viewedWhileAgent:       make(map[string]bool),
-		pendingRerenderRestart: make(map[string]bool),
-		kickWait:               make(map[string]time.Time),
-		kickDeferSince:         make(map[string]kickDefer),
-		kickRetryAfter:         make(map[string]time.Time),
-		pendingHeraReclaim:     make(map[string]bool),
-		lastAttachCols:         make(map[string]uint16),
-		committedCols:          make(map[string]uint16),
-		committedColsPID:       make(map[string]int),
-		owedAnchors:            make(map[string]owedAnchor),
-		kickForced:             make(map[string]time.Time),
-		owedFetching:           make(map[string]bool),
-		ptySyncLoopGen:         make(map[string]uint64),
-		wtRoot:                 filepath.Join(db.DataDir(), "worktrees"),
-		clipboardWriter:        pbcopyWriter,
-		nowFn:                  time.Now,
-		resumeResizeDelay:      300 * time.Millisecond,
+		tapp:                    tview.NewApplication(),
+		db:                      database,
+		runner:                  runner,
+		daemonConnected:         daemonConnected,
+		agentState:              agentview.New(),
+		tickDone:                make(chan struct{}),
+		recentStarts:            make(map[string]time.Time),
+		idleUnvisited:           make(map[string]bool),
+		viewedWhileAgent:        make(map[string]bool),
+		pendingRerenderRestart:  make(map[string]bool),
+		inlineSpawnReservations: make(map[string]agent.TaskRouting),
+		kickWait:                make(map[string]time.Time),
+		kickDeferSince:          make(map[string]kickDefer),
+		kickRetryAfter:          make(map[string]time.Time),
+		pendingHeraReclaim:      make(map[string]bool),
+		lastAttachCols:          make(map[string]uint16),
+		committedCols:           make(map[string]uint16),
+		committedColsPID:        make(map[string]int),
+		owedAnchors:             make(map[string]owedAnchor),
+		kickForced:              make(map[string]time.Time),
+		owedFetching:            make(map[string]bool),
+		ptySyncLoopGen:          make(map[string]uint64),
+		wtRoot:                  filepath.Join(db.DataDir(), "worktrees"),
+		clipboardWriter:         pbcopyWriter,
+		nowFn:                   time.Now,
+		resumeResizeDelay:       300 * time.Millisecond,
 	}
 	if dc, ok := runner.(*dclient.Client); ok {
 		app.daemonClient = dc
@@ -6744,12 +6746,42 @@ func (a *App) reapStaleRerenderRestart(taskID string, sess agent.SessionHandle) 
 	a.statusbar.ClearInfo()
 }
 
+// resolveInlineDynamicBackend resolves a dynamic selector before the no-path
+// inline create flow persists its task directly.
+func resolveInlineDynamicBackend(task *model.Task, project config.Project, cfg config.Config) (agent.TaskRouting, bool, error) {
+	selected := task.Backend
+	if selected == "" {
+		selected = project.Backend
+		if selected == "" {
+			selected = cfg.Defaults.Backend
+		}
+	}
+	if selected != config.DynamicBackend {
+		return agent.TaskRouting{}, false, nil
+	}
+	routing, err := agent.ResolveTaskRouting(agent.CreateInput{
+		Project:       task.Project,
+		Backend:       task.Backend,
+		Account:       task.Account,
+		AccountRouted: task.AccountRouted,
+		Model:         task.Model,
+	}, cfg, true)
+	if err != nil {
+		return agent.TaskRouting{}, true, err
+	}
+	task.Backend = routing.Backend
+	task.Account = routing.Account
+	task.AccountRouted = routing.AccountRouted
+	return routing, true, nil
+}
+
 // buildNewTaskForm constructs a NewTaskForm defaulted to defaultProject and
 // wires its async branch loader. Shared by the Tasks-tab new-task flow and the
 // Hera rail's `w`/`n` keys (which reuse the SAME modal).
 func (a *App) buildNewTaskForm(defaultProject string) *NewTaskForm {
 	cfg := a.db.Config()
 	f := NewNewTaskForm(cfg.Projects, defaultProject, cfg.Backends, cfg.Defaults.Backend)
+	f.SetBackendRoutingTiers(cfg.BackendRouting.Tiers)
 	// Supply the valid on-disk profile names for the per-spawn override cycler
 	// (add-diligence-profiles forms-and-modals), scoped to the default project's
 	// in-repo dir + the per-user library.
@@ -6898,6 +6930,7 @@ func (a *App) openHeraNewTaskForm(title, defaultProject string, hideArchetype bo
 	// shows it.
 	a.newTaskForm.SetHideArchetype(hideArchetype)
 	if hideArchetype { // coordinator creation; worker spawn retains its existing flow
+		a.newTaskForm.SetCoordinatorBackendRouting()
 		a.setupProjectFirst(a.newTaskForm)
 	}
 	a.newTaskOnDone = onDone
@@ -6957,6 +6990,47 @@ func (a *App) handleNewTaskKey(event *tcell.EventKey) {
 
 		if projCfg.Path == "" {
 			// No project path — no worktree needed, persist and start inline.
+			cfg := a.db.Config()
+			selectedBackend := task.Backend
+			if selectedBackend == "" {
+				selectedBackend = projCfg.Backend
+				if selectedBackend == "" {
+					selectedBackend = cfg.Defaults.Backend
+				}
+			}
+			if selectedBackend == config.DynamicBackend {
+				a.statusbar.SetInfo("Resolving backend usage tiers…")
+				go func() {
+					routing, _, routeErr := resolveInlineDynamicBackend(task, projCfg, cfg)
+					if routeErr != nil {
+						uxlog.Log("[tui] dynamic backend resolution failed for task %q: %v", task.Name, routeErr)
+						a.tapp.QueueUpdateDraw(func() {
+							a.statusbar.SetError("Could not resolve dynamic backend: " + routeErr.Error())
+						})
+						return
+					}
+					task.Sandboxed = agent.IsTaskSandboxed(task, cfg)
+					if addErr := a.db.Add(task); addErr != nil {
+						agent.ReleaseTaskRouting(routing)
+						uxlog.Log("[tui] dynamic task persistence failed for %q: %v", task.Name, addErr)
+						a.tapp.QueueUpdateDraw(func() {
+							a.statusbar.SetError("Could not create task: " + addErr.Error())
+						})
+						return
+					}
+					uxlog.Log("[tui] dynamic backend resolved for task %q: backend=%q account=%q routed=%t", task.Name, task.Backend, task.Account, task.AccountRouted)
+					a.tapp.QueueUpdateDraw(func() {
+						if routing.ReservedBackend != "" {
+							a.inlineSpawnReservations[task.ID] = routing
+						}
+						a.statusbar.ClearInfo()
+						a.refreshTasksLocal()
+						a.tasklist.SelectByID(task.ID)
+						a.onTaskSelect(task, true)
+					})
+				}()
+				return
+			}
 			task.Sandboxed = a.resolveSandboxed(task)
 			a.db.Add(task)
 			uxlog.Log("[tui] created task %s (%s)", task.ID, task.Name)
@@ -7383,6 +7457,11 @@ func (a *App) startSession(task *model.Task) {
 	if err != nil {
 		uxlog.Log("[tui] failed to start session: %v", err)
 		a.statusbar.SetError("Start failed: " + err.Error())
+		if routing, ok := a.inlineSpawnReservations[task.ID]; ok {
+			agent.ReleaseTaskRouting(routing)
+			delete(a.inlineSpawnReservations, task.ID)
+			uxlog.Log("[routing] inline spawn failed; reservation released task=%s backend=%q account=%q", task.ID, routing.ReservedBackend, routing.ReservedAccount)
+		}
 		// Revert to pending so the task isn't left in a ghost state.
 		task.SetStatus(model.StatusPending)
 		// Only clear the SessionID if WE just generated it — a pre-existing
@@ -7399,6 +7478,7 @@ func (a *App) startSession(task *model.Task) {
 		return
 	}
 
+	delete(a.inlineSpawnReservations, task.ID)
 	task.SetStatus(model.StatusInProgress)
 	task.AgentPID = sess.PID()
 	delete(a.committedCols, task.ID) // only a successful new start reconciles history

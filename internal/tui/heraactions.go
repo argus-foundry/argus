@@ -212,6 +212,7 @@ func (a *App) heraDoNewCoordinator(name string, task *model.Task) {
 			Project:              task.Project,
 			Branch:               task.Branch,
 			Backend:              task.Backend,
+			Account:              task.Account,
 			Model:                task.Model,
 		})
 		a.tapp.QueueUpdateDraw(func() {

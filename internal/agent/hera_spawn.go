@@ -53,8 +53,16 @@ const (
 // An explicit non-Claude backend remains an operator override with a warning.
 func resolveCoordinatorBackend(explicit, project string, cfg config.Config, accounts ...string) string {
 	const claudeFallback = "claude"
+	dynamicSelected := explicit == config.DynamicBackend
+	if explicit == "" {
+		selected := cfg.Projects[project].Backend
+		if selected == "" {
+			selected = cfg.Defaults.Backend
+		}
+		dynamicSelected = selected == config.DynamicBackend
+	}
 
-	if explicit != "" {
+	if explicit != "" && explicit != config.DynamicBackend {
 		if b, ok := cfg.Backends[explicit]; ok && IsClaudeBackend(b.Command) {
 			return explicit
 		}
@@ -72,6 +80,11 @@ func resolveCoordinatorBackend(explicit, project string, cfg config.Config, acco
 		}
 	}
 	preferred := cfg.Projects[project].Backend
+	if dynamicSelected {
+		// A dynamic choice asks the coordinator to consider every
+		// Claude-capable tier, not only the project's concrete backend tier.
+		preferred = ""
+	}
 	if b, ok := cfg.Backends[preferred]; !ok || !IsClaudeBackend(b.Command) {
 		preferred = ""
 	}
@@ -84,19 +97,53 @@ func resolveCoordinatorBackend(explicit, project string, cfg config.Config, acco
 			pin = p
 		}
 	}
+	for i := 0; i < len(filtered.BackendRouting.Tiers); {
+		tier := filtered.BackendRouting.Tiers[i]
+		account := pin
+		if account == "" {
+			account = tier.Account
+		}
+		if account == "" {
+			account = cfg.ResolveAccount("", project)
+		}
+		if !cfg.AccountSupports(account, cfg.Backends[tier.Backend].Command) {
+			filtered.BackendRouting.Tiers = append(filtered.BackendRouting.Tiers[:i], filtered.BackendRouting.Tiers[i+1:]...)
+			continue
+		}
+		i++
+	}
 	if choice := backendtier.ResolveChoice(filtered, preferred, pin); choice.Backend != "" {
 		return choice.Backend
 	}
-	name := resolveDefaultBackendName("", project, filtered, accounts...)
-	if b, ok := cfg.Backends[name]; ok && IsClaudeBackend(b.Command) {
+	name := ""
+	if dynamicSelected {
+		name = resolveDynamicBackendName(filtered, pin, project)
+	} else {
+		name = resolveDefaultBackendName("", project, filtered, accounts...)
+	}
+	effectiveAccount := pin
+	if effectiveAccount == "" {
+		effectiveAccount = cfg.ResolveAccount("", project)
+	}
+	if b, ok := cfg.Backends[name]; ok && IsClaudeBackend(b.Command) && cfg.AccountSupports(effectiveAccount, b.Command) {
 		return name
 	}
+	if dynamicSelected {
+		warnCoordinatorBackend("dynamic selection resolved to %q, which is not a compatible Claude backend", name)
+		return ""
+	}
 
-	if b, ok := cfg.Backends[claudeFallback]; ok && IsClaudeBackend(b.Command) {
+	if b, ok := cfg.Backends[claudeFallback]; ok && IsClaudeBackend(b.Command) && cfg.AccountSupports(effectiveAccount, b.Command) {
 		warnCoordinatorBackend("resolved backend %q is not Claude-capable, "+
 			"forcing %q (coord-hook context tracking, cost accrual, and recycle require Claude Code)",
 			name, claudeFallback)
 		return claudeFallback
+	}
+	for _, b := range cfg.Backends {
+		if IsClaudeBackend(b.Command) {
+			warnCoordinatorBackend("no Claude-capable backend supports account %q", effectiveAccount)
+			return ""
+		}
 	}
 	warnCoordinatorBackend("resolved backend %q is not Claude-capable and no "+
 		"Claude-capable backend is configured; leaving as-is", name)
@@ -525,13 +572,21 @@ func MaterializeHeraSubCoordinator(database *db.DB, runner SessionProvider, in H
 	if aerr != nil {
 		return nil, aerr
 	}
+	cfg := database.Config()
+	if len(cfg.BackendRouting.Tiers) > 0 {
+		backendtier.FreshenBeforeSpawn()
+	}
+	backend := resolveCoordinatorBackend(in.Backend, in.Project, cfg, inheritedAccount)
+	if backend == "" {
+		return nil, fmt.Errorf("no Claude-capable backend supports account %q", inheritedAccount)
+	}
 	task, _, err := CreateAndStart(database, runner, CreateInput{
 		Name:    in.Role.Name,
 		PTYRole: db.HeraKindCoordinator,
 		Prompt:  in.TaskPrompt,
 		Project: in.Project,
 		// Sub-coordinators route only among Claude-capable tiers.
-		Backend: resolveCoordinatorBackend(in.Backend, in.Project, database.Config(), inheritedAccount),
+		Backend: backend,
 		Model:   in.Model,
 		// The planned subcoord role's authored archetype propagates onto the
 		// materialized task (add-diligence-profiles); empty stays empty.
@@ -682,6 +737,7 @@ type HeraCoordinatorSpawnInput struct {
 	Project              string // resolved argus project
 	Branch               string // optional base branch
 	Backend              string // optional backend override
+	Account              string // optional named account pin
 	Model                string // optional model override (empty = backend default)
 	Archetype            string // optional diligence archetype; defaults to orchestrator when empty
 }
@@ -711,6 +767,14 @@ type HeraCoordinatorSpawnResult struct {
 // (hera_new_orchestrator) keeps its own task-resolution path because it binds an
 // EXISTING task rather than creating one.
 func SpawnHeraCoordinator(database *db.DB, runner SessionProvider, in HeraCoordinatorSpawnInput) (*HeraCoordinatorSpawnResult, error) {
+	cfg := database.Config()
+	if len(cfg.BackendRouting.Tiers) > 0 {
+		backendtier.FreshenBeforeSpawn()
+	}
+	backend := resolveCoordinatorBackend(in.Backend, in.Project, cfg, in.Account)
+	if backend == "" {
+		return nil, fmt.Errorf("no Claude-capable backend supports account %q", in.Account)
+	}
 	orchName, err := database.UniqueHeraOrchestratorName(in.OrchestratorBaseName)
 	if err != nil {
 		return nil, err
@@ -752,8 +816,9 @@ func SpawnHeraCoordinator(database *db.DB, runner SessionProvider, in HeraCoordi
 		Prompt:  in.TaskPrompt,
 		Project: in.Project,
 		// Coordinators route among Claude-capable tiers, including accounts.
-		Backend:         resolveCoordinatorBackend(in.Backend, in.Project, database.Config()),
+		Backend:         backend,
 		Model:           in.Model,
+		Account:         in.Account,
 		Archetype:       archetype,
 		BaseBranch:      in.Branch,
 		BranchNamespace: orchName,

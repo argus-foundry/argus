@@ -5482,19 +5482,28 @@ async function loadProjects() {
 // re-fetching settings on every create-view open.
 let createBackendsCache = [];
 let createDefaultBackend = '';
+let createDynamicTools = [];
 
 async function loadBackends() {
   try {
-    const [bRes, sRes] = await Promise.all([
+    const [bRes, sRes, cRes] = await Promise.all([
       api('/api/backends'),
       api('/api/settings'),
+      api('/api/config'),
     ]);
     if (!bRes.ok) return;
     const bData = await bRes.json();
     createBackendsCache = bData.backends || [];
+    createDynamicTools = [];
     if (sRes && sRes.ok) {
       const sData = await sRes.json();
       createDefaultBackend = (sData.defaults && sData.defaults.backend) || '';
+    }
+    if (cRes && cRes.ok) {
+      const cData = await cRes.json();
+      const tiers = cData.BackendRouting?.Tiers || cData.backend_routing?.tiers || [];
+      const defaultName = cData.Defaults?.Backend || cData.defaults?.backend || createDefaultBackend;
+      createDynamicTools = dynamicBackendTools(createBackendsCache, tiers, defaultName);
     }
     const sel = document.getElementById('create-backend');
     if (!sel) return;
@@ -5509,9 +5518,10 @@ async function loadBackends() {
     // Default selection priority: configured global default → 'claude' if
     // configured → first backend. Matches the user's expectation that the
     // form opens to Claude when both Claude and Codex are configured.
+    const concreteBackends = createBackendsCache.filter(b => b.name !== 'dynamic');
     const preferred = createDefaultBackend
       || (createBackendsCache.find(b => b.name === 'claude') ? 'claude' : '')
-      || (createBackendsCache[0] && createBackendsCache[0].name)
+      || (concreteBackends[0] && concreteBackends[0].name)
       || '';
     if (preferred) sel.value = preferred;
     // Rebuild the per-backend model <select> whenever the backend changes.
@@ -5554,9 +5564,26 @@ function backendTool(b) {
   return b ? (b.kind || '') : 'claude';
 }
 
+function dynamicBackendTools(backends, tiers, defaultName) {
+  const configured = new Set((tiers || []).map(t => t.Backend || t.backend)
+    .filter(name => typeof name === 'string' && name));
+  const tools = backends.filter(b => configured.has(b.name))
+    .map(backendTool)
+    .filter(tool => tool === 'claude' || tool === 'codex');
+  if (defaultName && defaultName !== 'dynamic') {
+    const fallback = backends.find(b => b.name === defaultName);
+    if (fallback) {
+      const tool = backendTool(fallback);
+      if (tool === 'claude' || tool === 'codex') tools.push(tool);
+    }
+  }
+  return [...new Set(tools)];
+}
+
 function accountSupportsTool(a, tool) {
   if (a.name === 'default') return true;
   const s = a.supports || {};
+  if (tool === 'dynamic') return createDynamicTools.some(candidate => !!s[candidate]);
   if (tool === 'claude') return !!s.claude;
   if (tool === 'codex') return !!s.codex;
   return false;
@@ -6925,12 +6952,13 @@ async function loadBackendsBlock() {
 
 function renderBackendsBlock() {
   const el = document.getElementById('backends-list');
-  if (!backendsCache.length) {
+  const configured = backendsCache.filter(b => b.name !== 'dynamic');
+  if (!configured.length) {
     el.innerHTML = '<div class="meta" style="padding: 8px 0">No backends configured.</div>';
     return;
   }
   const def = settingsCache && settingsCache.defaults && settingsCache.defaults.backend;
-  el.innerHTML = backendsCache.map((b) => {
+  el.innerHTML = configured.map((b) => {
     const star = b.name === def ? ' ★' : '';
     const modelLabel = b.model ? ` · model: ${esc(b.model)}` : '';
     return `<div class="settings-row">
