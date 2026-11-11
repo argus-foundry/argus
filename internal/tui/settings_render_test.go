@@ -680,8 +680,14 @@ func TestSettings_RenderAgentZoomDetail(t *testing.T) {
 func TestSettings_RenderCrossTabArrowsDetail(t *testing.T) {
 	sv := makeSettings(t)
 	selectRowInCategory(t, sv, catAppearance, srCrossTabArrows, "")
-	sv.SetRect(0, 0, 100, 30)
-	sv.Draw(drawSim(t))
+	sv.SetRect(0, 0, 200, 30)
+	sim := drawSim(t)
+	sim.SetSize(200, 30)
+	sv.Draw(sim)
+	text := screenText(sim, 200, 30)
+	testutil.Contains(t, text, "Resident rail ⇄ resident pane ⇄ worker pane")
+	testutil.Contains(t, text, "Tasks/agent view ⇄ Projects rail")
+	testutil.Contains(t, text, "Settings left ⇄ right")
 
 	sv.crossTabArrows = true
 	sv.Draw(drawSim(t))

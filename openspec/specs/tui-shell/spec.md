@@ -20,7 +20,7 @@ The shell SHALL present a fixed vertical layout: a single-row header (tab bar) a
 
 ### Requirement: Top-level tab navigation
 
-The shell SHALL expose three top-level tabs in order — Tasks, Hera, Settings — and SHALL switch among them in response to global numeric keys. Tab switching SHALL update both the header's active tab and the status bar's tab context, and SHALL move focus to the newly activated view. Plain Left/Right SHALL remain available to the active view rather than switching tabs. When the persisted `ui.cross_tab_arrows` option is enabled (opt-in; default disabled), modified Left/Right (`ModCtrl` or `ModAlt`, representing Cmd+arrow) SHALL traverse one continuous chain: Tasks list / agent view (unzoomed or zoomed) ⇄ Hera rail ⇄ Hera coordinator pane ⇄ Hera agent pane ⇄ Settings left pane ⇄ Settings right pane. Hops that enter a view from its left neighbor SHALL focus its leftmost pane; hops that enter from its right neighbor SHALL focus its rightmost present pane. Cmd+Left on Tasks and Cmd+Right on the Settings right pane SHALL be the chain's ends; the latter SHALL be consumed so it cannot alter a setting. The chain SHALL NOT fire in any modal mode or while the agent view's diff view is open, while the Tasks list, Hera rail, or a Settings inline edit holds the keyboard, or while a Hera pane is fullscreen. The Tasks tab's agent view (unzoomed or zoomed) SHALL participate when the option is enabled: the agent-pane-right action (default Cmd+Right) from the rightmost visible pane (files pane unzoomed, the terminal when zoomed) SHALL switch to Hera with its rail focused without stopping or restarting the session, and modified Left from that rail SHALL restore that task's agent view with its prior zoom state, landing on its rightmost visible pane. Without a preceding agent-view hop, modified Left from the rail returns to the task list. The unzoomed terminal-to-files step and all agent-view behavior with the option disabled SHALL be unchanged.
+The shell SHALL expose three top-level tabs in order — Tasks, Hera, Settings — and SHALL switch among them in response to global numeric keys. Tab switching SHALL update both the header's active tab and the status bar's tab context, and SHALL move focus to the newly activated view. Plain Left/Right SHALL remain available to the active view rather than switching tabs. When the persisted `ui.cross_tab_arrows` option is enabled (opt-in; default disabled), modified Left/Right (`ModCtrl` or `ModAlt`, representing Cmd+arrow) SHALL traverse one continuous chain: resident rail ⇄ resident conversation pane ⇄ resident worker pane ⇄ Tasks list / agent view (unzoomed or zoomed) ⇄ Hera rail ⇄ Hera coordinator pane ⇄ Hera agent pane ⇄ Settings left pane ⇄ Settings right pane. Hops that enter a view from its left neighbor SHALL focus its leftmost pane; hops that enter from its right neighbor SHALL focus its rightmost present pane. The resident SHALL participate only when its tab is visible (enabled, local mode), skipping hidden or absent panes through HeraPage's focus ladder. Cmd+Left on the resident rail and Cmd+Right on the Settings right pane SHALL be consumed as chain ends. Without a resident tab, Cmd+Left on Tasks SHALL remain unchanged as the left end. The chain SHALL NOT fire in any modal mode or while the agent view's diff view is open, while the Tasks list filter, Hera or resident rail filter, or a Settings inline edit holds the keyboard, or while a Hera or resident pane is fullscreen. The Tasks tab's agent view (unzoomed or zoomed) SHALL participate when the option is enabled: the agent-pane-right action (default Cmd+Right) from the rightmost visible pane (files pane unzoomed, the terminal when zoomed) SHALL switch to Hera with its rail focused without stopping or restarting the session, and modified Left from that rail SHALL restore that task's agent view with its prior zoom state, landing on its rightmost visible pane. Without a preceding agent-view hop, modified Left from the rail returns to the task list. The unzoomed terminal-to-files step and all agent-view behavior with the option disabled SHALL be unchanged.
 
 The active tab SHALL persist locally across an argus restart and SHALL be restored on launch in place of always defaulting to Tasks, so a user who quits while on the Hera or Settings tab reopens on that same tab. In `--remote` mode, where there is no local persistence seam, the active tab SHALL NOT persist and the shell SHALL always start on the Tasks tab.
 
@@ -118,6 +118,31 @@ The active tab SHALL persist locally across an argus restart and SHALL be restor
 
 - **WHEN** no tab state has ever been persisted (first run) or argus is running in `--remote` mode
 - **THEN** the shell opens on the Tasks tab
+
+#### Scenario: Tasks enters resident from the right
+
+- **WHEN** cross-tab arrows are enabled, the resident tab is visible and modified Left is pressed on the unfiltered Tasks list or focused persistent Tasks rail
+- **THEN** the resident tab opens with its rightmost present pane focused
+
+#### Scenario: Resident panes traverse without PTY input
+
+- **WHEN** cross-tab arrows are enabled and modified Left or Right is pressed in the resident tab without a filter, modal or fullscreen pane
+- **THEN** focus follows rail ⇄ resident conversation ⇄ worker pane, skipping hidden or absent panes, and those arrows do not reach a PTY
+
+#### Scenario: Resident returns to the Tasks left edge
+
+- **WHEN** cross-tab arrows are enabled and modified Right is pressed in the resident's rightmost present pane
+- **THEN** Tasks opens with its list focused, or its persistent rail focused when that layout is active
+
+#### Scenario: Resident left end consumes the arrow
+
+- **WHEN** cross-tab arrows are enabled and modified Left is pressed on the unfiltered resident rail
+- **THEN** the event is consumed without moving focus, switching tabs or forwarding input
+
+#### Scenario: Resident unavailable preserves Tasks left end
+
+- **WHEN** the resident is disabled or remote mode has no resident tab and modified Left is pressed on Tasks
+- **THEN** Tasks remains active with its existing focus
 
 ### Requirement: Application quit
 

@@ -199,7 +199,7 @@ below. The `?` overlay always shows your active bindings.
 | `ctrl+o`  | Open the project's GitHub repo in browser (via `gh repo view --web`) |
 | `ctrl+r`  | Prune completed tasks                                           |
 | `j` / `k` | Navigate up/down                                                |
-| `Cmd+→`   | Enter the Projects rail (Settings → Appearance → cross-tab arrow navigation) |
+| `Cmd+←` / `Cmd+→` | Enter the resident tab at its rightmost pane / enter the Projects rail (Settings → Appearance → cross-tab arrow navigation; resident only when shown) |
 | `1` / `2` / `3` | Switch tabs (Tasks / Projects / Settings); `0` selects the Resident tab |
 | `ctrl+l`  | Refresh screen (wipe ghost cells; works in every non-agent tab) |
 | `ctrl+j`  | Open the **jump switcher (tasks + projects)**: a two-column popup with the Tasks list on the left (Hera-managed tasks always hidden, archived excluded) and the Projects rail on the right. `↑`/`↓` move, `←`/`→` switch column, typing filters both columns at once, `ctrl+g` hops to the next `(?)` or coordinator with an unread board, `Enter` goes there (a Projects row lands on that exact rail row in the Projects tab), `Esc` clears the filter then closes. Opens on the first `(?)` or unread coordinator board, else on the task you're viewing. Global — works from every tab, the agent view (zoomed or not), and every Projects pane, never reaching a PTY. Rebind with `[keybindings.global] switcher` |
@@ -1300,7 +1300,7 @@ Registered repos, keyed by name. The DB projects table is the primary source; en
 | `spinner_style` | string | `"progress"` | Spinner animation: `progress`, `dots`, `braille`, or `classic`. |
 | `default_agent_zoom` | bool | `true` | Resting agent-view layout: `true` opens single-pane/zoomed (side panels collapsed); `false` opens the 1:3:1 three-pane layout. `Ctrl+Z` toggles at runtime. |
 | `tasks_rail` | bool | `false` | Keep a 34-column Tasks rail beside the selected agent; Appearance → Persistent task rail applies live. |
-| `cross_tab_arrows` | bool | `false` | Opt-in. One continuous `Cmd+Left`/`Cmd+Right` chain: Tasks list / agent view (unzoomed or zoomed) ⇄ Projects rail ⇄ coordinator pane ⇄ agent pane ⇄ Settings left pane ⇄ Settings right pane. Entering from the left lands on the leftmost pane, from the right on the rightmost. Never fires while a modal, filter / inline edit has focus, or while a Projects pane is fullscreen. |
+| `cross_tab_arrows` | bool | `false` | Opt-in. One continuous `Cmd+Left`/`Cmd+Right` chain: Resident rail ⇄ resident conversation ⇄ worker pane (when shown) ⇄ Tasks list / agent view (unzoomed or zoomed) ⇄ Projects rail ⇄ coordinator pane ⇄ agent pane ⇄ Settings left pane ⇄ Settings right pane. Entering from the left lands on the leftmost pane, from the right on the rightmost. Never fires while a modal, filter / inline edit has focus, or while a Projects or resident pane is fullscreen. |
 | `theme` | string | `"default"` | ⚠️ Color theme name. Only `default` exists today and nothing reads this yet — reserved for a future theming layer. |
 | `show_elapsed` | bool | `true` | ⚠️ Reserved — show elapsed time on task rows. Not yet consumed. |
 | `show_icons` | bool | `true` | ⚠️ Reserved — show status icons. Not yet consumed. |

@@ -25,7 +25,7 @@ When the resident is enabled the TUI header SHALL show the resident tab first, l
 #### Scenario: Opens on the resident conversation
 
 - **WHEN** the user opens the resident tab
-- **THEN** keyboard focus is on the resident conversation pane (input goes straight to its PTY), `ctrl+alt+←` reaches the team rail, and `ctrl+q` returns to the previous screen from either
+- **THEN** keyboard focus is on the resident conversation pane (input goes straight to its PTY), except directional entry from Tasks focuses the rightmost present pane, `ctrl+alt+←` reaches the team rail, and `ctrl+q` returns to the previous screen from either
 
 #### Scenario: Unread counts
 
@@ -66,6 +66,11 @@ When the resident is enabled the TUI header SHALL show the resident tab first, l
 
 - **WHEN** a live session is newly bound to the resident pane
 - **THEN** the existing first-attach resync applies and the Hera size-drift kick is not armed
+
+#### Scenario: Optional spatial navigation
+
+- **WHEN** cross-tab arrows are enabled in local mode
+- **THEN** the resident rail, conversation and worker panes precede Tasks in the continuous chain, with modified arrows intercepted before PTY input and hidden panes skipped; modal, filter and fullscreen guards still apply
 
 ### Requirement: A global hotkey toggles the resident and returns exactly
 
