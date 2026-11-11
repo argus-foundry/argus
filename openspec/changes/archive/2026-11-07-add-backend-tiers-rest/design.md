@@ -10,3 +10,7 @@
 ## Deviations
 
 - The ticket's usage example lacks a freshness rule; expired readings (`resets_at` in the past) are returned as null.
+
+## Dynamic routing note
+
+`ResolveChoice` can score a tier with a remembered last-known reading when no live one exists, and adds a burst-spawn penalty to the reading it scores. `ProjectTierUsage` deliberately reports only the live, unexpired reading (null otherwise), so a tier shown as unknown may still be scored by routing from its last-known value, and routing's effective figure can exceed the displayed percentage right after a spawn burst. Surfacing either adjustment is a follow-up for ENG-1088.
