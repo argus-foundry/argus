@@ -85,6 +85,7 @@ func TestHeraPage_ShouldRebuild_RuntimeMapChangesTriggerRebuild(t *testing.T) {
 		{"sessionIdle", func(p *HeraPage) { p.SetSessionIdle([]string{"t1"}) }},
 		{"sessionRunning", func(p *HeraPage) { p.SetSessionRunning([]string{"t1"}) }},
 		{"sustainedActive", func(p *HeraPage) { p.SetSustainedActive([]string{"t1"}) }},
+		{"disconnected", func(p *HeraPage) { p.SetDisconnected([]string{"t1"}) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -3192,3 +3192,15 @@ func TestTaskSection(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskListView_SetDisconnected(t *testing.T) {
+	tl := NewTaskListView()
+	tl.SetDisconnected([]string{"1", "3"})
+	if !tl.disconnected["1"] || tl.disconnected["2"] || !tl.disconnected["3"] {
+		t.Fatalf("disconnected = %v", tl.disconnected)
+	}
+	tl.SetDisconnected(nil)
+	if len(tl.disconnected) != 0 {
+		t.Fatalf("SetDisconnected(nil) should clear, got %v", tl.disconnected)
+	}
+}

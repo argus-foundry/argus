@@ -124,6 +124,10 @@ type HeraPage struct {
 	// heramodel.BuildModel so a dead worker whose binding lingers stops its spinner
 	// (heramodel.RoleView.SessionRunning → IsActive false; BUG-C).
 	sessionRunning map[string]bool
+	// disconnected is the per-task "session not running" set the App pushes each
+	// tick (agent.DisconnectedIDs). Stamped onto RoleView.Disconnected during the
+	// off-thread build (buildFromSnapshot) for live-bound, non-complete roles.
+	disconnected map[string]bool
 	// sustainedActive is the authoritative per-task sustained-activity set the App
 	// pushes each tick (the same agent.ResumeActivityTick debounce that already
 	// clears the content-scan needs-input flag). doRefresh threads it into
@@ -155,6 +159,7 @@ type HeraPage struct {
 	lastNeedsInput      map[string]bool
 	lastSessionIdle     map[string]bool
 	lastSessionRunning  map[string]bool
+	lastDisconnected    map[string]bool
 	lastSustainedActive map[string]bool
 
 	// tierResolver stamps the diligence-tiering readout (AppliedModel/Effort +
@@ -854,6 +859,21 @@ func (p *HeraPage) SetSessionRunning(ids []string) {
 	p.sessionRunning = m
 }
 
+// SetDisconnected records the task IDs whose session is not running (the App's
+// agent.DisconnectedIDs set). Pure setter; the change gate (shouldRebuild)
+// compares it so a flip schedules a rebuild. MUST run on the tview thread.
+func (p *HeraPage) SetDisconnected(ids []string) {
+	if len(ids) == 0 {
+		p.disconnected = nil
+		return
+	}
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	p.disconnected = m
+}
+
 // SetSustainedActive records the task IDs the App classified as sustained-active
 // this tick — several CONSECUTIVE ticks of demonstrated working content
 // (agent.ResumeActivityTick's existing debounce, the same signal that already
@@ -1018,6 +1038,7 @@ func (p *HeraPage) shouldRebuild() bool {
 	return !maps.Equal(p.needsInput, p.lastNeedsInput) ||
 		!maps.Equal(p.sessionIdle, p.lastSessionIdle) ||
 		!maps.Equal(p.sessionRunning, p.lastSessionRunning) ||
+		!maps.Equal(p.disconnected, p.lastDisconnected) ||
 		!maps.Equal(p.sustainedActive, p.lastSustainedActive)
 }
 
@@ -1038,6 +1059,7 @@ func (p *HeraPage) markRebuiltFrom(gs gateState) {
 	p.lastNeedsInput = gs.needsInput
 	p.lastSessionIdle = gs.sessionIdle
 	p.lastSessionRunning = gs.sessionRunning
+	p.lastDisconnected = gs.disconnected
 	p.lastSustainedActive = gs.sustainedActive
 }
 

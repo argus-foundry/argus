@@ -41,6 +41,12 @@ func TestRoleStatusIcon_Precedence(t *testing.T) {
 		{"active over ready_to_close (BUG-F)", RoleStatusInputs{Active: true, ReadyToClose: true}, SpinnerFrame(frame)},
 		{"active over failed", RoleStatusInputs{Active: true, Failed: true}, SpinnerFrame(frame)},
 		{"active over done", RoleStatusInputs{Active: true, Done: true}, SpinnerFrame(frame)},
+		// show-disconnected-agents D2: below needs-input/active, above every resting state.
+		{"needs-input over disconnected", RoleStatusInputs{NeedsInput: true, Disconnected: true}, theme.IconNeedsInput},
+		{"active over disconnected", RoleStatusInputs{Active: true, Disconnected: true}, SpinnerFrame(frame)},
+		{"disconnected over ready_to_close", RoleStatusInputs{Disconnected: true, ReadyToClose: true}, IconDisconnected},
+		{"disconnected over accepted", RoleStatusInputs{Disconnected: true, Accepted: true}, IconDisconnected},
+		{"disconnected over done/idle/live", RoleStatusInputs{Disconnected: true, Done: true, Idle: true, Live: true}, IconDisconnected},
 		{"active → spinner frame", RoleStatusInputs{Active: true}, SpinnerFrame(frame)},
 		// Resting states (NOT active) rank among themselves exactly as before.
 		{"ready_to_close over failed/done (resting)", RoleStatusInputs{ReadyToClose: true, Failed: true, Done: true}, theme.IconReview},
@@ -112,4 +118,9 @@ func TestRoleStatusIcon_DimForcesDimStyle(t *testing.T) {
 	// ready_to_close also dims.
 	_, rtc := RoleStatusIcon(RoleStatusInputs{ReadyToClose: true}, true, 0)
 	testutil.Equal(t, rtc, theme.StyleDimmed)
+}
+
+func TestRoleStatusIcon_DisconnectedStyle(t *testing.T) {
+	_, style := RoleStatusIcon(RoleStatusInputs{Disconnected: true}, false, 0)
+	testutil.Equal(t, style, theme.StyleDimmed)
 }

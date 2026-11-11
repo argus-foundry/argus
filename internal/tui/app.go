@@ -486,6 +486,10 @@ type App struct {
 	// genuinely sustained-active role, regardless of task status or a stale
 	// self-reported `blocked` hera status (narrow-needs-input-sustained-active).
 	sustainedActiveIDs []string
+	// disconnectedTicks/disconnectedIDs back the disconnected-agent predicate
+	// (disconnected.go): per-task consecutive-absent counters and the current set.
+	disconnectedTicks map[string]int
+	disconnectedIDs   []string
 	// needsInputScreen re-emulates a session's log tail to the visible screen so
 	// needs-input detection matches the rendered screen, not StripANSI(raw) —
 	// catching fullscreen (alt-screen) prompts whose cursor-addressed glyphs are
@@ -1799,6 +1803,7 @@ func (a *App) onTick() {
 	runner := a.runner
 	a.mu.Unlock()
 	runningIDs, idleIDs := runner.RunningAndIdle()
+	listHealthy := sessionListHealthy(runner)
 	var bridgeStates map[string]bridge.State
 	if source, ok := runner.(interface {
 		BridgeStates() (map[string]bridge.State, error)
@@ -1854,6 +1859,7 @@ func (a *App) onTick() {
 		if a.startGen.Load() != startGen {
 			uxlog.Log("[tui] tick: startGen changed (%d → %d), skipping reconciliation with stale runningIDs", startGen, a.startGen.Load())
 			runningIDs = nil
+			listHealthy = false
 		}
 		// allowCachedTasks=true: this is the periodic per-tick path
 		// (add-tasks-fetch-dirty-check) — see shouldRefetchTasks's doc comment
@@ -1863,6 +1869,7 @@ func (a *App) onTick() {
 			a.bridgeStates = nil
 		}
 		a.refreshTasksWithIDs(runningIDs, idleIDs, true)
+		a.updateDisconnected(runningIDs, listHealthy)
 		if a.mode == modeTaskList && a.header.ActiveTab() == widget.TabTasks {
 			if selected := a.tasklist.SelectedTask(); selected != nil && selected.ID != a.artifactCountTaskID {
 				a.artifactCountTaskID = selected.ID

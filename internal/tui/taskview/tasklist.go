@@ -67,6 +67,7 @@ type TaskListView struct {
 	idle          map[string]bool
 	idleUnvisited map[string]bool          // task IDs idle since user last viewed the agent view
 	needsInput    map[string]bool          // task IDs whose agent appears blocked on a user prompt
+	disconnected  map[string]bool          // task IDs whose session is not running (agent.DisconnectedIDs)
 	prStates      map[string]model.PRState // task ID → cached GitHub PR review state (from task_meta "pr")
 	heraWorkers   map[string]bool          // task IDs that are hera-spawned workers (task_meta hera.role=worker)
 	heraCoords    map[string]bool          // task IDs that hold a hera coordinator role (task_meta hera.role=coordinator)
@@ -201,6 +202,16 @@ func (tl *TaskListView) SetTasks(tasks []*model.Task) {
 		tl.restoreCursor(prev, sec)
 	}
 	tl.clampCursor()
+}
+
+// SetDisconnected updates the set of task IDs whose session is not running
+// (agent.DisconnectedIDs: past the grace ticks, fail-open). Only in_progress
+// rows render the glyph (widget.TaskStatusIcon).
+func (tl *TaskListView) SetDisconnected(ids []string) {
+	tl.disconnected = make(map[string]bool, len(ids))
+	for _, id := range ids {
+		tl.disconnected[id] = true
+	}
 }
 
 // SetRunning updates the set of running task IDs.
@@ -1492,6 +1503,7 @@ func (tl *TaskListView) drawTaskRow(screen tcell.Screen, x, y, w int, task *mode
 		IdleUnvisited: tl.idleUnvisited[task.ID],
 		Running:       tl.running[task.ID],
 		Idle:          tl.idle[task.ID],
+		Disconnected:  tl.disconnected[task.ID],
 	}, tl.animFrame)
 
 	// Build the row. A dimmed cursor (the jump switcher's inactive column)

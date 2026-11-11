@@ -10,9 +10,11 @@ import (
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
-// maxStreamRetries is the maximum number of times to retry the stream
-// connection when it drops but the process is still alive on the daemon.
-const maxStreamRetries = 3
+// streamBackoff is the delay before each stream reconnect attempt after a drop
+// (len = max retries). About 15s in total so a daemon restart (which takes
+// seconds, not the ~1.5s the old 3x500ms budget allowed) is survived instead of
+// leaving a live agent behind a dead handle. A var so tests can shrink it.
+var streamBackoff = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
 
 // connectStream opens a stream connection to the daemon for this session's output.
 // Reads raw bytes and writes them to the local ring buffer. If the stream drops
@@ -21,6 +23,7 @@ const maxStreamRetries = 3
 // exited. Calls removeSessionStreamLost when retries are exhausted, the daemon
 // is unreachable, or the session was closed externally (e.g., client shutdown).
 func (rs *RemoteSession) connectStream(sockPath string) {
+	maxStreamRetries := len(streamBackoff)
 	for attempt := 0; attempt <= maxStreamRetries; attempt++ {
 		// Check if the client was closed (e.g., daemon restart replaced it).
 		// This stops stale goroutines from flooding the new daemon with
@@ -40,13 +43,25 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 
 		if attempt > 0 {
 			uxlog.Log("stream: retry %d/%d task=%s", attempt, maxStreamRetries, rs.taskID)
-			time.Sleep(500 * time.Millisecond)
+			select {
+			case <-time.After(streamBackoff[attempt-1]):
+			case <-rs.client.closed:
+			case <-rs.done:
+			}
 		}
 
+		rs.streamAttempt = attempt
 		exited, daemonDown := rs.streamOnce(sockPath)
 		if daemonDown {
-			// Can't reach daemon — stream lost, not a confirmed process exit.
-			uxlog.Log("stream: daemon unreachable task=%s, treating as stream lost", rs.taskID)
+			// Can't reach daemon — not a confirmed process exit. A restarting
+			// daemon is back within seconds, so keep backing off (a closed
+			// client/session stops the loop at the top) instead of dropping
+			// the handle on the first failure.
+			if attempt < maxStreamRetries {
+				uxlog.Log("stream: daemon unreachable task=%s attempt=%d/%d, will retry", rs.taskID, attempt, maxStreamRetries)
+				continue
+			}
+			uxlog.Log("stream: gave up, daemon unreachable after %d retries task=%s, treating as stream lost", maxStreamRetries, rs.taskID)
 			rs.close()
 			rs.client.removeSessionStreamLost(rs.taskID)
 			return
@@ -75,7 +90,7 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 	}
 
 	// Exhausted retries — stream lost, not a confirmed process exit.
-	uxlog.Log("stream: exhausted %d retries task=%s, treating as stream lost", maxStreamRetries, rs.taskID)
+	uxlog.Log("stream: gave up after %d retries task=%s, treating as stream lost", maxStreamRetries, rs.taskID)
 	rs.close()
 	rs.client.removeSessionStreamLost(rs.taskID)
 }
@@ -135,6 +150,9 @@ func (rs *RemoteSession) streamOnce(sockPath string) (processExited, daemonDown 
 	}
 
 	uxlog.Log("stream: connected task=%s", rs.taskID)
+	if rs.streamAttempt > 0 {
+		uxlog.Log("stream: reconnected task=%s after %d retries", rs.taskID, rs.streamAttempt)
+	}
 
 	// Read output stream into local ring buffer, teeing to any attached writers.
 	// The tee mirrors agent.Session.readLoop: snapshot the writer slice under

@@ -15,6 +15,9 @@ type TaskStatusInputs struct {
 	IdleUnvisited bool // idle and not viewed since going idle (moon with stars)
 	Running       bool // a live session is attached
 	Idle          bool // session present but quiet
+	// Disconnected: the in_progress task's session is not running (agent.
+	// DisconnectedIDs). Ranks below needs-input, above the idle/running states.
+	Disconnected bool
 }
 
 // TaskStatusIcon resolves a task's status glyph + style — the SINGLE source of
@@ -22,7 +25,7 @@ type TaskStatusInputs struct {
 // Tasks column is a private TaskListView, so it renders the same glyphs). `frame` is the
 // current spinner animation frame (the actively-running in_progress case
 // animates via SpinnerFrame). The in_progress precedence matches drawTaskRow:
-// needs-input → idle-unvisited → idle/absent → actively-running spinner.
+// needs-input → disconnected → idle-unvisited → idle/absent → actively-running spinner.
 func TaskStatusIcon(status model.Status, in TaskStatusInputs, frame int) (rune, tcell.Style) {
 	switch status {
 	case model.StatusPending:
@@ -31,6 +34,8 @@ func TaskStatusIcon(status model.Status, in TaskStatusInputs, frame int) (rune, 
 		switch {
 		case in.NeedsInput:
 			return theme.IconNeedsInput, theme.StyleNeedsInput
+		case in.Disconnected:
+			return IconDisconnected, theme.StyleDimmed
 		case in.IdleUnvisited:
 			return theme.IconMoonStars, theme.StyleInReview
 		case !in.Running || in.Idle:

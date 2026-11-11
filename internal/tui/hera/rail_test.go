@@ -1968,3 +1968,37 @@ func TestRail_CursorToParent(t *testing.T) {
 		testutil.Equal(t, r.rows[r.cursor].role.Name, "bridge")
 	})
 }
+
+// show-disconnected-agents D2: disconnected ranks below needs-input and the
+// spinner, above every stale-able resting state (incl. ready_to_close/accepted).
+func TestStatusIcon_DisconnectedPrecedence(t *testing.T) {
+	dead := &heramodel.RoleView{Live: true, TaskStatus: "in_review", ReadyToClose: true, Disconnected: true}
+	g, style := statusIcon(dead, false, 0)
+	testutil.Equal(t, g, widget.IconDisconnected)
+	testutil.Equal(t, style, theme.StyleDimmed)
+
+	blocked := &heramodel.RoleView{Live: true, NeedsInput: true, Disconnected: true}
+	g, _ = statusIcon(blocked, false, 0)
+	testutil.Equal(t, g, theme.IconNeedsInput)
+
+	// Not disconnected: the resting review glyph is untouched.
+	ok := &heramodel.RoleView{Live: true, TaskStatus: "in_review", ReadyToClose: true}
+	g, _ = statusIcon(ok, false, 0)
+	testutil.Equal(t, g, theme.IconReview)
+}
+
+func TestStampDisconnected(t *testing.T) {
+	m := heramodel.Model{Active: []heramodel.OrchView{{Roles: []heramodel.RoleView{
+		{TaskID: "a", Live: true, TaskStatus: "in_review"},
+		{TaskID: "b", Live: true, TaskStatus: "complete"}, // accepted: never disconnected
+		{TaskID: "c", Live: false},                        // unbound: never disconnected
+		{TaskID: "d", Live: true, TaskStatus: "in_progress"},
+	}}}, Freelance: []heramodel.RoleView{{TaskID: "a", Live: true, TaskStatus: "in_progress"}}}
+	stampDisconnected(&m, map[string]bool{"a": true, "b": true, "c": true})
+	r := m.Active[0].Roles
+	testutil.Equal(t, r[0].Disconnected, true)
+	testutil.Equal(t, r[1].Disconnected, false)
+	testutil.Equal(t, r[2].Disconnected, false)
+	testutil.Equal(t, r[3].Disconnected, false)
+	testutil.Equal(t, m.Freelance[0].Disconnected, true)
+}
