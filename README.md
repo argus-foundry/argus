@@ -115,7 +115,7 @@ Disabled by default — see **[Knowledge Base setup](docs/knowledge-base.md)** t
 - **Session resume** — `--resume` on Claude Code, `codex resume <id>` on Codex, `--session <id>` on opencode, `--conversation <id>` on Antigravity, `--resume <id>` on Cursor and Oh My Pi. Your conversation survives a daemon restart.
 - **Consistent scrollback across viewers** — switch between the TUI and the PWA at very different widths and the agent re-emits the conversation at the new size. Idle-gated so it never fires mid-tool-call; the SPA reattaches transparently.
 - **Agent forking** — duplicate a running task with full context (source info, recent output, git diff) injected into the new worktree.
-- **Smart auto-naming** — a Claude Haiku call quietly turns a free-form prompt into a kebab-case task name. Falls open to a regex slug if `claude` is unavailable.
+- **Smart auto-naming** — the task’s resolved backend quietly turns a free-form prompt into a kebab-case task name (Claude Haiku or Codex’s low-cost `gpt-6-luna`, independent of the task model). Unsupported or unavailable naming backends keep the initial regex slug; Argus never falls back to another backend.
 - **Scheduled tasks** — cron, descriptors, intervals, or one-shot runs. Each fire spawns a fresh task. Manage from TUI, PWA, or MCP.
 - **macOS sandbox-exec** — per-session SBPL profiles. `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.config/gcloud` blocked by default.
 - **Session-supervisor** — agent PTYs live in a long-lived out-of-process supervisor, not the daemon, so bouncing the daemon (for an upgrade or a config change) re-attaches to still-running agents instead of killing them. On by default; one flag rolls back to the legacy in-process runner.

@@ -14,7 +14,7 @@ import (
 // package so they don't need to install the `claude` CLI.
 var autoRenameFn = llm.GenerateName
 
-// runAutoRename asks Haiku for a better task name and writes it to the DB
+// runAutoRename asks the configured generator for a better task name and writes it to the DB
 // when the original auto-generated slug is still in place. It is fire-and-
 // forget: any error keeps the regex slug. The race guard (re-fetching the
 // task and comparing names) ensures we never clobber a manual rename that
@@ -27,14 +27,18 @@ var autoRenameFn = llm.GenerateName
 // a semaphore — the DefaultTimeout window (the goroutine's max lifetime) is the
 // knob that decides how many can pile up.
 func runAutoRename(database *db.DB, taskID, originalName, prompt string) {
+	runAutoRenameWith(database, taskID, originalName, prompt, autoRenameFn)
+}
+
+func runAutoRenameWith(database *db.DB, taskID, originalName, prompt string, generate func(context.Context, string) (string, error)) {
 	ctx, cancel := context.WithTimeout(context.Background(), llm.DefaultTimeout)
 	defer cancel()
 
-	name, err := autoRenameFn(ctx, prompt)
+	name, err := generate(ctx, prompt)
 	if err != nil {
 		switch {
 		case errors.Is(err, llm.ErrUnavailable):
-			uxlog.Log("[autoname] skipped (claude CLI unavailable) task=%s", taskID)
+			uxlog.Log("[autoname] skipped (naming CLI unavailable) task=%s", taskID)
 		case errors.Is(err, llm.ErrEmptyPrompt):
 			uxlog.Log("[autoname] skipped (empty prompt) task=%s", taskID)
 		default:
@@ -51,14 +55,14 @@ func runAutoRename(database *db.DB, taskID, originalName, prompt string) {
 	// Atomic compare-and-swap: only rename if Name still equals the regex
 	// slug we started with. Closes the TOCTOU window between a manual rename
 	// and our write — without this guard, a user typing into the rename
-	// modal during the ~2s Haiku call could be silently overwritten.
+	// modal during the ~2s backend call could be silently overwritten.
 	ok, err := database.RenameIfName(taskID, originalName, name)
 	if err != nil {
 		uxlog.Log("[autoname] db.RenameIfName failed task=%s err=%v", taskID, err)
 		return
 	}
 	if !ok {
-		uxlog.Log("[autoname] skipped task=%s (name changed externally while haiku in flight)", taskID)
+		uxlog.Log("[autoname] skipped task=%s (name changed externally while model in flight)", taskID)
 		return
 	}
 	uxlog.Log("[autoname] renamed task=%s %q → %q", taskID, originalName, name)
