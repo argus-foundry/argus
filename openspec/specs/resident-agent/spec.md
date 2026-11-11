@@ -152,7 +152,7 @@ The resident SHALL record durable facts (people, customers, projects, decisions)
 
 ### Requirement: Outward actions need one-key confirmation and Slack is drafts only
 
-The resident's permission policy SHALL have three tiers, configurable by `resident.allow_tools`, `resident.ask_tools` and `resident.deny_tools` with shipped defaults, and SHALL run under a non-bypass permission mode so the ask and deny tiers are enforced: read-only connector tools and `kb_*` SHALL run without a prompt; outward tools (every write/send/delete/modify tool of the outward connectors (Notion, Gmail, Superhuman, Slack, Linear, Google Calendar, Granola), except draft creation/update) SHALL require an explicit user confirmation through the Claude permission prompt; Slack message sending (including scheduled sends) SHALL be denied, with draft creation/update (such as `slack_send_message_draft`) allowed; Slack send and schedule are denied. A pending confirmation SHALL raise the resident's waiting (`?`) signal.
+The resident's permission policy SHALL have three tiers, configurable by `resident.allow_tools`, `resident.ask_tools` and `resident.deny_tools` with shipped defaults, and SHALL run under a non-bypass permission mode so the ask and deny tiers are enforced: all shipped local/built-in tools, non-Hera Argus MCP tools other than `task_message_send`, reviewed connector reads and draft creation/update SHALL run without a prompt; the resident-coordinator specification’s structural Hera allow/ask/deny tiers SHALL remain unchanged; outward tools (every write/send/delete/modify tool of the outward connectors (Notion, Gmail, Superhuman, Slack, Linear, Google Calendar, Granola, Keystone, Figma, Sketch, Claude Docs and artifacts), except draft creation/update) SHALL require an explicit user confirmation through the Claude permission prompt; Slack message sending (including scheduled sends) SHALL be denied, with draft creation/update (such as `slack_send_message_draft`) allowed; Slack send and schedule are denied. Rules SHALL follow deny > ask > allow precedence. Connector allow rules SHALL name a literal server and reviewed read or draft tool, never a whole external server or global MCP allow wildcard. An unmatched tool SHALL require confirmation in default mode. Because Claude Code does not support global MCP allow patterns or expose connector schemas to Argus at launch, reads from wholly unlisted servers MAY still prompt. A pending confirmation SHALL raise the resident's waiting (`?`) signal.
 
 The resident launch SHALL strip `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions` and `--permission-mode` (with its value) from the backend command, and SHALL then apply a flag allowlist to what remains: the executable SHALL be a Claude binary (any path whose base name is `claude`) and every other word SHALL be `--model`, `--effort`, `--fallback-model` (each with a value, space or `=` form) or `--verbose`, free of shell metacharacters. The executable word SHALL be a plain, unquoted path (no quotes, globs, escapes or `=`, and not starting with `-`, `+` or `%`) and MAY lead with `~/`; a value MAY be a simple single-quoted string (`--model 'opus[1m]'`, `--effort='high'`). Unescaped newlines or carriage returns (a newline ends the command in sh), double quotes, `$`, backticks, `;`, `|`, `&`, redirects, spaces, unbalanced quotes and unquoted `[`/`]` (a shell glob; the error suggests single-quoting) SHALL be refused. Any other word (including `--allowedTools`/`--allowed-tools`, `--plugin-dir`, `--plugin-url`, `--agent`, `--agents`, `--mcp-config`, `--settings`, `--setting-sources`, `--add-dir`, positional words and shell operators) SHALL make the launch fail with an error naming it, surfaced as the resident's reason; plain tasks are unaffected.
 
@@ -215,6 +215,46 @@ The policy SHALL be self-contained: the resident SHALL launch with setting sourc
 - **THEN** the launch fails naming the word (the glob error suggests single-quoting)
 - **WHEN** it contains `--allowedTools`, `--plugin-dir`, `--mcp-config`, `--settings`, `--add-dir` or a positional word
 - **THEN** the launch fails with an error naming the flag, and a plain task with the same command still launches
+
+#### Scenario: Bash runs without a prompt
+
+- **WHEN** the resident invokes Bash for ordinary work with no matching user ask/deny rule
+- **THEN** the policy allows it without confirmation and Argus sandbox restrictions still apply
+
+#### Scenario: Previously unlisted connector read runs without a prompt
+
+- **WHEN** the resident invokes Keystone `approved_mcp_servers`, `drata_policies`, `list_directory`, `list_repositories` or `search_code`, absent from the old defaults
+- **THEN** the shipped policy allows the read without confirmation
+
+#### Scenario: Mail send asks
+
+- **WHEN** the resident sends, replies to or forwards mail
+- **THEN** confirmation is required and the waiting signal is raised
+
+#### Scenario: Calendar event create asks
+
+- **WHEN** the resident calls `create_event`
+- **THEN** confirmation is required even when a broader allow also matches
+
+#### Scenario: Slack draft is allowed
+
+- **WHEN** the resident calls `slack_send_message_draft`
+- **THEN** it runs without confirmation
+
+#### Scenario: Slack send is denied
+
+- **WHEN** the resident sends or schedules a Slack message
+- **THEN** it is denied
+
+#### Scenario: Unknown write tool asks
+
+- **WHEN** the resident calls a new connector tool with no matching read/draft allow rule
+- **THEN** it asks rather than running unprompted, including on an otherwise covered server
+
+#### Scenario: User restrictions override broad allow
+
+- **WHEN** the user asks for a Bash command or denies a connector read which the shipped policy allows
+- **THEN** ask/deny remains effective, with deny taking precedence
 
 ### Requirement: Resident reply and unread state is daemon-held
 

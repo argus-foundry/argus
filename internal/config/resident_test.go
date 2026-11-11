@@ -145,8 +145,8 @@ func enforceResidentPermissions(t *testing.T) {
 	t.Cleanup(func() { ResidentPermissionsEnforced = old })
 }
 
-// The tiers must be disjoint: an allow entry that also appears in ask or deny
-// would make the intended policy ambiguous, and Slack send must never be allowed.
+// Exact entries stay disjoint; the broader Argus wildcard deliberately overlaps
+// structural Hera restrictions, where deny > ask > allow resolves precedence.
 func TestDefaultResidentConfig_TiersAreDisjoint(t *testing.T) {
 	r := DefaultResidentConfig(1)
 	seen := map[string]string{}
@@ -192,50 +192,11 @@ func TestDefaultResidentConfig_OutwardActionsNeverAllowed(t *testing.T) {
 			t.Errorf("DenyTools missing %s", want)
 		}
 	}
-	// Positive rule: every allow-tier entry is a single named MCP tool whose
-	// verb is read-only, except an explicit, reviewed exception list.
-	readVerbs := map[string]bool{"get": true, "list": true, "search": true, "read": true, "query": true, "fetch": true, "suggest": true, "whoami": true, "view": true}
-	// Draft create/update tools are the reviewed exceptions: a draft is never
-	// sent without a separate (ask-tier) send tool.
-	exceptions := []string{"mcp__argus__kb_ingest", "mcp__argus__task_recycle", "mcp__argus__task_inbox", "mcp__argus__task_message_ack", "mcp__claude_ai_Slack__slack_send_message_draft",
-		"mcp__claude_ai_Gmail__create_draft", "mcp__claude_ai_Gmail__update_draft", "mcp__claude_ai_Superhuman_Mail__create_or_update_draft"}
-	for _, ex := range exceptions {
-		if !has(r.AllowTools, ex) {
-			t.Errorf("AllowTools missing reviewed exception %s", ex)
-		}
-	}
+	// Every external grant is concrete. A future connector write must not
+	// accidentally inherit a whole-server or read-name wildcard allow.
 	for _, tool := range r.AllowTools {
-		if strings.HasPrefix(tool, "mcp__argus__hera_") {
-			continue
-		} // exhaustively reviewed by TestResidentHeraInventory
-		if !strings.HasPrefix(tool, "mcp__") || strings.Contains(tool, "*") {
-			t.Errorf("allow tier entry %q must be a concrete mcp__ tool", tool)
-			continue
-		}
-		if has(exceptions, tool) {
-			continue
-		}
-		op := tool[strings.LastIndex(tool, "__")+2:]
-		for _, prefix := range []string{"slack_", "notion-calendar-", "notion-connector-", "notion-memory-", "notion-", "kb_"} {
-			if strings.HasPrefix(op, prefix) {
-				op = strings.TrimPrefix(op, prefix)
-				break
-			}
-		}
-		verb := op
-		if i := strings.IndexAny(op, "_-"); i >= 0 {
-			verb = op[:i]
-		}
-		if !readVerbs[verb] {
-			t.Errorf("allow tier holds %s with non-read verb %q", tool, verb)
-		}
-		if has(r.AskTools, tool) || has(r.DenyTools, tool) {
-			t.Errorf("allow tier entry %s also in ask/deny", tool)
-		}
-	}
-	for _, ex := range exceptions {
-		if has(r.AskTools, ex) || has(r.DenyTools, ex) {
-			t.Errorf("exception %s also in ask/deny", ex)
+		if strings.HasPrefix(tool, "mcp__") && !strings.HasPrefix(tool, "mcp__argus__") {
+			testutil.Equal(t, strings.ContainsAny(tool, "*?"), false)
 		}
 	}
 }

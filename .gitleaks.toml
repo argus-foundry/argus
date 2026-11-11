@@ -1,0 +1,14 @@
+title = "Argus secret scanning"
+
+[extend]
+useDefault = true
+
+# Fixed permission-rule tool names, not Cloudflare credentials.
+[[rules]]
+id = "cloudflare-api-key"
+
+[[rules.allowlists]]
+description = "Resident policy's literal Cloudflare MCP tool identifiers"
+condition = "AND"
+paths = ['''^internal/config/resident\.go$''']
+regexes = ['''^mcp__claude_ai_Keystone__cloudflare_zones?$''']

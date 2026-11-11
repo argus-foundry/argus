@@ -265,7 +265,10 @@ const (
 	//     and repairs stale symlinks before spawn (fix-codex-daemon-state-symlink).
 	//     A stale supervisor still links the source daemon state and can fail
 	//     every new Codex task at startup.
-	SupervisorSpawnSurface = 45
+	// 46: the resident allows ordinary built-ins and non-structural Argus
+	//     tools plus reviewed connector reads/drafts (widen-resident-allow-tier).
+	//     A stale supervisor retains the old narrow defaults and keeps prompting.
+	SupervisorSpawnSurface = 46
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -576,7 +579,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "9679a2f94aa5709ce5b45be594d0cc6242facb7e6be4ed48b9ef12e6018bc1e7"
+	SpawnSurfaceDigest  = "0192757a477dd89fe9dc6fc410b7dd1aa1b1def784bf9c6f7cd6473454d6510d"
 	StreamSurfaceDigest = "a0b3efb1c129a7c3a3ba94ef8922d258e60d87907e1f599f17e8108ad97770f0"
 )
 
