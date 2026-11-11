@@ -101,6 +101,9 @@ type Family struct {
 	// TrustWorktree prepares persisted folder trust before a fresh task starts.
 	// Nil means this family does not need folder-trust preparation.
 	TrustWorktree func(task *model.Task, cfg config.Config) error
+	// WorktreeTrustFlag delivers trust to this process without editing the
+	// account's config. The flag is retained on both fresh and resumed launches.
+	WorktreeTrustFlag func(worktree string) (string, error)
 
 	// PinsSessionID: the CLI accepts a start-time `--session-id <id>`, so the
 	// task's ID is minted before launch. False means capture-style: the ID is
@@ -743,17 +746,18 @@ var families = []*Family{
 		},
 	},
 	{
-		Spec:            mustSpec(backendkind.Codex),
-		Capture:         captureCodex,
-		TransferSession: codexTransferSession,
-		ResumeCmd:       codexResumeCommand,
-		CostSource:      CostSourceCodexRollout,
-		ContextReader:   readCodexContext,
-		ContextProvider: ContextProviderOpenAI,
-		ContextSource:   ContextSourceCodex,
-		UsageReader:     readCodexUsage,
-		UsageProvider:   ContextProviderOpenAI,
-		UsageSource:     ContextSourceCodex,
+		Spec:              mustSpec(backendkind.Codex),
+		WorktreeTrustFlag: codexWorktreeTrustFlag,
+		Capture:           captureCodex,
+		TransferSession:   codexTransferSession,
+		ResumeCmd:         codexResumeCommand,
+		CostSource:        CostSourceCodexRollout,
+		ContextReader:     readCodexContext,
+		ContextProvider:   ContextProviderOpenAI,
+		ContextSource:     ContextSourceCodex,
+		UsageReader:       readCodexUsage,
+		UsageProvider:     ContextProviderOpenAI,
+		UsageSource:       ContextSourceCodex,
 		// Keep this list synced with the Codex CLI's own `/model` picker and
 		// the seed diligence profiles' archetype.*.models.codex entries.
 		KnownModels:   []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"},

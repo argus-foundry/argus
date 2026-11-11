@@ -2,23 +2,21 @@ package inject
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
+	"time"
 
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/argus-foundry/argus/internal/inject/atomicfile"
 )
 
-var claudeTrustMu sync.Mutex
-
 // TrustClaudeWorktree updates only this worktree's persisted folder trust.
 // The caller supplies the launched account's global config file. Read afresh
-// each time: Claude also writes this file. The mutex serializes Argus callers;
-// atomic rename protects readers, but cannot lock out Claude's own writers.
-func TrustClaudeWorktree(path, worktree string) error {
+// each time under Claude's own directory lock, held through atomic rename.
+func TrustClaudeWorktree(path, worktree string) (err error) {
 	canonical, err := filepath.EvalSymlinks(worktree)
 	if err != nil {
 		return fmt.Errorf("trust claude: resolve worktree: %w", err)
@@ -28,8 +26,14 @@ func TrustClaudeWorktree(path, worktree string) error {
 		return err
 	}
 	canonical = norm.NFC.String(canonical)
-	claudeTrustMu.Lock()
-	defer claudeTrustMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	lease, err := acquireClaudeConfigLock(path, claudeLockWait, time.Second)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, lease.close()) }()
 	data, err := atomicfile.ReadRawJSONObject(path, "trust claude")
 	if err != nil {
 		return err
@@ -54,10 +58,7 @@ func TrustClaudeWorktree(path, worktree string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return atomicfile.WriteJSON(path, data, "trust claude")
+	return atomicfile.WriteJSONGuarded(path, data, "trust claude", lease.refresh)
 }
 
 func trustObject(raw json.RawMessage) (map[string]json.RawMessage, error) {

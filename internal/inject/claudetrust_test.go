@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -69,12 +70,66 @@ func TestTrustClaudeWorktree(t *testing.T) {
 				testutil.NoError(t, err)
 				testutil.Equal(t, info.Mode().Perm(), os.FileMode(0o640))
 			}
+			before, err := os.Stat(path)
+			testutil.NoError(t, err)
 			testutil.NoError(t, TrustClaudeWorktree(path, wt))
 			again, err := os.ReadFile(path)
 			testutil.NoError(t, err)
 			testutil.Equal(t, string(again), string(raw))
+			after, err := os.Stat(path)
+			testutil.NoError(t, err)
+			testutil.True(t, os.SameFile(before, after)) // already trusted: no rename
 		})
 	}
+}
+
+func TestTrustClaudeWorktree_WaitsForWriter(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(os.Getenv("HOME"), ".claude.json")
+	wt := t.TempDir()
+	testutil.NoError(t, os.WriteFile(path, []byte(`{"token":"old"}`), 0o600))
+	testutil.NoError(t, os.Mkdir(path+".lock", 0o700))
+	done := make(chan error, 1)
+	go func() { done <- TrustClaudeWorktree(path, wt) }()
+	select {
+	case err := <-done:
+		t.Fatalf("trust returned while another writer held the lock: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	testutil.NoError(t, os.WriteFile(path, []byte(`{"token":"refreshed"}`), 0o600))
+	testutil.NoError(t, os.Remove(path+".lock"))
+	select {
+	case err := <-done:
+		testutil.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("trust did not finish after lock handoff")
+	}
+	raw, err := os.ReadFile(path)
+	testutil.NoError(t, err)
+	testutil.Contains(t, string(raw), `"token": "refreshed"`)
+	testutil.Contains(t, string(raw), `"hasTrustDialogAccepted": true`)
+	_, err = os.Stat(path + ".lock")
+	testutil.True(t, os.IsNotExist(err))
+}
+
+func TestTrustClaudeWorktree_LockTimeoutPreservesData(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(os.Getenv("HOME"), ".claude.json")
+	testutil.NoError(t, os.WriteFile(path, []byte(`{"token":"keep"}`), 0o600))
+	testutil.NoError(t, os.Mkdir(path+".lock", 0o700))
+	// Even a very old lock belongs to someone else; do not steal it.
+	old := time.Now().Add(-time.Hour)
+	testutil.NoError(t, os.Chtimes(path+".lock", old, old))
+	start := time.Now()
+	err := TrustClaudeWorktree(path, t.TempDir())
+	testutil.NotNil(t, err)
+	testutil.True(t, time.Since(start) < 2*time.Second)
+	raw, err := os.ReadFile(path)
+	testutil.NoError(t, err)
+	testutil.Equal(t, string(raw), `{"token":"keep"}`)
+	info, err := os.Stat(path + ".lock")
+	testutil.NoError(t, err)
+	testutil.True(t, info.IsDir())
 }
 
 func TestTrustClaudeWorktree_Paths(t *testing.T) {

@@ -17,13 +17,15 @@ func TestCreateAndStart_ClaudeTrust(t *testing.T) {
 	for _, tc := range []struct {
 		name, account, command, toml, initial string
 		trust                                 bool
+		locked                                bool
 	}{
 		{name: "plain", command: "claude", trust: true},
 		{name: "named account", account: "work", command: "claude", trust: true},
 		{name: "aliased backend", command: "/usr/local/bin/claude --verbose", trust: true},
-		{name: "disabled", command: "claude", toml: "[claude]\ntrust_worktrees = false\n"},
+		{name: "disabled", command: "claude", toml: "[agents]\ntrust_worktrees = false\n"},
 		{name: "other family", command: "codex"},
 		{name: "fail open", command: "claude", initial: "{bad json"},
+		{name: "lock busy fails open", command: "claude", locked: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := initGitRepo(t) // redirects HOME before any creation
@@ -42,6 +44,9 @@ func TestCreateAndStart_ClaudeTrust(t *testing.T) {
 			}
 			if tc.initial != "" {
 				testutil.NoError(t, os.WriteFile(path, []byte(tc.initial), 0o600))
+			}
+			if tc.locked {
+				testutil.NoError(t, os.Mkdir(path+".lock", 0o700))
 			}
 			wt := ""
 			runner := &fakeRunner{sessionPID: 42}
@@ -72,6 +77,11 @@ func TestCreateAndStart_ClaudeTrust(t *testing.T) {
 			testutil.NoError(t, err)
 			testutil.Equal(t, task.Status, model.StatusInProgress)
 			testutil.Equal(t, runner.startCalls, 1)
+			if tc.locked {
+				info, err := os.Stat(path + ".lock")
+				testutil.NoError(t, err)
+				testutil.True(t, info.IsDir())
+			}
 			if tc.account != "" {
 				_, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".claude.json"))
 				testutil.True(t, os.IsNotExist(err))

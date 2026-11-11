@@ -10,7 +10,7 @@ import (
 )
 
 func trustClaudeWorktree(task *model.Task, cfg config.Config) error {
-	if !cfg.Claude.TrustWorktrees {
+	if !cfg.Agents.TrustWorktrees {
 		return nil
 	}
 	// Account selection and backend env mappings must match launch. An explicit

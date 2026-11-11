@@ -268,7 +268,11 @@ const (
 	// 46: the resident allows ordinary built-ins and non-structural Argus
 	//     tools plus reviewed connector reads/drafts (widen-resident-allow-tier).
 	//     A stale supervisor retains the old narrow defaults and keeps prompting.
-	SupervisorSpawnSurface = 46
+	// 47: Codex receives a process-scoped inline projects-table trust override
+	//     for its physical worktree on fresh and resumed launches, gated by
+	//     [agents] trust_worktrees. A stale supervisor still shows the folder
+	//     trust dialog even with approval/sandbox bypass enabled.
+	SupervisorSpawnSurface = 47
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -496,6 +500,8 @@ var SupervisorSpawnPaths = []string{
 	"internal/agent/git_policy.go",                                   // child-only Git signing policy
 	"internal/config/git.go",                                         // Git policy schema and validation
 	"internal/agent/backends.go",                                     // backend family registry BuildCmd dispatches on
+	"internal/agent/codextrust.go",                                   // process-scoped Codex worktree trust flag
+	"internal/config/agenttrust.go",                                  // shared trust switch/default used by launches
 	"internal/mcplimits/limits.go",                                   // shared inbox cap and derived MCP client deadline
 	"internal/agent/bridge_mod.go",                                   // --plugin-dir bridge mod materialization seam BuildCmd calls
 	"internal/bridgemod/bridgemod.go",                                // embedded argus-bridge mod + content-addressed materialization
@@ -579,7 +585,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "454b694b6b1513eb0f3ef133236ceaf5ccb76ec6030a408965c531a5aec6d1b7"
+	SpawnSurfaceDigest  = "5eef69ee8d0046078b9e29e45a4e330b5ac1d9d928e43e1088c772d0e4cd7ba9"
 	StreamSurfaceDigest = "a0b3efb1c129a7c3a3ba94ef8922d258e60d87907e1f599f17e8108ad97770f0"
 )
 

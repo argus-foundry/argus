@@ -20,6 +20,10 @@ import (
 // symlink at path is replaced, never followed: a sandboxed agent can write
 // these config dirs and must not be able to aim the daemon's write elsewhere.
 func Write(path string, data []byte, label string) error {
+	return write(path, data, label, nil)
+}
+
+func write(path string, data []byte, label string, beforeRename func() error) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".argus-*.tmp")
 	if err != nil {
 		return fmt.Errorf("%s: create temp: %w", label, err)
@@ -41,6 +45,12 @@ func Write(path string, data []byte, label string) error {
 		os.Remove(tmpName) //nolint:errcheck
 		return fmt.Errorf("%s: close temp: %w", label, err)
 	}
+	if beforeRename != nil {
+		if err := beforeRename(); err != nil {
+			os.Remove(tmpName) //nolint:errcheck
+			return fmt.Errorf("%s: pre-rename guard: %w", label, err)
+		}
+	}
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName) //nolint:errcheck
 		return fmt.Errorf("%s: rename: %w", label, err)
@@ -60,11 +70,18 @@ func WriteIfDifferent(path string, data []byte, label string) error {
 // WriteJSON marshals v as two-space-indented JSON with a trailing newline and
 // writes it atomically.
 func WriteJSON(path string, v any, label string) error {
+	return WriteJSONGuarded(path, v, label, nil)
+}
+
+// WriteJSONGuarded checks a caller's lock ownership immediately before the
+// atomic rename. A failed guard leaves the destination untouched and removes
+// the temporary file. Other callers use WriteJSON without a guard.
+func WriteJSONGuarded(path string, v any, label string, beforeRename func() error) error {
 	out, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("%s: marshal: %w", label, err)
 	}
-	return Write(path, append(out, '\n'), label)
+	return write(path, append(out, '\n'), label, beforeRename)
 }
 
 // maxJSONSize bounds ReadJSONObject so a planted oversized file can't exhaust
