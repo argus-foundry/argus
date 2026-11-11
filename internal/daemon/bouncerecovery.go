@@ -5,7 +5,6 @@ import (
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/bouncerecovery"
-	"github.com/argus-foundry/argus/internal/db"
 )
 
 // bounceRecoveryRunner adapts the daemon's session runner to
@@ -35,8 +34,7 @@ func (d *Daemon) runBounceRecovery() {
 		slog.Warn("[bounce-recovery] no notifier; recovery worker not started")
 		return
 	}
-	var store *db.DB = d.db
-	w := bouncerecovery.NewWorker(store,
+	w := bouncerecovery.NewWorker(d.db,
 		&bounceRecoveryRunner{revive: NewHeraReviveRunner(d.db, d.runner, d.cfgFn), runner: d.runner},
 		d.notifier, d.cfgFn)
 	// A resumed agent launched before the MCP port binds would start without

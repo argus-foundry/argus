@@ -49,12 +49,13 @@ func record(database *db.DB, orphanIDs []string, now time.Time, classify classif
 			slog.Info("[bounce-recovery] skip task (missing, archived or resident)", "task", id)
 			continue
 		}
-		role, roleName, orchID, coordTask, depth := roleInfo(database, id)
+		rd := roleInfo(database, id)
+		rd.depth = orchDepth(database, rd.orchID)
 		st := classify(t, database)
 		e := Entry{
 			TaskID: id, KilledAt: now, State: st.Kind, Question: st.Question, Options: st.Options,
-			Role: role, RoleName: roleName, TaskName: t.Name, OrchID: orchID,
-			CoordTask: coordTask, Depth: depth, BounceID: bounceID,
+			Role: rd.role, RoleName: rd.roleName, TaskName: t.Name, OrchID: rd.orchID,
+			CoordTask: rd.coordTask, Depth: rd.depth, BounceID: bounceID,
 		}
 		e.Status = initialStatus(e, inSet)
 		if err := Save(database, e); err != nil {
@@ -62,7 +63,7 @@ func record(database *db.DB, orphanIDs []string, now time.Time, classify classif
 			continue
 		}
 		written++
-		slog.Info("[bounce-recovery] recorded", "task", id, "name", t.Name, "role", role, "state", st.Kind, "status", e.Status, "depth", depth)
+		slog.Info("[bounce-recovery] recorded", "task", id, "name", t.Name, "role", rd.role, "state", st.Kind, "status", e.Status, "depth", rd.depth)
 	}
 	return written
 }
@@ -88,48 +89,62 @@ func unsupervisedStatus(e Entry) Status {
 	return StatusPending
 }
 
-// roleInfo resolves a task's hera role class, orchestrator, supervising
-// coordinator task and orchestrator depth. Any lookup error degrades to a
+// roleDetails is a task's hera role class, orchestrator, supervising
+// coordinator task and orchestrator depth.
+type roleDetails struct {
+	role      string
+	roleName  string
+	orchID    int64
+	coordTask string
+	depth     int
+}
+
+// hat is one live binding paired with its role.
+type hat struct {
+	binding *db.HeraBinding
+	role    *db.HeraRole
+}
+
+// roleInfo resolves a task's hera role details. Any lookup error degrades to a
 // plain task rather than failing the record.
-func roleInfo(d *db.DB, taskID string) (role, roleName string, orchID int64, coordTask string, depth int) {
-	role = RolePlain
+func roleInfo(d *db.DB, taskID string) roleDetails {
+	out := roleDetails{role: RolePlain}
 	bindings, err := d.ListHeraLiveBindingsByTask(taskID)
-	if err != nil || len(bindings) == 0 {
-		return
+	if err != nil {
+		return out
 	}
-	var workerB, coordB *db.HeraBinding
-	var workerRole, coordRole *db.HeraRole
+	var coordHat, workerHat *hat
 	for _, b := range bindings {
 		r, err := d.HeraRole(b.RoleID)
 		if err != nil || r == nil {
 			continue
 		}
+		h := &hat{binding: b, role: r}
 		if r.Kind == db.HeraKindCoordinator {
-			if coordB == nil {
-				coordB, coordRole = b, r
+			if coordHat == nil {
+				coordHat = h
 			}
-		} else if workerB == nil {
-			workerB, workerRole = b, r
+		} else if workerHat == nil {
+			workerHat = h
 		}
 	}
 	switch {
-	case coordB != nil:
-		role, roleName, orchID = RoleCoordinator, coordRole.Name, coordB.OrchestratorID
-	case workerB != nil:
-		role, roleName, orchID = RoleWorker, workerRole.Name, workerB.OrchestratorID
-		if workerRole.Kind == db.HeraKindFreelance {
-			role = RoleFreelance
+	case coordHat != nil:
+		out.role, out.roleName, out.orchID = RoleCoordinator, coordHat.role.Name, coordHat.binding.OrchestratorID
+	case workerHat != nil:
+		out.role, out.roleName, out.orchID = RoleWorker, workerHat.role.Name, workerHat.binding.OrchestratorID
+		if workerHat.role.Kind == db.HeraKindFreelance {
+			out.role = RoleFreelance
 		}
 	default:
-		return
+		return out
 	}
 	// The supervising coordinator comes from the WORKER hat (a sub-coordinator
 	// is a worker in its parent's orchestrator too).
-	if workerB != nil {
-		coordTask = coordinatorTaskOf(d, workerB.OrchestratorID, taskID)
+	if workerHat != nil {
+		out.coordTask = coordinatorTaskOf(d, workerHat.binding.OrchestratorID, taskID)
 	}
-	depth = orchDepth(d, orchID)
-	return
+	return out
 }
 
 // coordinatorTaskOf returns the task bound to the coordinator role of orchID.
@@ -148,19 +163,23 @@ func coordinatorTaskOf(d *db.DB, orchID int64, selfTask string) string {
 	return ""
 }
 
-// orchDepth counts parent links above orchID (cycle-guarded).
+// maxOrchDepth bounds the parent-link walk (cycle guard).
+const maxOrchDepth = 16
+
+// orchDepth counts parent links above orchID.
 func orchDepth(d *db.DB, orchID int64) int {
+	cur := orchID
 	depth := 0
-	for i := 0; i < 16; i++ {
-		parent, _, err := d.HeraOrchLink(orchID)
+	for depth < maxOrchDepth {
+		parent, _, err := d.HeraOrchLink(cur)
 		if err != nil {
 			if !errors.Is(err, db.ErrHeraNotFound) {
-				slog.Warn("[bounce-recovery] orch link lookup failed", "orch", orchID, "err", err)
+				slog.Warn("[bounce-recovery] orch link lookup failed", "orch", cur, "err", err)
 			}
-			return depth
+			break
 		}
 		depth++
-		orchID = parent
+		cur = parent
 	}
 	return depth
 }

@@ -332,7 +332,7 @@ func TestWorker_DelegatedPromotedWhenCoordinatorFails(t *testing.T) {
 	team(t, h.d)
 	mid := transcriptstate.State{Kind: transcriptstate.MidTurn}
 	record(h.d, []string{"c", "w1", "w2"}, h.now, stateOf(map[string]transcriptstate.State{"c": mid, "w1": mid, "w2": {Kind: transcriptstate.Idle}}))
-	h.d.Update(&model.Task{ID: "c", Name: "task-c", Project: "p", Worktree: "/wt/c", Status: model.StatusInReview, Archived: true})
+	testutil.NoError(t, h.d.Update(&model.Task{ID: "c", Name: "task-c", Project: "p", Worktree: "/wt/c", Status: model.StatusInReview, Archived: true}))
 	h.r.failFor["c"] = 9
 	for i := 0; i < 6; i++ {
 		h.tick(40 * time.Second)
