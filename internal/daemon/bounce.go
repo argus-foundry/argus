@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/bouncerecovery"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/hera"
 	"github.com/argus-foundry/argus/internal/heraadopt"
@@ -282,6 +284,15 @@ func (d *Daemon) reattachSupervised() {
 		if t, gerr := d.db.Get(id); gerr == nil && t != nil {
 			agent.RefreshResumeSessionID(d.db, t)
 		}
+	}
+
+	// Record the orphans in the bounce-recovery ledger (add-bounce-recovery) so
+	// the recovery worker can resume the interrupted ones. After the session-ID
+	// refresh above: classification reads the newest transcript. Off switch:
+	// [bounce_recovery] enabled=false skips this and restores the old behavior.
+	if d.cfgFn().BounceRecovery.Enabled {
+		recorded := bouncerecovery.Record(d.db, orphans, time.Now())
+		slog.Info("[bounce-recovery] orphans recorded", "orphans", len(orphans), "recorded", recorded)
 	}
 
 	// Signal ARGUS_BOUNCED to the true orphans only.

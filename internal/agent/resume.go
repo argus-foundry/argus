@@ -27,15 +27,36 @@ func ResumableSessionAvailable(task *model.Task, cfg config.Config) (bool, error
 }
 
 func claudeResumeAvailable(task *model.Task, cfg config.Config) (bool, error) {
+	path, err := claudeTranscriptPath(task, cfg)
+	return path != "", err
+}
+
+// ClaudeTranscriptPath returns the on-disk JSONL transcript of task's recorded
+// Claude session, or "" when the task's backend family is not Claude (only
+// Claude declares ResumeAvailable) or the transcript does not exist. It is the
+// single locator behind both resume availability and bounce-recovery's
+// state-at-death classification.
+func ClaudeTranscriptPath(task *model.Task, cfg config.Config) (string, error) {
+	backend, err := ResolveBackend(task, cfg)
+	if err != nil {
+		return "", err
+	}
+	if FamilyOf(backend.Command).ResumeAvailable == nil {
+		return "", nil
+	}
+	return claudeTranscriptPath(task, cfg)
+}
+
+func claudeTranscriptPath(task *model.Task, cfg config.Config) (string, error) {
 	dir, err := ClaudeConfigDirForTask(task, cfg)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if task.Worktree == "" {
-		return false, fmt.Errorf("cannot inspect transcript without a worktree")
+		return "", fmt.Errorf("cannot inspect transcript without a worktree")
 	}
 	if task.SessionID == "" || filepath.Base(task.SessionID) != task.SessionID {
-		return false, nil
+		return "", nil
 	}
 	paths := []string{task.Worktree}
 	physical, pathErr := filepath.EvalSymlinks(task.Worktree)
@@ -49,21 +70,22 @@ func claudeResumeAvailable(task *model.Task, cfg config.Config) (bool, error) {
 			inspectErr = err
 			continue
 		}
-		info, err := os.Stat(filepath.Join(project, task.SessionID+".jsonl"))
+		file := filepath.Join(project, task.SessionID+".jsonl")
+		info, err := os.Stat(file)
 		if err == nil && info.Mode().IsRegular() {
-			return true, nil
+			return file, nil
 		}
 		if err != nil && !os.IsNotExist(err) {
 			inspectErr = err
 		}
 	}
 	if inspectErr != nil {
-		return false, inspectErr
+		return "", inspectErr
 	}
 	if pathErr != nil && !os.IsNotExist(pathErr) {
-		return false, pathErr
+		return "", pathErr
 	}
-	return false, nil
+	return "", nil
 }
 
 // prepareResume is called only after reserving a genuinely new runner launch,

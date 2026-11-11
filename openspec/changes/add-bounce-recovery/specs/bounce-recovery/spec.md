@@ -2,7 +2,7 @@
 
 ### Requirement: Recovery ledger of bounce-killed sessions
 
-When the supervisor-restart reconcile finds true orphans, the daemon SHALL record each non-resident, non-archived orphan in a durable ledger (task_meta namespace `bounce`) before any resume is attempted. Each entry SHALL carry the kill time, the agent's state at death (`parked_question`, `mid_turn`, `idle`, or `unknown`), the pending question text and options when parked, the hera role kind and orchestrator, and a recovery status (`pending`, `resumed`, `dormant`, `delegated`, `failed`, `expired`). The ledger SHALL survive a daemon restart so an interrupted recovery continues. When the ledger cannot be written, the daemon SHALL log the failure and continue serving.
+When the supervisor-restart reconcile finds true orphans, the daemon SHALL record each non-resident, non-archived orphan in a durable ledger (task_meta namespace `bounce`) before any resume is attempted. Each entry SHALL carry the kill time, the agent's state at death (`parked_question`, `mid_turn`, `idle`, or `unknown`), the pending question text and options when parked, the hera role kind and orchestrator, and a recovery status (`pending`, `resumed`, `dormant`, `delegated`, `failed`, `expired`, `superseded`). The ledger SHALL survive a daemon restart so an interrupted recovery continues. When the ledger cannot be written, the daemon SHALL log the failure and continue serving.
 
 #### Scenario: Orphans recorded before resume
 
@@ -54,7 +54,7 @@ The recovery worker SHALL resume: every orphaned coordinator regardless of state
 
 ### Requirement: Throttled, coordinator-first resume
 
-The recovery worker SHALL start resumes in order of orchestrator depth (shallowest coordinators first, then unsupervised agents), oldest kill first within a tier. It SHALL keep at most `max_concurrent` resumed sessions unsettled at once and SHALL wait at least `stagger_seconds` between starts. A resumed session counts as settled once it has produced output and is idle, or after a 60 second ceiling. A failed start SHALL be retried with backoff up to 3 attempts, then marked `failed` and logged. Entries older than `expiry_hours` SHALL be marked `expired` and never resumed.
+The recovery worker SHALL start resumes in order of orchestrator depth (shallowest coordinators first, then unsupervised agents), oldest kill first within a tier. It SHALL keep at most `max_concurrent` resumed sessions unsettled at once and SHALL wait at least `stagger_seconds` between starts. A resumed session counts as settled once it is idle at least 8 seconds after its start, or after a 60 second ceiling. The worker SHALL wait for the daemon's MCP port to be bound (unless the MCP server is disabled) before starting any resume. A failed start SHALL be retried with backoff up to 3 attempts, then marked `failed` and logged. Entries older than `expiry_hours` SHALL be marked `expired` and never resumed.
 
 #### Scenario: Thirty orphans
 

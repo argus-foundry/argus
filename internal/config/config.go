@@ -9,24 +9,25 @@ import (
 type Config struct {
 	// MCPPort is the daemon's actual listener port for task launch. It is runtime
 	// only; the configured KB.HTTPPort may differ when the listener retries.
-	MCPPort     int                `toml:"-"`
-	Defaults    Defaults           `toml:"defaults"`
-	Backends    map[string]Backend `toml:"backends"`
-	Projects    map[string]Project `toml:"projects"`
-	Keybindings Keybindings        `toml:"keybindings"`
-	UI          UIConfig           `toml:"ui"`
-	Sandbox     SandboxConfig      `toml:"sandbox"`
-	KB          KBConfig           `toml:"kb"`
-	API         APIConfig          `toml:"api"`
-	Hera        HeraConfig         `toml:"hera"`
-	Resident    ResidentConfig     `toml:"resident"`
-	DevStack    DevStackConfig     `toml:"devstack"`
-	Supervisor  SupervisorConfig   `toml:"supervisor"`
-	Bridge      BridgeConfig       `toml:"bridge"`
-	Argus       ArgusConfig        `toml:"argus"`
-	Secrets     SecretsConfig      `toml:"secrets"`
-	Git         GitConfig          `toml:"git"`
-	Agents      AgentsConfig       `toml:"agents"`
+	MCPPort        int                  `toml:"-"`
+	Defaults       Defaults             `toml:"defaults"`
+	Backends       map[string]Backend   `toml:"backends"`
+	Projects       map[string]Project   `toml:"projects"`
+	Keybindings    Keybindings          `toml:"keybindings"`
+	UI             UIConfig             `toml:"ui"`
+	Sandbox        SandboxConfig        `toml:"sandbox"`
+	KB             KBConfig             `toml:"kb"`
+	API            APIConfig            `toml:"api"`
+	Hera           HeraConfig           `toml:"hera"`
+	Resident       ResidentConfig       `toml:"resident"`
+	DevStack       DevStackConfig       `toml:"devstack"`
+	BounceRecovery BounceRecoveryConfig `toml:"bounce_recovery"`
+	Supervisor     SupervisorConfig     `toml:"supervisor"`
+	Bridge         BridgeConfig         `toml:"bridge"`
+	Argus          ArgusConfig          `toml:"argus"`
+	Secrets        SecretsConfig        `toml:"secrets"`
+	Git            GitConfig            `toml:"git"`
+	Agents         AgentsConfig         `toml:"agents"`
 	// CacheDirs maps a TARGET environment-variable name to a subdirectory name
 	// under `~/.argus/cache/`, shared across every worktree of every task —
 	// the opt-in, project-configurable generalization of the GOCACHE /
@@ -210,6 +211,25 @@ type BridgeConfig struct {
 	// Band and Toasts control visible mod UI and are read live by sessions.
 	Band   bool `toml:"band"`
 	Toasts bool `toml:"toasts"`
+}
+
+// BounceRecoveryConfig controls the daemon's post-supervisor-restart recovery
+// (add-bounce-recovery): auto-resuming agents the restart killed. config.toml
+// only; absent keys keep the defaults. Enabled=false restores the old
+// behavior exactly (reconcile to in_review + ARGUS_BOUNCED, no resume).
+type BounceRecoveryConfig struct {
+	Enabled bool `toml:"enabled"`
+	// MaxConcurrent caps resumed sessions that have not yet settled.
+	MaxConcurrent int `toml:"max_concurrent"`
+	// StaggerSeconds is the minimum gap between two resume starts.
+	StaggerSeconds int `toml:"stagger_seconds"`
+	// ExpiryHours: ledger entries older than this are never resumed.
+	ExpiryHours int `toml:"expiry_hours"`
+}
+
+// DefaultBounceRecovery returns the shipped defaults.
+func DefaultBounceRecovery() BounceRecoveryConfig {
+	return BounceRecoveryConfig{Enabled: true, MaxConcurrent: 3, StaggerSeconds: 4, ExpiryHours: 6}
 }
 
 // DevStackConfig controls the daemon's finished-task dev-stack sweeper
@@ -587,9 +607,10 @@ func DefaultConfig() Config {
 			CoordinatorNudgeIncrement: 50000,
 			WorkerContextWindow:       1000000,
 		},
-		Resident: DefaultResidentConfig(300000),
-		DevStack: DevStackConfig{StopFinished: true},
-		Bridge:   BridgeConfig{Enabled: true, Delivery: true, Band: true, Toasts: true},
+		Resident:       DefaultResidentConfig(300000),
+		DevStack:       DevStackConfig{StopFinished: true},
+		BounceRecovery: DefaultBounceRecovery(),
+		Bridge:         BridgeConfig{Enabled: true, Delivery: true, Band: true, Toasts: true},
 		Supervisor: SupervisorConfig{
 			// Default ON as of P4: agents run under the out-of-process
 			// session-supervisor so the daemon can bounce without interrupting
