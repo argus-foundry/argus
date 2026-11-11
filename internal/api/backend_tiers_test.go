@@ -27,7 +27,7 @@ func tierReq(method, url, body, ifMatch string) *http.Request {
 
 func getTiers(t *testing.T, srv *Server) backendTiersJSON {
 	t.Helper()
-	w := serve(srv, tierReq("GET", "/api/backend-tiers", "", ""))
+	w := serveAccountRequest(srv, tierReq("GET", "/api/backend-tiers", "", ""))
 	testutil.Equal(t, w.Code, http.StatusOK)
 	var got backendTiersJSON
 	testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
@@ -107,7 +107,7 @@ func TestBackendTiers_Get(t *testing.T) {
 		srv, d := accountsServer(t, tierTOML)
 		testutil.NoError(t, d.SetBackendTiers([]config.BackendTier{{Backend: "claude", Account: "work", Probe: config.ProbeClaudeUsage, ThresholdPct: 80}}))
 
-		w := serve(srv, tierReq("GET", "/api/backend-tiers", "", ""))
+		w := serveAccountRequest(srv, tierReq("GET", "/api/backend-tiers", "", ""))
 		var raw map[string]any
 		testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
 		tier1 := raw["tiers"].([]any)[0].(map[string]any)
@@ -140,7 +140,7 @@ func TestBackendTiers_Get(t *testing.T) {
 			{Backend: "claude", Probe: config.ProbeNone},
 		}))
 		list := getTiers(t, srv)
-		w := serve(srv, tierReq("GET", "/api/backend-tiers/usage", "", ""))
+		w := serveAccountRequest(srv, tierReq("GET", "/api/backend-tiers/usage", "", ""))
 		testutil.Equal(t, w.Code, http.StatusOK)
 		var got struct {
 			Revision string                   `json:"revision"`
@@ -178,7 +178,7 @@ func TestBackendTiers_Put(t *testing.T) {
 		rs := captureEvents(t)
 		srv, d := accountsServer(t, tierTOML)
 		rev := getTiers(t, srv).Revision
-		w := serve(srv, tierReq("PUT", "/api/backend-tiers", good, `"`+rev+`"`))
+		w := serveAccountRequest(srv, tierReq("PUT", "/api/backend-tiers", good, `"`+rev+`"`))
 		testutil.Equal(t, w.Code, http.StatusOK)
 		var got backendTiersJSON
 		testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
@@ -202,7 +202,7 @@ func TestBackendTiers_Put(t *testing.T) {
 		rev := getTiers(t, srv).Revision
 		req := acctReq("PUT", "/api/backend-tiers", good, "device")
 		req.Header.Set("If-Match", rev)
-		testutil.Equal(t, serve(srv, req).Code, http.StatusOK)
+		testutil.Equal(t, serveAccountRequest(srv, req).Code, http.StatusOK)
 		stored, _ := d.BackendTiers()
 		testutil.Equal(t, len(stored), 3)
 	})
@@ -211,7 +211,7 @@ func TestBackendTiers_Put(t *testing.T) {
 		srv, d := accountsServer(t, tierTOML)
 		testutil.NoError(t, d.SetBackendTiers([]config.BackendTier{{Backend: "claude", Probe: "none"}}))
 		rev := getTiers(t, srv).Revision
-		w := serve(srv, tierReq("PUT", "/api/backend-tiers", `{"tiers":[]}`, rev))
+		w := serveAccountRequest(srv, tierReq("PUT", "/api/backend-tiers", `{"tiers":[]}`, rev))
 		testutil.Equal(t, w.Code, http.StatusOK)
 		stored, err := d.BackendTiers()
 		testutil.NoError(t, err)
@@ -221,14 +221,14 @@ func TestBackendTiers_Put(t *testing.T) {
 	t.Run("second save with stale revision is 412", func(t *testing.T) {
 		srv, _ := accountsServer(t, tierTOML)
 		rev := getTiers(t, srv).Revision
-		testutil.Equal(t, serve(srv, tierReq("PUT", "/api/backend-tiers", good, rev)).Code, http.StatusOK)
-		testutil.Equal(t, serve(srv, tierReq("PUT", "/api/backend-tiers", good, rev)).Code, http.StatusPreconditionFailed)
+		testutil.Equal(t, serveAccountRequest(srv, tierReq("PUT", "/api/backend-tiers", good, rev)).Code, http.StatusOK)
+		testutil.Equal(t, serveAccountRequest(srv, tierReq("PUT", "/api/backend-tiers", good, rev)).Code, http.StatusPreconditionFailed)
 	})
 
 	t.Run("missing If-Match is 428 and stores nothing", func(t *testing.T) {
 		srv, d := accountsServer(t, tierTOML)
 		rs := captureEvents(t)
-		testutil.Equal(t, serve(srv, tierReq("PUT", "/api/backend-tiers", good, "")).Code, http.StatusPreconditionRequired)
+		testutil.Equal(t, serveAccountRequest(srv, tierReq("PUT", "/api/backend-tiers", good, "")).Code, http.StatusPreconditionRequired)
 		stored, _ := d.BackendTiers()
 		testutil.Equal(t, len(stored), 0)
 		testutil.Equal(t, len(rs.configChanged()), 0)
@@ -253,7 +253,7 @@ func TestBackendTiers_Put(t *testing.T) {
 			testutil.NoError(t, d.SetBackendTiers(seed))
 			rs := captureEvents(t)
 			rev := getTiers(t, srv).Revision
-			w := serve(srv, tierReq("PUT", "/api/backend-tiers", tc.body, rev))
+			w := serveAccountRequest(srv, tierReq("PUT", "/api/backend-tiers", tc.body, rev))
 			testutil.Equal(t, w.Code, http.StatusBadRequest)
 			stored, err := d.BackendTiers()
 			testutil.NoError(t, err)
@@ -276,7 +276,7 @@ probe = "none"
 		testutil.False(t, got.Editable)
 		testutil.Equal(t, len(got.Tiers), 1)
 
-		w := serve(srv, tierReq("PUT", "/api/backend-tiers", good, got.Revision))
+		w := serveAccountRequest(srv, tierReq("PUT", "/api/backend-tiers", good, got.Revision))
 		testutil.Equal(t, w.Code, http.StatusConflict)
 		stored, err := d.BackendTiers()
 		testutil.NoError(t, err)
@@ -289,7 +289,7 @@ probe = "none"
 		srv, _ := accountsServer(t, tierTOML)
 		rev := getTiers(t, srv).Revision
 		body := `{"tiers":[{"backend":"` + strings.Repeat("x", 9000) + `"}]}`
-		testutil.Equal(t, serve(srv, tierReq("PUT", "/api/backend-tiers", body, rev)).Code, http.StatusBadRequest)
+		testutil.Equal(t, serveAccountRequest(srv, tierReq("PUT", "/api/backend-tiers", body, rev)).Code, http.StatusBadRequest)
 	})
 }
 
