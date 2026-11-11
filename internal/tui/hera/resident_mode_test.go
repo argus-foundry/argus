@@ -1,15 +1,51 @@
 package hera
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/gdamore/tcell/v2"
 )
+
+func TestResidentRailDisplayName(t *testing.T) {
+	for _, tt := range []struct{ name, display, want string }{
+		{"custom", "Solo", "Solo"},
+		{"unicode", "Sólo", "Sólo"},
+		{"empty", "", "resident"},
+		{"control", "So\x1blo", "resident"},
+		{"too long", strings.Repeat("x", config.ResidentNameMaxRunes+1), "resident"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newResidentFixture(t)
+			f.enter(t)
+			f.p.SetResidentTitle(tt.display)
+			text := joinRows(railScreen(t, f.p.Rail(), 40, 12))
+			testutil.Contains(t, text, tt.want)
+			testutil.Contains(t, text, "alpha")
+			testutil.Contains(t, text, "beta")
+			m := f.p.Rail().Model()
+			testutil.Equal(t, m.Active[0].Name, "resident")
+			testutil.Equal(t, m.Active[0].CoordRole().Name, "resident")
+			// A refresh must preserve the label without rewriting the model.
+			f.p.Reconcile()
+			testutil.Contains(t, joinRows(railScreen(t, f.p.Rail(), 40, 12)), tt.want)
+			f.p.SetResidentMode(false)
+			// Even a resident-named coordinator outside this tab keeps its identity label.
+			f.p.Rail().SetModel(m)
+			text = joinRows(railScreen(t, f.p.Rail(), 40, 12))
+			testutil.Contains(t, text, "resident")
+			if tt.want != "resident" {
+				testutil.False(t, strings.Contains(text, tt.want))
+			}
+		})
+	}
+}
 
 // residentFixture builds the standing team (resident coordinator + two
 // workers) plus an ordinary project orchestrator, and returns a page in

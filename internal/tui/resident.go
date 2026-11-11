@@ -33,13 +33,14 @@ type residentReturn struct {
 
 // refreshResidentTab runs on the UI goroutine alongside keymap/config refresh.
 // The resident is local-only until add-resident-web exposes a REST surface. It
-// only maintains the header label and bounces a viewer back to Tasks when the
+// maintains display labels and bounces a viewer back to Tasks when the
 // resident is disabled: the resident session itself is bound by the shared
 // HeraPage in resident mode (enterResidentView), never by this function.
 func (a *App) refreshResidentTab() {
 	_, local := a.db.(*db.DB)
 	cfg := a.db.Config().Resident
 	label := residentTabLabel(local, cfg)
+	a.heraPage.SetResidentTitle(cfg.Name)
 	// The marker is folded into this single label write so the tick can never
 	// clobber it; the stored attention state is applied by applyResidentState.
 	a.header.SetTabLabel(widget.TabResident, a.residentLabelWithMarker(label))
@@ -360,11 +361,13 @@ func (a *App) syncResidentBox() {
 	a.residentBox.Set(name, st.unread, st.waiting, st.preview, suppressed)
 }
 
-// refreshResidentLabelOnly re-derives just the header label (marker) from the
-// current config after a tab change, without touching the pane attachment.
+// refreshResidentLabelOnly re-derives display labels (including the header
+// marker) after a tab change, without touching the pane attachment.
 func (a *App) refreshResidentLabelOnly() {
 	_, local := a.db.(*db.DB)
-	label := residentTabLabel(local, a.db.Config().Resident)
+	cfg := a.db.Config().Resident
+	label := residentTabLabel(local, cfg)
+	a.heraPage.SetResidentTitle(cfg.Name)
 	a.header.SetTabLabel(widget.TabResident, a.residentLabelWithMarker(label))
 }
 

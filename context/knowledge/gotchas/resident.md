@@ -1,5 +1,7 @@
 # Resident agent (add-resident-agent)
 
+- **The resident rail name is a draw-only override on the shared Hera rail, cleared on mode exit.** Feed it through `SetResidentTitle` from both label refresh paths so Settings/config renames apply without reattaching; never rename the orchestrator or role model, which remain `resident` for routing.
+
 Memory, orientation and tool permissions are in [resident-memory.md](resident-memory.md). Other resident invariants sit with their areas: ensure-loop and RPCs in `daemon-rpc.md`, Stop hook and recycle seed in `orchestration.md`, `ctrl+\` and return snapshots in `keybindings.md`, rail box and tab marker in `tasklist-ui.md`, Settings category in `misc.md`.
 
 - **The resident is a task row with a `kind` marker, hidden at one choke-point predicate.** Task lists, the PR poller, reapers, merge-safety, `/api/tasks` and the cleanup sweeps all go through it; a new task-enumerating path that skips the predicate leaks the resident into Hera, the web UI or a completion sweep.
