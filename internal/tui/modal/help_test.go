@@ -483,6 +483,21 @@ func TestResidentSections_ListOnlyAllowedRailKeys(t *testing.T) {
 	}
 	testutil.Contains(t, titles, "Global")
 	testutil.Contains(t, titles, "Modals & Forms")
+	testutil.Contains(t, titles, "Coordinator board")
+	for _, sec := range secs {
+		if sec.Title != "Coordinator board" {
+			continue
+		}
+		board := ""
+		for _, b := range sec.Bindings {
+			board += b.Key + " " + b.Action + "\n"
+		}
+		for _, act := range keymap.ContextOrder(keymap.CtxHeraBoard) {
+			binding, ok := km.BindingFor(keymap.CtxHeraBoard, act)
+			testutil.True(t, ok)
+			testutil.Contains(t, board, binding.String()+" "+km.ActionLabel(act))
+		}
+	}
 }
 
 func TestResidentSections_FollowRebind(t *testing.T) {

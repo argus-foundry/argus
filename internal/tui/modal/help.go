@@ -192,8 +192,6 @@ func ResidentSectionsFromKeymap(km *keymap.Keymap) []HelpSection {
 			}
 			res.Bindings = append(res.Bindings, residentRailExtra...)
 			out = append(out, res)
-		case "Coordinator board":
-			// The resident has no board region.
 		default:
 			out = append(out, sec)
 		}

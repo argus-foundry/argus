@@ -35,6 +35,26 @@ func (p *HeraPage) SetBoardAuto(enabled bool) {
 	p.rail.SetBoardAuto(enabled)
 }
 
+// BoardActions reports the board commands applicable to the current region.
+// Physical dispatch stays in InputHandler so palette actions obey identical
+// focus, filtering, and PTY forwarding rules.
+func (p *HeraPage) BoardActions() []keymap.Action {
+	if !p.detailsMode || p.rail.Filtering() {
+		return nil
+	}
+	switch p.focus.State() {
+	case FocusRail:
+		return []keymap.Action{keymap.ActBoardToggle}
+	case FocusAgent:
+		if p.showBoard {
+			return keymap.ContextOrder(keymap.CtxHeraBoard)
+		}
+		return []keymap.Action{keymap.ActBoardToggle}
+	default:
+		return nil
+	}
+}
+
 func (r *Rail) coordMarker(orchID int64) rune {
 	if r.boardAuto {
 		if o := r.model.OrchByID(orchID); o != nil {
@@ -63,6 +83,27 @@ func (p *HeraPage) updateBoard(o *heramodel.OrchView) {
 	var selected int64
 	if i := p.board.selected(); i != nil {
 		selected = i.ID
+	}
+	// Only newly unread versions trigger auto-show. A manual switch to the
+	// plan must survive ordinary refreshes of the same open reminders.
+	if p.residentMode && p.boardAuto && !p.showBoard && c != nil {
+		for _, item := range c.BoardItems {
+			if item.Read {
+				continue
+			}
+			known := false
+			for _, old := range p.board.items {
+				if old.ID == item.ID && !old.Read && old.UpdatedAt.Equal(item.UpdatedAt) {
+					known = true
+					break
+				}
+			}
+			if !known {
+				p.showBoard = true
+				uxlog.Log("[board] unread arrival orch=%d item=%d resident=%v", o.ID, item.ID, p.residentMode)
+				break
+			}
+		}
 	}
 	p.board.items = nil
 	if c != nil {
