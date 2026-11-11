@@ -1,0 +1,5 @@
+- [x] agent: ResolveTaskRouting extracted from CreateAndStart; PreviewRouting
+- [x] REST: POST /api/routing/preview with coded errors and uxlog entries
+- [x] Tests: same result as creation, inherited/project/explicit/no-candidate, tier routing, no side effects, revalidation after routing change
+- [x] README reference, gotchas, supervisor spawn digest re-recorded (refactor only)
+- [x] Archive into base specs
