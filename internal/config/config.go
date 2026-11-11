@@ -26,6 +26,7 @@ type Config struct {
 	Argus       ArgusConfig        `toml:"argus"`
 	Secrets     SecretsConfig      `toml:"secrets"`
 	Git         GitConfig          `toml:"git"`
+	Agents      AgentsConfig       `toml:"agents"`
 	// CacheDirs maps a TARGET environment-variable name to a subdirectory name
 	// under `~/.argus/cache/`, shared across every worktree of every task —
 	// the opt-in, project-configurable generalization of the GOCACHE /
@@ -510,6 +511,7 @@ func (u UIConfig) ShouldCleanupWorktrees() bool {
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
+		Agents:   defaultAgentsConfig(),
 		Git:      GitConfig{AgentCommitSigning: "inherit"},
 		Defaults: Defaults{Backend: "claude", PermissionMode: PermissionModeBypassActive},
 		Backends: map[string]Backend{

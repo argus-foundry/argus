@@ -1239,6 +1239,20 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 		}
 	}
 
+	trustFlag := ""
+	if cfg.Agents.TrustWorktrees && fam.WorktreeTrustFlag != nil {
+		var trustErr error
+		trustFlag, trustErr = fam.WorktreeTrustFlag(task.Worktree)
+		if trustErr != nil {
+			trustFlag = ""
+			uxlog.Log("[trust] launch override failed (continuing) family=%s worktree=%q: %v", fam.Kind, task.Worktree, trustErr)
+			slog.Warn("[trust] launch override failed (continuing)", "family", fam.Kind, "worktree", task.Worktree, "err", trustErr)
+		} else {
+			uxlog.Log("[trust] launch override ready family=%s worktree=%q", fam.Kind, task.Worktree)
+			slog.Info("[trust] launch override ready", "family", fam.Kind, "worktree", task.Worktree)
+		}
+	}
+	cmdStr += trustFlag
 	if resume {
 		// A ResumeCmd family (codex) replaces the base command
 		// unconditionally — that's codex's contract and TestBuildCmd_Resume
@@ -1249,7 +1263,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 		// obviously-broken `--resume ''` flag.
 		switch {
 		case fam.ResumeCmd != nil:
-			cmdStr = fam.ResumeCmd(mcpFlag, modelFlag, task.SessionID)
+			cmdStr = fam.ResumeCmd(mcpFlag+trustFlag, modelFlag, task.SessionID)
 		case fam.ResumeFlag != "" && task.SessionID != "":
 			cmdStr += " " + fam.ResumeFlag + " " + shellQuote(task.SessionID)
 		}

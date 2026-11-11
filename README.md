@@ -1178,6 +1178,12 @@ Argus adds `--auto` when launching OpenCode, including resumed sessions and stor
 | `model` | string | `""` | Default model for this backend. Claude, Codex, Pi, Antigravity, and Cursor receive it as `--model <value>`; OpenCode receives it through the child-only `OPENCODE_CONFIG_CONTENT` `model` key because its v2 full TUI rejects the top-level flag. Empty = the CLI's own default. A per-task model overrides it. |
 | `models` | array | `[]` | Option list for the new-task model selector for this backend. Empty = built-in list (claude → `opus`/`sonnet`/`haiku`/`fable`, codex → its current model lineup — churns per Codex release, see `agent.KnownModels`, others including opencode, antigravity, and cursor → none, so `custom…` only). A `custom…` entry always lets you type a model not in the list. |
 
+#### `[agents]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `trust_worktrees` | bool | `true` | Trust Argus worktrees in Claude and Codex. Claude seeds the task account's trust before first launch under its config lock (500ms acquisition limit); Codex uses a process-scoped inline-table override on fresh/resumed launches without persisting trust to account config. Failures log and launch continues. config.toml only; applies across TUI, web and macOS. |
+
 #### `[bridge]`
 
 | Key | Type | Default | Description |
