@@ -1,3 +1,4 @@
+import {comparisonText} from './comparison.js';
 import {captureFocus} from '../../shared/focus-recovery.js';
 import {node,button,errorMessage} from '../../shared/dom.js';
 import {changedFiles,gitPath} from './git.js';
@@ -13,7 +14,7 @@ export class TaskChanges {
   }
   show(result) {
     const files=changedFiles(result),totals=statTotals(result);
-    this.stale=!!result.stale;this.watchDegraded=!!result.watch_degraded;
+    this.comparison=result.comparison;this.stale=!!result.stale;this.watchDegraded=!!result.watch_degraded;
     const summaries=new Map(),stats=new Map();
     for(const stat of [result.BranchDiff,result.Diff])for(const line of (stat||'').split('\n')) {
       const separator=line.lastIndexOf('|');if(separator<0)continue;
@@ -24,7 +25,7 @@ export class TaskChanges {
       const lines=stats.get(file.path)||[];
       summaries.set(file.path,JSON.stringify([file.status,lines]));
     }
-    const fingerprint=JSON.stringify([[...summaries],totals,result.git_revision,this.stale,this.watchDegraded]);
+    const fingerprint=JSON.stringify([[...summaries],totals,result.git_revision,this.comparison,this.stale,this.watchDegraded]);
     if(fingerprint===this.fingerprint)return false;
     const changed=new Set([...summaries.keys(),...(this.summaries?.keys()||[])]);
     for(const path of changed)if(this.revision!==result.git_revision||this.summaries?.get(path)!==summaries.get(path))this.counts.invalidate(path);
@@ -55,7 +56,8 @@ export class TaskChanges {
     toggle.setAttribute('aria-pressed',String(this.mode==='tree'));toggle.append(node('span','',this.mode==='flat'?'☷':'⊞'));
     header.append(toggle);
     this.list=node('div','changes-list');this.panel.replaceChildren(header,this.list);
-    if(this.stale||this.watchDegraded){const note=node('p','tool-note',this.stale?'Git snapshot is stale. Checking for current changes…':'Live file watching is degraded. Changes reconcile when the daemon refreshes.');note.setAttribute('role','status');this.panel.insertBefore(note,this.list);}
+    const comparison=node('p','tool-note changes-comparison',comparisonText(this.comparison));comparison.setAttribute('role','status');this.panel.replaceChildren(header,comparison,this.list);
+    if(this.stale||this.watchDegraded){const note=node('p','tool-note',this.stale?'Git snapshot is stale. Checking for current changes…':'Live file watching is degraded. Changes reconcile when the daemon refreshes.');note.setAttribute('role','status');this.panel.replaceChildren(header,comparison,note,this.list);}
     if (!this.files.length) this.list.append(node('p','empty-state','No changes yet'));
     const render=file=>{
       const previous=oldRows.get(file.path);

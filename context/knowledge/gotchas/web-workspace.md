@@ -192,3 +192,5 @@
 - **Agents account usage shares composer window validation and remains Claude-only.** Expired, null and invalid readings stay unavailable; Codex-only accounts omit the Claude usage block altogether.
 
 - **Deliver worktree invalidations outside task snapshot buffering and compare opaque revisions only for equality.** Fence status reads invalidated in flight; label stale snapshots and bound retry backoff so a persistent collection failure cannot spin.
+
+- **The comparison record describes base resolution, not which diff fallback supplied a file.** Preserve requested/resolved base, merge-base and fallback reason through diff layout changes; explain HEAD-first and untracked fallback without inventing a per-file kind.

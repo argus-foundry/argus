@@ -44,7 +44,7 @@ The numbered references retain the original backend tally identifiers and record
 14. `multiplexed-terminal-output` provides continuous shared output across visited tasks. Hidden cached terminals currently suspend SSE and recover only the bounded existing replay window.
 15. `discard-worktree-file` defines a confirmed per-file discard operation. Changes omits Discard.
 16. `git-per-file-numstat` supplies numeric per-file counts. Visible rows currently fetch individual diffs with at most four concurrent reads.
-17. `task-base-aware-git-comparison` honors task.base_branch and supplies comparison provenance. Changes currently displays the daemon's whole-stack comparison without client filtering.
+17. `task-base-aware-git-comparison` is adopted through authoritative comparison provenance in Changes and file diffs; the client renders the returned file list directly.
 18. `worktree-change-events` is adopted through matching revisioned invalidations, fenced snapshots and reconnect/resync convergence. Changes has no discovery interval; Artifacts retains its fallback.
 19. `clear-stale-role-ready-marker` clears ready_to_close when a role resumes working. Workspace role tags currently give working precedence over the stale marker.
 
@@ -203,7 +203,7 @@ The client SHALL distinguish request failures from successful results but SHALL 
 #### Scenario: Existing git response is empty
 - **WHEN** an existing git read succeeds with empty fields
 - **THEN** the UI SHALL describe that no changes were returned without claiming verified repository health
-- **AND** it SHALL NOT imply a complete repository tree or a stable comparison base
+- **AND** it SHALL NOT imply a complete repository tree or a stable comparison identity beyond the returned comparison provenance
 
 ### Requirement: Dictation friendly composer
 The composer SHALL use a native multiline textarea and receive focus after explicit task selection and successful submission when doing so does not interrupt another control. Enter SHALL send, Shift+Enter SHALL insert a newline, and composition or repeated Enter events SHALL NOT submit. Clipboard text, including multiline dictation, SHALL be inserted without automatic submission. Paste outside editable controls SHALL target the selected task's composer unless a dialog, drawer or terminal owns the interaction.
@@ -1373,4 +1373,11 @@ The workspace SHALL consume matching worktree.changed events directly even durin
 
 #### Scenario: Adopt the merged contract
 - **WHEN** An external edit sends a revision or revisionless invalidation; only the visible matching task refreshes, and an earlier snapshot cannot overwrite it.
+- **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback
+
+### Requirement: Changes comparison provenance
+The workspace SHALL label status and diff using returned comparison requested_base, resolved_base, merge_base and fallback_reason. It SHALL explain local HEAD changes, branch merge-base changes and untracked contents without inferring a per-file comparison kind absent from the contract. Fallback warnings SHALL name the effective base.
+
+#### Scenario: Adopt the merged contract
+- **WHEN** A stacked task displays only the returned list, and its diff labels the same returned provenance with effective-base fallback warnings.
 - **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback

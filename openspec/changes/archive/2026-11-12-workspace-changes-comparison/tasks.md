@@ -1,0 +1,4 @@
+- [x] Add failing unit and Changes browser coverage.
+- [x] Implement frontend adoption with diagnostics and lifecycle guards.
+- [x] Run workspace unit and scoped browser tests.
+- [x] Amend deferred contracts and archive into base specs before commit.

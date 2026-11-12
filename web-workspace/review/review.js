@@ -59,7 +59,7 @@ export class TaskReview {
       const result = await this.api.json(`/api/tasks/${encodeURIComponent(task.id)}/git/diff?path=${encodeURIComponent(path)}`, { signal: this.abort.signal });
       if (generation !== this.generation || this.task?.id !== task.id) return;
       const diff = result.Diff || '';
-      this.drawDiff(selection, diff);
+      this.drawDiff(selection, diff, result.comparison);
       log('review', 'diff loaded', { count: diff.length });
     } catch (error) {
       if (generation !== this.generation || error.name === 'AbortError') return;
@@ -68,7 +68,7 @@ export class TaskReview {
       log('review', 'diff failed', { status: error.status || 'error' });
     } finally { restore(); }
   }
-  drawDiff(selection, diff) { renderDiff($('review-panel'), { ...selection, diff }, mode => { selection.mode = mode; this.drawDiff(selection, diff); this.onSelection(); }); }
+  drawDiff(selection, diff, comparison) { renderDiff($('review-panel'), { ...selection, diff, comparison }, mode => { selection.mode = mode; this.drawDiff(selection, diff, comparison); this.onSelection(); }); }
   async openArtifact(task, artifact, activate = true) {
     this.cancel();
     const restore=captureFocus($('review-panel'),()=>document.getElementById('tab-review'),{signal:this.abort.signal});
