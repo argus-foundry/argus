@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/daemon"
@@ -14,7 +15,16 @@ import (
 // (len = max retries). About 15s in total so a daemon restart (which takes
 // seconds, not the ~1.5s the old 3x500ms budget allowed) is survived instead of
 // leaving a live agent behind a dead handle. A var so tests can shrink it.
-var streamBackoff = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+var streamBackoffPtr atomic.Pointer[[]time.Duration]
+
+func init() {
+	d := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+	streamBackoffPtr.Store(&d)
+}
+
+// streamBackoff returns the current schedule. Atomic because a connectStream
+// goroutine can outlive the test (or caller) that swapped the schedule.
+func streamBackoff() []time.Duration { return *streamBackoffPtr.Load() }
 
 // connectStream opens a stream connection to the daemon for this session's output.
 // Reads raw bytes and writes them to the local ring buffer. If the stream drops
@@ -23,7 +33,8 @@ var streamBackoff = []time.Duration{500 * time.Millisecond, time.Second, 2 * tim
 // exited. Calls removeSessionStreamLost when retries are exhausted, the daemon
 // is unreachable, or the session was closed externally (e.g., client shutdown).
 func (rs *RemoteSession) connectStream(sockPath string) {
-	maxStreamRetries := len(streamBackoff)
+	backoff := streamBackoff()
+	maxStreamRetries := len(backoff)
 	for attempt := 0; attempt <= maxStreamRetries; attempt++ {
 		// Check if the client was closed (e.g., daemon restart replaced it).
 		// This stops stale goroutines from flooding the new daemon with
@@ -44,7 +55,7 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 		if attempt > 0 {
 			uxlog.Log("stream: retry %d/%d task=%s", attempt, maxStreamRetries, rs.taskID)
 			select {
-			case <-time.After(streamBackoff[attempt-1]):
+			case <-time.After(backoff[attempt-1]):
 			case <-rs.client.closed:
 			case <-rs.done:
 			}

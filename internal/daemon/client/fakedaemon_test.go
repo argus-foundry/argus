@@ -731,14 +731,15 @@ func TestProbeSession(t *testing.T) {
 // shrinkStreamBackoff makes reconnect backoff test-fast (same retry count).
 func shrinkStreamBackoff(t *testing.T) {
 	t.Helper()
-	old := streamBackoff
-	streamBackoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond}
-	t.Cleanup(func() { streamBackoff = old })
+	old := streamBackoffPtr.Load()
+	fast := []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond}
+	streamBackoffPtr.Store(&fast)
+	t.Cleanup(func() { streamBackoffPtr.Store(old) })
 }
 
 func TestStreamBackoff_SpansDaemonRestart(t *testing.T) {
 	var total time.Duration
-	for _, d := range streamBackoff {
+	for _, d := range streamBackoff() {
 		total += d
 	}
 	if total < 10*time.Second || total > 20*time.Second {
@@ -768,5 +769,5 @@ func TestStream_DaemonDownRetriesThenLoses(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected StreamLost")
 	}
-	testutil.Equal(t, rs.streamAttempt, len(streamBackoff))
+	testutil.Equal(t, rs.streamAttempt, len(streamBackoff()))
 }
