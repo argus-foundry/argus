@@ -24,6 +24,12 @@ func sessionListHealthy(r any) bool {
 // tick-based) on the tview goroutine, with a.tasks current. healthy=false (the
 // session list could not be read, or runningIDs is stale) fails open.
 func (a *App) updateDisconnected(runningIDs []string, healthy bool) {
+	// A nil running list means "unknown", never "no sessions": every real
+	// provider returns a non-nil (possibly empty) slice on success, and nil on
+	// an RPC/HTTP error (client.Client, apiclient.Provider) or a startGen-stale
+	// tick. This covers providers with no SessionListHealthy of their own (the
+	// --remote REST provider), so a network blip can't mark everything ○.
+	healthy = healthy && runningIDs != nil
 	candidates := make([]string, 0, len(a.tasks))
 	for _, t := range a.tasks {
 		if t == nil || t.Archived {

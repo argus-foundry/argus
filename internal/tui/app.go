@@ -5082,7 +5082,7 @@ func (a *App) handleAgentKey(event *tcell.EventKey) *tcell.EventKey {
 		// show-disconnected-agents D4: Enter on a dead HANDLE of a still-alive
 		// agent reattaches the live session. It must NOT reach startSession —
 		// that fails "session already exists" and flips the task to Pending.
-		if a.agentPane.ReResolveSession(taskID, a.resolveSession) == terminal.ReResolveReplaced {
+		if a.reattachAgentPane(taskID) {
 			uxlog.Log("[tui] enter: reattached live session for task=%s (no restart)", taskID)
 			a.statusbar.SetInfo("Reconnected")
 			return nil
@@ -7446,9 +7446,33 @@ func (a *App) reresolveAgentPane(taskID string, runningIDs []string) {
 	if cur == nil || cur.Alive() || !slices.Contains(runningIDs, taskID) {
 		return
 	}
-	if a.agentPane.ReResolveSession(taskID, a.resolveSession) == terminal.ReResolveReplaced {
+	if a.reattachAgentPane(taskID) {
 		uxlog.Log("[tui] agent pane re-resolve task=%s (replaced dead handle; agent still alive)", taskID)
 	}
+}
+
+// reattachAgentPane re-resolves the Tasks-tab agent pane's session and, when it
+// attaches a LIVE handle (late bind or dead-handle replacement), restarts the
+// PTY sync loop: the previous loop captured the old handle and exited when it
+// died, so without this the reattached agent would stay at a stale width.
+// Reports whether a live session was attached — callers must then NOT call
+// startSession (the agent is alive; starting it fails "already exists" and
+// flips the task to Pending). Tview goroutine only; must not hold a.mu.
+func (a *App) reattachAgentPane(taskID string) bool {
+	var h agent.SessionHandle
+	out := a.agentPane.ReResolveSession(taskID, func(id string) agentview.TerminalAdapter {
+		sess := a.runner.Get(id)
+		if sess == nil {
+			return nil
+		}
+		h = sess
+		return sess
+	})
+	if out == terminal.ReResolveNone || h == nil || !h.Alive() {
+		return false
+	}
+	a.startAgentPTYSyncLoop(taskID, h)
+	return true
 }
 
 // resolveSession asks the CURRENT runner (read at call time, tview goroutine)

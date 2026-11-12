@@ -178,6 +178,22 @@ func TestProvider_RunningAndIdle(t *testing.T) {
 	testutil.False(t, p.HasSession("missing"))
 }
 
+// RunningAndIdle must distinguish a successful empty read (non-nil) from a
+// failed one (nil): App.updateDisconnected treats nil as "unknown".
+func TestProvider_RunningAndIdle_NilOnlyOnError(t *testing.T) {
+	fs := newFakeServer(t) // no sessions running
+	running, _ := NewProvider(fs.client()).RunningAndIdle()
+	testutil.True(t, running != nil)
+	testutil.Equal(t, len(running), 0)
+
+	f := newFixture(t)
+	f.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":"boom"}`, http.StatusInternalServerError)
+	})
+	running, _ = NewProvider(f.c).RunningAndIdle()
+	testutil.True(t, running == nil)
+}
+
 func TestProvider_WorkDir(t *testing.T) {
 	fs := newFakeServer(t)
 	fs.addTask("t1", TaskJSON{ID: "t1", Name: "t1", Status: "in_progress", Project: "p", CreatedAt: "2026-05-22T00:00:00Z", WorktreePath: "/tmp/wt"})

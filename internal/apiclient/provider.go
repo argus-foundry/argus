@@ -221,7 +221,14 @@ func (p *Provider) RunningAndIdle() (running, idle []string) {
 	if err != nil {
 		return nil, nil
 	}
-	return state.Running, state.Idle
+	// A successful read always yields a non-nil running list (JSON null/omitted
+	// decodes to nil): callers treat nil as "unknown" (fetch failed), never as
+	// "no sessions" — see App.updateDisconnected.
+	running, idle = state.Running, state.Idle
+	if running == nil {
+		running = []string{}
+	}
+	return running, idle
 }
 
 // HasSession reports whether the server tracks an alive session for the task.
