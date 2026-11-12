@@ -443,3 +443,23 @@ func ListMetaEntry(t *testing.T, d *DB, taskID, ns, key string) (TaskMetaEntry, 
 	t.Fatalf("no entry %s/%s/%s", taskID, ns, key)
 	return TaskMetaEntry{}, nil
 }
+
+func TestDB_DeleteMetaNamespaceForTask_OnlyThatNamespace(t *testing.T) {
+	d := testDB(t)
+	testutil.NoError(t, d.SetMeta("t1", "bounce", "status", "pending"))
+	testutil.NoError(t, d.SetMeta("t1", "hera", "status", "idle"))
+	testutil.NoError(t, d.SetMeta("t2", "bounce", "status", "pending"))
+
+	n, err := d.DeleteMetaNamespaceForTask("t1", "bounce")
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 1)
+	gone, _ := d.ListMeta("t1", "bounce")
+	testutil.Equal(t, len(gone), 0)
+	kept, _ := d.ListMeta("t1", "hera")
+	testutil.Equal(t, len(kept), 1)
+	other, _ := d.ListMeta("t2", "bounce")
+	testutil.Equal(t, len(other), 1)
+
+	_, err = d.DeleteMetaNamespaceForTask("", "bounce")
+	testutil.ErrorIs(t, err, ErrMetaInvalidKey)
+}

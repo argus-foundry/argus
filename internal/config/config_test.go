@@ -280,3 +280,18 @@ func TestDevStackConfig_DefaultOnAndTOMLOverride(t *testing.T) {
 	testutil.NoError(t, os.WriteFile(path2, []byte("[ui]\nshow_icons = true\n"), 0o600))
 	testutil.True(t, NewFileLoader(path2).Apply(DefaultConfig()).DevStack.StopFinished)
 }
+
+func TestBounceRecoveryConfig_DefaultsAndOverride(t *testing.T) {
+	d := DefaultConfig().BounceRecovery
+	testutil.True(t, d.Enabled)
+	testutil.Equal(t, d.MaxConcurrent, 3)
+	testutil.Equal(t, d.StaggerSeconds, 4)
+	testutil.Equal(t, d.ExpiryHours, 6)
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	testutil.NoError(t, os.WriteFile(path, []byte("[bounce_recovery]\nenabled = false\nmax_concurrent = 1\n"), 0o600))
+	got := NewFileLoader(path).Apply(DefaultConfig()).BounceRecovery
+	testutil.Equal(t, got.Enabled, false)
+	testutil.Equal(t, got.MaxConcurrent, 1)
+	testutil.Equal(t, got.ExpiryHours, 6) // untouched keys keep defaults
+}

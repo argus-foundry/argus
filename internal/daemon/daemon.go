@@ -1623,6 +1623,12 @@ func (d *Daemon) Serve(sockPath string) error {
 	// synthetic times instead of sleeping.
 	go d.runHostSuspendWatcher()
 
+	// Bounce-recovery worker (add-bounce-recovery). Resumes, throttled and
+	// coordinator-first, the agents a supervisor restart killed (ledger written
+	// by reattachSupervised). Inert with an empty ledger or when
+	// [bounce_recovery] enabled=false.
+	go d.runBounceRecovery()
+
 	// Hera plan-DAG gater (add-hera-plan-substrate). Runs whenever hera is
 	// enabled, independent of the KB/MCP server: it materializes already-authored
 	// planned nodes whose blockers have all reached role-status done. Inert when no

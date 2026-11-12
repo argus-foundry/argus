@@ -1155,6 +1155,15 @@ Every option below is overridable. A ⚠️ marks options that are **read but no
 | `share_project` | string | `""` | Project preselected in the New Task form when the PWA share target (iOS/Android share sheet) lands a payload. Empty falls back to the currently expanded project folder. |
 | `permission_mode` | string | `"bypass-active"` | Permission flags injected into Claude-style backends at launch. One of `default`, `acceptEdits`, `plan`, `bypass-allow`, `bypass-active`. |
 
+#### `[bounce_recovery]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `true` | After a supervisor restart kills agent sessions, the daemon resumes the interrupted ones: coordinators first, then agents with no coordinator above them that were mid-turn or parked on a question. Each gets an `[argus]` note saying what happened and what it was doing; a coordinator also gets the list of its killed workers and is told to `hera_revive` them. Idle plain tasks and residents stay dormant. `false` restores the old behavior (tasks flip to `in_review`, nothing resumes). Read live. |
+| `max_concurrent` | int | `3` | Resumed sessions that may be starting (not yet idle) at once. |
+| `stagger_seconds` | int | `4` | Minimum gap between two resume starts. |
+| `expiry_hours` | int | `6` | Entries older than this are never resumed (for example after a long shutdown). |
+
 #### `[devstack]`
 
 | Key | Type | Default | Description |

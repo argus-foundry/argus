@@ -243,3 +243,19 @@ func (d *DB) DeleteMetaForTask(taskID string) (int, error) {
 	n, _ := res.RowsAffected()
 	return int(n), nil
 }
+
+// DeleteMetaNamespaceForTask removes taskID's rows in one namespace only,
+// leaving every other namespace untouched. Returns the row count.
+func (d *DB) DeleteMetaNamespaceForTask(taskID, namespace string) (int, error) {
+	if taskID == "" || namespace == "" {
+		return 0, ErrMetaInvalidKey
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	res, err := d.conn.Exec(`DELETE FROM task_meta WHERE task_id=? AND namespace=?`, taskID, namespace)
+	if err != nil {
+		return 0, fmt.Errorf("delete meta namespace for task: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
