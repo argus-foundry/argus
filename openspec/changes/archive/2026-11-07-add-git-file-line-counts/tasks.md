@@ -1,0 +1,4 @@
+- [x] FileChange type and batch numstat collection in gitutil
+- [x] files on git status message and REST response
+- [x] Tests: scopes vs file diff, rename/binary/untracked/unicode/whitespace, failure, batch bound, API
+- [x] README REST table, gotcha, archive

@@ -29,3 +29,11 @@ func TestWtRevisionFingerprint(t *testing.T) {
 	testutil.Equal(t, worktreeRevision(root, large), statusRevision(large))
 	testutil.Equal(t, worktreeRevision(filepath.Join(root, "absent"), msg), statusRevision(msg))
 }
+
+func TestStatusRevisionCountsOnly(t *testing.T) {
+	one, two, zero := 1, 2, 0
+	msg := gitutil.GitStatusRefreshMsg{Status: "?? f", Files: []gitutil.FileChange{{Path: "f", Status: "??", Kind: gitutil.FileKindText, Additions: &one, Deletions: &zero}}}
+	first := statusRevision(msg)
+	msg.Files[0].Additions = &two
+	testutil.Equal(t, statusRevision(msg) != first, true)
+}
