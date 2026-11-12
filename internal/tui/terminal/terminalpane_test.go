@@ -5041,6 +5041,7 @@ func TestTerminalPane_Draw_DeadReplayStoppedBanner(t *testing.T) {
 		lines := strings.Split(readScreen(sim), "\n")
 		testutil.Contains(t, lines[0], deadReplayNote)
 		testutil.False(t, strings.Contains(lines[1], deadReplayNote))
+		testutil.False(t, strings.Contains(lines[0], "press Enter")) // neutral: closed-out Enter arms a banner
 	})
 	t.Run("explicit reason banner and border marker coexist", func(t *testing.T) {
 		sim := newSim(t, 60, 12)
@@ -5051,12 +5052,19 @@ func TestTerminalPane_Draw_DeadReplayStoppedBanner(t *testing.T) {
 		testutil.Contains(t, lines[0], deadReplayNote)
 		testutil.Contains(t, lines[1], "waiting for the Argus MCP server")
 	})
-	t.Run("narrow pane drops the marker rather than overlap the title", func(t *testing.T) {
-		sim := newSim(t, 20, 12)
-		tp := newReplay(t, "dead-banner-narrow")
-		tp.SetRect(0, 0, 20, 12)
+	t.Run("complete task gets no marker", func(t *testing.T) {
+		sim := newSim(t, 60, 12)
+		tp := newReplay(t, "dead-banner-complete")
+		tp.SetLaunchTaskStatus("complete")
 		tp.Draw(sim)
-		testutil.False(t, strings.Contains(readScreen(sim), "press Enter to resume"))
+		testutil.False(t, strings.Contains(readScreen(sim), deadReplayNote))
+	})
+	t.Run("narrow pane drops the marker rather than overlap the title", func(t *testing.T) {
+		sim := newSim(t, 14, 12)
+		tp := newReplay(t, "dead-banner-narrow")
+		tp.SetRect(0, 0, 14, 12)
+		tp.Draw(sim)
+		testutil.False(t, strings.Contains(readScreen(sim), deadReplayNote))
 	})
 	t.Run("live session shows no stopped banner", func(t *testing.T) {
 		sim := newSim(t, 60, 12)

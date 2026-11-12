@@ -8,7 +8,7 @@
 ## 2. Icons
 - [x] 2.1 `widget.RoleStatusIcon` `Disconnected` input + precedence; update `rolestatusicon_test.go`.
 - [x] 2.2 `RoleView.Disconnected` + `HeraPage.SetDisconnected` (changegate fingerprint includes it); plan-view node picks it up via the shared classifier.
-- [x] 2.3 `widget.TaskStatusIcon` `Disconnected` input; Tasks-tab list feed; jump switcher inherits via classifier.
+- [x] 2.3 (dropped in review) Tasks-list `○`; see proposal Non-goals.
 
 ## 3. Dead-pane marker
 - [x] 3.1 `TerminalPane` default dead-replay note + tests (precedence vs closed-out/launch/placeholder).

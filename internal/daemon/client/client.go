@@ -107,7 +107,7 @@ type Client struct {
 	// decrement the counter when the RPC eventually completes.
 	leakedCalls int
 
-	// listUnhealthy is set when the last Daemon.ListSessions read failed, so a
+	// listUnhealthy is set when the last Daemon.ListSessions read failed (last-writer-wins: concurrent RunningAndIdle callers can overwrite each other; the only consumer is the TUI tick, which calls it from one goroutine, and callers independently treat a nil list as unknown), so a
 	// nil RunningAndIdle result means "unknown", not "no sessions". Zero value =
 	// healthy. See SessionListHealthy.
 	listUnhealthy atomic.Bool

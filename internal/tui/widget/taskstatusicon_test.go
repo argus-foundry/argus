@@ -29,10 +29,6 @@ func TestTaskStatusIcon(t *testing.T) {
 		{"in_progress idle-unvisited", model.StatusInProgress, TaskStatusInputs{IdleUnvisited: true, Running: true}, theme.IconMoonStars, theme.StyleInReview},
 		{"in_progress idle", model.StatusInProgress, TaskStatusInputs{Running: true, Idle: true}, theme.IconMoonOutline, theme.StyleInReview},
 		{"in_progress not running", model.StatusInProgress, TaskStatusInputs{}, theme.IconMoonOutline, theme.StyleInReview},
-		{"in_progress disconnected", model.StatusInProgress, TaskStatusInputs{Disconnected: true}, IconDisconnected, theme.StyleDimmed},
-		{"needs-input over disconnected", model.StatusInProgress, TaskStatusInputs{NeedsInput: true, Disconnected: true}, theme.IconNeedsInput, theme.StyleNeedsInput},
-		{"disconnected over idle-unvisited", model.StatusInProgress, TaskStatusInputs{Disconnected: true, IdleUnvisited: true}, IconDisconnected, theme.StyleDimmed},
-		{"in_review ignores disconnected", model.StatusInReview, TaskStatusInputs{Disconnected: true}, theme.IconReview, theme.StyleInReview},
 		{"in_progress active → spinner", model.StatusInProgress, TaskStatusInputs{Running: true}, SpinnerFrame(frame), theme.StyleInProgress},
 	}
 	for _, tc := range cases {

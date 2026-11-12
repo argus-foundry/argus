@@ -11,8 +11,8 @@ Nothing in the rail tells the user which agents are dead.
 
 ## What changes
 
-1. **Disconnected rail icon.** A role whose session is not running shows a dim hollow circle `○` in the Hera rail, plan-view nodes, and the Tasks-tab list. Backed by one reusable liveness predicate that fails open (unknown ≠ disconnected).
-2. **Dead-pane marker.** A pane replaying a dead session's log shows a one-line banner ("stopped — press Enter to resume") in the existing top-row reason-banner slot, so a dead pane never looks alive.
+1. **Disconnected rail icon.** A role whose session is not running shows a dim hollow circle `○` in the Hera rail, plan-view nodes and the coordinator roster. (Not in the Tasks list; see Non-goals.) Backed by one reusable liveness predicate that fails open (unknown ≠ disconnected).
+2. **Dead-pane marker.** A pane replaying a dead session's log shows a right-aligned "stopped" marker on its top border (the slot the re-render indicator uses; a row-0 overlay would hide replay content), so a dead pane never looks alive. Not shown for complete tasks.
 3. **Don't mislabel live agents.**
    - The Tasks-tab tick swaps in a fresh handle when the daemon still reports the session alive (parity with the Hera tab).
    - Tasks-tab Enter checks liveness first and reattaches instead of calling `startSession`: no "already exists", no Pending flip.
@@ -22,4 +22,5 @@ Nothing in the rail tells the user which agents are dead.
 
 - Automatic wake-up of agents after a supervisor restart (sibling role `bounce-recovery`). This change only exposes the liveness predicate it can read.
 - **Frontend parity (named follow-ups):** the web SPA and macOS app do not get the `○` icon or dead banner in this PR. Both are REST clients; `/api/tasks` already carries per-task session liveness, so the follow-ups are `web-disconnected-icon` and `mac-disconnected-icon`. No REST/wire change is made here, so the parity trigger (REST surface change) is not hit.
+- **Tasks-list `○` (removed in review):** the Tasks list gets no disconnected glyph. Reconciliation flips a dead in_progress plain task to in_review in the same tick, so it would almost never render, and `○` is already the Tasks-list pending glyph in a near-identical grey. The "stopped" pane marker is the Tasks-list signal.
 - Changing session start/resume semantics or the Hera closed-out banner flow.

@@ -19,8 +19,7 @@ func sessionListHealthy(r any) bool {
 }
 
 // updateDisconnected recomputes the disconnected-agent set (show-disconnected-
-// agents D1) from this tick's daemon alive set and feeds the Hera rail and the
-// Tasks list. It MUST run exactly once per periodic tick (the grace counter is
+// agents D1) from this tick's daemon alive set and feeds the Hera rail. It MUST run exactly once per periodic tick (the grace counter is
 // tick-based) on the tview goroutine, with a.tasks current. healthy=false (the
 // session list could not be read, or runningIDs is stale) fails open.
 func (a *App) updateDisconnected(runningIDs []string, healthy bool) {
@@ -47,7 +46,6 @@ func (a *App) updateDisconnected(runningIDs []string, healthy bool) {
 	}
 	a.disconnectedIDs = ids
 	a.heraPage.SetDisconnected(ids)
-	a.tasklist.SetDisconnected(ids)
 }
 
 // DisconnectedTaskIDs returns the task IDs whose session is not running as of

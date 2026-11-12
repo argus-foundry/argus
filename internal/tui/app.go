@@ -1923,6 +1923,10 @@ func (a *App) onTick() {
 		// buffer → SetSession resets emulator → "Waiting for output..." flash).
 		if taskID != "" {
 			a.retryDeferredKick(taskID)
+			// Feed the bound task's status so the pane can suppress the
+			// dead-replay "stopped" marker for a complete task (the launch
+			// splash stays opt-in, so this is otherwise inert here).
+			a.agentPane.SetLaunchTaskStatus(a.taskStatusString(taskID))
 			if a.agentPane.Session() == nil {
 				sess := a.runner.Get(taskID)
 				if sess != nil {
@@ -7449,6 +7453,16 @@ func (a *App) reresolveAgentPane(taskID string, runningIDs []string) {
 	if a.reattachAgentPane(taskID) {
 		uxlog.Log("[tui] agent pane re-resolve task=%s (replaced dead handle; agent still alive)", taskID)
 	}
+}
+
+// taskStatusString returns the cached status of a task ("" if unknown).
+func (a *App) taskStatusString(taskID string) string {
+	for _, t := range a.tasks {
+		if t != nil && t.ID == taskID {
+			return t.Status.String()
+		}
+	}
+	return ""
 }
 
 // reattachAgentPane re-resolves the Tasks-tab agent pane's session and, when it
