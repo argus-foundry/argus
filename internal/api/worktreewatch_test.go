@@ -499,11 +499,19 @@ func TestGitStatusFileCounts(t *testing.T) {
 	for time.Now().Before(deadline) {
 		rev2, files2, _ := get()
 		if rev2 != rev {
+			found := false
 			for _, f := range files2 {
 				if f.Path == "new.txt" {
+					found = true
+					testutil.Equal(t, f.Kind, gitutil.FileKindText)
+					if f.Additions == nil || f.Deletions == nil {
+						t.Fatal("updated counts missing")
+					}
 					testutil.Equal(t, *f.Additions, 2)
+					testutil.Equal(t, *f.Deletions, 0)
 				}
 			}
+			testutil.Equal(t, found, true)
 			return
 		}
 		time.Sleep(50 * time.Millisecond)

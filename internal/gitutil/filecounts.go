@@ -1,11 +1,9 @@
 package gitutil
 
 import (
-	"bytes"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
+
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 const (
@@ -42,6 +40,7 @@ type numstatEntry struct {
 func collectFileChanges(worktree, mergeBase string) []FileChange {
 	statusOut, err := runGit(worktree, "status", "--porcelain=v1", "-z")
 	if err != nil {
+		uxlog.Log("[git-counts] status failed: %v", err)
 		return nil
 	}
 	entries := parseStatusZ(statusOut)
@@ -59,28 +58,50 @@ func collectFileChanges(worktree, mergeBase string) []FileChange {
 		}
 	}
 
+	attrs, attrsErr := collectCountAttributes(worktree, append(append([]FileChange{}, entries...), branchStatus...))
 	seen := make(map[string]bool, len(entries))
 	files := make([]FileChange, 0, len(entries)+len(branchStatus))
 	for _, e := range entries {
+		if seen[e.Path] {
+			continue
+		}
 		seen[e.Path] = true
-		files = append(files, resolveFile(worktree, e, local, localErr, branch, branchErr))
+		files = append(files, resolveFileAttributes(worktree, e, local, localErr, branch, branchErr, attrs[e.Path], attrsErr))
 	}
 	for _, e := range branchStatus {
 		if seen[e.Path] {
 			continue
 		}
-		files = append(files, resolveFile(worktree, e, local, localErr, branch, branchErr))
+		files = append(files, resolveFileAttributes(worktree, e, local, localErr, branch, branchErr, attrs[e.Path], attrsErr))
 	}
+	unavailable := 0
+	for _, f := range files {
+		if f.Kind == FileKindUnavailable {
+			unavailable++
+		}
+	}
+	uxlog.Log("[git-counts] collected files=%d skipped_unavailable=%d attributes_error=%v local_error=%v branch_error=%v", len(files), unavailable, attrsErr, localErr, branchErr)
 	return files
 }
 
 func resolveFile(worktree string, e FileChange, local map[string]numstatEntry, localErr error, branch map[string]numstatEntry, branchErr error) FileChange {
+	return resolveFileAttributes(worktree, e, local, localErr, branch, branchErr, fileCountAttributes{}, nil)
+}
+
+func resolveFileAttributes(worktree string, e FileChange, local map[string]numstatEntry, localErr error, branch map[string]numstatEntry, branchErr error, attrs fileCountAttributes, attrsErr error) FileChange {
+	e.Kind, e.Additions, e.Deletions = FileKindUnavailable, nil, nil
 	if strings.HasSuffix(e.Path, "/") {
 		e.Kind = FileKindDirectory
 		return e
 	}
+	if e.Status == "U" || attrsErr != nil {
+		return e
+	}
 	if e.Status == "??" {
-		return countUntracked(worktree, e)
+		return countUntrackedAttributes(worktree, e, attrs)
+	}
+	if attrs.textconv {
+		return e
 	}
 	if ns, ok := local[e.Path]; ok {
 		return applyNumstat(e, ns)
@@ -92,7 +113,7 @@ func resolveFile(worktree string, e FileChange, local map[string]numstatEntry, l
 	if ns, ok := branch[e.Path]; ok {
 		return applyNumstat(e, ns)
 	}
-	if branchErr != nil || strings.Contains(e.Status, "U") {
+	if branchErr != nil {
 		e.Kind = FileKindUnavailable
 		return e
 	}
@@ -114,144 +135,10 @@ func applyNumstat(e FileChange, ns numstatEntry) FileChange {
 	return e
 }
 
-func countUntracked(worktree string, e FileChange) FileChange {
-	e.Kind = FileKindUnavailable
-	full := filepath.Join(worktree, filepath.FromSlash(e.Path))
-	info, err := os.Lstat(full)
-	if err != nil {
-		return e
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		one, zero := 1, 0
-		e.Kind, e.Additions, e.Deletions = FileKindText, &one, &zero
-		return e
-	}
-	if !info.Mode().IsRegular() || info.Size() > maxUntrackedCountBytes {
-		return e
-	}
-	data, err := os.ReadFile(full)
-	if err != nil {
-		return e
-	}
-	sniff := data
-	if len(sniff) > binarySniffBytes {
-		sniff = sniff[:binarySniffBytes]
-	}
-	if bytes.IndexByte(sniff, 0) >= 0 {
-		e.Kind = FileKindBinary
-		return e
-	}
-	lines := bytes.Count(data, []byte{'\n'})
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		lines++
-	}
-	zero := 0
-	e.Kind, e.Additions, e.Deletions = FileKindText, &lines, &zero
-	return e
-}
-
 func runNumstat(worktree, rng string) (map[string]numstatEntry, error) {
-	out, err := runGit(worktree, "diff", "--numstat", "-z", rng)
+	out, err := runGit(worktree, "diff", "--numstat", "--no-renames", "-z", rng)
 	if err != nil {
 		return nil, err
 	}
 	return parseNumstatZ(out), nil
-}
-
-// parseNumstatZ parses `git diff --numstat -z`. Renames are emitted as
-// "add\tdel\t\0old\0new\0"; the result is keyed by the new path.
-func parseNumstatZ(out string) map[string]numstatEntry {
-	m := make(map[string]numstatEntry)
-	parts := strings.Split(out, "\x00")
-	for i := 0; i < len(parts); i++ {
-		rec := parts[i]
-		if rec == "" {
-			continue
-		}
-		f := strings.SplitN(rec, "\t", 3)
-		if len(f) < 3 {
-			continue
-		}
-		ns := numstatEntry{}
-		if f[0] == "-" || f[1] == "-" {
-			ns.binary = true
-		} else {
-			ns.add, _ = strconv.Atoi(f[0])
-			ns.del, _ = strconv.Atoi(f[1])
-		}
-		path := f[2]
-		if path == "" {
-			if i+2 >= len(parts) {
-				break
-			}
-			ns.orig, path = parts[i+1], parts[i+2]
-			i += 2
-		}
-		m[path] = ns
-	}
-	return m
-}
-
-// parseStatusZ parses `git status --porcelain=v1 -z` into legacy-style single
-// status codes ("M", "A", "D", "R", "??").
-func parseStatusZ(out string) []FileChange {
-	var files []FileChange
-	parts := strings.Split(out, "\x00")
-	for i := 0; i < len(parts); i++ {
-		rec := parts[i]
-		if len(rec) < 4 {
-			continue
-		}
-		xy, path := rec[:2], rec[3:]
-		fc := FileChange{Path: path, Status: collapseXY(xy)}
-		if xy[0] == 'R' || xy[0] == 'C' || xy[1] == 'R' || xy[1] == 'C' {
-			if i+1 < len(parts) {
-				fc.OriginalPath = parts[i+1]
-				i++
-			}
-		}
-		files = append(files, fc)
-	}
-	return files
-}
-
-func collapseXY(xy string) string {
-	if xy == "??" {
-		return "??"
-	}
-	if strings.ContainsAny(xy, "U") || xy == "AA" || xy == "DD" {
-		return "U"
-	}
-	if xy[1] != ' ' {
-		return string(xy[1])
-	}
-	return string(xy[0])
-}
-
-// parseNameStatusZ parses `git diff --name-status -z`.
-func parseNameStatusZ(out string) []FileChange {
-	var files []FileChange
-	parts := strings.Split(out, "\x00")
-	for i := 0; i < len(parts); i++ {
-		code := parts[i]
-		if code == "" {
-			continue
-		}
-		fc := FileChange{Status: code[:1]}
-		if code[0] == 'R' || code[0] == 'C' {
-			if i+2 >= len(parts) {
-				break
-			}
-			fc.OriginalPath, fc.Path = parts[i+1], parts[i+2]
-			i += 2
-		} else {
-			if i+1 >= len(parts) {
-				break
-			}
-			fc.Path = parts[i+1]
-			i++
-		}
-		files = append(files, fc)
-	}
-	return files
 }

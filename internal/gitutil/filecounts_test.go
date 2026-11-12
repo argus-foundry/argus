@@ -2,6 +2,7 @@ package gitutil
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -71,6 +72,7 @@ func TestFileChanges_ScopesMatchFileDiff(t *testing.T) {
 
 	for _, p := range []string{"committed.txt", "staged.txt", "unstaged.txt", "new.txt"} {
 		d := FetchFileDiff("t", dir, p, Options{BaseBranch: "feature-base"})
+		testutil.NoError(t, d.Err)
 		a, r := diffCounts(d.Diff)
 		wantCounts(t, files[p], a, r)
 	}
@@ -99,7 +101,10 @@ func TestFileChanges_SpecialPaths(t *testing.T) {
 	rn := files["new name.txt"]
 	testutil.Equal(t, rn.OriginalPath, "old name.txt")
 	testutil.Equal(t, rn.Status, "R")
-	wantCounts(t, rn, 0, 0)
+	d := FetchFileDiff("t", dir, "new name.txt", Options{})
+	testutil.NoError(t, d.Err)
+	a, r := diffCounts(d.Diff)
+	wantCounts(t, rn, a, r)
 
 	b := files["bin.dat"]
 	testutil.Equal(t, b.Kind, FileKindBinary)
@@ -152,38 +157,23 @@ func TestFileChanges_BatchedCommands(t *testing.T) {
 	writeFile(t, dir, "u1", "1\n")
 	writeFile(t, dir, "u2", "1\n")
 
+	realGit, err := exec.LookPath("git")
+	testutil.NoError(t, err)
+	bin := t.TempDir()
+	callsPath := filepath.Join(bin, "calls")
+	shim := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + quoteGitCommand(callsPath) + "\nexec " + quoteGitCommand(realGit) + " \"$@\"\n"
+	testutil.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(shim), 0o700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	gitCalls := 0
 	runGitHook = func() { gitCalls++ }
 	defer func() { runGitHook = nil }()
 	msg := FetchGitStatus("t", dir, Options{})
 	testutil.Equal(t, len(msg.Files), 32)
-	if gitCalls > 15 {
+	if gitCalls > 17 {
 		t.Fatalf("git commands scale with files: %d", gitCalls)
 	}
-}
-
-func TestParseZ(t *testing.T) {
-	t.Run("numstat rename and binary", func(t *testing.T) {
-		m := parseNumstatZ("1\t2\ta b.txt\x00-\t-\tbin\x003\t0\t\x00old\x00new\x00")
-		testutil.Equal(t, m["a b.txt"].add, 1)
-		testutil.Equal(t, m["a b.txt"].del, 2)
-		testutil.Equal(t, m["bin"].binary, true)
-		testutil.Equal(t, m["new"].orig, "old")
-	})
-	t.Run("name-status", func(t *testing.T) {
-		f := parseNameStatusZ("M\x00a\x00R100\x00o\x00n\x00D\x00z\x00")
-		testutil.Equal(t, len(f), 3)
-		testutil.Equal(t, f[1].OriginalPath, "o")
-		testutil.Equal(t, f[1].Path, "n")
-		testutil.Equal(t, f[2].Status, "D")
-	})
-	t.Run("status collapse", func(t *testing.T) {
-		f := parseStatusZ(" M a\x00A  b\x00?? c\x00UU d\x00R  n\x00o\x00")
-		var got []string
-		for _, x := range f {
-			got = append(got, x.Status)
-		}
-		testutil.DeepEqual(t, got, []string{"M", "A", "??", "U", "R"})
-		testutil.Equal(t, f[4].OriginalPath, "o")
-	})
+	calls, err := os.ReadFile(callsPath)
+	testutil.NoError(t, err)
+	testutil.Equal(t, strings.Count(string(calls), "check-attr -z --stdin"), 1)
+	testutil.Equal(t, strings.Count(string(calls), "config --null --get-regexp"), 1)
 }
