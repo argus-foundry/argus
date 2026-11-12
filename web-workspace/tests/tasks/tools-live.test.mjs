@@ -2,36 +2,64 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ToolRefresh} from '../../tasks/tools-live.js';
 function fixture(){
- const calls=[],applied=[],errors=[],state={visible:true};let tick;
- const timers={setInterval(fn){tick=fn;return 1;},clearInterval(){tick=null;}};
+ const calls=[],applied=[],errors=[],state={visible:true},intervals=[],timeouts=[];
+ const timers={setInterval(fn){intervals.push(fn);return fn;},clearInterval(){},setTimeout(fn){timeouts.push(fn);return fn;},clearTimeout(fn){const i=timeouts.indexOf(fn);if(i>=0)timeouts.splice(i,1);}};
  const refresh=new ToolRefresh({visible:()=>state.visible,read:(task,tool,signal)=>new Promise((resolve,reject)=>calls.push({task,tool,signal,resolve,reject})),apply:value=>applied.push(value),failed:error=>errors.push(error),timers});
- return{refresh,calls,applied,errors,state,poll:()=>tick?.()};
+ return{refresh,calls,applied,errors,state,intervals,timeouts};
 }
 const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
-test('events only refresh the visible selected task; fallback covers missing events',async()=>{
- const f=fixture();f.refresh.select('a','changes');assert.equal(f.calls.length,1);f.calls[0].resolve({});await settle();
- f.refresh.event({task_id:'b',type:'session.idle'});assert.equal(f.calls.length,1);
- f.refresh.event({task_id:'a',type:'session.idle'});assert.equal(f.calls.length,2);f.calls[1].resolve({});await settle();
- f.poll();assert.equal(f.calls.length,3);f.calls[2].resolve({});await settle();f.state.visible=false;
- f.poll();f.refresh.event({task_id:'a',type:'session.exited'});assert.equal(f.calls.length,3);
- f.state.visible=true;f.refresh.trigger('focus');assert.equal(f.calls.length,4);f.refresh.stop();
+const event=revision=>({task_id:'a',type:'worktree.changed',payload:revision?{revision}:{reason:'filesystem'}});
+test('worktree events refresh only matching Changes; Changes has no discovery interval',async()=>{
+ const f=fixture();f.refresh.select('a','changes');f.calls[0].resolve({git_revision:'r1'});await settle();assert.equal(f.intervals.length,0);
+ f.refresh.event({...event('r2'),task_id:'b'});f.refresh.event(event('r1'));assert.equal(f.calls.length,1);
+ f.refresh.event(event('r2'));f.refresh.event(event('r2'));assert.equal(f.calls.length,2);f.calls[1].resolve({git_revision:'r2'});await settle();assert.equal(f.calls.length,2);
+ f.refresh.event(event());assert.equal(f.calls.length,3);f.refresh.stop();
 });
-test('single flight coalesces triggers and task switches abort and fence stale results',async()=>{
- const f=fixture();f.refresh.select('a','changes');f.poll();f.poll();assert.equal(f.calls.length,1);
- f.calls[0].resolve({first:true});await settle();assert.equal(f.calls.length,2);
- f.refresh.select('b','changes');assert.equal(f.calls[1].signal.aborted,true);assert.equal(f.calls.length,3);
- f.calls[1].resolve({stale:true});f.calls[2].resolve({current:true});await settle();assert.deepEqual(f.applied,[{first:true},{current:true}]);f.refresh.stop();
+test('events fence earlier in-flight snapshots and coalesce a fresh read',async()=>{
+ const f=fixture();f.refresh.select('a','changes');f.refresh.event(event('r2'));f.refresh.event(event('r3'));
+ f.calls[0].resolve({git_revision:'r1'});await settle();assert.deepEqual(f.applied,[]);assert.equal(f.calls.length,2);
+ f.calls[1].resolve({git_revision:'r3'});await settle();assert.deepEqual(f.applied,[{git_revision:'r3'}]);
+ f.refresh.select('b','changes');f.refresh.select('c','changes');assert.equal(f.calls[2].signal.aborted,true);f.calls[2].resolve({old:true});f.calls[3].resolve({current:true});await settle();assert.equal(f.applied.at(-1).current,true);f.refresh.stop();
 });
-test('hidden selection defers reads; Artifacts shares triggers and failures permit retry',async()=>{
- const f=fixture();f.state.visible=false;f.refresh.select('a','artifacts');assert.equal(f.calls.length,0);
- f.state.visible=true;f.refresh.trigger('visible');assert.equal(f.calls[0].tool,'artifacts');f.calls[0].reject(new Error('offline'));await settle();assert.equal(f.errors.length,1);
- f.refresh.trigger('retry');assert.equal(f.calls.length,2);f.refresh.stop();
+test('hidden events defer until visible; resync forces a fresh read independent of revision',async()=>{
+ const f=fixture();f.state.visible=false;f.refresh.select('a','changes');f.refresh.event(event('r2'));assert.equal(f.calls.length,0);
+ f.state.visible=true;f.refresh.trigger('visible');f.calls[0].resolve({git_revision:'r2'});await settle();f.refresh.event({type:'resync'});assert.equal(f.calls.length,2);f.refresh.stop();
 });
-
-test('all write signals and resync refresh; status tool and stopped controller never poll',async()=>{
+test('stale snapshots remain labeled and retry with a finite backoff; explicit retry recovers',async()=>{
+ const f=fixture();f.refresh.select('a','changes');
+ for(let i=0;i<4;i++){f.calls.at(-1).resolve({git_revision:'r1',stale:true});await settle();if(i<3)f.timeouts.shift()();}
+ assert.equal(f.calls.length,4);assert.equal(f.timeouts.length,0);assert.equal(f.errors.length,1);assert.equal(f.applied.at(-1).stale,true);
+ f.refresh.trigger('retry');f.calls.at(-1).resolve({git_revision:'r2',stale:false});await settle();assert.equal(f.applied.at(-1).git_revision,'r2');f.refresh.stop();
+});
+test('Artifacts retains its interval and write signals, failures permit manual retry',async()=>{
+ const f=fixture();f.refresh.select('a','artifacts');f.calls[0].resolve({});await settle();assert.equal(f.intervals.length,1);
+ f.refresh.event(event('r2'));assert.equal(f.calls.length,1);f.intervals[0]();f.calls[1].reject(new Error('offline'));await settle();assert.equal(f.errors.length,1);
+ f.refresh.trigger('retry');f.calls[2].resolve({});await settle();f.refresh.event({task_id:'a',type:'session.idle'});assert.equal(f.calls.length,4);f.refresh.stop();
+});
+test('session write signals and resync remain supported; status and stopped owners do not read',async()=>{
  const f=fixture();f.refresh.select('a','changes');f.calls[0].resolve({});await settle();
- for(const type of ['session.needs_input','session.exited','task.status_changed','resync']){
-  const before=f.calls.length;f.refresh.event({task_id:'a',type});assert.equal(f.calls.length,before+1);f.calls.at(-1).resolve({});await settle();
- }
- f.refresh.select('a','status');const before=f.calls.length;f.poll();f.refresh.event({task_id:'a',type:'session.idle'});assert.equal(f.calls.length,before);f.refresh.stop();f.refresh.trigger('focus');assert.equal(f.calls.length,before);
+ for(const type of ['session.idle','session.needs_input','session.exited','task.status_changed','resync']){const count=f.calls.length;f.refresh.event({type,task_id:'a'});assert.equal(f.calls.length,count+1);f.calls.at(-1).resolve({});await settle();}
+ f.refresh.select('a','status');const count=f.calls.length;f.refresh.event(event());f.refresh.trigger('focus');assert.equal(f.calls.length,count);f.refresh.stop();f.refresh.trigger('focus');assert.equal(f.calls.length,count);
+});
+test('returning to the displayed revision supersedes a different in-flight revision',async()=>{
+ const f=fixture();f.refresh.select('a','changes');f.calls[0].resolve({git_revision:'r1'});await settle();
+ f.refresh.event(event('r2'));f.refresh.event(event('r1'));f.calls[1].resolve({git_revision:'r2'});await settle();
+ assert.deepEqual(f.applied.map(item=>item.git_revision),['r1']);assert.equal(f.calls.length,3);
+ f.calls[2].resolve({git_revision:'r1'});await settle();assert.deepEqual(f.applied.map(item=>item.git_revision),['r1','r1']);f.refresh.stop();
+});
+test('degraded watching reconciles at fifteen seconds only while visible and stops on recovery',async()=>{
+ const f=fixture(),delays=[];f.refresh.timers.setTimeout=(fn,delay)=>{f.timeouts.push(fn);delays.push(delay);return fn;};
+ f.refresh.select('a','changes');f.calls[0].resolve({git_revision:'r1',watch_degraded:true});await settle();assert.deepEqual(delays,[15000]);
+ f.timeouts.shift()();assert.equal(f.calls.length,2);f.calls[1].resolve({git_revision:'r2',watch_degraded:true});await settle();
+ f.state.visible=false;f.refresh.suspend();assert.equal(f.timeouts.length,0);f.state.visible=true;f.refresh.trigger('visible');f.calls[2].resolve({git_revision:'r2',watch_degraded:true});await settle();
+ f.refresh.event(event('r2'));assert.equal(f.timeouts.length,0);assert.equal(f.calls.length,4);f.calls[3].resolve({git_revision:'r2',watch_degraded:false});await settle();assert.equal(f.timeouts.length,0);f.refresh.stop();
+});
+test('degraded retries continue at max age after a failed reconciliation read',async()=>{
+ const f=fixture();f.refresh.select('a','changes');f.calls[0].resolve({git_revision:'r1',watch_degraded:true});await settle();f.timeouts.shift()();f.calls[1].reject(new Error('offline'));await settle();
+ assert.equal(f.errors.length,1);assert.equal(f.timeouts.length,1);f.refresh.stop();assert.equal(f.timeouts.length,0);
+});
+for(const [base,first,last] of [['r9','r10','r1'],['baseline','z-opaque','a-opaque']])test(`opaque revisions accept a lexically smaller distinct value while a read is pending: ${first} to ${last}`,async()=>{
+ const f=fixture();f.refresh.select('a','changes');f.calls[0].resolve({git_revision:base});await settle();
+ f.refresh.event(event(first));assert.equal(f.calls.length,2);f.refresh.event(event(last));f.calls[1].resolve({git_revision:first});await settle();
+ assert.deepEqual(f.applied.map(value=>value.git_revision),[base]);assert.equal(f.calls.length,3);f.calls[2].resolve({git_revision:last});await settle();assert.equal(f.applied.at(-1).git_revision,last);f.refresh.stop();
 });

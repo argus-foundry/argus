@@ -1,6 +1,6 @@
 # Theia
 
-A separate desktop web client using the existing Argus API. The original web UI, daemon, TUI and native app are unchanged. Older daemons retain task reconciliation polling. New pin, usage and mail features require a daemon rebuilt and restarted with their merged APIs.
+A separate desktop web client using the existing Argus API. The original web UI, daemon, TUI and native app are unchanged. The running daemon must include comparison provenance, worktree.changed, git_revision/stale/watch_degraded, git/discard and task reveal, all present at commit 59a79cd7, plus the merged pin, usage and mail APIs. Rebuild and restart the daemon before using this client. There is no older-daemon compatibility shim.
 
 Start with Node 20 or newer from the repository root.
 
@@ -164,7 +164,7 @@ Settings opens as a full-window mode. Back or Escape restores the previous task 
 
 Changes shows one line per file with a dim directory prefix, intact filename, line counts and status badge. Only the directory truncates; very long filenames scroll inside the row. The small header icon switches flat/tree views. Header totals use the API's branch and working diff summaries. Per-file counts load only for visible rows, with at most four concurrent reads, and are reused while switching views. Pending/unavailable counts stay blank; binary files show bin.
 
-Hover or focus a row to reveal its chevron. Its menu offers Copy path, Copy absolute path and Open in VS Code. Absolute actions require a known worktree. Click the file itself to open its diff. Untracked directories still expand lazily. Discard, Finder and Xcode actions are omitted because this browser client has no supported contract for them.
+Hover or focus a row to reveal its chevron. Its menu offers Copy path, Copy absolute path and Open in VS Code. Absolute actions require a known worktree. Click the file itself to open its diff. Untracked directories still expand lazily. Dirty files offer confirmed local discard, and untracked files require explicit deletion confirmation. Task and file menus offer Finder actions through the daemon host, with a master token required. The confirmation explains which computer will open Finder. Xcode launching remains omitted.
 
 The list uses the API's returned branch and working paths. The daemon chooses its comparison base from upstream/default refs, rather than the task base branch, so a workspace stacked on an integration branch may include its unmerged history. This frontend does not silently filter those paths.
 
@@ -183,3 +183,5 @@ See [test commands](docs/testing.md) for all unit, browser, security and master 
 ## Mail views
 
 Agent messages in task tools shows read-only history, including ended bindings and older pages, without acknowledging mail. Coordinator tasks also offer Inbox. Its mail glyph opens unread human items; opening marks the viewed revision read, while Mark unread and Dismiss remain explicit. Reply appends an Inbox reference to the existing composer draft without sending. A stopped coordinator still needs an explicit Resume before send.
+
+Changes consumes live worktree events instead of routine discovery polling; only degraded watching reconciles every 15 seconds while visible. It labels the returned comparison base and fallback reason, and marks stale git snapshots while retrying a bounded number of times. Status and the opened diff refresh on worktree updates, including after discard.

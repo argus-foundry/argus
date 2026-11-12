@@ -20,7 +20,7 @@ export function paintCounts(host,counts) {
   if(!counts||counts.kind){host.textContent=countLabel(counts);return;}
   host.append(node('span','added',`+${counts.added}`),document.createTextNode(' '),node('span','removed',`−${counts.removed}`));
 }
-export function fileRow(task,file,{openDiff,expandDirectory,counts}) {
+export function fileRow(task,file,{openDiff,expandDirectory,counts,discard,reveal,signal}) {
   const container=node('div','file-entry'),line=node('div','file-line');
   const row=button('',()=>file.directory?expandDirectory(file,row,container):openDiff(task,file.path),'file-row');
   row.dataset.tooltip=file.path;row.dataset.tooltipOverflow='';row.dataset.filePath=file.path;row.dataset.directory=String(!!file.directory);row.setAttribute('aria-label',`${file.directory?'Expand directory':'Open diff for'} ${file.path}`);
@@ -36,6 +36,8 @@ export function fileRow(task,file,{openDiff,expandDirectory,counts}) {
   if(file.directory)row.setAttribute('aria-expanded','false');
   const entries=[{label:'Copy path',icon:'copy',run:()=>copyNotice(file.path,'Copied relative path.')},{label:'Copy absolute path',icon:'folder',disabled:!task.worktree_path?.startsWith('/'),run:()=>copyNotice(fileCopyPath(task.worktree_path,file.path),'Copied absolute path.')}];
   const href=editorFileURL(task.worktree_path,file.path);if(href)entries.push({label:'Open in VS Code',icon:'external',href});
+  if(reveal&&!file.directory)entries.push({label:'Reveal in Finder',icon:'folder',disabled:reveal.disabled,dataset:{hostReveal:'true'},run:()=>reveal.open(task,file.path,signal)});
+  if(discard&&!file.directory)entries.push({label:file.status.includes('?')?'Delete untracked file':'Discard local changes',icon:'delete',danger:true,run:()=>discard(file)});
   line.append(row,...rowMenu({label:`File actions for ${file.path}`,text:'⌄',className:'file-more',entries}));container.append(line);return container;
 }
 export function drawTaskFiles(panel,files,renderFile) {

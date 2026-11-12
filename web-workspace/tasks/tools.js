@@ -21,10 +21,10 @@ export class TaskTools {
     this.selectedTools = new Map();
     this.generation = 0;
     this.live = new ToolRefresh({visible:()=>this.visible(),read:(id,tool,signal)=>this.api.json(`/api/tasks/${encodeURIComponent(id)}/${tool==='artifacts'?'artifacts':'git/status'}`,{signal}),apply:result=>this.apply(result),failed:error=>this.failed(error),log:(message,fields)=>log('tools-live',message,fields)});
-    this.wake=()=>{const visible=this.visible();if(visible&&!this.wasVisible){this.live.trigger('visible');if(this.tool==='status')this.drawStatus();}this.wasVisible=visible;};
+    this.wake=()=>{const visible=this.visible();if(!visible)this.live.suspend();if(visible&&!this.wasVisible){this.live.trigger('visible');if(this.tool==='status')this.drawStatus();}this.wasVisible=visible;};
     document.addEventListener('visibilitychange',this.wake);
     window.addEventListener('focus',()=>{this.wasVisible=this.visible();this.live.trigger('focus');if(this.tool==='status')this.drawStatus();});
-    window.addEventListener('blur',()=>{this.wasVisible=false;});
+    window.addEventListener('blur',()=>{this.wasVisible=false;this.live.suspend();});
     this.visibilityObserver=new MutationObserver(this.wake);
     for(const target of [document.body,$('workspace'),$('tools')])this.visibilityObserver.observe(target,{attributes:true,attributeFilter:['class','hidden','style']});
     this.selectTab = tabs(document.querySelector('.tool-tabs'), tab => {
@@ -83,7 +83,7 @@ export class TaskTools {
     const panel=$('tool-panel');
     return !!this.task&&!document.hidden&&document.hasFocus()&&!!panel?.getClientRects().length&&getComputedStyle(panel).visibility!=='hidden'&&!document.body.classList.contains('settings-mode');
   }
-  event(event) {this.live.event(event);this.mail?.event?.(event);}
+  event(event) {this.live.event(event);this.review.event?.(event);this.mail?.event?.(event);}
   apply(result) {
     const restore=captureFocus($('tool-panel'),()=>document.getElementById(`tool-${this.tool}`),{signal:this.abort.signal});
     this.error?.remove();this.error=null;
@@ -111,7 +111,7 @@ export class TaskTools {
     return header;
   }
   drawChanges(result) {
-    this.changes=new TaskChanges({api:this.api,task:this.task,panel:$('tool-panel'),openDiff:(task,path)=>this.review.openDiff(task,path),signal:this.abort.signal,mode:this.fileMode||'flat',onMode:mode=>{this.fileMode=mode;}});
+    this.changes=new TaskChanges({api:this.api,task:this.task,panel:$('tool-panel'),openDiff:(task,path)=>this.review.openDiff(task,path),signal:this.abort.signal,reveal:this.callbacks.reveal,mode:this.fileMode||'flat',onMode:mode=>{this.fileMode=mode;}});
     this.changes.show(result);
   }
   drawArtifacts(artifacts) {

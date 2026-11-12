@@ -1,3 +1,4 @@
+import {ToolRefresh} from '../tasks/tools-live.js';
 import {captureFocus} from '../shared/focus-recovery.js';
 import { $, node, button, empty, notice } from '../shared/dom.js';
 import { log } from '../core/api.js';
@@ -12,8 +13,14 @@ export class TaskReview {
     this.selections = new Map();
     this.urls = new Set();
     this.generation = 0;
+    this.diffLive=new ToolRefresh({visible:()=>this.visible(),read:(id,tool,signal)=>this.api.json(`/api/tasks/${encodeURIComponent(id)}/git/diff?path=${encodeURIComponent(this.diffSelection.path)}`,{signal}),apply:result=>this.applyDiff(result),failed:error=>this.failDiff(error),log:(message,fields)=>log('review-live',message,fields)});
+    this.wake=()=>{const visible=this.visible();if(!visible)this.diffLive.suspend();if(visible&&!this.wasVisible)this.diffLive.trigger('visible');this.wasVisible=visible;};
+    document.addEventListener?.('visibilitychange',this.wake);
+    for(const event of ['focus','blur'])globalThis.window?.addEventListener(event,this.wake);
+    if(globalThis.MutationObserver){this.visibilityObserver=new MutationObserver(this.wake);for(const target of [document.body,$('review-panel'),$('workspace')].filter(Boolean))this.visibilityObserver.observe(target,{attributes:true,attributeFilter:['class','hidden','inert','style']});}
+
   }
-  cancel() { this.generation++; this.abort?.abort(); this.abort = new AbortController(); this.urls.forEach(url => URL.revokeObjectURL(url)); this.urls.clear(); }
+  cancel() { this.generation++; this.diffLive.stop(); this.abort?.abort();this.diffRestore?.();this.diffRestore=null;this.diffSelection=null;this.hasDiff=false;this.diffError=null; this.abort = new AbortController(); this.urls.forEach(url => URL.revokeObjectURL(url)); this.urls.clear(); }
   selectTask(task, location) {
     this.cancel();
     this.task = task;
@@ -46,29 +53,39 @@ export class TaskReview {
       box.append(button('Retry', () => this.restoreArtifact(task, filename)));
     } finally { restore(); }
   }
+  visible() {
+    const panel=$('review-panel');
+    return !!panel&&!panel.hidden&&!panel.closest('[hidden],[inert]')&&!document.hidden&&document.hasFocus?.()!==false&&!!panel.getClientRects?.().length&&getComputedStyle(panel).visibility!=='hidden'&&!document.body.classList?.contains('settings-mode');
+  }
   async openDiff(task, path, activate = true) {
     this.cancel();
-    const restore=captureFocus($('review-panel'),()=>document.getElementById('tab-review'),{signal:this.abort.signal});
-    const generation = this.generation;
-    const previous = this.selections.get(task.id);
-    const selection = { type: 'diff', path, mode: previous?.mode || 'unified' };
-    this.selections.set(task.id, selection);
-    if (activate) this.onOpen();
-    empty($('review-panel'), '', 'Loading diff…');
-    try {
-      const result = await this.api.json(`/api/tasks/${encodeURIComponent(task.id)}/git/diff?path=${encodeURIComponent(path)}`, { signal: this.abort.signal });
-      if (generation !== this.generation || this.task?.id !== task.id) return;
-      const diff = result.Diff || '';
-      this.drawDiff(selection, diff);
-      log('review', 'diff loaded', { count: diff.length });
-    } catch (error) {
-      if (generation !== this.generation || error.name === 'AbortError') return;
-      const box = empty($('review-panel'), 'Diff unavailable', error.message, 'alert');
-      box.append(button('Retry', () => this.openDiff(task, path)));
-      log('review', 'diff failed', { status: error.status || 'error' });
-    } finally { restore(); }
+    this.diffRestore=captureFocus($('review-panel'),()=>document.getElementById('tab-review'),{signal:this.abort.signal});
+    const previous=this.selections.get(task.id);
+    this.diffSelection={type:'diff',path,mode:previous?.mode||'unified'};
+    this.selections.set(task.id,this.diffSelection);
+    if(activate)this.onOpen();
+    empty($('review-panel'),'','Loading diff…');this.wasVisible=this.visible();
+    return this.diffLive.select(task.id,'diff');
   }
-  drawDiff(selection, diff) { renderDiff($('review-panel'), { ...selection, diff }, mode => { selection.mode = mode; this.drawDiff(selection, diff); this.onSelection(); }); }
+  applyDiff(result) {
+    if(this.task?.id!==this.diffLive.task)return;
+    const restore=captureFocus($('review-panel'),()=>document.getElementById('tab-review'),{signal:this.abort.signal});
+    this.diffError?.remove();this.diffError=null;
+    this.drawDiff(this.diffSelection,result.Diff||'',result.comparison);this.hasDiff=true;
+    restore();this.diffRestore?.();this.diffRestore=null;
+    log('review','diff loaded',{count:result.Diff?.length||0});
+  }
+  failDiff(error) {
+    if(this.task?.id!==this.diffLive.task)return;
+    const restore=captureFocus($('review-panel'),()=>document.getElementById('tab-review'),{signal:this.abort.signal});
+    this.diffError?.remove();
+    const box=this.hasDiff?node('div','tool-error'):empty($('review-panel'),'Diff unavailable',error.message,'alert');
+    if(this.hasDiff){box.setAttribute('role','alert');box.append(node('p','','Diff unavailable. '+error.message));$('review-panel').prepend(box);}
+    box.append(button('Retry',()=>this.diffLive.trigger('retry')));
+    this.diffError=box;restore();this.diffRestore?.();this.diffRestore=null;log('review','diff failed',{status:error.status||0});
+  }
+  event(event) {if(!this.visible())this.wasVisible=false;this.diffLive.event(event);}
+  drawDiff(selection, diff, comparison) { renderDiff($('review-panel'), { ...selection, diff, comparison }, mode => { selection.mode = mode; this.drawDiff(selection, diff, comparison); this.onSelection(); }); }
   async openArtifact(task, artifact, activate = true) {
     this.cancel();
     const restore=captureFocus($('review-panel'),()=>document.getElementById('tab-review'),{signal:this.abort.signal});

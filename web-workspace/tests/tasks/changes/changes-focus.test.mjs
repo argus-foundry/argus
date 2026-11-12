@@ -39,3 +39,10 @@ test('removing a focused folder falls back to a remaining row',t=>{
   const {changes,panel,row}=fixture(t,'tree');panel.querySelectorAll('summary').find(item=>item.getAttribute('aria-label')==='src').focus();
   changes.show({BranchFiles:'M\tother/b.js'});assert.equal(document.activeElement,row('other/b.js'));
 });
+test('direct draw initializes local-change ownership without a prior snapshot',t=>{
+  const dom=focusDOM(t),panel=dom.element('section');dom.body.append(panel);
+  const changes=new TaskChanges({panel,api:{},task:{id:'a'},signal:new AbortController().signal,openDiff(){}});
+  changes.files=[{path:'fixture.txt',status:'M'}];changes.totals=null;changes.draw();
+  assert.equal(panel.querySelectorAll('.file-row').length,1);
+  assert.equal(panel.querySelectorAll('.danger-menu-item').length,0,'A manually supplied branch row must not imply local discard');
+});

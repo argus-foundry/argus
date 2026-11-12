@@ -18,7 +18,7 @@ The optional web workspace is the client we converge on. This specification is t
 
 The native `add-web-hera-mutations` follow-up remains separate. Spawn, new coordinator, move, join, detach, consuming agent inbox and merge-safety Cleanup retain their standing TUI-only disposition. The workspace rail supports coordinator kanban and orchestrator pin mutations through existing endpoints. One unified project rail replaces separate Tasks/Hera modes, the Hera visibility filter and a separate Freelance section. Task status remains editable in Settings rather than through quick workflow transitions. Archive/restore remains in the rail. Session selection remains beside Stop/Resume. Web Push is the desktop-alert channel; in-page attention preferences remain separate.
 
-Browser drawers, DOM tooltips and their pixel geometry do not require literal native or terminal copies. Path copy and encoded VS Code links replace native Finder/Xcode launching. Opt-out origin token storage replaces Keychain. Tab title/favicon attention and the unified rail replace Dock/menu-bar affordances. Native window controls remain platform-specific. These equivalents add no backend requirements.
+Browser drawers, DOM tooltips and their pixel geometry do not require literal native or terminal copies. Path copy and encoded VS Code links complement master-only Finder reveal on the daemon host; Xcode launching remains outside this client. Opt-out origin token storage replaces Keychain. Tab title/favicon attention and the unified rail replace Dock/menu-bar affordances. Native window controls remain platform-specific. These equivalents add no backend requirements.
 
 ### Settings interaction follow-up
 
@@ -42,10 +42,10 @@ The numbered references retain the original backend tally identifiers and record
 10. `cross-backend-account-move` defines account movement beyond Claude. Existing movement remains Claude-only.
 11. `durable-task-pr-association` defines manual PR links that coexist with the branch poller. This client reads existing PR links only.
 14. `multiplexed-terminal-output` provides continuous shared output across visited tasks. Hidden cached terminals currently suspend SSE and recover only the bounded existing replay window.
-15. `discard-worktree-file` defines a confirmed per-file discard operation. Changes omits Discard.
+15. `discard-worktree-file` is adopted with captured per-file local confirmation, explicit untracked deletion, documented error messages and event-driven refresh.
 16. `git-per-file-numstat` supplies numeric per-file counts. Visible rows currently fetch individual diffs with at most four concurrent reads.
-17. `task-base-aware-git-comparison` honors task.base_branch and supplies comparison provenance. Changes currently displays the daemon's whole-stack comparison without client filtering.
-18. `worktree-change-events` supplies authoritative worktree updates. Changes and Artifacts retain relevant session-event refresh, focus/visibility refresh and a visible-only ten-second fallback.
+17. `task-base-aware-git-comparison` is adopted through authoritative comparison provenance in Changes and file diffs; the client renders the returned file list directly.
+18. `worktree-change-events` is adopted through matching revisioned invalidations, fenced snapshots and reconnect/resync convergence. Healthy watching has no Changes discovery interval; degraded Changes reconciles every 15 seconds while visible, and Artifacts retains its fallback.
 19. `clear-stale-role-ready-marker` clears ready_to_close when a role resumes working. Workspace role tags currently give working precedence over the stale marker.
 
 20. `codex-recapture-test-env-isolation` isolates CODEX_HOME and CODEX_SQLITE_HOME in the daemon recapture fixture. This is a pre-existing test issue on master, not a product defect.
@@ -203,7 +203,7 @@ The client SHALL distinguish request failures from successful results but SHALL 
 #### Scenario: Existing git response is empty
 - **WHEN** an existing git read succeeds with empty fields
 - **THEN** the UI SHALL describe that no changes were returned without claiming verified repository health
-- **AND** it SHALL NOT imply a complete repository tree or a stable comparison base
+- **AND** it SHALL NOT imply a complete repository tree or a stable comparison identity beyond the returned comparison provenance
 
 ### Requirement: Dictation friendly composer
 The composer SHALL use a native multiline textarea and receive focus after explicit task selection and successful submission when doing so does not interrupt another control. Enter SHALL send, Shift+Enter SHALL insert a newline, and composition or repeated Enter events SHALL NOT submit. Clipboard text, including multiline dictation, SHALL be inserted without automatic submission. Paste outside editable controls SHALL target the selected task's composer unless a dialog, drawer or terminal owns the interaction.
@@ -670,7 +670,7 @@ The workspace SHALL expose task settings, explicit Pin/Unpin and copies through 
 
 ### Requirement: Complete task information and files
 
-Changes SHALL render one git-status path list in flat/tree modes, lazily expand untracked directories through the existing files endpoint, open returned diffs and offer relative/absolute path copy. Info SHALL own immutable task facts, created time, original prompt and credential-free HTTP(S) output links. Settings SHALL keep editable controls and session ID/sandbox facts missing from Info. The task name tooltip SHALL identify the full name and project without repeated workflow/elapsed facts. Header branch copy and PR links SHALL remain available across task tabs. Creation SHALL allow an optional backend choice, preserving daemon defaults when omitted. Native Finder access SHALL use path copy in the browser.
+Changes SHALL render one git-status path list in flat/tree modes, lazily expand untracked directories through the existing files endpoint, open returned diffs and offer relative/absolute path copy. Info SHALL own immutable task facts, created time, original prompt and credential-free HTTP(S) output links. Settings SHALL keep editable controls and session ID/sandbox facts missing from Info. The task name tooltip SHALL identify the full name and project without repeated workflow/elapsed facts. Header branch copy and PR links SHALL remain available across task tabs. Creation SHALL allow an optional backend choice, preserving daemon defaults when omitted. Finder actions SHALL use the existing master-only host reveal endpoint and explain that they open on the daemon host.
 
 #### Scenario: Safe links and paths
 
@@ -890,7 +890,7 @@ This optional-client layout does not change the REST surface. The existing TUI a
 
 The Changes panel SHALL display one compact line per file, with a dim directory prefix and bright intact filename. Only the directory prefix SHALL ellipsize; exceptionally long filenames SHALL scroll inside the file list rather than expand the document. Exact added/removed text counts and a small status badge SHALL align to the right. The header SHALL show N files changed and total added/removed counts from the returned branch/working diff-stat summary lines. Per-file counts SHALL load only for visible rows through IntersectionObserver with at most four concurrent existing file-diff reads, cached per task/status generation and canceled on task changes. Pending and unavailable per-file counts SHALL remain blank, binary files SHALL show bin and directories SHALL retain lazy expansion. Per-file counts SHALL never be inferred from scaled stat-bar estimates.
 
-Hover or keyboard focus SHALL reveal a small menu chevron using the shared task-menu popover behavior. The menu SHALL offer Copy path, Copy absolute path and an encoded vscode://file link for Open in VS Code when an absolute worktree is available. Copy actions SHALL use the shared copyNotice. The row SHALL still open its diff. No discard, Finder, Xcode or always-visible copy controls SHALL appear. A small icon toggle in the header SHALL switch flat/tree views with the same row styling and captured paths.
+Hover or keyboard focus SHALL reveal a small menu chevron using the shared task-menu popover behavior. The menu SHALL offer Copy path, Copy absolute path and an encoded vscode://file link for Open in VS Code when an absolute worktree is available. Copy actions SHALL use the shared copyNotice. The row SHALL still open its diff. Local dirty regular files SHALL offer confirmed discard or explicit untracked deletion. File and task menus SHALL offer master-only Finder reveal on the daemon host; Xcode and always-visible copy controls remain outside this requirement. A small icon toggle in the header SHALL switch flat/tree views with the same row styling and captured paths.
 
 #### Scenario: Compact row actions
 
@@ -997,7 +997,7 @@ Tooltips SHALL appear only for icon-only controls, visibly truncated names/paths
 - **AND** a labeled control with a shortcut SHALL show the shortcut alone
 
 ### Requirement: Visible task tools update live
-The optional workspace SHALL refresh Changes and Artifacts for the selected task on session.idle, session.needs_input, session.exited and task.status_changed events, on visibility/focus return, and on a ten-second fallback while the pane and focused document are visible. Reads SHALL be single-flight with coalesced triggers and cancellation/fencing on task switch. Changes SHALL avoid rendering identical path/status/summary results and preserve scroll, view mode, folder expansion, row menu and opened review across updates. Path count caches SHALL invalidate only affected status/stat summaries. The normal Changes header SHALL have no Refresh control; empty state SHALL say No changes yet, and read failures SHALL offer Retry.
+The optional workspace SHALL refresh Changes and Artifacts for the selected task on session.idle, session.needs_input, session.exited and task.status_changed events, on visibility/focus return, and through matching worktree.changed invalidations. Artifacts retains a ten-second fallback while the pane and focused document are visible; Healthy Changes watching has no discovery interval. Degraded watching SHALL reconcile at the daemon max age of 15 seconds while visible, canceling the timer when hidden or on an event and re-evaluating after the resulting snapshot. Reads SHALL be single-flight with coalesced triggers and cancellation/fencing on task switch. Changes SHALL avoid rendering identical path/status/summary results and preserve scroll, view mode, folder expansion, row menu and opened review across updates. Path count caches SHALL retain unchanged committed-only counts, invalidate changed status/stat/comparison identities and conservatively invalidate dirty-file metadata revisions. Revision-only changes SHALL retain the visible list DOM. The normal Changes header SHALL have no Refresh control; empty state SHALL say No changes yet, and read failures SHALL offer Retry.
 
 #### Scenario: Agent writes a file
 - **WHEN** the selected task emits session.idle while Changes is visible
@@ -1005,7 +1005,7 @@ The optional workspace SHALL refresh Changes and Artifacts for the selected task
 
 #### Scenario: No write event exists
 - **WHEN** a visible focused Changes pane remains open without an SSE write signal
-- **THEN** a ten-second fallback discovers changes without polling hidden panes or background windows
+- **THEN** worktree invalidations discover Changes without polling, while Artifacts retains its visible fallback
 
 ### Requirement: Attachment submission observes recipient readiness
 Attachment sends SHALL write one closed paste, allow output to settle within a bounded wait, and send exactly one standalone CR. Literal image paths SHALL NOT prevent submission. If output never settles, the wait SHALL expire and allow the CR while the captured session remains live. Successful daemon acceptance of CR SHALL clear the captured browser draft and attachments without requiring screen acknowledgment. The client SHALL NOT retry CR or paste automatically. Cancellation and input failures before acceptance SHALL retain the captured draft; disconnect retains its existing clearing behavior. Plain-text sending SHALL retain its existing behavior.
@@ -1367,3 +1367,44 @@ Agents settings SHALL use the existing authenticated accounts array to display e
 #### Scenario: Mixed account readings
 - **WHEN** one account has valid usage and another has expired or absent usage
 - **THEN** only the matching account shows the valid usage windows and reset times, with unavailable readings labeled clearly
+
+### Requirement: Live Changes snapshots
+The workspace SHALL consume matching worktree.changed events directly even during task snapshot buffering, deduplicate opaque revisions, fence snapshots invalidated in flight, surface stale snapshots and retry them with bounded backoff, and converge on reconnect/resync. Hidden panes SHALL defer reads until shown. Healthy Changes watching SHALL have no discovery interval; degraded watching SHALL reconcile every 15 seconds while visible; Artifacts retains its existing interval.
+
+#### Scenario: Adopt the merged contract
+- **WHEN** An external edit sends a revision or revisionless invalidation; only the visible matching task refreshes, and an earlier snapshot cannot overwrite it.
+- **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback
+
+### Requirement: Changes comparison provenance
+The workspace SHALL label status and diff using returned comparison requested_base, resolved_base, merge_base and fallback_reason. It SHALL explain local HEAD changes, branch merge-base changes and untracked contents without inferring a per-file comparison kind absent from the contract. Fallback warnings SHALL name the effective base.
+
+#### Scenario: Adopt the merged contract
+- **WHEN** A stacked task displays only the returned list, and its diff labels the same returned provenance with effective-base fallback warnings.
+- **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback
+
+### Requirement: Confirmed local file discard
+The workspace SHALL offer local file discard only for dirty regular file entries, capture task and path before confirmation, initially focus Cancel and explain restoration to HEAD or explicit untracked deletion. It SHALL send scope local and explicit delete_untracked, never retry automatically, retain failures and list state, explain documented error codes, and refresh status and any open diff through worktree.changed.
+
+#### Scenario: Adopt the merged contract
+- **WHEN** Cancel sends no request; tracked restore sends false, untracked delete sends true only after confirmation, and conflict errors preserve the list.
+- **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback
+
+### Requirement: Host Finder reveal
+The workspace SHALL offer worktree and file Finder actions explaining before activation that Finder opens on the daemon host. It SHALL POST {} or the exact relative path, disable actions after master-only 403 for the credential lifetime, and distinguish unsupported host, missing path/task, invalid path and launch failure without automatic retries.
+
+#### Scenario: Adopt the merged contract
+- **WHEN** Task and file menus send captured targets including whitespace; device-token rejection disables further reveal controls until reconnect.
+- **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback
+
+### Requirement: Changes refresh ordering and retained-view hardening
+The status list and opened diff SHALL use the same revision-aware single-flight policy, comparing an event against the latest expected revision rather than merely the displayed revision. Revisions may recur. Every event, manual refresh, resync and visibility refresh SHALL fence superseded responses and failures. Hidden or unfocused views SHALL defer reads and refresh once on return; background diff reads SHALL retain their toolbar and keyboard focus through coalesced invalidations. Directory refresh SHALL reconcile decoded child paths, retain expansion at every depth, and preserve focus acquired in retained children while a read was pending by capturing ownership at settlement.
+
+Hardening clarification on 2026-11-12 supersedes the unconditional no-interval wording in the original archived workspace-changes-events delta. Only watch_degraded=true enables 15-second, visible-only max-age reconciliation, including after a failed read. A healthy response, event, hide or teardown cancels that timer; an event's replacement degraded snapshot may re-arm it. This is supported-daemon recovery, not an older-daemon compatibility shim.
+
+#### Scenario: Revision returns while another read is outstanding
+- **WHEN** r1 is displayed, r2 starts a read and a later event returns to r1
+- **THEN** r2 SHALL never apply and the coalesced read SHALL converge to r1
+
+#### Scenario: Retained directory children during refresh
+- **WHEN** a retained nested child owns focus at read settlement
+- **THEN** its expansion and equivalent focused control SHALL survive reconciliation, while removed paths SHALL disappear

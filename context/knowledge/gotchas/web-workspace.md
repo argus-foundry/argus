@@ -56,7 +56,7 @@
 - **Claude session selection can restart a task, so a failed or canceled request is unconfirmed.** Capture the task before opening, fence late callbacks and reconnect output only after a confirmed switch; the daemon's backend capability and 400 response remain authoritative.
 - **Split must keep the main composer scoped to the primary task.** Route secondary state/Fit callbacks through the currently mounted secondary slot; blocked preference storage leaves split off and task selection must not enable it.
 - **Task pins post only the desired pinned flag to the targeted pin endpoint.** Apply returned pinned/archived values; pinning can restore an archived task. Never PUT a raw task to pin it.
-- **Task links must be credential-free HTTP(S) URLs, and copied file paths must remain text.** Browser clients cannot reveal daemon filesystem paths in Finder.
+- **Task links must be credential-free HTTP(S) URLs, and copied file paths must remain text.** Finder launches use only the master-only host reveal endpoint, never a browser file URL.
 - **Subscribe before the task baseline and buffer events while any snapshot is in flight.** Apply buffered events silently, resnapshot unknown/resync envelopes and retain the cursor through retry; a snapshot failure must keep its fence until a successful replacement so stale baseline data never overwrites an event.
 - **Task events stop the 30 second rail poll only after task.updated is observed on the current stream; reconnect resets that observation.** Reconnect, visibility return and Retry connection resnapshot tasks; these recover mutations whose event could not be persisted.
 - **Task snapshots serialize both pinned values; absence means an older daemon.** Reconcile booleans on every snapshot, retain cached pins when absent, and capture observation fences before reads so older snapshots cannot overwrite newer local or SSE pins. Pin invalidations use the single-task DTO with per-task cancellation.
@@ -107,7 +107,7 @@
 - **Bound paste settling and clear on daemon acceptance, without automatic CR retries.** Wait for fresh output and 100ms quiet outside the transient Pasting… status, but stop waiting after five seconds even with absent output or an unknown layout; then verify the captured session and post one standalone CR. The PTY has no submission acknowledgment protocol, and unchanged screen text cannot distinguish an unconsumed Enter from accepted work, so retaining accepted browser drafts or retrying Enter risks duplicate sends.
 - **Tooltips must add information beyond visible text.** Suppress duplicate untruncated labels, show only the shortcut on labeled controls, and mark full-value names/paths with data-tooltip-overflow so they appear only while clipped; check ellipsis-bearing descendants because a task row itself can fit while its name is truncated.
 - **Native select scrollWidth does not reveal clipped option text.** Measure the selected label in the control's font against the padded content width with disclosure space reserved; ordinary names still use the real ellipsis-bearing element's scrollWidth/clientWidth.
-- **Live Changes and Artifacts must read only the selected, visible pane in a visible focused document.** The daemon has no git-change event, so refresh on task idle/needs-input/exited/status events, focus/visibility return and the ten-second fallback.
+- **Live Changes and Artifacts must read only the selected, visible pane in a visible focused document.** Healthy Changes consumes worktree.changed without a discovery interval; degraded watching alone reconciles every 15 seconds while visible; Artifacts keeps its ten-second fallback. Both retain session, resync and focus/visibility refresh.
 - **Keep status refresh cancellation separate from retained row-count reads.** Single-flight status reads coalesce and task switches abort/fence late results; invalidate only paths whose status/stat summary changed and fence their older count completions, retaining scroll, folders, menus and the independent opened diff.
 - **ready_to_close outlives the done status.** The daemon keeps the mark when a done worker resumes, so role tags and binding selection must rank blocked/failed, then working, then ready to avoid a stale green ready tag.
 - **Keep `workspace-push.js` at the workspace root.** Moving it changes the service worker URL and scope.
@@ -190,3 +190,16 @@
 - **Roster pressure uses the server percent and the TUI 40/65/90 thresholds.** Null denominators stay uncomputed, null observation time says timing unknown, and coordinator denominators describe recycle budgets rather than model context.
 
 - **Agents account usage shares composer window validation and remains Claude-only.** Expired, null and invalid readings stay unavailable; Codex-only accounts omit the Claude usage block altogether.
+
+- **Deliver worktree invalidations outside task snapshot buffering and compare opaque revisions only for equality.** Fence status reads invalidated in flight; label stale snapshots and bound retry backoff so a persistent collection failure cannot spin.
+
+- **The comparison record describes base resolution, not which diff fallback supplied a file.** Preserve requested/resolved base, merge-base and fallback reason through diff layout changes; explain HEAD-first and untracked fallback without inventing a per-file kind.
+
+- **Discard scope comes from working status, never BranchFiles.** Capture task/path before shared confirmation, send explicit untracked deletion only for that confirmation, preserve server conflicts and wait for worktree.changed to refresh status and the opened diff.
+
+- **A Finder reveal opens on the daemon host and emits no worktree event.** Capture its target before confirmation, disable task and file reveal controls after 403 until reconnect, and fence launch results on teardown.
+- **Refresh expanded untracked-directory children when the git revision changes.** Retaining the parent row also retains deleted child rows; re-read its files behind content-version and task-lifetime fences, with explicit deletion for children of an untracked directory.
+
+- **Status and Review share one expected-revision fence, not a displayed-revision shortcut.** Content hashes can recur: r2 followed by r1 must invalidate an outstanding r2 read even while r1 remains displayed. Automatic diff reads retain the toolbar and coalesce behind one visible flight.
+- **Only degraded git watching needs max-age reconciliation, at 15 seconds while visible.** The daemon closes a degraded watcher and refreshes on requests; cancel on events, healthy responses, hide and teardown, re-arm only for a still-degraded snapshot or failed degraded read.
+- **Directory settlement owns focus and recursive expansion.** Retain child containers by decoded path, refresh every retained expanded descendant, and capture focus immediately before replacement so a user entering during the read keeps their control.

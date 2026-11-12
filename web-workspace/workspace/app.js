@@ -1,3 +1,4 @@
+import {HostReveal} from '../tasks/host-reveal.js';
 import {TaskBatch} from '../tasks/task-batch.js';
 import {TaskDelete} from '../tasks/task-delete.js';
 import {deletionNeighbor} from '../tasks/task-delete-policy.js';
@@ -40,6 +41,7 @@ let historyState, events, attention, deleteFocus;
 let split, rosterWatch, taskSettings, settings, newTask, terminal, currentTask, tasks = [], refreshAbort, refreshGeneration = 0;
 const taskTabs = new Map();
 const taskLinks = new TaskHeaderLinks(api);
+const hostReveal=new HostReveal(api,{denied:()=>{for(const control of document.querySelectorAll('[data-host-reveal]'))control.disabled=true;}});
 const railActions = new RailActions(api, async () => { navigation.pinned = railActions.pinned; await refreshTasks(); }, () => { railActions.retain(tasks);navigation.pinned=railActions.pinned; navigation.render(); });
 const heraKanban = new HeraKanban(api,()=>navigation.render(),()=>refreshTasks());
 const sessions = new ClaudeSessions(api, async (task, status) => { if(status !== 'unchanged')tools.invalidateIdentity(task.id); if (currentTask?.id === task.id && status !== 'unchanged') { composer.context.invalidate(); terminal?.reconnect(); } await refreshTasks();if(taskSettings?.active&&taskSettings.task?.id===task.id)await taskSettings.load(); });
@@ -61,6 +63,7 @@ const review = new TaskReview(api, () => {
   if (layout.compact.matches && layout.visible.tools) layout.close('tools');
 }, writeLocation);
 const tools = new TaskTools(api, review, {
+  reveal:hostReveal,
   changed:(roleID,unread)=>{
     for(const orch of navigation.roster.orchestrators||[])for(const role of orch.roles||[])if(role.role_id===roleID)role.board_unread=unread;
     navigation.update(tasks,currentTask?.id,undefined,{roster:navigation.roster},{defer:true});
@@ -75,7 +78,7 @@ const navigation = new TaskNavigation(selectTask, (project, action) => {
     if (layout.compact.matches) $('toggle-nav').focus(); else navigation.focusProject(project, action);
   });
 }, {
-  heraKanban,
+  heraKanban,reveal:hostReveal,
   openInbox:(task,roleID)=>{selectTask(task);tools.inboxRoleID=roleID;if(currentTask?.id!==task.id)return;tools.selectTab('tool-inbox');if(!layout.visible.tools)layout.toggle('tools');$('tool-inbox').focus();},
   bulkAction: tasks => taskBatch.open(tasks),
   deleteTask: task => {deleteFocus=taskNeighbor(task)?.id;taskDelete.open(task);},
@@ -254,7 +257,7 @@ const connection = new WorkspaceConnection(api, {
     composer.focus();
   },
   disconnected: () => {
-    refreshGeneration++; refreshAbort?.abort(); attention?.clear(); sessions.clear(); taskLinks.clear(); taskLinks.urls.clear(); railActions.clear(); heraKanban.clear(); rosterWatch?.stop(); split?.clear(); newTask.clear(); taskSettings.dismiss(); settings.setConnected(false);
+    refreshGeneration++; refreshAbort?.abort(); hostReveal.clear(); attention?.clear(); sessions.clear(); taskLinks.clear(); taskLinks.urls.clear(); railActions.clear(); heraKanban.clear(); rosterWatch?.stop(); split?.clear(); newTask.clear(); taskSettings.dismiss(); settings.setConnected(false);
     terminal?.destroy(); terminal = null; currentTask = null; tasks = [];
     composer.clear(); review.clear(); tools.clear(); navigation.clear(); archive.clear(); taskDelete.clear(); taskBatch.clear(); taskTabs.clear();
     $('terminal').replaceChildren(); $('notice').hidden = true; header(null); selectTab('tab-agent');
@@ -266,8 +269,8 @@ $('fit-session').addEventListener('click', async () => {
   try { await terminal?.fitSession(); }
   catch (error) { notice(`Could not fit the session. ${error.message}`); }
 });
-window.addEventListener('pagehide', () => { attention?.destroy(); sessions.clear(); taskLinks.clear(); stagedClipboard.select(null); railActions.clear(); heraKanban.clear(); rosterWatch?.stop(); split?.clear(); newTask.clear(); refreshAbort?.abort(); terminal?.destroy(); composer.clear(); review.clear(); tools.clear(); archive.clear(); taskDelete.clear(); taskBatch.clear(); settings.clear(); taskSettings.dismiss(); });
-events = new WorkspaceEvents(api, { refresh: refreshTasks, pin:event=>railActions.event(event,tasks), context: event => composer.context.event(event), suggestion: event => { if (connection.connected) composer.suggestion.event(event); }, event: event => {
+window.addEventListener('pagehide', () => { hostReveal.clear(); attention?.destroy(); sessions.clear(); taskLinks.clear(); stagedClipboard.select(null); railActions.clear(); heraKanban.clear(); rosterWatch?.stop(); split?.clear(); newTask.clear(); refreshAbort?.abort(); terminal?.destroy(); composer.clear(); review.clear(); tools.clear(); archive.clear(); taskDelete.clear(); taskBatch.clear(); settings.clear(); taskSettings.dismiss(); });
+events = new WorkspaceEvents(api, { refresh: refreshTasks, worktree:event=>{if(connection.connected)tools.event(event);}, pin:event=>railActions.event(event,tasks), context: event => composer.context.event(event), suggestion: event => { if (connection.connected) composer.suggestion.event(event); }, event: event => {
   if (!connection.connected) return;
   tools.event(event);
   if(event.type==='task.deleted')removeDeletedTask({id:event.task_id});

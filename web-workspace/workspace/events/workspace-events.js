@@ -54,7 +54,8 @@ export class WorkspaceEvents {
      if(event.type==='task.updated'){this.seenTaskUpdates=true;clearInterval(this.fallback);this.fallback=null;this.callbacks.pin?.(event);}
      this.callbacks.suggestion?.(event);
      if(['session.started','session.exited'].includes(event.type))this.callbacks.context?.(event);
-     if(event.type==='hera.board_changed'){this.callbacks.board?.(event);
+     if(event.type==='worktree.changed'){this.callbacks.worktree?.(event);
+     }else if(event.type==='hera.board_changed'){this.callbacks.board?.(event);
      }else if(['task.context_changed','task.usage_changed'].includes(event.type)){
       this.callbacks.context?.(event);
      }else if(event.type==='task.archived'){

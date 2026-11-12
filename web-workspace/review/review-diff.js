@@ -1,3 +1,4 @@
+import {comparisonText} from '../tasks/changes/comparison.js';
 import { node, button } from '../shared/dom.js';
 import { diffLines, splitLines } from '../tasks/changes/git.js';
 
@@ -16,7 +17,7 @@ export function renderDiff(container, selection, onMode) {
     modes.append(control);
   }
   toolbar.append(modes);
-  container.replaceChildren(toolbar, node('div', 'review-caption', 'Returned git diff · file contents and comparisons can change as the agent works'));
+  container.replaceChildren(toolbar, node('div', 'review-caption', comparisonText(selection.comparison)+' File diff prefers uncommitted edits, then branch changes; untracked files show their contents.'));
   if (focused) [...modes.children].find(control => control.textContent === focused)?.focus({ preventScroll: true });
   if (!selection.diff) { container.append(node('div', 'empty-state', 'No diff text was returned. This file may be binary, removed, unavailable, or unchanged in the current comparison.')); return; }
   const allLines = diffLines(selection.diff, DIFF_LINE_LIMIT + 1);
