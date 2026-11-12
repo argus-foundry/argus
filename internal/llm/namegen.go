@@ -11,6 +11,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -77,7 +78,7 @@ var validNamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // ErrUnavailable indicates the `claude` CLI is missing from PATH. Callers
 // should treat this as a clean skip, not a failure worth surfacing.
-var ErrUnavailable = errors.New("claude CLI unavailable")
+var ErrUnavailable = errors.New("naming CLI unavailable")
 
 // ErrEmptyPrompt indicates an empty/whitespace prompt was passed. Distinct
 // from ErrUnavailable so callers and logs can tell the two skip-cases
@@ -103,10 +104,18 @@ var nameGenCmd = func(ctx context.Context, name string, args ...string) *exec.Cm
 // (scraped tickets, clipboard, etc.) should pre-screen if they care about
 // the side effect of the rename succeeding.
 func GenerateName(ctx context.Context, prompt string) (string, error) {
+	return GenerateNameWithBackend(ctx, prompt, NamingBackend{})
+}
+
+// GenerateNameWithBackend runs a registry-selected utility, with shared validation and retries.
+func GenerateNameWithBackend(ctx context.Context, prompt string, backend NamingBackend) (string, error) {
+	if backend.Binary == "" {
+		backend.Binary = "claude"
+	}
 	if strings.TrimSpace(prompt) == "" {
 		return "", ErrEmptyPrompt
 	}
-	if _, err := exec.LookPath("claude"); err != nil {
+	if _, err := exec.LookPath(backend.Binary); err != nil {
 		return "", ErrUnavailable
 	}
 
@@ -117,6 +126,15 @@ func GenerateName(ctx context.Context, prompt string) (string, error) {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, DefaultTimeout)
 		defer cancel()
+	}
+
+	if backend.Prepare != nil {
+		prepared, cleanup, err := backend.Prepare(backend, nameSystemPrompt)
+		if err != nil {
+			return "", err
+		}
+		defer cleanup()
+		backend = prepared
 	}
 
 	args := []string{
@@ -146,6 +164,10 @@ func GenerateName(ctx context.Context, prompt string) (string, error) {
 		"Task description: " + prompt,
 	}
 
+	if backend.Args != nil {
+		args = backend.Args(prompt, nameSystemPrompt)
+	}
+
 	// Retry once on a transient CLI failure (overload, usage/rate limit, budget
 	// blip) so a momentary error doesn't permanently strand the slug. A clean
 	// run that produced UNUSABLE output is NOT retried — it would just produce
@@ -171,7 +193,7 @@ func GenerateName(ctx context.Context, prompt string) (string, error) {
 			case <-time.After(retryBackoff):
 			}
 		}
-		name, retryable, err := generateNameOnce(ctx, args)
+		name, retryable, err := generateNameOnce(ctx, args, backend)
 		switch {
 		case err == nil:
 			return name, nil
@@ -190,8 +212,9 @@ func GenerateName(ctx context.Context, prompt string) (string, error) {
 //   - (name, false, nil)  success
 //   - ("", false, err)    clean run, unusable output — terminal, NOT retryable
 //   - ("", true,  err)    non-zero exit — retryable
-func generateNameOnce(ctx context.Context, args []string) (name string, retryable bool, err error) {
-	cmd := nameGenCmd(ctx, "claude", args...)
+func generateNameOnce(ctx context.Context, args []string, backend NamingBackend) (name string, retryable bool, err error) {
+	cmd := nameGenCmd(ctx, backend.Binary, args...)
+	cmd.Env = backend.Env
 	// Run from a neutral cwd so claude can't auto-discover CLAUDE.md or
 	// project-local config in the worktree even though --setting-sources ""
 	// already disables settings loading. Belt-and-suspenders.
@@ -203,9 +226,24 @@ func generateNameOnce(ctx context.Context, args []string) (name string, retryabl
 	}
 
 	outStr := string(out)
+	if backend.JSONEvents {
+		outStr = ""
+		for _, line := range strings.Split(string(out), "\n") {
+			var event struct {
+				Type string `json:"type"`
+				Item struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"item"`
+			}
+			if json.Unmarshal([]byte(line), &event) == nil && event.Type == "item.completed" && event.Item.Type == "agent_message" {
+				outStr = event.Item.Text
+			}
+		}
+	}
 	name = sanitizeAndValidate(outStr)
 	if name == "" {
-		return "", false, fmt.Errorf("invalid name from model: %q", strings.TrimSpace(outStr))
+		return "", false, fmt.Errorf("invalid name from model: %q", truncate(scrubReason(outStr), 500))
 	}
 	return name, false, nil
 }
@@ -235,9 +273,9 @@ func wrapRunError(err error, stdout []byte) error {
 		}
 	}
 	if len(reasons) == 0 {
-		return fmt.Errorf("claude -p failed: %w", err)
+		return fmt.Errorf("naming CLI failed: %w", err)
 	}
-	return fmt.Errorf("claude -p failed: %w: %s", err, truncate(strings.Join(reasons, " | "), 500))
+	return fmt.Errorf("naming CLI failed: %w: %s", err, truncate(strings.Join(reasons, " | "), 500))
 }
 
 // scrubReason trims surrounding whitespace and replaces every control rune

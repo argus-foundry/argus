@@ -176,7 +176,7 @@ func TestGenerateName_ExitErrorIncludesStderr(t *testing.T) {
 
 	_, err := GenerateName(context.Background(), "build a feature")
 	testutil.Error(t, err)
-	testutil.Contains(t, err.Error(), "claude -p failed")
+	testutil.Contains(t, err.Error(), "naming CLI failed")
 	testutil.Contains(t, err.Error(), "Credit balance is too low")
 }
 
@@ -186,7 +186,7 @@ func TestGenerateName_ExitErrorEmptyStderr(t *testing.T) {
 	_, err := GenerateName(context.Background(), "build a feature")
 	testutil.Error(t, err)
 	// No stdout/stderr to fold in — error stays the bare exit-status form.
-	testutil.Contains(t, err.Error(), "claude -p failed: exit status 1")
+	testutil.Contains(t, err.Error(), "naming CLI failed: exit status 1")
 }
 
 // TestGenerateName_ExitErrorIncludesStdout is the regression guard for the
@@ -198,7 +198,7 @@ func TestGenerateName_ExitErrorIncludesStdout(t *testing.T) {
 
 	_, err := GenerateName(context.Background(), "build a feature")
 	testutil.Error(t, err)
-	testutil.Contains(t, err.Error(), "claude -p failed")
+	testutil.Contains(t, err.Error(), "naming CLI failed")
 	testutil.Contains(t, err.Error(), "Exceeded USD budget")
 }
 

@@ -68,7 +68,7 @@ type CreateInput struct {
 	// coordinator, MCP caller) so an unsupported backend error names it.
 	InheritedAccount bool
 
-	// AutoName, when true, fires a fire-and-forget Haiku rename in a
+	// AutoName, when true, fires a fire-and-forget backend rename in a
 	// background goroutine after the task is fully created. The DB write
 	// is race-guarded: it only overwrites Name if the row's current Name
 	// still equals the regex-derived slug. Callers should set this only
@@ -525,12 +525,12 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 
 	slog.Info("task created and started", "id", taskID, "name", task.Name, "project", input.Project, "pid", sess.PID())
 
-	// Fire-and-forget Haiku rename. Runs after the task is live so a slow
+	// Fire-and-forget backend rename. Runs after the task is live so a slow
 	// or failing LLM call cannot block task startup. The goroutine is
-	// race-guarded — if the user manually renames before Haiku returns,
+	// race-guarded — if the user manually renames before the model returns,
 	// the rename is skipped.
 	if input.AutoName {
-		go runAutoRename(database, taskID, task.Name, input.Prompt)
+		go runAutoRenameForTask(database, *task, input.Prompt, cfg)
 	}
 
 	return task, sess, nil

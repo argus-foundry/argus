@@ -272,7 +272,9 @@ const (
 	//     for its physical worktree on fresh and resumed launches, gated by
 	//     [agents] trust_worktrees. A stale supervisor still shows the folder
 	//     trust dialog even with approval/sandbox bypass enabled.
-	SupervisorSpawnSurface = 47
+	// 48: dash-leading Pi positional prompts receive a leading newline so the
+	//     CLI treats frontmatter and option-like text as messages, not flags.
+	SupervisorSpawnSurface = 48
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -585,7 +587,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "9618cf3c944b2865d2c7e9e7d06d4ab0b52b60c5191e772f807eebb1b7459ef8"
+	SpawnSurfaceDigest  = "cd33fb019df2333ee440102c13e1a03ab95d97b1dd1eed6ce3fab7a12dd5df2a"
 	StreamSurfaceDigest = "7d9956cdee0e7aaad62e26e5b800ec00345fde9c803fa09f35d88ca05b11a965"
 )
 
