@@ -309,6 +309,7 @@ func runGitWithInput(dir string, input io.Reader, extraEnv []string, args ...str
 	cmd.Dir = dir
 	cmd.Env = append(cmd.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
 	)
 	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.Stdin = input

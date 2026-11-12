@@ -23,3 +23,4 @@
 
 - **`golangci-lint` can hang indefinitely (local AND CI, no output) on one specific call chain, not on load.** bounce-recovery's `roleInfo` called `orchDepth` (a loop over `db.HeraOrchLink` + `errors.Is`); either function linted fine alone, but the call between them hung every linter, even `--default=none -E errcheck`, for 30+ minutes. Bisect by copying files into a scratch package (`internal/zzlint`, delete after) and running with `timeout`; the fix was calling `orchDepth` from the caller instead of from `roleInfo`. Also: `make lint-pr` normally takes ~25s, so anything past a few minutes is this, not a slow machine.
 
+- **Keep scratch mutation overlays under `.context/` goimports-clean too.** `fmt-check` runs `goimports -l .`, which includes hidden scratch directories; unformatted overlay copies stop the gate even though Go package discovery skips them.

@@ -197,3 +197,22 @@ The system SHALL publish `task.pr_changed` with the task id and payload `{"url",
 
 - **WHEN** DELETE clears a task with no manual link
 - **THEN** neither task.pr_changed nor task.updated is emitted and automatic cache is preserved
+
+### Requirement: Worktree change events
+
+The daemon SHALL emit `worktree.changed` with the task id and payload `{"revision":"<opaque>","reason":"filesystem|git|discard","paths":[...]}` (revision and paths optional). A consumer receiving an event without a revision SHALL treat it as an invalidation. Payloads carry no file contents.
+
+#### Scenario: Replay
+- **WHEN** a client reconnects with `since` before a worktree event
+- **THEN** the ring replays it, or a `resync` tells the client to refetch status
+
+### Requirement: Discard publishes a worktree change
+
+After a successful discard the daemon SHALL emit `worktree.changed` with reason `discard` and the discarded path, advertising a revision only after a completed successful post-mutation refresh. On refresh timeout or collection failure the cache SHALL remain stale and the event SHALL omit the revision so consumers refetch.
+
+#### Scenario: Failure emits nothing
+- **WHEN** a discard is rejected
+- **THEN** no `worktree.changed` event with reason `discard` is emitted
+#### Scenario: Refresh timeout
+- **WHEN** the post-discard refresh exceeds the bound while an older cached snapshot exists
+- **THEN** the discard event has no revision and the cached snapshot remains stale until refreshed
