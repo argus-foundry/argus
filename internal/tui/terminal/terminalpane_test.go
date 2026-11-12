@@ -5022,3 +5022,50 @@ func TestTerminalPane_Draw_ReplayReasonBanner(t *testing.T) {
 		}
 	})
 }
+
+// show-disconnected-agents D3: a task-bound pane replaying a dead session shows
+// the default stopped banner even with no explicit reason; live and task-less
+// panes never do; an explicit reason replaces it.
+func TestTerminalPane_Draw_DeadReplayStoppedBanner(t *testing.T) {
+	newReplay := func(t *testing.T, id string) *TerminalPane {
+		setupTaskLog(t, id, strings.Repeat("replayed line\r\n", 40))
+		tp := NewTerminalPane()
+		tp.SetRect(0, 0, 60, 12)
+		tp.SetTaskID(id)
+		return tp
+	}
+	t.Run("dead replay marks the top border without covering replay rows", func(t *testing.T) {
+		sim := newSim(t, 60, 12)
+		tp := newReplay(t, "dead-banner")
+		tp.Draw(sim)
+		lines := strings.Split(readScreen(sim), "\n")
+		testutil.Contains(t, lines[0], deadReplayNote)
+		testutil.False(t, strings.Contains(lines[1], deadReplayNote))
+	})
+	t.Run("explicit reason banner and border marker coexist", func(t *testing.T) {
+		sim := newSim(t, 60, 12)
+		tp := newReplay(t, "dead-banner-reason")
+		tp.SetPlaceholderNote("waiting for the Argus MCP server")
+		tp.Draw(sim)
+		lines := strings.Split(readScreen(sim), "\n")
+		testutil.Contains(t, lines[0], deadReplayNote)
+		testutil.Contains(t, lines[1], "waiting for the Argus MCP server")
+	})
+	t.Run("narrow pane drops the marker rather than overlap the title", func(t *testing.T) {
+		sim := newSim(t, 20, 12)
+		tp := newReplay(t, "dead-banner-narrow")
+		tp.SetRect(0, 0, 20, 12)
+		tp.Draw(sim)
+		testutil.False(t, strings.Contains(readScreen(sim), "press Enter to resume"))
+	})
+	t.Run("live session shows no stopped banner", func(t *testing.T) {
+		sim := newSim(t, 60, 12)
+		tp := NewTerminalPane()
+		tp.SetRect(0, 0, 60, 12)
+		tp.SetTaskID("live-task")
+		output := []byte("live output\r\n")
+		tp.SetSession(&mockAdapter{alive: true, totalWritten: uint64(len(output)), output: output})
+		tp.Draw(sim)
+		testutil.False(t, strings.Contains(readScreen(sim), deadReplayNote))
+	})
+}

@@ -541,30 +541,10 @@ func (p *HeraPage) reconcileOne(tp *terminal.TerminalPane, taskID, label string)
 	if taskID == "" || p.resolve == nil {
 		return
 	}
-	cur := tp.Session()
-	if cur != nil && cur.Alive() {
-		return // live session already bound
-	}
-	sess := p.resolve(taskID)
-	if sess == nil {
-		return // no session available (process gone → replay handles it)
-	}
-	if cur != nil && (sess == cur || !sess.Alive()) {
-		return // replacing a dead handle: only a fresh, live, distinct one qualifies
-	}
-	// ResetVT before SetSession: this is the recycle_coord kill+respawn
-	// transition (same task, brand-new session) as much as it is a
-	// StreamLost re-dial — a genuinely different handle is "new content
-	// incoming" either way, so any emulator/replay/scroll-anchor state left
-	// over from the OLD handle must not survive into the new one's render
-	// (BUG: recycled coordinator panes showed stale cells from the prior
-	// session at the top of the pane).
-	tp.ResetVT()
-	tp.SetSession(sess)
-	tp.ForceResyncPTY()
-	if cur == nil {
+	switch tp.ReResolveSession(taskID, p.resolve) {
+	case terminal.ReResolveLateBound:
 		uxlog.Log("[hera-view] %s pane feed-start task=%s (late bind)", label, taskID)
-	} else {
+	case terminal.ReResolveReplaced:
 		uxlog.Log("[hera-view] %s pane re-resolve task=%s (replaced dead session)", label, taskID)
 	}
 }
