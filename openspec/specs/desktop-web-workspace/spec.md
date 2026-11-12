@@ -45,7 +45,7 @@ The numbered references retain the original backend tally identifiers and record
 15. `discard-worktree-file` is adopted with captured per-file local confirmation, explicit untracked deletion, documented error messages and event-driven refresh.
 16. `git-per-file-numstat` supplies numeric per-file counts. Visible rows currently fetch individual diffs with at most four concurrent reads.
 17. `task-base-aware-git-comparison` is adopted through authoritative comparison provenance in Changes and file diffs; the client renders the returned file list directly.
-18. `worktree-change-events` is adopted through matching revisioned invalidations, fenced snapshots and reconnect/resync convergence. Changes has no discovery interval; Artifacts retains its fallback.
+18. `worktree-change-events` is adopted through matching revisioned invalidations, fenced snapshots and reconnect/resync convergence. Healthy watching has no Changes discovery interval; degraded Changes reconciles every 15 seconds while visible, and Artifacts retains its fallback.
 19. `clear-stale-role-ready-marker` clears ready_to_close when a role resumes working. Workspace role tags currently give working precedence over the stale marker.
 
 20. `codex-recapture-test-env-isolation` isolates CODEX_HOME and CODEX_SQLITE_HOME in the daemon recapture fixture. This is a pre-existing test issue on master, not a product defect.
@@ -997,7 +997,7 @@ Tooltips SHALL appear only for icon-only controls, visibly truncated names/paths
 - **AND** a labeled control with a shortcut SHALL show the shortcut alone
 
 ### Requirement: Visible task tools update live
-The optional workspace SHALL refresh Changes and Artifacts for the selected task on session.idle, session.needs_input, session.exited and task.status_changed events, on visibility/focus return, and through matching worktree.changed invalidations. Artifacts retains a ten-second fallback while the pane and focused document are visible; Changes has no discovery interval. Reads SHALL be single-flight with coalesced triggers and cancellation/fencing on task switch. Changes SHALL avoid rendering identical path/status/summary results and preserve scroll, view mode, folder expansion, row menu and opened review across updates. Path count caches SHALL invalidate affected status/stat summaries and dirty-file metadata revisions. The normal Changes header SHALL have no Refresh control; empty state SHALL say No changes yet, and read failures SHALL offer Retry.
+The optional workspace SHALL refresh Changes and Artifacts for the selected task on session.idle, session.needs_input, session.exited and task.status_changed events, on visibility/focus return, and through matching worktree.changed invalidations. Artifacts retains a ten-second fallback while the pane and focused document are visible; Healthy Changes watching has no discovery interval. Degraded watching SHALL reconcile at the daemon max age of 15 seconds while visible, canceling the timer when hidden or on an event and re-evaluating after the resulting snapshot. Reads SHALL be single-flight with coalesced triggers and cancellation/fencing on task switch. Changes SHALL avoid rendering identical path/status/summary results and preserve scroll, view mode, folder expansion, row menu and opened review across updates. Path count caches SHALL retain unchanged committed-only counts, invalidate changed status/stat/comparison identities and conservatively invalidate dirty-file metadata revisions. Revision-only changes SHALL retain the visible list DOM. The normal Changes header SHALL have no Refresh control; empty state SHALL say No changes yet, and read failures SHALL offer Retry.
 
 #### Scenario: Agent writes a file
 - **WHEN** the selected task emits session.idle while Changes is visible
@@ -1369,7 +1369,7 @@ Agents settings SHALL use the existing authenticated accounts array to display e
 - **THEN** only the matching account shows the valid usage windows and reset times, with unavailable readings labeled clearly
 
 ### Requirement: Live Changes snapshots
-The workspace SHALL consume matching worktree.changed events directly even during task snapshot buffering, deduplicate opaque revisions, fence snapshots invalidated in flight, surface stale snapshots and retry them with bounded backoff, and converge on reconnect/resync. Hidden panes SHALL defer reads until shown. Changes SHALL have no discovery interval; Artifacts retains its existing interval.
+The workspace SHALL consume matching worktree.changed events directly even during task snapshot buffering, deduplicate opaque revisions, fence snapshots invalidated in flight, surface stale snapshots and retry them with bounded backoff, and converge on reconnect/resync. Hidden panes SHALL defer reads until shown. Healthy Changes watching SHALL have no discovery interval; degraded watching SHALL reconcile every 15 seconds while visible; Artifacts retains its existing interval.
 
 #### Scenario: Adopt the merged contract
 - **WHEN** An external edit sends a revision or revisionless invalidation; only the visible matching task refreshes, and an earlier snapshot cannot overwrite it.
@@ -1395,3 +1395,16 @@ The workspace SHALL offer worktree and file Finder actions explaining before act
 #### Scenario: Adopt the merged contract
 - **WHEN** Task and file menus send captured targets including whitespace; device-token rejection disables further reveal controls until reconnect.
 - **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback
+
+### Requirement: Changes refresh ordering and retained-view hardening
+The status list and opened diff SHALL use the same revision-aware single-flight policy, comparing an event against the latest expected revision rather than merely the displayed revision. Revisions may recur. Every event, manual refresh, resync and visibility refresh SHALL fence superseded responses and failures. Hidden or unfocused views SHALL defer reads and refresh once on return; background diff reads SHALL retain their toolbar and keyboard focus through coalesced invalidations. Directory refresh SHALL reconcile decoded child paths, retain expansion at every depth, and preserve focus acquired in retained children while a read was pending by capturing ownership at settlement.
+
+Hardening clarification on 2026-11-12 supersedes the unconditional no-interval wording in the original archived workspace-changes-events delta. Only watch_degraded=true enables 15-second, visible-only max-age reconciliation, including after a failed read. A healthy response, event, hide or teardown cancels that timer; an event's replacement degraded snapshot may re-arm it. This is supported-daemon recovery, not an older-daemon compatibility shim.
+
+#### Scenario: Revision returns while another read is outstanding
+- **WHEN** r1 is displayed, r2 starts a read and a later event returns to r1
+- **THEN** r2 SHALL never apply and the coalesced read SHALL converge to r1
+
+#### Scenario: Retained directory children during refresh
+- **WHEN** a retained nested child owns focus at read settlement
+- **THEN** its expansion and equivalent focused control SHALL survive reconciliation, while removed paths SHALL disappear

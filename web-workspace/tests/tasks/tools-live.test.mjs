@@ -41,3 +41,25 @@ test('session write signals and resync remain supported; status and stopped owne
  for(const type of ['session.idle','session.needs_input','session.exited','task.status_changed','resync']){const count=f.calls.length;f.refresh.event({type,task_id:'a'});assert.equal(f.calls.length,count+1);f.calls.at(-1).resolve({});await settle();}
  f.refresh.select('a','status');const count=f.calls.length;f.refresh.event(event());f.refresh.trigger('focus');assert.equal(f.calls.length,count);f.refresh.stop();f.refresh.trigger('focus');assert.equal(f.calls.length,count);
 });
+test('returning to the displayed revision supersedes a different in-flight revision',async()=>{
+ const f=fixture();f.refresh.select('a','changes');f.calls[0].resolve({git_revision:'r1'});await settle();
+ f.refresh.event(event('r2'));f.refresh.event(event('r1'));f.calls[1].resolve({git_revision:'r2'});await settle();
+ assert.deepEqual(f.applied.map(item=>item.git_revision),['r1']);assert.equal(f.calls.length,3);
+ f.calls[2].resolve({git_revision:'r1'});await settle();assert.deepEqual(f.applied.map(item=>item.git_revision),['r1','r1']);f.refresh.stop();
+});
+test('degraded watching reconciles at fifteen seconds only while visible and stops on recovery',async()=>{
+ const f=fixture(),delays=[];f.refresh.timers.setTimeout=(fn,delay)=>{f.timeouts.push(fn);delays.push(delay);return fn;};
+ f.refresh.select('a','changes');f.calls[0].resolve({git_revision:'r1',watch_degraded:true});await settle();assert.deepEqual(delays,[15000]);
+ f.timeouts.shift()();assert.equal(f.calls.length,2);f.calls[1].resolve({git_revision:'r2',watch_degraded:true});await settle();
+ f.state.visible=false;f.refresh.suspend();assert.equal(f.timeouts.length,0);f.state.visible=true;f.refresh.trigger('visible');f.calls[2].resolve({git_revision:'r2',watch_degraded:true});await settle();
+ f.refresh.event(event('r2'));assert.equal(f.timeouts.length,0);assert.equal(f.calls.length,4);f.calls[3].resolve({git_revision:'r2',watch_degraded:false});await settle();assert.equal(f.timeouts.length,0);f.refresh.stop();
+});
+test('degraded retries continue at max age after a failed reconciliation read',async()=>{
+ const f=fixture();f.refresh.select('a','changes');f.calls[0].resolve({git_revision:'r1',watch_degraded:true});await settle();f.timeouts.shift()();f.calls[1].reject(new Error('offline'));await settle();
+ assert.equal(f.errors.length,1);assert.equal(f.timeouts.length,1);f.refresh.stop();assert.equal(f.timeouts.length,0);
+});
+for(const [base,first,last] of [['r9','r10','r1'],['baseline','z-opaque','a-opaque']])test(`opaque revisions accept a lexically smaller distinct value while a read is pending: ${first} to ${last}`,async()=>{
+ const f=fixture();f.refresh.select('a','changes');f.calls[0].resolve({git_revision:base});await settle();
+ f.refresh.event(event(first));assert.equal(f.calls.length,2);f.refresh.event(event(last));f.calls[1].resolve({git_revision:first});await settle();
+ assert.deepEqual(f.applied.map(value=>value.git_revision),[base]);assert.equal(f.calls.length,3);f.calls[2].resolve({git_revision:last});await settle();assert.equal(f.applied.at(-1).git_revision,last);f.refresh.stop();
+});

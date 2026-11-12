@@ -1,6 +1,6 @@
 # Theia
 
-A separate desktop web client using the existing Argus API. The original web UI, daemon, TUI and native app are unchanged. Older daemons retain task reconciliation polling. New pin, usage and mail features require a daemon rebuilt and restarted with their merged APIs.
+A separate desktop web client using the existing Argus API. The original web UI, daemon, TUI and native app are unchanged. The running daemon must include comparison provenance, worktree.changed, git_revision/stale/watch_degraded, git/discard and task reveal, all present at commit 59a79cd7, plus the merged pin, usage and mail APIs. Rebuild and restart the daemon before using this client. There is no older-daemon compatibility shim.
 
 Start with Node 20 or newer from the repository root.
 
@@ -184,4 +184,4 @@ See [test commands](docs/testing.md) for all unit, browser, security and master 
 
 Agent messages in task tools shows read-only history, including ended bindings and older pages, without acknowledging mail. Coordinator tasks also offer Inbox. Its mail glyph opens unread human items; opening marks the viewed revision read, while Mark unread and Dismiss remain explicit. Reply appends an Inbox reference to the existing composer draft without sending. A stopped coordinator still needs an explicit Resume before send.
 
-Changes consumes live worktree events instead of discovery polling, labels the returned comparison base and fallback reason, and marks stale git snapshots while retrying a bounded number of times. Status and the opened diff refresh on worktree updates, including after discard.
+Changes consumes live worktree events instead of routine discovery polling; only degraded watching reconciles every 15 seconds while visible. It labels the returned comparison base and fallback reason, and marks stale git snapshots while retrying a bounded number of times. Status and the opened diff refresh on worktree updates, including after discard.

@@ -15,7 +15,7 @@ export class TaskChanges {
     signal.addEventListener('abort',()=>this.observer?.disconnect(),{once:true});
   }
   show(result) {
-    const files=changedFiles(result),totals=statTotals(result),revisionChanged=this.revision!==result.git_revision;
+    const files=changedFiles(result),totals=statTotals(result),revisionChanged=this.revision!==result.git_revision,comparisonChanged=JSON.stringify(this.comparison)!==JSON.stringify(result.comparison);
     this.localPaths=new Set(changedFiles({Status:result.Status}).map(file=>file.path));
     this.comparison=result.comparison;this.stale=!!result.stale;this.watchDegraded=!!result.watch_degraded;
     const summaries=new Map(),stats=new Map();
@@ -28,11 +28,12 @@ export class TaskChanges {
       const lines=stats.get(file.path)||[];
       summaries.set(file.path,JSON.stringify([file.status,lines,this.localPaths.has(file.path)]));
     }
-    const fingerprint=JSON.stringify([[...summaries],totals,result.git_revision,this.comparison,this.stale,this.watchDegraded]);
-    if(fingerprint===this.fingerprint)return false;
+    const fingerprint=JSON.stringify([[...summaries],totals,this.comparison,this.stale,this.watchDegraded]);
+    const visibleChanged=fingerprint!==this.fingerprint;
     const changed=new Set([...summaries.keys(),...(this.summaries?.keys()||[])]);
-    for(const path of changed)if(this.revision!==result.git_revision||this.summaries?.get(path)!==summaries.get(path))this.counts.invalidate(path);
-    this.revision=result.git_revision;this.fingerprint=fingerprint;this.summaries=summaries;this.files=files;this.totals=totals;this.draw();
+    for(const path of changed)if(comparisonChanged||revisionChanged&&this.localPaths.has(path)||this.summaries?.get(path)!==summaries.get(path))this.counts.invalidate(path);
+    this.revision=result.git_revision;this.fingerprint=fingerprint;this.summaries=summaries;this.files=files;this.totals=totals;
+    if(visibleChanged)this.draw();else if(revisionChanged){this.updateCounts();this.observeRows();}
     if(revisionChanged)for(const file of files.filter(file=>file.directory)) {
       const row=[...this.list.querySelectorAll('.file-row')].find(row=>row.dataset.filePath===file.path);
       const container=row?.closest('.file-entry');
@@ -41,7 +42,7 @@ export class TaskChanges {
         void this.expandDirectory(file,row,container,true);
       }
     }
-    return true;
+    return visibleChanged;
   }
   draw() {
     const scroll=this.panel.scrollTop;
@@ -119,15 +120,24 @@ export class TaskChanges {
     try {
       const result=await this.api.json(`/api/tasks/${encodeURIComponent(this.task.id)}/files?dir=${encodeURIComponent(file.path)}`,{signal:this.signal});
       if(this.signal.aborted||!content.isConnected||version!==content.readVersion)return;
-      content.replaceChildren();
+      const restoreContent=captureFocus(content,()=>row,{signal:this.signal});
+      const retained=new Map([...content.children].filter(entry=>entry.matches('.file-entry')).map(entry=>[entry.querySelector('.file-row').dataset.filePath,entry]));
       const files=(result.Files||[]).map(item=>({path:gitPath(item.Path),status:file.status.includes('?')?'??':item.Status||'?',directory:item.IsDir}));
-      for(const child of files)content.append(fileRow(this.task,child,{openDiff:this.openDiff,expandDirectory:(...args)=>this.expandDirectory(...args),counts:this.counts.results.get(child.path),reveal:this.reveal,signal:this.signal,discard:!this.task.archived?file=>this.discard(file):null}));
+      const entries=files.map(child=>{
+        const previous=retained.get(child.path),oldRow=previous?.querySelector('.file-row');
+        if(previous&&previous.dataset.status===child.status&&oldRow.dataset.directory===String(!!child.directory))return previous;
+        const entry=fileRow(this.task,child,{openDiff:this.openDiff,expandDirectory:(...args)=>this.expandDirectory(...args),counts:this.counts.results.get(child.path),reveal:this.reveal,signal:this.signal,discard:!this.task.archived?file=>this.discard(file):null});
+        entry.dataset.status=child.status;return entry;
+      });
+      content.replaceChildren(...entries);row.disabled=false;restoreContent();
+      for(let index=0;index<files.length;index++)if(files[index].directory&&entries[index].querySelector(':scope > .directory-files'))void this.expandDirectory(files[index],entries[index].querySelector('.file-row'),entries[index],true);
       this.observeRows();
       if(!files.length)content.append(node('p','tool-note','No changed files returned for this directory.'));
       log('tools','directory loaded',{count:files.length});
     } catch(error) {
       if(this.signal.aborted||!content.isConnected||version!==content.readVersion)return;
-      content.replaceChildren(errorMessage(`Directory unavailable. ${error.message}`,'tool-note'));log('tools','directory failed',{status:error.status||0});
+      const restoreContent=captureFocus(content,()=>row,{signal:this.signal});
+      content.replaceChildren(errorMessage(`Directory unavailable. ${error.message}`,'tool-note'));row.disabled=false;restoreContent();log('tools','directory failed',{status:error.status||0});
     } finally {if(!this.signal.aborted&&version===content.readVersion)row.disabled=false;restore();}
   }
 }

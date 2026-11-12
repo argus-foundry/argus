@@ -2,11 +2,11 @@ import {test,expect} from '@playwright/test';
 
 async function fixture(page,{comparison={requested_base:'parent',resolved_base:'parent',merge_base:'abc123',fallback_reason:null},status=' M src/file space.txt',branch='M\tsrc/file space.txt'}={}) {
   const task={id:'changes-task',name:'Changes contracts',project:'fixture',status:'complete',worktree_path:'/tmp/fixture worktree'};
-  const state={comparison,status,branch,revision:'r1',stale:false,discardStatus:200,discardCode:'',revealStatus:200,revealCode:'',requests:[] as {path:string,body:unknown}[],statusReads:0};
+  const state={comparison,status,branch,revision:'r1',stale:false,degraded:false,discardStatus:200,discardCode:'',revealStatus:200,revealCode:'',requests:[] as {path:string,body:unknown}[],statusReads:0};
   await page.addInitScript(()=>{
     const original=window.fetch;
     window.fetch=(path,options)=>String(path).startsWith('/api/events/stream')?Promise.resolve(new Response(new ReadableStream({start(controller){window['changesEvents']=controller;}}),{headers:{'Content-Type':'text/event-stream'}})):original(path,options);
-    window['invalidateChanges']=()=>window['changesEvents'].enqueue(new TextEncoder().encode('data: '+JSON.stringify({type:'worktree.changed',task_id:'changes-task',payload:{reason:'filesystem'}})+'\n\n'));
+    window['invalidateChanges']=(revision?)=>window['changesEvents'].enqueue(new TextEncoder().encode('data: '+JSON.stringify({type:'worktree.changed',task_id:'changes-task',payload:revision?{revision}:{reason:'filesystem'}})+'\n\n'));
   });
   await page.route('**/api/**',async route=>{
     const path=new URL(route.request().url()).pathname;let json:any={};let responseStatus=200;
@@ -17,7 +17,7 @@ async function fixture(page,{comparison={requested_base:'parent',resolved_base:'
     }else if(path==='/api/tasks')json={tasks:[task]};
     else if(path==='/api/projects/full'||path==='/api/projects')json={projects:[{name:'fixture'}]};
     else if(path.endsWith('/raw'))json=task;
-    else if(path.endsWith('/git/status')){state.statusReads++;json={Status:state.status,BranchFiles:state.branch,comparison:state.comparison,git_revision:state.revision,stale:state.stale};}
+    else if(path.endsWith('/git/status')){state.statusReads++;json={Status:state.status,BranchFiles:state.branch,comparison:state.comparison,git_revision:state.revision,stale:state.stale,watch_degraded:state.degraded};}
     else if(path.endsWith('/git/diff'))json={Diff:'diff --git a/f b/f\n@@ -1 +1 @@\n-old\n+new',comparison:state.comparison};
     else if(path.endsWith('/size'))json={cols:80,rows:24};
     if(path.endsWith('/output'))return route.fulfill({body:'',headers:{'X-Output-Total':'0'}});
@@ -109,4 +109,32 @@ test('reconnect resnapshots Changes after a stream gap',async({page})=>{
 test('stale snapshots retain files and converge through bounded retry',async({page})=>{
  const state=await fixture(page);state.stale=true;await page.evaluate(()=>window['invalidateChanges']());await expect(page.getByText('Git snapshot is stale. Checking for current changes…',{exact:true})).toBeVisible();
  state.stale=false;state.revision='r2';state.branch='A\tfresh.txt';state.status='';await expect(page.locator('.file-row')).toContainText('fresh.txt');await expect(page.getByText('Git snapshot is stale. Checking for current changes…',{exact:true})).toHaveCount(0);
+});
+
+test('hidden Review defers event bursts until the Review tab becomes visible',async({page})=>{
+ const state=await fixture(page);await page.locator('.file-row').click();await expect(page.locator('.diff-table')).toBeVisible();await page.locator('#tab-agent').click();
+ let reads=0;await page.route('**/git/diff?*',route=>{reads++;return route.fulfill({json:{Diff:'@@ -1 +1 @@\n-old\n+shown once'}});});
+ const before=state.statusReads;await page.evaluate(()=>{for(let i=0;i<20;i++)window['invalidateChanges']('opaque-'+i);});await expect.poll(()=>state.statusReads).toBeGreaterThan(before);expect(reads).toBe(0);
+ await page.locator('#tab-review').click();await expect(page.locator('.diff-table')).toContainText('shown once');expect(reads).toBe(1);
+});
+test('coalesced visible diff refreshes retain Split focus and reject the old response',async({page})=>{
+ await fixture(page);await page.locator('.file-row').click();const split=page.getByRole('button',{name:'Split',exact:true});await split.click();await split.focus();
+ const pending=[];await page.route('**/git/diff?*',route=>{pending.push(route);});await page.evaluate(()=>{window['invalidateChanges']('r2');for(let i=0;i<20;i++)window['invalidateChanges']('r3');});
+ await expect.poll(()=>pending.length).toBe(1);await expect(split).toBeFocused();await pending[0].fulfill({json:{Diff:'@@ -1 +1 @@\n-old\n+obsolete response'}});
+ await expect.poll(()=>pending.length).toBe(2);await expect(page.locator('.diff-table')).not.toContainText('obsolete response');await expect(split).toBeFocused();await pending[1].fulfill({json:{Diff:'@@ -1 +1 @@\n-old\n+latest response'}});
+ await expect(page.locator('.diff-table')).toContainText('latest response');await expect(split).toBeFocused();await page.evaluate(()=>window['invalidateChanges']('r3'));await page.evaluate(()=>new Promise(resolve=>setTimeout(resolve,0)));expect(pending.length).toBe(2);
+});
+test('nested untracked refresh preserves late child focus, expansion and child deletion',async({page})=>{
+ const state=await fixture(page,{status:'?? draft/',branch:''});let leaf='draft/sub/leaf.txt',hold=false,release;
+ await page.route('**/files?*',async route=>{if(!new URL(route.request().url()).searchParams.get('dir')?.includes('sub')){if(hold)await new Promise(resolve=>{release=resolve;});return route.fulfill({json:{Files:[{Path:'draft/sub/',Status:'A',IsDir:true}]}});}return route.fulfill({json:{Files:[{Path:leaf,Status:'A',IsDir:false}]}});});
+ const byPath=path=>page.locator(`.file-row[data-file-path=${JSON.stringify(path)}]`);
+ await byPath('draft/').click();await byPath('draft/sub/').click();await expect(byPath(leaf)).toBeVisible();await page.locator('#tool-changes').focus();hold=true;state.revision='r2';await page.evaluate(()=>window['invalidateChanges']());await expect.poll(()=>!!release).toBe(true);
+ await byPath(leaf).focus();release();await expect(byPath('draft/')).toBeEnabled();await expect(byPath('draft/sub/')).toHaveAttribute('aria-expanded','true');await expect(byPath(leaf)).toBeFocused();
+ hold=false;await page.getByRole('button',{name:'File actions for '+leaf,exact:true}).click();await page.getByRole('menuitem',{name:'Delete untracked file',exact:true}).click();await page.locator('#confirm-dialog').getByRole('button',{name:'Delete file',exact:true}).click();leaf='draft/sub/new.txt';state.revision='r3';await page.evaluate(()=>window['invalidateChanges']());
+ await expect(byPath(leaf)).toBeVisible();await expect(byPath('draft/sub/leaf.txt')).toHaveCount(0);await expect(byPath('draft/sub/')).toHaveAttribute('aria-expanded','true');
+});
+test('degraded watching reconciles at max age and stops while hidden or healthy',async({page})=>{
+ const state=await fixture(page);await page.clock.install();state.degraded=true;await page.evaluate(()=>window['invalidateChanges']());await expect(page.getByText('Live file watching is degraded. Changes reconcile when the daemon refreshes.',{exact:true})).toBeVisible();
+ const before=state.statusReads;state.branch='A\tdegraded-fresh.txt';state.status='';state.revision='r2';await page.clock.runFor(14999);expect(state.statusReads).toBe(before);await page.clock.runFor(1);await expect(page.locator('.file-row')).toContainText('degraded-fresh.txt');expect(state.statusReads).toBe(before+1);
+ await page.locator('#toggle-tools').click();const hidden=state.statusReads;await page.clock.runFor(30001);expect(state.statusReads).toBe(hidden);state.degraded=false;await page.locator('#toggle-tools').click();await expect.poll(()=>state.statusReads).toBeGreaterThan(hidden);const healthy=state.statusReads;await page.clock.runFor(15001);expect(state.statusReads).toBe(healthy);
 });
