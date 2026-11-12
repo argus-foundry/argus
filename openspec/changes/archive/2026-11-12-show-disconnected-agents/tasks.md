@@ -20,4 +20,4 @@
 
 ## 5. Docs and wrap-up
 - [x] 5.1 Gotchas in `hera-view.md`, `tasklist-ui.md`, `pty-terminal.md`/`daemon-rpc.md`; README reference if icon legend exists.
-- [ ] 5.2 `make pre-pr` once; archive change in the PR.
+- [x] 5.2 `make pre-pr` once; archive change in the PR.
