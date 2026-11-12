@@ -71,6 +71,11 @@ type RoleView struct {
 	// running" from "dead worker, binding lingering"; the running signal does, and
 	// gates the spinner (IsActive) so a dead worker never animates.
 	SessionRunning bool
+	// Disconnected: the live binding's bound task has no running session (the
+	// App's agent.DisconnectedIDs set: absent past the grace ticks, fail-open on
+	// an unreadable session list). Stamped after BuildModel by the page via
+	// AnnotateRoles, NOT by BuildModel itself. Never set for complete tasks.
+	Disconnected bool
 	// SustainedActive reports whether this role's bound task has demonstrated
 	// several CONSECUTIVE ticks of genuine working activity (the App's
 	// agent.ResumeActivityTick debounce — the SAME signal that already clears

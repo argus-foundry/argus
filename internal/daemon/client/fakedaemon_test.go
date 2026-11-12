@@ -265,6 +265,7 @@ func (fd *fakeDaemon) handle(conn net.Conn, server *rpc.Server) {
 // streamOnce returns (false, false) — process still alive but stream dropped.
 // After 3 retries the function falls through to removeSessionStreamLost.
 func TestStream_RetryAlive(t *testing.T) {
+	shrinkStreamBackoff(t)
 	fd := newFakeDaemon(t)
 
 	// Build a Client wired to the fake daemon.
@@ -725,4 +726,48 @@ func TestProbeSession(t *testing.T) {
 	_ = c.rpc.Close()
 	_, err = c.ProbeSession("t")
 	testutil.Error(t, err)
+}
+
+// shrinkStreamBackoff makes reconnect backoff test-fast (same retry count).
+func shrinkStreamBackoff(t *testing.T) {
+	t.Helper()
+	old := streamBackoffPtr.Load()
+	fast := []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond}
+	streamBackoffPtr.Store(&fast)
+	t.Cleanup(func() { streamBackoffPtr.Store(old) })
+}
+
+func TestStreamBackoff_SpansDaemonRestart(t *testing.T) {
+	var total time.Duration
+	for _, d := range streamBackoff() {
+		total += d
+	}
+	if total < 10*time.Second || total > 20*time.Second {
+		t.Fatalf("backoff total %v should be ~15s so a daemon restart is survived", total)
+	}
+}
+
+// A daemon that is unreachable on dial must be retried, not dropped on the
+// first failure; when it never returns the session is removed as stream-lost.
+func TestStream_DaemonDownRetriesThenLoses(t *testing.T) {
+	shrinkStreamBackoff(t)
+	c := &Client{sessions: make(map[string]*RemoteSession), closed: make(chan struct{})}
+	lost := make(chan daemon.ExitInfo, 1)
+	c.OnSessionExit(func(_ string, info daemon.ExitInfo) { lost <- info })
+	rs := newRemoteSession("down", c)
+	c.sessions["down"] = rs
+	done := make(chan struct{})
+	go func() { rs.connectStream("/nonexistent/argus-test.sock"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connectStream did not give up")
+	}
+	select {
+	case info := <-lost:
+		testutil.True(t, info.StreamLost)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected StreamLost")
+	}
+	testutil.Equal(t, rs.streamAttempt, len(streamBackoff()))
 }

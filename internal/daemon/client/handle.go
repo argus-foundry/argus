@@ -28,6 +28,10 @@ var _ agent.SessionHandle = (*RemoteSession)(nil)
 
 // RemoteSession implements agent.SessionHandle by proxying to the daemon.
 type RemoteSession struct {
+	// streamAttempt is the connectStream retry index of the in-flight stream
+	// connection (0 = first dial). Only touched by the connectStream goroutine.
+	streamAttempt int
+
 	taskID string
 	client *Client
 

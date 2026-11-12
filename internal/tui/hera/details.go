@@ -573,6 +573,8 @@ func rosterStatusText(r *heramodel.RoleView, hasPR bool) string {
 		text = "needs-input"
 	case in.Active:
 		text = "working"
+	case in.Disconnected:
+		text = "disconnected"
 	case in.Accepted:
 		text = "accepted"
 	case in.ReadyToClose:

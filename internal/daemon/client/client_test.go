@@ -592,6 +592,7 @@ func TestC_AutoStart(t *testing.T) {
 // TestC_StreamRetry exercises connectStream when the dial succeeds but the
 // header write reads fall into the retry loop.
 func TestC_StreamRetry(t *testing.T) {
+	shrinkStreamBackoff(t)
 	// Spin up a fake daemon that accepts and immediately closes connections
 	// so streamOnce fails fast each iteration.
 	dir := t.TempDir()
@@ -1022,3 +1023,23 @@ func TestC_RunningChecked(t *testing.T) {
 // Client.RunningChecked is renamed or its signature changes, this stops
 // compiling instead of silently reverting to "RPC failure reads as no sessions".
 var _ daemon.RunningChecker = (*Client)(nil)
+
+func TestClient_SessionListHealthy(t *testing.T) {
+	_, sockPath, _ := testSetup(t)
+	c, err := Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.SessionListHealthy() {
+		t.Fatal("fresh client should be healthy")
+	}
+	c.RunningAndIdle()
+	if !c.SessionListHealthy() {
+		t.Fatal("successful list should be healthy")
+	}
+	_ = c.Close() // subsequent RPC fails
+	c.RunningAndIdle()
+	if c.SessionListHealthy() {
+		t.Fatal("failed list should be unhealthy")
+	}
+}

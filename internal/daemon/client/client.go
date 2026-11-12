@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
@@ -105,6 +106,11 @@ type Client struct {
 	// blocked in rpc.Call. Logged for observability — drain goroutines
 	// decrement the counter when the RPC eventually completes.
 	leakedCalls int
+
+	// listUnhealthy is set when the last Daemon.ListSessions read failed (last-writer-wins: concurrent RunningAndIdle callers can overwrite each other; the only consumer is the TUI tick, which calls it from one goroutine, and callers independently treat a nil list as unknown), so a
+	// nil RunningAndIdle result means "unknown", not "no sessions". Zero value =
+	// healthy. See SessionListHealthy.
+	listUnhealthy atomic.Bool
 
 	// onSessionExit is called when a session's stream EOF is detected.
 	// Includes exit info (error, stopped flag, last output) from the daemon.
@@ -530,8 +536,10 @@ func (c *Client) Idle() []string {
 func (c *Client) RunningAndIdle() (running, idle []string) {
 	var resp daemon.ListResp
 	if err := c.call("Daemon.ListSessions", &daemon.Empty{}, &resp); err != nil {
+		c.listUnhealthy.Store(true)
 		return nil, nil
 	}
+	c.listUnhealthy.Store(false)
 	running = make([]string, 0, len(resp.Sessions))
 	for _, s := range resp.Sessions {
 		if s.Alive {
@@ -543,6 +551,12 @@ func (c *Client) RunningAndIdle() (running, idle []string) {
 	}
 	return running, idle
 }
+
+// SessionListHealthy reports whether the most recent RunningAndIdle read
+// succeeded. RunningAndIdle returns (nil, nil) on an RPC error, which is
+// indistinguishable from "no sessions"; callers deriving a "not running" signal
+// (agent.DisconnectedIDs) must fail open when this is false.
+func (c *Client) SessionListHealthy() bool { return !c.listUnhealthy.Load() }
 
 // HasSession returns true if a session exists for the task.
 func (c *Client) HasSession(taskID string) bool {

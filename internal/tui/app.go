@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -486,6 +487,10 @@ type App struct {
 	// genuinely sustained-active role, regardless of task status or a stale
 	// self-reported `blocked` hera status (narrow-needs-input-sustained-active).
 	sustainedActiveIDs []string
+	// disconnectedTicks/disconnectedIDs back the disconnected-agent predicate
+	// (disconnected.go): per-task consecutive-absent counters and the current set.
+	disconnectedTicks map[string]int
+	disconnectedIDs   []string
 	// needsInputScreen re-emulates a session's log tail to the visible screen so
 	// needs-input detection matches the rendered screen, not StripANSI(raw) —
 	// catching fullscreen (alt-screen) prompts whose cursor-addressed glyphs are
@@ -1141,16 +1146,7 @@ func (a *App) buildUI() {
 		// In-process runner feed seam (replaces Hera's proxy/ SSE fan-out). Read
 		// a.runner at call time on the main thread — applySelection/refresh and
 		// restartDaemon both run on the tview goroutine, so this never races.
-		a.heraPage.SetSessionResolver(func(taskID string) agentview.TerminalAdapter {
-			if taskID == "" {
-				return nil
-			}
-			sess := a.runner.Get(taskID)
-			if sess == nil {
-				return nil
-			}
-			return sess
-		})
+		a.heraPage.SetSessionResolver(a.resolveSession)
 		// Size-drift kill+resume seam (see heraKickRerender) — same runner/db
 		// access as the resolver above, wired unconditionally alongside it.
 		a.heraPage.SetRerenderKicker(a.heraKickRerender)
@@ -1799,6 +1795,7 @@ func (a *App) onTick() {
 	runner := a.runner
 	a.mu.Unlock()
 	runningIDs, idleIDs := runner.RunningAndIdle()
+	listHealthy := sessionListHealthy(runner)
 	var bridgeStates map[string]bridge.State
 	if source, ok := runner.(interface {
 		BridgeStates() (map[string]bridge.State, error)
@@ -1854,6 +1851,7 @@ func (a *App) onTick() {
 		if a.startGen.Load() != startGen {
 			uxlog.Log("[tui] tick: startGen changed (%d → %d), skipping reconciliation with stale runningIDs", startGen, a.startGen.Load())
 			runningIDs = nil
+			listHealthy = false
 		}
 		// allowCachedTasks=true: this is the periodic per-tick path
 		// (add-tasks-fetch-dirty-check) — see shouldRefetchTasks's doc comment
@@ -1863,6 +1861,7 @@ func (a *App) onTick() {
 			a.bridgeStates = nil
 		}
 		a.refreshTasksWithIDs(runningIDs, idleIDs, true)
+		a.updateDisconnected(runningIDs, listHealthy)
 		if a.mode == modeTaskList && a.header.ActiveTab() == widget.TabTasks {
 			if selected := a.tasklist.SelectedTask(); selected != nil && selected.ID != a.artifactCountTaskID {
 				a.artifactCountTaskID = selected.ID
@@ -1924,11 +1923,17 @@ func (a *App) onTick() {
 		// buffer → SetSession resets emulator → "Waiting for output..." flash).
 		if taskID != "" {
 			a.retryDeferredKick(taskID)
+			// Feed the bound task's status so the pane can suppress the
+			// dead-replay "stopped" marker for a complete task (the launch
+			// splash stays opt-in, so this is otherwise inert here).
+			a.agentPane.SetLaunchTaskStatus(a.taskStatusString(taskID))
 			if a.agentPane.Session() == nil {
 				sess := a.runner.Get(taskID)
 				if sess != nil {
 					a.agentPane.SetSession(sess)
 				}
+			} else {
+				a.reresolveAgentPane(taskID, runningIDs)
 			}
 			// Refresh git status periodically.
 			// lastGitRefresh is only accessed on the tview goroutine.
@@ -5078,6 +5083,14 @@ func (a *App) handleAgentKey(event *tcell.EventKey) *tcell.EventKey {
 		a.mu.Lock()
 		taskID := a.agentState.TaskID
 		a.mu.Unlock()
+		// show-disconnected-agents D4: Enter on a dead HANDLE of a still-alive
+		// agent reattaches the live session. It must NOT reach startSession —
+		// that fails "session already exists" and flips the task to Pending.
+		if a.reattachAgentPane(taskID) {
+			uxlog.Log("[tui] enter: reattached live session for task=%s (no restart)", taskID)
+			a.statusbar.SetInfo("Reconnected")
+			return nil
+		}
 		if t, err := a.db.Get(taskID); err == nil && t != nil {
 			if closedOut, cerr := a.heraKickRestartClosedOut(t.ID); cerr == nil && closedOut {
 				a.reattachClosedOut(a.agentPane, t)
@@ -7426,6 +7439,68 @@ func (a *App) forceReviveClosedOut(pane *terminal.TerminalPane, t *model.Task) {
 	uxlog.Log("[tui] reattach: force-reviving closed-out task %s (%s) — operator override (3rd Enter)", t.ID, t.Name)
 	a.statusbar.SetInfo("Reopening…")
 	a.startSession(t)
+}
+
+// reresolveAgentPane swaps a DEAD handle on the Tasks-tab agent pane for a fresh
+// one when the daemon still reports the agent alive (show-disconnected-agents
+// D4, parity with the Hera tab's reconcileOne). Gated on the daemon's alive set
+// (runningIDs) so a genuinely dead agent costs no per-tick RPC. Tview goroutine.
+func (a *App) reresolveAgentPane(taskID string, runningIDs []string) {
+	cur := a.agentPane.Session()
+	if cur == nil || cur.Alive() || !slices.Contains(runningIDs, taskID) {
+		return
+	}
+	if a.reattachAgentPane(taskID) {
+		uxlog.Log("[tui] agent pane re-resolve task=%s (replaced dead handle; agent still alive)", taskID)
+	}
+}
+
+// taskStatusString returns the cached status of a task ("" if unknown).
+func (a *App) taskStatusString(taskID string) string {
+	for _, t := range a.tasks {
+		if t != nil && t.ID == taskID {
+			return t.Status.String()
+		}
+	}
+	return ""
+}
+
+// reattachAgentPane re-resolves the Tasks-tab agent pane's session and, when it
+// attaches a LIVE handle (late bind or dead-handle replacement), restarts the
+// PTY sync loop: the previous loop captured the old handle and exited when it
+// died, so without this the reattached agent would stay at a stale width.
+// Reports whether a live session was attached — callers must then NOT call
+// startSession (the agent is alive; starting it fails "already exists" and
+// flips the task to Pending). Tview goroutine only; must not hold a.mu.
+func (a *App) reattachAgentPane(taskID string) bool {
+	var h agent.SessionHandle
+	out := a.agentPane.ReResolveSession(taskID, func(id string) agentview.TerminalAdapter {
+		sess := a.runner.Get(id)
+		if sess == nil {
+			return nil
+		}
+		h = sess
+		return sess
+	})
+	if out == terminal.ReResolveNone || h == nil || !h.Alive() {
+		return false
+	}
+	a.startAgentPTYSyncLoop(taskID, h)
+	return true
+}
+
+// resolveSession asks the CURRENT runner (read at call time, tview goroutine)
+// for a task's live session handle; nil when the daemon has none. Shared by the
+// Hera pane resolver and the Tasks-tab dead-handle re-resolve.
+func (a *App) resolveSession(taskID string) agentview.TerminalAdapter {
+	if taskID == "" {
+		return nil
+	}
+	sess := a.runner.Get(taskID)
+	if sess == nil {
+		return nil
+	}
+	return sess
 }
 
 // startSession writes task status/SessionID/AgentPID through a.db at several

@@ -48,6 +48,7 @@ type gateState struct {
 	needsInput      map[string]bool
 	sessionIdle     map[string]bool
 	sessionRunning  map[string]bool
+	disconnected    map[string]bool
 	sustainedActive map[string]bool
 }
 
@@ -108,6 +109,7 @@ func (p *HeraPage) captureGate() gateState {
 		needsInput:      maps.Clone(p.needsInput),
 		sessionIdle:     maps.Clone(p.sessionIdle),
 		sessionRunning:  maps.Clone(p.sessionRunning),
+		disconnected:    maps.Clone(p.disconnected),
 		sustainedActive: maps.Clone(p.sustainedActive),
 	}
 }
@@ -149,6 +151,7 @@ func (p *HeraPage) buildFromSnapshot(s *rebuildSnapshot) rebuildResult {
 	if err != nil {
 		return rebuildResult{err: err, buildDur: time.Since(start)}
 	}
+	stampDisconnected(&m, s.gate.disconnected)
 	// Tier annotation reads config and disk; it runs here, off the Draw path.
 	if s.tierResolverFactory != nil {
 		annotate, done := s.tierResolverFactory()
@@ -276,4 +279,17 @@ func safeBuild(build func(*rebuildSnapshot) rebuildResult, snap *rebuildSnapshot
 		}
 	}()
 	return build(snap)
+}
+
+// stampDisconnected marks live-bound roles whose bound task has no running
+// session (show-disconnected-agents). Complete tasks are never disconnected (a
+// finished agent is expected to be gone). Runs off-thread from the snapshot's
+// private copy of the set.
+func stampDisconnected(m *heramodel.Model, dis map[string]bool) {
+	if len(dis) == 0 {
+		return
+	}
+	m.AnnotateRoles(func(rv *heramodel.RoleView) {
+		rv.Disconnected = rv.Live && dis[rv.TaskID] && rv.TaskStatus != model.StatusComplete.String()
+	})
 }

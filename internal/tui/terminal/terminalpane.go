@@ -1988,6 +1988,10 @@ func drawClosedOutBanner(screen tcell.Screen, x, y, width, height int) {
 	}
 }
 
+// deadReplayNote is the top-border marker on a dead session's replay
+// (show-disconnected-agents D3). Suppressed for complete tasks.
+const deadReplayNote = "stopped"
+
 // drawReasonBanner paints a one-line, closed-out-banner-styled reason over the
 // first row of a replayed (not-running) pane: the row is blanked first so the
 // text never mixes with replay cells. Truncated to the pane width.
@@ -2134,6 +2138,27 @@ func (tp *TerminalPane) Draw(screen tcell.Screen) {
 	if sub := tp.launchSubtitle(sess); sub != "" {
 		drawLaunchSplash(screen, x, y, width, height, sub)
 		return
+	}
+
+	// show-disconnected-agents D3: a task-bound pane replaying a dead session
+	// must never look alive. The marker rides the top border (right-aligned,
+	// like the re-render indicator) so it never covers replay content. It
+	// yields to an in-flight/deferred re-render and to the owed-repair notice
+	// (both claim the same border slot) and is dropped when it would overlap
+	// the title.
+	// Neutral wording ("stopped"), not "press Enter": on a closed-out worker the
+	// first Enter arms the close-out banner instead of resuming. A COMPLETE
+	// task is expected to be gone, so it gets no marker at all.
+	tp.mu.Lock()
+	taskDone := tp.launchTaskStatus == "complete"
+	tp.mu.Unlock()
+	if tp.taskID != "" && !taskDone && !alive && (sess != nil || tp.HasContent()) && !tp.Rerendering() && !owedNow {
+		cand := " " + deadReplayNote + " "
+		n := utf8.RuneCountInString(cand)
+		left := x + utf8.RuneCountInString(title) + utf8.RuneCountInString(tp.borderHint) + 1
+		if avail := x + width - left; n <= avail {
+			defer widget.DrawText(screen, x+width-n, y-1, n, cand, theme.StyleClipboardHint)
+		}
 	}
 
 	if note := tp.placeholderNote; note != "" && !alive && (sess != nil || tp.HasContent()) {

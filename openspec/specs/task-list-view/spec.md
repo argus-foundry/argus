@@ -417,4 +417,3 @@ In the Tasks-tab agent view, the previous-task and next-task actions (default `C
 
 - **WHEN** a pinned task is open and an unpinned active task exists
 - **THEN** next-task opens the first active task, and previous-task from that task returns to the pinned one
-

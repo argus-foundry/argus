@@ -2714,6 +2714,7 @@ func roleStatusInputs(role *heramodel.RoleView) widget.RoleStatusInputs {
 		// as contextIndicator above.
 		Accepted:     role.Kind != db.HeraKindCoordinator && role.TaskStatus == model.StatusComplete.String(),
 		ReadyToClose: role.ReadyToClose,
+		Disconnected: role.Disconnected,
 		NeedsInput:   role.ShowsNeedsInput(),
 		Failed:       role.HasStatus && role.Status == db.HeraStatusFailed,
 		Done:         role.HasStatus && role.Status == db.HeraStatusDone,
