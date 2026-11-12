@@ -14,6 +14,10 @@ type boardStore interface {
 	ListHeraBoardItems(int64, bool) ([]*db.HeraBoardItem, error)
 }
 
+// boardBodyGuidance tells coordinators how to author a board body; the TUI
+// renders newlines, bullets, nested bullets, numbered items and **bold**.
+const boardBodyGuidance = "Format every body for scanning: open with one short sentence naming the ask or outcome, then a blank line, then one fact or option per `- **Label:** detail` bullet (indent two spaces for `  - ` sub-bullets; `1. ` for ordered steps). For a decision, give each option its own bullet plus a `- **Recommendation:**` bullet. Put each link or PR URL on its own bullet. Never write a wall of prose."
+
 func boardToolDefs() []Tool {
 	var out []Tool
 	for _, verb := range []string{"post", "update", "resolve", "list"} {
@@ -26,7 +30,7 @@ func boardToolDefs() []Tool {
 		case "resolve":
 			required = append(required, "id")
 		}
-		out = append(out, Tool{Name: "hera_board_" + verb, Description: "Coordinator-only human attention board: " + verb + " items owned by your coordinator role. Put things needing Aaron's decision or attention on your board instead of only in chat. Rewrite an item when newer information supersedes it; resolve when settled, including after Aaron replies and follow-up concludes. Material edits mark unread. update replaces kind, subject and body; list defaults to open items.", InputSchema: map[string]interface{}{
+		out = append(out, Tool{Name: "hera_board_" + verb, Description: "Coordinator-only human attention board: " + verb + " items owned by your coordinator role. Put things needing Aaron's decision or attention on your board instead of only in chat. Rewrite an item when newer information supersedes it; resolve when settled, including after Aaron replies and follow-up concludes. Material edits mark unread. update replaces kind, subject and body; list defaults to open items. Body format: " + boardBodyGuidance + "", InputSchema: map[string]interface{}{
 			"type": "object", "required": required, "properties": map[string]interface{}{
 				"cwd": map[string]string{"type": "string"}, "orchestrator": map[string]string{"type": "string"}, "id": map[string]string{"type": "integer"},
 				"kind": map[string]interface{}{"type": "string", "enum": []string{"decision", "fyi"}}, "subject": map[string]string{"type": "string"}, "body": map[string]string{"type": "string"}, "note": map[string]string{"type": "string"}, "include_resolved": map[string]string{"type": "boolean"},

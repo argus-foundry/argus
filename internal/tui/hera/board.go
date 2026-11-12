@@ -202,6 +202,26 @@ func boardBold(s string) (string, []bool) {
 	return text.String(), bold
 }
 
+// boardListPrefixLen returns the byte length of a list prefix: optional leading
+// spaces (nesting, one level per two spaces) then "- ", "* " or "N. ". Zero
+// means the line is not a list item and stays literal.
+func boardListPrefixLen(line string) int {
+	spaces := len(line) - len(strings.TrimLeft(line, " "))
+	rest := line[spaces:]
+	switch {
+	case strings.HasPrefix(rest, "- "), strings.HasPrefix(rest, "* "):
+		return spaces + 2
+	}
+	digits := 0
+	for digits < len(rest) && digits < 9 && rest[digits] >= '0' && rest[digits] <= '9' {
+		digits++
+	}
+	if digits > 0 && strings.HasPrefix(rest[digits:], ". ") {
+		return spaces + digits + 2
+	}
+	return 0
+}
+
 func boardBodyLines(body string, width int) []boardLine {
 	var lines []boardLine
 	indent := strings.Repeat(" ", min(2, max(0, width-1)))
@@ -212,9 +232,9 @@ func boardBodyLines(body string, width int) []boardLine {
 		bold := allBold[offset : offset+length]
 		offset += length + 1
 		bullet := ""
-		if strings.HasPrefix(paragraph, "- ") || strings.HasPrefix(paragraph, "* ") {
-			bullet, paragraph = paragraph[:2], paragraph[2:]
-			bold = bold[2:]
+		if n := boardListPrefixLen(paragraph); n > 0 {
+			bullet, paragraph = paragraph[:n], paragraph[n:]
+			bold = bold[n:]
 		}
 		source := []rune(paragraph)
 		pos := 0

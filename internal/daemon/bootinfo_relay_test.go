@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/argus-foundry/argus/internal/api"
 	"github.com/argus-foundry/argus/internal/backendtier"
 
 	"github.com/argus-foundry/argus/internal/buildid"
@@ -159,4 +160,25 @@ func TestRoutingUsageRPCReadsDaemonCaches(t *testing.T) {
 	var resp backendtier.Usage
 	testutil.NoError(t, rpcFor(d).RoutingUsage(&Empty{}, &resp))
 	testutil.Equal(t, resp.Claude["default"].Percentage, 64.0)
+}
+
+func TestDaemonBootInfoMatchesRPC(t *testing.T) {
+	d, _ := testDaemon(t)
+	got, err := d.BootInfo()
+	testutil.NoError(t, err)
+	var want BootInfoResp
+	testutil.NoError(t, rpcFor(d).BootInfo(&Empty{}, &want))
+	testutil.Equal(t, got.BinaryHash, want.BinaryHash)
+	testutil.Equal(t, got.BootedAt, want.BootedAt)
+	testutil.Equal(t, got.SupervisorPresent, want.SupervisorPresent)
+}
+
+type nopRuntime struct{}
+
+func (nopRuntime) Snapshot() api.RuntimeSnapshot { return api.RuntimeSnapshot{} }
+
+func TestDaemonSetRuntimeSource(t *testing.T) {
+	d, _ := testDaemon(t)
+	d.SetRuntimeSource(nopRuntime{})
+	testutil.Equal(t, d.runtimeSource != nil, true)
 }

@@ -729,6 +729,15 @@ func (n *Notifier) dropCancel(taskID, deliveryID string) {
 	}
 }
 
+// Submitted reports whether deliveryID was already submitted for taskID. It is
+// the exported, locking form of isSubmitted for callers (bounce recovery) that
+// must learn when a queued delivery actually went out.
+func (n *Notifier) Submitted(taskID, deliveryID string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.isSubmitted(taskID, deliveryID)
+}
+
 // isSubmitted returns whether deliveryID was already submitted for taskID.
 // Caller must hold n.mu.
 func (n *Notifier) isSubmitted(taskID, deliveryID string) bool {

@@ -1232,3 +1232,14 @@ func TestNotifier_GhostSuggestionNeverAnnotated(t *testing.T) {
 		})
 	}
 }
+
+func TestNotifier_Submitted(t *testing.T) {
+	n := New(newFakeRunner(), fakeNoFocus{})
+	testutil.Equal(t, n.Submitted("t", "d1"), false)
+	n.mu.Lock()
+	n.markSubmitted("t", "d1")
+	n.mu.Unlock()
+	testutil.Equal(t, n.Submitted("t", "d1"), true)
+	testutil.Equal(t, n.Submitted("t", "d2"), false)
+	testutil.Equal(t, n.Submitted("other", "d1"), false)
+}

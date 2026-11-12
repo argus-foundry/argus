@@ -1,0 +1,4 @@
+- [x] Handler and routes
+- [x] Go tests (injectable launcher / lifecycle hooks)
+- [x] Gotchas and README reference
+- [x] Archive into base specs
