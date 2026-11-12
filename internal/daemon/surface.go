@@ -272,7 +272,9 @@ const (
 	//     for its physical worktree on fresh and resumed launches, gated by
 	//     [agents] trust_worktrees. A stale supervisor still shows the folder
 	//     trust dialog even with approval/sandbox bypass enabled.
-	SupervisorSpawnSurface = 47
+	// 48: dash-leading Pi positional prompts receive a leading newline so the
+	//     CLI treats frontmatter and option-like text as messages, not flags.
+	SupervisorSpawnSurface = 48
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -585,9 +587,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	// Naming capabilities added to the family registry are daemon/TUI-only;
-	// BuildCmd and supervised session construction are unchanged (no version bump).
-	SpawnSurfaceDigest  = "97ff5bde6437c17bae9857fb40d7c643db816f7099efcc98fa25dbf54bff993d"
+	SpawnSurfaceDigest  = "cd33fb019df2333ee440102c13e1a03ab95d97b1dd1eed6ce3fab7a12dd5df2a"
 	StreamSurfaceDigest = "a0b3efb1c129a7c3a3ba94ef8922d258e60d87907e1f599f17e8108ad97770f0"
 )
 
