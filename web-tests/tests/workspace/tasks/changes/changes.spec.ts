@@ -144,7 +144,8 @@ test('compact Changes rows retain intact filenames, exact counts and a small hea
     name: 'Tree',
     exact: true
   }).count(), 0);
-  assert.doesNotMatch(await page.locator('#tool-panel').textContent(), /Discard|Finder|Xcode/);
+  assert.doesNotMatch(await page.locator('#tool-panel').textContent(), /Discard|Xcode/);
+  assert.equal(await page.locator('.file-entry [data-host-reveal]').count(),2);
   await page.screenshot({
     path: '.context/changes-compact.png'
   });
@@ -183,6 +184,8 @@ test('hover and keyboard menus use captured copy paths and encoded VS Code links
   assert.deepEqual(await page.evaluate(() => window.copied), [first, `/tmp/task space/${first}`]);
   await trigger.click();
   await page.keyboard.press('End');
+  await expect(menu.getByRole('menuitem',{name:'Reveal in Finder',exact:true})).toBeFocused();
+  await page.keyboard.press('ArrowUp');
   const editor = menu.getByRole('menuitem', {
     name: 'Open in VS Code',
     exact: true

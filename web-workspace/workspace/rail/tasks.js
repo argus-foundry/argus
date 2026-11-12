@@ -186,7 +186,7 @@ export class TaskNavigation {
     icon.append(outline);
     action.append(icon);
     item.append(action, ...taskMenu({...task,pinned:typeof task.pinned==='boolean'?task.pinned:this.pinned.has(task.id)}, {
-      coordinator,heraPending:this.actions.heraKanban?.pending.has(coordinator?.id),
+      reveal:this.actions.reveal,coordinator,heraPending:this.actions.heraKanban?.pending.has(coordinator?.id),
       heraAction:(operation,status)=>{this.menuTask=null;this.kanbanFocusTask=task.id;item.querySelector('.task-more').focus();this.actions.heraKanban?.run(this.coordinators().get(task.id),operation,status);},
       pinKnown:this.actions.pinKnown?.(task)??true,
       quickAction: (task, operation) => this.actions.quickAction?.(this.latestTask(task), operation),

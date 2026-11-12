@@ -56,7 +56,7 @@
 - **Claude session selection can restart a task, so a failed or canceled request is unconfirmed.** Capture the task before opening, fence late callbacks and reconnect output only after a confirmed switch; the daemon's backend capability and 400 response remain authoritative.
 - **Split must keep the main composer scoped to the primary task.** Route secondary state/Fit callbacks through the currently mounted secondary slot; blocked preference storage leaves split off and task selection must not enable it.
 - **Task pins post only the desired pinned flag to the targeted pin endpoint.** Apply returned pinned/archived values; pinning can restore an archived task. Never PUT a raw task to pin it.
-- **Task links must be credential-free HTTP(S) URLs, and copied file paths must remain text.** Browser clients cannot reveal daemon filesystem paths in Finder.
+- **Task links must be credential-free HTTP(S) URLs, and copied file paths must remain text.** Finder launches use only the master-only host reveal endpoint, never a browser file URL.
 - **Subscribe before the task baseline and buffer events while any snapshot is in flight.** Apply buffered events silently, resnapshot unknown/resync envelopes and retain the cursor through retry; a snapshot failure must keep its fence until a successful replacement so stale baseline data never overwrites an event.
 - **Task events stop the 30 second rail poll only after task.updated is observed on the current stream; reconnect resets that observation.** Reconnect, visibility return and Retry connection resnapshot tasks; these recover mutations whose event could not be persisted.
 - **Task snapshots serialize both pinned values; absence means an older daemon.** Reconcile booleans on every snapshot, retain cached pins when absent, and capture observation fences before reads so older snapshots cannot overwrite newer local or SSE pins. Pin invalidations use the single-task DTO with per-task cancellation.
@@ -196,3 +196,6 @@
 - **The comparison record describes base resolution, not which diff fallback supplied a file.** Preserve requested/resolved base, merge-base and fallback reason through diff layout changes; explain HEAD-first and untracked fallback without inventing a per-file kind.
 
 - **Discard scope comes from working status, never BranchFiles.** Capture task/path before shared confirmation, send explicit untracked deletion only for that confirmation, preserve server conflicts and wait for worktree.changed to refresh status and the opened diff.
+
+- **A Finder reveal opens on the daemon host and emits no worktree event.** Capture its target before confirmation, disable task and file reveal controls after 403 until reconnect, and fence launch results on teardown.
+- **Refresh expanded untracked-directory children when the git revision changes.** Retaining the parent row also retains deleted child rows; re-read its files behind content-version and task-lifetime fences, with explicit deletion for children of an untracked directory.

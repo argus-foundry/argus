@@ -228,3 +228,7 @@ role-context.js uses server context.percent and the TUI 40/65/90 tiers. Denomina
 Agents settings shares accountWindows with composer validity rules. Returned five-hour and weekly Claude windows display percent used and reset time beside the matching account. Missing/expired readings stay unavailable. Codex-only accounts omit the Claude usage block. Read-only settings have no account edit draft to overwrite on refresh.
 
 Tool tabs stay on one row with hidden-scrollbar horizontal overflow and selected-tab visibility. Messages keeps the Agent messages accessible name. Empty first-page usage session with totals null is unmeasured, even after a bridge context event; nonempty session mismatches and pinned older-page mismatches remain errors.
+
+## Host Finder actions
+
+HostReveal captures worktree or relative file targets before the shared confirmation. The confirmation explains daemon-host behavior, then POSTs {} or {path} to the master-only reveal endpoint. HTTP 403 disables all rendered Finder actions for the connection credential lifetime; reconnect resets that knowledge. Unsupported hosts, missing task/path, invalid paths and launch failures remain distinct, with no automatic mutation retry or browser file URL fallback. View teardown and disconnect fence late results.

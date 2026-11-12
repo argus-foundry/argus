@@ -2,7 +2,7 @@ import {kanbanStatuses,kanbanLabel} from './hera-kanban.js';
 import {copyNotice} from '../../shared/clipboard.js';
 import {rowMenu} from '../../shared/row-menu.js';
 
-export function taskMenu(task, {open,changed,settings,quickAction,pinKnown=true,coordinator,heraAction,heraPending=false,deleteTask}) {
+export function taskMenu(task, {open,changed,settings,quickAction,pinKnown=true,coordinator,heraAction,heraPending=false,deleteTask,reveal}) {
   const entries=[];
   const entry=(label,action,run,disabled=false)=>{
     const icon=action.startsWith('kanban-')?action.slice(7):action.includes('pin')?(label==='Unpin'?'unpin':'pin'):
@@ -18,6 +18,7 @@ export function taskMenu(task, {open,changed,settings,quickAction,pinKnown=true,
   entry('Copy task ID','copy-id',()=>copyNotice(task.id));
   if(task.branch)entry('Copy branch','copy-branch',()=>copyNotice(task.branch));
   if(task.worktree_path)entry('Copy worktree path','copy-worktree',()=>copyNotice(task.worktree_path));
+  if(reveal&&task.worktree_path)entries.push({label:'Open in Finder',icon:'folder',disabled:reveal.disabled,dataset:{hostReveal:'true',taskId:task.id,taskAction:'reveal'},run:()=>reveal.open(task)});
   if(deleteTask)entries.push({label:'Delete',icon:'delete',run:()=>deleteTask(task),danger:true,dataset:{taskId:task.id,taskAction:'delete'}});
   const [more,menu]=rowMenu({label:`Task actions for ${task.name}`,open,changed,entries});
   more.dataset.tooltip=more.getAttribute('aria-label');more.removeAttribute('title');

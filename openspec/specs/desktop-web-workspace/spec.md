@@ -18,7 +18,7 @@ The optional web workspace is the client we converge on. This specification is t
 
 The native `add-web-hera-mutations` follow-up remains separate. Spawn, new coordinator, move, join, detach, consuming agent inbox and merge-safety Cleanup retain their standing TUI-only disposition. The workspace rail supports coordinator kanban and orchestrator pin mutations through existing endpoints. One unified project rail replaces separate Tasks/Hera modes, the Hera visibility filter and a separate Freelance section. Task status remains editable in Settings rather than through quick workflow transitions. Archive/restore remains in the rail. Session selection remains beside Stop/Resume. Web Push is the desktop-alert channel; in-page attention preferences remain separate.
 
-Browser drawers, DOM tooltips and their pixel geometry do not require literal native or terminal copies. Path copy and encoded VS Code links replace native Finder/Xcode launching. Opt-out origin token storage replaces Keychain. Tab title/favicon attention and the unified rail replace Dock/menu-bar affordances. Native window controls remain platform-specific. These equivalents add no backend requirements.
+Browser drawers, DOM tooltips and their pixel geometry do not require literal native or terminal copies. Path copy and encoded VS Code links complement master-only Finder reveal on the daemon host; Xcode launching remains outside this client. Opt-out origin token storage replaces Keychain. Tab title/favicon attention and the unified rail replace Dock/menu-bar affordances. Native window controls remain platform-specific. These equivalents add no backend requirements.
 
 ### Settings interaction follow-up
 
@@ -670,7 +670,7 @@ The workspace SHALL expose task settings, explicit Pin/Unpin and copies through 
 
 ### Requirement: Complete task information and files
 
-Changes SHALL render one git-status path list in flat/tree modes, lazily expand untracked directories through the existing files endpoint, open returned diffs and offer relative/absolute path copy. Info SHALL own immutable task facts, created time, original prompt and credential-free HTTP(S) output links. Settings SHALL keep editable controls and session ID/sandbox facts missing from Info. The task name tooltip SHALL identify the full name and project without repeated workflow/elapsed facts. Header branch copy and PR links SHALL remain available across task tabs. Creation SHALL allow an optional backend choice, preserving daemon defaults when omitted. Native Finder access SHALL use path copy in the browser.
+Changes SHALL render one git-status path list in flat/tree modes, lazily expand untracked directories through the existing files endpoint, open returned diffs and offer relative/absolute path copy. Info SHALL own immutable task facts, created time, original prompt and credential-free HTTP(S) output links. Settings SHALL keep editable controls and session ID/sandbox facts missing from Info. The task name tooltip SHALL identify the full name and project without repeated workflow/elapsed facts. Header branch copy and PR links SHALL remain available across task tabs. Creation SHALL allow an optional backend choice, preserving daemon defaults when omitted. Finder actions SHALL use the existing master-only host reveal endpoint and explain that they open on the daemon host.
 
 #### Scenario: Safe links and paths
 
@@ -890,7 +890,7 @@ This optional-client layout does not change the REST surface. The existing TUI a
 
 The Changes panel SHALL display one compact line per file, with a dim directory prefix and bright intact filename. Only the directory prefix SHALL ellipsize; exceptionally long filenames SHALL scroll inside the file list rather than expand the document. Exact added/removed text counts and a small status badge SHALL align to the right. The header SHALL show N files changed and total added/removed counts from the returned branch/working diff-stat summary lines. Per-file counts SHALL load only for visible rows through IntersectionObserver with at most four concurrent existing file-diff reads, cached per task/status generation and canceled on task changes. Pending and unavailable per-file counts SHALL remain blank, binary files SHALL show bin and directories SHALL retain lazy expansion. Per-file counts SHALL never be inferred from scaled stat-bar estimates.
 
-Hover or keyboard focus SHALL reveal a small menu chevron using the shared task-menu popover behavior. The menu SHALL offer Copy path, Copy absolute path and an encoded vscode://file link for Open in VS Code when an absolute worktree is available. Copy actions SHALL use the shared copyNotice. The row SHALL still open its diff. Local dirty regular files SHALL offer confirmed discard or explicit untracked deletion. Finder, Xcode and always-visible copy controls remain outside this compact-layout requirement. A small icon toggle in the header SHALL switch flat/tree views with the same row styling and captured paths.
+Hover or keyboard focus SHALL reveal a small menu chevron using the shared task-menu popover behavior. The menu SHALL offer Copy path, Copy absolute path and an encoded vscode://file link for Open in VS Code when an absolute worktree is available. Copy actions SHALL use the shared copyNotice. The row SHALL still open its diff. Local dirty regular files SHALL offer confirmed discard or explicit untracked deletion. File and task menus SHALL offer master-only Finder reveal on the daemon host; Xcode and always-visible copy controls remain outside this requirement. A small icon toggle in the header SHALL switch flat/tree views with the same row styling and captured paths.
 
 #### Scenario: Compact row actions
 
@@ -1387,4 +1387,11 @@ The workspace SHALL offer local file discard only for dirty regular file entries
 
 #### Scenario: Adopt the merged contract
 - **WHEN** Cancel sends no request; tracked restore sends false, untracked delete sends true only after confirmation, and conflict errors preserve the list.
+- **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback
+
+### Requirement: Host Finder reveal
+The workspace SHALL offer worktree and file Finder actions explaining before activation that Finder opens on the daemon host. It SHALL POST {} or the exact relative path, disable actions after master-only 403 for the credential lifetime, and distinguish unsupported host, missing path/task, invalid path and launch failure without automatic retries.
+
+#### Scenario: Adopt the merged contract
+- **WHEN** Task and file menus send captured targets including whitespace; device-token rejection disables further reveal controls until reconnect.
 - **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback

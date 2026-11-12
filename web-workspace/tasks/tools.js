@@ -111,7 +111,7 @@ export class TaskTools {
     return header;
   }
   drawChanges(result) {
-    this.changes=new TaskChanges({api:this.api,task:this.task,panel:$('tool-panel'),openDiff:(task,path)=>this.review.openDiff(task,path),signal:this.abort.signal,mode:this.fileMode||'flat',onMode:mode=>{this.fileMode=mode;}});
+    this.changes=new TaskChanges({api:this.api,task:this.task,panel:$('tool-panel'),openDiff:(task,path)=>this.review.openDiff(task,path),signal:this.abort.signal,reveal:this.callbacks.reveal,mode:this.fileMode||'flat',onMode:mode=>{this.fileMode=mode;}});
     this.changes.show(result);
   }
   drawArtifacts(artifacts) {
