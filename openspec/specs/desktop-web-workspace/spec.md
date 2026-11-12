@@ -45,7 +45,7 @@ The numbered references retain the original backend tally identifiers and record
 15. `discard-worktree-file` defines a confirmed per-file discard operation. Changes omits Discard.
 16. `git-per-file-numstat` supplies numeric per-file counts. Visible rows currently fetch individual diffs with at most four concurrent reads.
 17. `task-base-aware-git-comparison` honors task.base_branch and supplies comparison provenance. Changes currently displays the daemon's whole-stack comparison without client filtering.
-18. `worktree-change-events` supplies authoritative worktree updates. Changes and Artifacts retain relevant session-event refresh, focus/visibility refresh and a visible-only ten-second fallback.
+18. `worktree-change-events` is adopted through matching revisioned invalidations, fenced snapshots and reconnect/resync convergence. Changes has no discovery interval; Artifacts retains its fallback.
 19. `clear-stale-role-ready-marker` clears ready_to_close when a role resumes working. Workspace role tags currently give working precedence over the stale marker.
 
 20. `codex-recapture-test-env-isolation` isolates CODEX_HOME and CODEX_SQLITE_HOME in the daemon recapture fixture. This is a pre-existing test issue on master, not a product defect.
@@ -997,7 +997,7 @@ Tooltips SHALL appear only for icon-only controls, visibly truncated names/paths
 - **AND** a labeled control with a shortcut SHALL show the shortcut alone
 
 ### Requirement: Visible task tools update live
-The optional workspace SHALL refresh Changes and Artifacts for the selected task on session.idle, session.needs_input, session.exited and task.status_changed events, on visibility/focus return, and on a ten-second fallback while the pane and focused document are visible. Reads SHALL be single-flight with coalesced triggers and cancellation/fencing on task switch. Changes SHALL avoid rendering identical path/status/summary results and preserve scroll, view mode, folder expansion, row menu and opened review across updates. Path count caches SHALL invalidate only affected status/stat summaries. The normal Changes header SHALL have no Refresh control; empty state SHALL say No changes yet, and read failures SHALL offer Retry.
+The optional workspace SHALL refresh Changes and Artifacts for the selected task on session.idle, session.needs_input, session.exited and task.status_changed events, on visibility/focus return, and through matching worktree.changed invalidations. Artifacts retains a ten-second fallback while the pane and focused document are visible; Changes has no discovery interval. Reads SHALL be single-flight with coalesced triggers and cancellation/fencing on task switch. Changes SHALL avoid rendering identical path/status/summary results and preserve scroll, view mode, folder expansion, row menu and opened review across updates. Path count caches SHALL invalidate affected status/stat summaries and dirty-file metadata revisions. The normal Changes header SHALL have no Refresh control; empty state SHALL say No changes yet, and read failures SHALL offer Retry.
 
 #### Scenario: Agent writes a file
 - **WHEN** the selected task emits session.idle while Changes is visible
@@ -1005,7 +1005,7 @@ The optional workspace SHALL refresh Changes and Artifacts for the selected task
 
 #### Scenario: No write event exists
 - **WHEN** a visible focused Changes pane remains open without an SSE write signal
-- **THEN** a ten-second fallback discovers changes without polling hidden panes or background windows
+- **THEN** worktree invalidations discover Changes without polling, while Artifacts retains its visible fallback
 
 ### Requirement: Attachment submission observes recipient readiness
 Attachment sends SHALL write one closed paste, allow output to settle within a bounded wait, and send exactly one standalone CR. Literal image paths SHALL NOT prevent submission. If output never settles, the wait SHALL expire and allow the CR while the captured session remains live. Successful daemon acceptance of CR SHALL clear the captured browser draft and attachments without requiring screen acknowledgment. The client SHALL NOT retry CR or paste automatically. Cancellation and input failures before acceptance SHALL retain the captured draft; disconnect retains its existing clearing behavior. Plain-text sending SHALL retain its existing behavior.
@@ -1367,3 +1367,10 @@ Agents settings SHALL use the existing authenticated accounts array to display e
 #### Scenario: Mixed account readings
 - **WHEN** one account has valid usage and another has expired or absent usage
 - **THEN** only the matching account shows the valid usage windows and reset times, with unavailable readings labeled clearly
+
+### Requirement: Live Changes snapshots
+The workspace SHALL consume matching worktree.changed events directly even during task snapshot buffering, deduplicate opaque revisions, fence snapshots invalidated in flight, surface stale snapshots and retry them with bounded backoff, and converge on reconnect/resync. Hidden panes SHALL defer reads until shown. Changes SHALL have no discovery interval; Artifacts retains its existing interval.
+
+#### Scenario: Adopt the merged contract
+- **WHEN** An external edit sends a revision or revisionless invalidation; only the visible matching task refreshes, and an earlier snapshot cannot overwrite it.
+- **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback

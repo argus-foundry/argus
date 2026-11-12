@@ -267,7 +267,7 @@ $('fit-session').addEventListener('click', async () => {
   catch (error) { notice(`Could not fit the session. ${error.message}`); }
 });
 window.addEventListener('pagehide', () => { attention?.destroy(); sessions.clear(); taskLinks.clear(); stagedClipboard.select(null); railActions.clear(); heraKanban.clear(); rosterWatch?.stop(); split?.clear(); newTask.clear(); refreshAbort?.abort(); terminal?.destroy(); composer.clear(); review.clear(); tools.clear(); archive.clear(); taskDelete.clear(); taskBatch.clear(); settings.clear(); taskSettings.dismiss(); });
-events = new WorkspaceEvents(api, { refresh: refreshTasks, pin:event=>railActions.event(event,tasks), context: event => composer.context.event(event), suggestion: event => { if (connection.connected) composer.suggestion.event(event); }, event: event => {
+events = new WorkspaceEvents(api, { refresh: refreshTasks, worktree:event=>{if(connection.connected)tools.event(event);}, pin:event=>railActions.event(event,tasks), context: event => composer.context.event(event), suggestion: event => { if (connection.connected) composer.suggestion.event(event); }, event: event => {
   if (!connection.connected) return;
   tools.event(event);
   if(event.type==='task.deleted')removeDeletedTask({id:event.task_id});

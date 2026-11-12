@@ -106,3 +106,13 @@ test('legacy poll stops after task.updated and rearms on reconnect',async t=>{
  stream.enqueue(new TextEncoder().encode('data: {"id":1,"type":"task.updated","task_id":"a"}\n\n'));await new Promise(setImmediate);
  t.mock.timers.tick(60000);assert.equal(reads,1);await events.reconnect();assert.equal(reads,2);t.mock.timers.tick(30000);assert.equal(reads,3);
 });
+
+test('worktree invalidations bypass task snapshot buffering without triggering task snapshots',async()=>{
+ const delivered=[],event={id:8,type:'worktree.changed',task_id:'a',payload:{revision:'opaque'}};
+ const signal=new AbortController();
+ const events=Object.assign(Object.create(WorkspaceEvents.prototype),{running:true,generation:1,cursor:0,buffering:true,pending:[],failed:error=>{throw error;},callbacks:{worktree:value=>{delivered.push(value);signal.abort();}}});
+ const response=new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));controller.close();}}));
+ await events.consume(response,1,signal.signal);
+ assert.deepEqual(delivered,[event]);assert.deepEqual(events.pending,[]);
+ assert.equal(patchEvent([{id:'a'}],event).resnapshot,false);
+});

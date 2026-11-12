@@ -76,7 +76,7 @@ test.beforeAll(async ({
   await resetServer();
   idle = page => page.evaluate(() => tools.event({
     task_id: 'a',
-    type: 'session.idle'
+    type: 'worktree.changed'
   }));
 });
 test.afterEach(async () => {
@@ -90,7 +90,7 @@ test.afterEach(async () => {
   }
   if (errors.length) throw new AggregateError(errors, 'Fixture cleanup failed');
 });
-test('idle and fallback update visible Changes without Refresh; failures offer Retry', async () => {
+test('worktree events update visible Changes without a discovery poll; failures offer Retry', async () => {
   const page = await fixture();
   assert.equal(await page.locator('.changes-refresh').count(), 0);
   await page.evaluate(() => {
@@ -106,6 +106,8 @@ test('idle and fallback update visible Changes without Refresh; failures offer R
     };
   });
   await page.clock.runFor(10001);
+  assert.equal(await page.locator('[data-file-path="poll-file.txt"].file-row').count(),0);
+  await idle(page);
   await page.locator('[data-file-path="poll-file.txt"].file-row').waitFor();
   await page.evaluate(() => {
     state.fail = true;
@@ -215,11 +217,11 @@ test('hidden pane/document do not read; wake refreshes; task switches abort and 
     state.hold = true;
     tools.event({
       task_id: 'a',
-      type: 'session.idle'
+      type: 'worktree.changed'
     });
     tools.event({
       task_id: 'a',
-      type: 'session.idle'
+      type: 'worktree.changed'
     });
   });
   assert.equal(await page.evaluate(() => state.pending.length), 1);
@@ -238,7 +240,7 @@ test('hidden pane/document do not read; wake refreshes; task switches abort and 
   await page.locator('[data-file-path="CURRENT"].file-row').waitFor();
   assert.equal(await page.locator('[data-file-path="STALE"].file-row').count(), 0);
 });
-test('a real worktree file appears after session.idle through the app SSE wiring without polling', async () => {
+test('a real worktree file appears from live filesystem events through the app SSE wiring without polling', async () => {
   const response = await fetch(process.env.WORKSPACE_TEST_API + '/api/tasks?archived=all', {
     headers: {
       Authorization: 'Bearer test-token'
@@ -253,20 +255,7 @@ test('a real worktree file appears after session.idle through the app SSE wiring
     }
   });
   cleanup.push(() => page.close());
-  await page.addInitScript(() => {
-    const original = window.fetch;
-    window.fetch = (path, options) => String(path).startsWith('/api/events/stream') ? Promise.resolve(new Response(new ReadableStream({
-      start(controller) {
-        window.eventBytes = controller;
-      }
-    }), {
-      headers: {
-        'Content-Type': 'text/event-stream'
-      }
-    })) : original(path, options);
-  });
   await page.goto(process.env.WORKSPACE_TEST_URL);
-  await page.clock.install();
   await page.locator('#token').fill('test-token');
   await page.locator('#connect-button').click();
   await page.locator('.task-row').filter({
@@ -275,12 +264,6 @@ test('a real worktree file appears after session.idle through the app SSE wiring
   await page.locator('.changes-heading').waitFor();
   const name = 'idle-proof-' + Date.now() + '.txt';
   await writeFile(task.worktree_path + '/' + name, 'real idle proof\n');
-  await page.evaluate(({
-    id
-  }) => eventBytes.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({
-    type: 'session.idle',
-    task_id: id
-  }) + '\n\n')), task);
   await page.locator('.file-row').filter({
     hasText: name
   }).waitFor();

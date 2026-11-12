@@ -13,6 +13,7 @@ export class TaskChanges {
   }
   show(result) {
     const files=changedFiles(result),totals=statTotals(result);
+    this.stale=!!result.stale;this.watchDegraded=!!result.watch_degraded;
     const summaries=new Map(),stats=new Map();
     for(const stat of [result.BranchDiff,result.Diff])for(const line of (stat||'').split('\n')) {
       const separator=line.lastIndexOf('|');if(separator<0)continue;
@@ -23,11 +24,11 @@ export class TaskChanges {
       const lines=stats.get(file.path)||[];
       summaries.set(file.path,JSON.stringify([file.status,lines]));
     }
-    const fingerprint=JSON.stringify([[...summaries],totals]);
+    const fingerprint=JSON.stringify([[...summaries],totals,result.git_revision,this.stale,this.watchDegraded]);
     if(fingerprint===this.fingerprint)return false;
     const changed=new Set([...summaries.keys(),...(this.summaries?.keys()||[])]);
-    for(const path of changed)if(this.summaries?.get(path)!==summaries.get(path))this.counts.invalidate(path);
-    this.fingerprint=fingerprint;this.summaries=summaries;this.files=files;this.totals=totals;this.draw();return true;
+    for(const path of changed)if(this.revision!==result.git_revision||this.summaries?.get(path)!==summaries.get(path))this.counts.invalidate(path);
+    this.revision=result.git_revision;this.fingerprint=fingerprint;this.summaries=summaries;this.files=files;this.totals=totals;this.draw();return true;
   }
   draw() {
     const scroll=this.panel.scrollTop;
@@ -54,6 +55,7 @@ export class TaskChanges {
     toggle.setAttribute('aria-pressed',String(this.mode==='tree'));toggle.append(node('span','',this.mode==='flat'?'☷':'⊞'));
     header.append(toggle);
     this.list=node('div','changes-list');this.panel.replaceChildren(header,this.list);
+    if(this.stale||this.watchDegraded){const note=node('p','tool-note',this.stale?'Git snapshot is stale. Checking for current changes…':'Live file watching is degraded. Changes reconcile when the daemon refreshes.');note.setAttribute('role','status');this.panel.insertBefore(note,this.list);}
     if (!this.files.length) this.list.append(node('p','empty-state','No changes yet'));
     const render=file=>{
       const previous=oldRows.get(file.path);
