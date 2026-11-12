@@ -1037,7 +1037,7 @@ func TestClient_SessionListHealthy(t *testing.T) {
 	if !c.SessionListHealthy() {
 		t.Fatal("successful list should be healthy")
 	}
-	c.Close() // subsequent RPC fails
+	_ = c.Close() // subsequent RPC fails
 	c.RunningAndIdle()
 	if c.SessionListHealthy() {
 		t.Fatal("failed list should be unhealthy")
