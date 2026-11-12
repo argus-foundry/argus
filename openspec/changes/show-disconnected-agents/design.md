@@ -8,7 +8,7 @@ A role/task is **disconnected** when it is bound to a task that is supposed to h
 - **Fail open.** `client.RunningAndIdle` returns `(nil, nil)` on RPC error, indistinguishable from "no sessions". Add `SessionListHealthy() bool` to the daemon client (true iff the last `Daemon.ListSessions` succeeded; in-process runner is always healthy) read via an optional interface. When unhealthy the disconnected set is empty.
 - **Grace.** A task must be absent for 2 consecutive ticks (~2s) before it shows `○`, so a daemon bounce or a session mid-restart (`pendingRestart` is already in the running list) never flashes it.
 - Exposed as `heramodel.RoleView.Disconnected` (new field fed by `HeraPage.SetDisconnected(ids)`) and a `Disconnected` input on `TaskStatusInputs`. A pure `agent.DisconnectedIDs(tracked, running, healthy, prev) (ids, next)` function owns the grace logic so `bounce-recovery` can read the same set.
-- Scope: only roles with `Live` bindings and tasks in `in_progress`/`in_review`. Pending/complete/archived are never disconnected (no session expected).
+- Scope: candidates are non-archived tasks in `in_progress`/`in_review`; the rail additionally requires a `Live` binding and a non-complete task. The Tasks-tab list renders the glyph for `in_progress` rows only (an `in_review` plain task has normally finished and exited, so `○` there would be noise). Pending/complete/archived are never disconnected.
 
 ## D2. Rail precedence
 
@@ -21,7 +21,7 @@ A role/task is **disconnected** when it is bound to a task that is supposed to h
 
 ## D3. Dead-pane marker
 
-`TerminalPane.Draw` already overlays `drawReasonBanner` on row 0 when a dead pane replays a log and `placeholderNote` is set. Add a default note, used when the pane has a `taskID`, the session is nil/dead, it is replaying content, and no `placeholderNote` is set: `stopped — press Enter to resume`. Closed-out banner, launch splash and the "Session not running" placeholder keep precedence (unchanged). No new slot or widget.
+The marker rides the pane's top border, right-aligned (the slot the re-render indicator and owed-repair notice already use), NOT row 0: an overlay on row 0 would hide replay content. Shown when the pane has a `taskID`, the session is nil/dead and it is replaying content: `stopped · press Enter to resume`. It yields to the re-render indicator / owed notice (same slot) and is dropped when it would overlap the title. An explicit `placeholderNote` banner on row 0 is unchanged and coexists. Closed-out banner, launch splash and the "Session not running" placeholder keep precedence. No new widget.
 
 ## D4. Don't mislabel live agents
 

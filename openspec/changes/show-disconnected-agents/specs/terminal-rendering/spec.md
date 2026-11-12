@@ -2,12 +2,12 @@
 
 ### Requirement: Dead-session replay carries a stopped marker
 
-A pane bound to a task that replays a dead or absent session's log SHALL overlay a one-line banner "stopped — press Enter to resume" on its first row, reusing the existing replay reason-banner slot, unless the closed-out banner, launch splash, or an explicit placeholder note applies (those keep precedence). A live session SHALL never show it.
+A pane bound to a task that replays a dead or absent session's log SHALL show a right-aligned "stopped · press Enter to resume" marker on its top border (the slot shared with the re-render indicator, which takes precedence; the marker is dropped when it would overlap the title), never covering replay rows. The closed-out banner and launch splash keep precedence over the replay entirely. A live session SHALL never show it.
 
 #### Scenario: Replay of a dead session
 
 - **WHEN** a pane has a task ID, no live session, and replay content
-- **THEN** the first row shows the stopped banner over the replay
+- **THEN** the top border shows the stopped marker and no replay row is covered
 
 #### Scenario: Live session
 

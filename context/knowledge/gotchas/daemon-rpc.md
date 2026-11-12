@@ -229,3 +229,5 @@
 - **Note delivery is two-phase and persisted** (`note_state`): `deliverNotes` re-queues under the same `bounce-recovery:<task>:<bounce_id>` ID until `Notifier.Submitted` reports it out; each queue lives the notifier's 10-minute deadline, abandoned after 3.
 - **Expiry and pruning run before the MCP-port gate**, so a daemon that never gets a port cannot resurrect stale entries or keep finished ones forever.
 
+
+- **Stream reconnect backoff is ~15s (`streamBackoff` 0.5/1/2/4/8s), and a daemon-unreachable dial now RETRIES instead of dropping on the first failure (show-disconnected-agents).** The old 3×500ms budget (~1.5s) was shorter than any daemon restart, so streams went `removeSessionStreamLost` en masse (38 dropped, 2 reconnected in one observed bounce) and the Tasks tab never re-dialed. A replaced/closed client (`client.closed`) or closed session still stops the loop at the top of each attempt. Logs: `stream: reconnected … after N retries`, `stream: gave up after N retries`. Tests must call `shrinkStreamBackoff(t)`.
