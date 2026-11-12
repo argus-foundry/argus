@@ -1,3 +1,4 @@
+import {discardFile} from './discard-file.js';
 import {comparisonText} from './comparison.js';
 import {captureFocus} from '../../shared/focus-recovery.js';
 import {node,button,errorMessage} from '../../shared/dom.js';
@@ -14,6 +15,7 @@ export class TaskChanges {
   }
   show(result) {
     const files=changedFiles(result),totals=statTotals(result);
+    this.localPaths=new Set(changedFiles({Status:result.Status}).map(file=>file.path));
     this.comparison=result.comparison;this.stale=!!result.stale;this.watchDegraded=!!result.watch_degraded;
     const summaries=new Map(),stats=new Map();
     for(const stat of [result.BranchDiff,result.Diff])for(const line of (stat||'').split('\n')) {
@@ -23,7 +25,7 @@ export class TaskChanges {
     }
     for(const file of files) {
       const lines=stats.get(file.path)||[];
-      summaries.set(file.path,JSON.stringify([file.status,lines]));
+      summaries.set(file.path,JSON.stringify([file.status,lines,this.localPaths.has(file.path)]));
     }
     const fingerprint=JSON.stringify([[...summaries],totals,result.git_revision,this.comparison,this.stale,this.watchDegraded]);
     if(fingerprint===this.fingerprint)return false;
@@ -61,8 +63,8 @@ export class TaskChanges {
     if (!this.files.length) this.list.append(node('p','empty-state','No changes yet'));
     const render=file=>{
       const previous=oldRows.get(file.path);
-      if(previous&&previous.dataset.status===file.status)return previous;
-      const entry=fileRow(this.task,file,{openDiff:this.openDiff,expandDirectory:(...args)=>this.expandDirectory(...args),counts:this.counts.results.get(file.path)});entry.dataset.status=file.status;return entry;
+      if(previous&&previous.dataset.status===file.status&&previous.dataset.local===String(this.localPaths.has(file.path)))return previous;
+      const entry=fileRow(this.task,file,{openDiff:this.openDiff,expandDirectory:(...args)=>this.expandDirectory(...args),counts:this.counts.results.get(file.path),discard:this.localPaths.has(file.path)&&!this.task.archived?file=>this.discard(file):null});entry.dataset.local=String(this.localPaths.has(file.path));entry.dataset.status=file.status;return entry;
     };
     if(this.mode==='tree')drawTaskFiles(this.list,this.files,render);else for(const file of this.files)this.list.append(render(file));
     for(const folder of this.list.querySelectorAll('details.file-directory')) {
@@ -97,6 +99,7 @@ export class TaskChanges {
     },{root:this.panel});
     for(const row of this.list.querySelectorAll('.file-row'))this.observer.observe(row);
   }
+  discard(file) {return discardFile({api:this.api,task:this.task,file,signal:this.signal});}
   async expandDirectory(file,row,container) {
     const previous=container.querySelector(':scope > .directory-files');
     if(previous){previous.remove();row.setAttribute('aria-expanded','false');return;}
@@ -107,8 +110,8 @@ export class TaskChanges {
       const result=await this.api.json(`/api/tasks/${encodeURIComponent(this.task.id)}/files?dir=${encodeURIComponent(file.path)}`,{signal:this.signal});
       if(this.signal.aborted||!content.isConnected)return;
       content.replaceChildren();
-      const files=(result.Files||[]).map(item=>({path:gitPath(item.Path),status:item.Status||'?',directory:item.IsDir}));
-      for(const child of files)content.append(fileRow(this.task,child,{openDiff:this.openDiff,expandDirectory:(...args)=>this.expandDirectory(...args),counts:this.counts.results.get(child.path)}));
+      const files=(result.Files||[]).map(item=>({path:gitPath(item.Path),status:file.status.includes('?')?'??':item.Status||'?',directory:item.IsDir}));
+      for(const child of files)content.append(fileRow(this.task,child,{openDiff:this.openDiff,expandDirectory:(...args)=>this.expandDirectory(...args),counts:this.counts.results.get(child.path),discard:!this.task.archived?file=>this.discard(file):null}));
       this.observeRows();
       if(!files.length)content.append(node('p','tool-note','No changed files returned for this directory.'));
       log('tools','directory loaded',{count:files.length});

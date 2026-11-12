@@ -68,6 +68,11 @@ export class TaskReview {
       log('review', 'diff failed', { status: error.status || 'error' });
     } finally { restore(); }
   }
+  event(event) {
+    if(event.type!=='resync'&&!(event.type==='worktree.changed'&&event.task_id===this.task?.id))return;
+    const selection=this.selections.get(this.task?.id);
+    if(selection?.type==='diff')this.openDiff(this.task,selection.path,false);
+  }
   drawDiff(selection, diff, comparison) { renderDiff($('review-panel'), { ...selection, diff, comparison }, mode => { selection.mode = mode; this.drawDiff(selection, diff, comparison); this.onSelection(); }); }
   async openArtifact(task, artifact, activate = true) {
     this.cancel();

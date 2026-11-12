@@ -42,7 +42,7 @@ The numbered references retain the original backend tally identifiers and record
 10. `cross-backend-account-move` defines account movement beyond Claude. Existing movement remains Claude-only.
 11. `durable-task-pr-association` defines manual PR links that coexist with the branch poller. This client reads existing PR links only.
 14. `multiplexed-terminal-output` provides continuous shared output across visited tasks. Hidden cached terminals currently suspend SSE and recover only the bounded existing replay window.
-15. `discard-worktree-file` defines a confirmed per-file discard operation. Changes omits Discard.
+15. `discard-worktree-file` is adopted with captured per-file local confirmation, explicit untracked deletion, documented error messages and event-driven refresh.
 16. `git-per-file-numstat` supplies numeric per-file counts. Visible rows currently fetch individual diffs with at most four concurrent reads.
 17. `task-base-aware-git-comparison` is adopted through authoritative comparison provenance in Changes and file diffs; the client renders the returned file list directly.
 18. `worktree-change-events` is adopted through matching revisioned invalidations, fenced snapshots and reconnect/resync convergence. Changes has no discovery interval; Artifacts retains its fallback.
@@ -890,7 +890,7 @@ This optional-client layout does not change the REST surface. The existing TUI a
 
 The Changes panel SHALL display one compact line per file, with a dim directory prefix and bright intact filename. Only the directory prefix SHALL ellipsize; exceptionally long filenames SHALL scroll inside the file list rather than expand the document. Exact added/removed text counts and a small status badge SHALL align to the right. The header SHALL show N files changed and total added/removed counts from the returned branch/working diff-stat summary lines. Per-file counts SHALL load only for visible rows through IntersectionObserver with at most four concurrent existing file-diff reads, cached per task/status generation and canceled on task changes. Pending and unavailable per-file counts SHALL remain blank, binary files SHALL show bin and directories SHALL retain lazy expansion. Per-file counts SHALL never be inferred from scaled stat-bar estimates.
 
-Hover or keyboard focus SHALL reveal a small menu chevron using the shared task-menu popover behavior. The menu SHALL offer Copy path, Copy absolute path and an encoded vscode://file link for Open in VS Code when an absolute worktree is available. Copy actions SHALL use the shared copyNotice. The row SHALL still open its diff. No discard, Finder, Xcode or always-visible copy controls SHALL appear. A small icon toggle in the header SHALL switch flat/tree views with the same row styling and captured paths.
+Hover or keyboard focus SHALL reveal a small menu chevron using the shared task-menu popover behavior. The menu SHALL offer Copy path, Copy absolute path and an encoded vscode://file link for Open in VS Code when an absolute worktree is available. Copy actions SHALL use the shared copyNotice. The row SHALL still open its diff. Local dirty regular files SHALL offer confirmed discard or explicit untracked deletion. Finder, Xcode and always-visible copy controls remain outside this compact-layout requirement. A small icon toggle in the header SHALL switch flat/tree views with the same row styling and captured paths.
 
 #### Scenario: Compact row actions
 
@@ -1380,4 +1380,11 @@ The workspace SHALL label status and diff using returned comparison requested_ba
 
 #### Scenario: Adopt the merged contract
 - **WHEN** A stacked task displays only the returned list, and its diff labels the same returned provenance with effective-base fallback warnings.
+- **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback
+
+### Requirement: Confirmed local file discard
+The workspace SHALL offer local file discard only for dirty regular file entries, capture task and path before confirmation, initially focus Cancel and explain restoration to HEAD or explicit untracked deletion. It SHALL send scope local and explicit delete_untracked, never retry automatically, retain failures and list state, explain documented error codes, and refresh status and any open diff through worktree.changed.
+
+#### Scenario: Adopt the merged contract
+- **WHEN** Cancel sends no request; tracked restore sends false, untracked delete sends true only after confirmation, and conflict errors preserve the list.
 - **THEN** the client follows the merged daemon contract, retaining captured-task cancellation and accessible feedback

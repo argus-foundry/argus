@@ -83,7 +83,7 @@ export class TaskTools {
     const panel=$('tool-panel');
     return !!this.task&&!document.hidden&&document.hasFocus()&&!!panel?.getClientRects().length&&getComputedStyle(panel).visibility!=='hidden'&&!document.body.classList.contains('settings-mode');
   }
-  event(event) {this.live.event(event);this.mail?.event?.(event);}
+  event(event) {this.live.event(event);this.review.event?.(event);this.mail?.event?.(event);}
   apply(result) {
     const restore=captureFocus($('tool-panel'),()=>document.getElementById(`tool-${this.tool}`),{signal:this.abort.signal});
     this.error?.remove();this.error=null;

@@ -40,3 +40,30 @@ test('stacked status and file diff share returned comparison and explain fallbac
   await page.getByRole('button',{name:'Split',exact:true}).click();await expect(page.locator('.review-caption')).toContainText('Requested missing');
   await expect(page.locator('.file-row')).toHaveCount(1);
 });
+
+for(const untracked of [false,true])test(`confirmed ${untracked?'untracked deletion':'tracked discard'} captures exact path and refreshes through events`,async({page})=>{
+  const state=await fixture(page,{status:(untracked?'?? ':' M ')+'src/file space.txt'});
+  const action=untracked?'Delete untracked file':'Discard local changes';
+  await page.getByRole('button',{name:'File actions for src/file space.txt'}).click();await page.getByRole('menuitem',{name:action,exact:true}).click();
+  const dialog=page.locator('#confirm-dialog');await expect(dialog).toContainText('src/file space.txt');await expect(dialog.getByRole('button',{name:'Cancel',exact:true})).toBeFocused();
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();expect(state.requests).toEqual([]);
+  await page.getByRole('button',{name:'File actions for src/file space.txt'}).click();await page.getByRole('menuitem',{name:action,exact:true}).click();
+  await dialog.getByRole('button',{name:untracked?'Delete file':'Discard changes',exact:true}).click();await expect(dialog).toHaveCount(0);
+  expect(state.requests).toEqual([{path:'/api/tasks/changes-task/git/discard',body:{path:'src/file space.txt',scope:'local',delete_untracked:untracked}}]);
+  await expect(page.locator('.file-row')).toHaveCount(1);
+  state.status='';state.branch='';state.revision='r2';await page.evaluate(()=>window['invalidateChanges']());await expect(page.getByText('No changes yet',{exact:true})).toBeVisible();
+});
+for(const [code,responseStatus,message] of [
+ ['rename_requires_explicit_paths',409,'both paths'],['untracked_requires_delete',409,'explicit deletion'],['conflict_state',409,'conflict'],['no_changes',409,'no local changes'],['task_archived',409,'archived'],['invalid_path',400,'path is invalid'],['task_not_found',404,'task is unavailable'],['worktree_not_found',404,'worktree is unavailable'],['git_failed',500,'not confirmed'],
+] as const)test(`discard retains list and explains ${code}`,async({page})=>{
+  const state=await fixture(page);state.discardStatus=responseStatus;state.discardCode=code;
+  await page.getByRole('button',{name:'File actions for src/file space.txt'}).click();await page.getByRole('menuitem',{name:'Discard local changes',exact:true}).click();
+  await page.locator('#confirm-dialog').getByRole('button',{name:'Discard changes',exact:true}).click();
+  await expect(page.locator('#confirm-dialog [role=alert]')).toContainText(message);expect(state.requests.length).toBe(1);await expect(page.locator('.file-row')).toHaveCount(1);
+});
+test('branch-only files offer no local discard and a worktree event refreshes an open diff',async({page})=>{
+  await fixture(page,{status:''});await page.locator('.file-row').click();await expect(page.locator('.diff-table')).toBeVisible();
+  await page.getByRole('button',{name:'File actions for src/file space.txt'}).click();await expect(page.getByRole('menuitem',{name:'Discard local changes',exact:true})).toHaveCount(0);
+  let diffReads=0;await page.route('**/git/diff?*',route=>{diffReads++;return route.fulfill({json:{Diff:'@@ -1 +1 @@\n-old\n+fresh event contents'}});});
+  await page.evaluate(()=>window['invalidateChanges']());await expect(page.locator('.diff-table')).toContainText('fresh event contents');expect(diffReads).toBeGreaterThan(0);
+});
