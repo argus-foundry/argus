@@ -30,7 +30,7 @@ func TestBulkDelete_ConfirmsRealSessionExit(t *testing.T) {
 	testutil.NoError(t, err)
 	defer readyR.Close()
 	defer readyW.Close()
-	cmd := exec.Command("/bin/sh", "-c", `trap '' TERM HUP; printf x >&3; while :; do read ignored; done`)
+	cmd := exec.Command("/bin/sh", "-c", `trap '' TERM HUP; printf x >&3; while read ignored; do :; done`)
 	cmd.Dir = task.Worktree
 	cmd.ExtraFiles = []*os.File{readyW}
 	session, err := agent.StartSession(task.ID, cmd, 24, 80)
