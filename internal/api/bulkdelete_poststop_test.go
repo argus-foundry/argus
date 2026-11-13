@@ -60,7 +60,7 @@ func TestBulkDelete_PostExitDirtyCheck(t *testing.T) {
 			testutil.NoError(t, err)
 			defer readyR.Close()
 			defer readyW.Close()
-			cmd := exec.Command("/bin/sh", "-c", `trap 'if [ "$2" = dirty ]; then printf valuable > late.txt; fi; printf flushed > "$1"; exit 0' HUP TERM; printf x >&3; while :; do read ignored; done`, "sh", proof, tc.exitAction)
+			cmd := exec.Command("/bin/sh", "-c", `trap 'if [ "$2" = dirty ]; then printf valuable > late.txt; fi; printf flushed > "$1"; exit 0' HUP TERM; printf x >&3; while read ignored; do :; done`, "sh", proof, tc.exitAction)
 			cmd.Dir = wt
 			cmd.ExtraFiles = []*os.File{readyW}
 			session, err := agent.StartSession(task.ID, cmd, 24, 80)
