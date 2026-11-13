@@ -86,6 +86,18 @@ func TestUnattendedOutwardDeny_HonorsTierOverrides(t *testing.T) {
 	testutil.DeepEqual(t, ResidentWorkerDenyRules(cfg), []string{"mcp__custom__write", "Bash(git push:*)", "mcp__custom__*"})
 }
 
+func TestUnattendedOutwardDeny_ConnectorAliasOverride(t *testing.T) {
+	cfg := unattendedOutwardCfg(t)
+	cfg.Resident.AskTools = []string{"mcp__claude_ai_keystone__circleci_rerun_workflow"}
+	cfg.Resident.DenyTools = nil
+	groups := disallowedGroups(t, unattendedOutwardLine(t, cfg, true))
+	testutil.Equal(t, len(groups), 2)
+	testutil.DeepEqual(t, groups[1], []string{
+		"mcp__claude_ai_keystone__circleci_rerun_workflow",
+		"mcp__claude_ai_Keystone__circleci_rerun_workflow",
+	})
+}
+
 func TestUnattendedOutwardDeny_BuildCmd(t *testing.T) {
 	cfg := unattendedOutwardCfg(t)
 	groups := disallowedGroups(t, unattendedOutwardLine(t, cfg, true))
@@ -98,6 +110,9 @@ func TestUnattendedOutwardDeny_BuildCmd(t *testing.T) {
 	outward := groups[1]
 	testutil.DeepEqual(t, outward, ResidentWorkerDenyRules(cfg))
 	for _, tool := range []string{
+		"mcp__claude_ai_Keystone__circleci_rerun_workflow",
+		"mcp__claude_ai_keystone__circleci_rerun_workflow",
+		"mcp__claude_ai_slack__slack_send_message",
 		"mcp__claude_ai_Gmail__send_message",
 		"mcp__claude_ai_Gmail__reply",
 		"mcp__claude_ai_Gmail__forward",
