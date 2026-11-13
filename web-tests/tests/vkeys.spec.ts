@@ -91,6 +91,23 @@ test.describe('agent detail view chrome', () => {
     await expect(page.locator('#overflow-menu.open')).toBeVisible();
   });
 
+  test('Send now menu item posts ctrl+x ctrl+s and closes the menu', async ({ page }) => {
+    await login(page);
+
+    await page.locator('#btn-overflow').click();
+    await expect(page.locator('#btn-send-now')).toBeVisible();
+
+    const inputReq = page.waitForRequest(req =>
+      req.url().includes('/input') && req.method() === 'POST',
+      { timeout: 3000 }
+    );
+    await page.locator('#btn-send-now').click();
+    const req = await inputReq;
+    expect(req.postData()).toBe('\x18\x13');
+
+    await expect(page.locator('#overflow-menu.open')).toHaveCount(0);
+  });
+
   test('Stop button is gone from the menu', async ({ page }) => {
     await login(page);
     await page.locator('#btn-overflow').click();
