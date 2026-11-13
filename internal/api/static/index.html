@@ -3901,6 +3901,7 @@ function renderOverflowMenu() {
   // branches are mutually exclusive.
   if (isInteractive(currentTask)) {
     items.push({ id: 'btn-mode', label: 'Toggle mode', fn: () => sendInputBytes('\x1b[Z'), keepOpen: true });
+    items.push({ id: 'btn-send-now', label: 'Send now (ctrl+x ctrl+s)', fn: () => sendInputBytes('\x18\x13') });
   } else {
     items.push({ id: 'btn-resume', label: 'Resume', fn: resumeTask });
   }
