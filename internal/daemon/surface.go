@@ -274,7 +274,9 @@ const (
 	//     trust dialog even with approval/sandbox bypass enabled.
 	// 48: dash-leading Pi positional prompts receive a leading newline so the
 	//     CLI treats frontmatter and option-like text as messages, not flags.
-	SupervisorSpawnSurface = 48
+	// 49: resident connector permission rules expand historical and lowercase
+	//     server aliases for both the resident and unattended-worker denials.
+	SupervisorSpawnSurface = 49
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -587,7 +589,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "cd33fb019df2333ee440102c13e1a03ab95d97b1dd1eed6ce3fab7a12dd5df2a"
+	SpawnSurfaceDigest  = "8b33c67dfc319aa849915433ad32b7c6a9bee4dff794976959ccb37d78edf65f"
 	StreamSurfaceDigest = "7d9956cdee0e7aaad62e26e5b800ec00345fde9c803fa09f35d88ca05b11a965"
 )
 

@@ -1087,9 +1087,9 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 		us := readResidentUserSettings(task, cfg, residentArgusWrap)
 		ask, deny := ResidentOutwardTiers(cfg)
 		policy := ResidentPolicy{
-			Allow:       cfg.Resident.AllowTools,
-			Ask:         mergeRules(ask, us.Ask),
-			Deny:        mergeRules(deny, us.Deny),
+			Allow:       config.ExpandResidentConnectorRules(cfg.Resident.AllowTools),
+			Ask:         config.ExpandResidentConnectorRules(mergeRules(ask, us.Ask)),
+			Deny:        config.ExpandResidentConnectorRules(mergeRules(deny, us.Deny)),
 			HookCommand: residentStopHookCommand(),
 			Effort:      us.Effort,
 			Sandbox:     us.Sandbox,

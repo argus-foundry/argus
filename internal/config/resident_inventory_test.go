@@ -895,3 +895,34 @@ func TestResidentConnectorInventory(t *testing.T) {
 		}
 	})
 }
+
+// Every reviewed connector keeps its tier when its display-name server changes
+// to lowercase. Exercise the entire inventory, not just Gong's current names.
+func TestResidentConnectorAliasInventory(t *testing.T) {
+	d := DefaultResidentConfig(1)
+	allow := ExpandResidentConnectorRules(d.AllowTools)
+	ask := ExpandResidentConnectorRules(d.AskTools)
+	deny := ExpandResidentConnectorRules(d.DenyTools)
+	for connector, catalog := range residentConnectorInventory {
+		prefix := "mcp__claude_ai_" + connector + "__"
+		if connector == "claude-artifacts" {
+			prefix = "mcp__claude-artifacts__"
+		}
+		for class, tools := range map[string][]string{"read": catalog.read, "draft": catalog.draft, "write": catalog.write} {
+			for _, tool := range tools {
+				for _, pre := range []string{prefix, strings.ToLower(prefix)} {
+					full := pre + tool
+					t.Run(class+"/"+full, func(t *testing.T) {
+						if class == "write" {
+							testutil.False(t, slices.Contains(allow, full))
+							testutil.True(t, slices.Contains(ask, full) || slices.Contains(deny, full))
+						} else {
+							testutil.True(t, slices.Contains(allow, full))
+							testutil.False(t, slices.Contains(ask, full) || slices.Contains(deny, full))
+						}
+					})
+				}
+			}
+		}
+	}
+}

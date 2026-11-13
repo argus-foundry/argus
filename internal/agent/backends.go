@@ -353,7 +353,7 @@ func claudePermissionRulesFlag(p ResidentPolicy) string {
 // defaults, or config.toml / DB overrides). The resident's own policy and the
 // unattended-worker deny are both derived from it.
 func ResidentOutwardTiers(cfg config.Config) (ask, deny []string) {
-	return cfg.Resident.AskTools, cfg.Resident.DenyTools
+	return config.ExpandResidentConnectorRules(cfg.Resident.AskTools), config.ExpandResidentConnectorRules(cfg.Resident.DenyTools)
 }
 
 // ResidentWorkerDenyRules is what an unattended resident worker is

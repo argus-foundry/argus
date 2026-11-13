@@ -22,6 +22,23 @@ func TestResidentDefaults(t *testing.T) {
 	testutil.Equal(t, len(r.AskTools) > 0, true)
 }
 
+func TestExpandResidentConnectorRules(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		in, want []string
+	}{
+		{"empty", nil, nil},
+		{"reverse alias and deduplicate", []string{"mcp__claude_ai_keystone__Read_Name", "mcp__claude_ai_Keystone__Read_Name"}, []string{"mcp__claude_ai_keystone__Read_Name", "mcp__claude_ai_Keystone__Read_Name"}},
+		{"mixed case configured alias", []string{"mcp__claude_ai_KEYSTONE__write"}, []string{"mcp__claude_ai_KEYSTONE__write", "mcp__claude_ai_Keystone__write", "mcp__claude_ai_keystone__write"}},
+		{"unknown and malformed stay literal", []string{"Bash", "mcp__other__read", "mcp__claude_ai_Keystone", "mcp__claude_ai_Keystone__"}, []string{"Bash", "mcp__other__read", "mcp__claude_ai_Keystone", "mcp__claude_ai_Keystone__"}},
+		{"wildcard restriction stays scoped", []string{"mcp__claude_ai_Slack__*"}, []string{"mcp__claude_ai_Slack__*", "mcp__claude_ai_slack__*"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testutil.DeepEqual(t, ExpandResidentConnectorRules(tc.in), tc.want)
+		})
+	}
+}
+
 func TestResidentValidName(t *testing.T) {
 	tests := []struct {
 		name string

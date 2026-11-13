@@ -412,6 +412,59 @@ func buildResident(t *testing.T, task *model.Task, cfg config.Config) *exec.Cmd 
 	return cmd
 }
 
+func TestBuildCmd_ResidentConnectorAliases(t *testing.T) {
+	task, _ := residentFixture(t)
+	cmd := buildResident(t, task, residentCfg())
+	st, ok := settingsArg(t, cmd.Args)
+	testutil.True(t, ok)
+	perms := st["permissions"].(map[string]any)
+	for _, rule := range []string{
+		"mcp__claude_ai_Keystone__circleci_rerun_workflow",
+		"mcp__claude_ai_keystone__circleci_rerun_workflow",
+	} {
+		t.Run("explicit ask/"+rule, func(t *testing.T) {
+			var found bool
+			for _, ask := range perms["ask"].([]any) {
+				found = found || ask == rule
+			}
+			testutil.True(t, found)
+		})
+	}
+	for _, tc := range []struct{ tool, tier string }{
+		{"mcp__claude_ai_Keystone__gong_list_calls", "allow"},
+		{"mcp__claude_ai_keystone__gong_list_calls", "allow"},
+		{"mcp__claude_ai_Keystone__circleci_rerun_workflow", "ask"},
+		{"mcp__claude_ai_keystone__circleci_rerun_workflow", "ask"},
+		{"mcp__claude_ai_slack__slack_send_message", "deny"},
+		{"mcp__claude_ai_keystone__unreviewed_tool", "ask"},
+		{"mcp__claude_ai_unknown__gong_list_calls", "ask"},
+	} {
+		t.Run(tc.tool, func(t *testing.T) { testutil.Equal(t, residentRuleTier(t, perms, tc.tool), tc.tier) })
+	}
+}
+
+func TestBuildCmd_ResidentConnectorAliasUserRestrictions(t *testing.T) {
+	task, acct := residentFixture(t)
+	testutil.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"), []byte(`{
+		"permissions": {
+			"ask": ["mcp__claude_ai_Keystone__gong_list_calls"],
+			"deny": ["mcp__claude_ai_notion__notion-fetch"]
+		}
+	}`), 0o600))
+	cmd := buildResident(t, task, residentCfg())
+	st, ok := settingsArg(t, cmd.Args)
+	testutil.True(t, ok)
+	perms := st["permissions"].(map[string]any)
+	for _, tc := range []struct{ tool, tier string }{
+		{"mcp__claude_ai_Keystone__gong_list_calls", "ask"},
+		{"mcp__claude_ai_keystone__gong_list_calls", "ask"},
+		{"mcp__claude_ai_Notion__notion-fetch", "deny"},
+		{"mcp__claude_ai_notion__notion-fetch", "deny"},
+	} {
+		t.Run(tc.tool, func(t *testing.T) { testutil.Equal(t, residentRuleTier(t, perms, tc.tool), tc.tier) })
+	}
+}
+
 func TestBuildCmd_ResidentIsSelfContainedUnderUserAllowAll(t *testing.T) {
 	task, acct := residentFixture(t)
 	// A user-level allow-all plus restrictions, model and effort.

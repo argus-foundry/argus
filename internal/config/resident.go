@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -39,6 +40,46 @@ type ResidentConfig struct {
 	// every connector tool so a new write tool cannot land in AllowTools.
 	AskTools  []string `toml:"ask_tools"`
 	DenyTools []string `toml:"deny_tools"`
+}
+
+// ExpandResidentConnectorRules preserves literal tool names while emitting both
+// historical display-name spellings and lowercase connector server names. Only
+// these reviewed server identities are aliases; unfamiliar servers stay exact.
+// Keep this at policy delivery, not just in defaults: persisted config overrides
+// and the account's ask/deny restrictions need the same protection.
+func ExpandResidentConnectorRules(rules []string) []string {
+	servers := []string{
+		"claude_ai_Keystone", "claude_ai_Notion", "claude_ai_Figma",
+		"claude_ai_Sketch", "claude_ai_Claude_Docs", "claude_ai_Slack",
+		"claude_ai_Gmail", "claude_ai_Superhuman_Mail", "claude_ai_Google_Calendar",
+		"claude_ai_Linear", "claude_ai_Granola", "claude-artifacts",
+	}
+	var expanded []string
+	seen := make(map[string]bool)
+	add := func(rule string) {
+		if !seen[rule] {
+			seen[rule] = true
+			expanded = append(expanded, rule)
+		}
+	}
+	for _, rule := range rules {
+		add(rule)
+		if !strings.HasPrefix(rule, "mcp__") {
+			continue
+		}
+		server, tool, ok := strings.Cut(strings.TrimPrefix(rule, "mcp__"), "__")
+		if !ok || tool == "" {
+			continue
+		}
+		for _, known := range servers {
+			if strings.EqualFold(server, known) {
+				add("mcp__" + known + "__" + tool)
+				add("mcp__" + strings.ToLower(known) + "__" + tool)
+				break
+			}
+		}
+	}
+	return expanded
 }
 
 // DefaultResidentConfig returns the shipped [resident] defaults.
