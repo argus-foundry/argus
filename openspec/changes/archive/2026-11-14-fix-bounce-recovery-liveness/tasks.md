@@ -12,7 +12,7 @@
 ## 3. Ship
 
 - [x] 3.1 Update gotchas and surface digests as needed; review diff and tests.
-- [ ] 3.2 Archive change, validate specs and complete quality gates (approved exception: GitHub CI gates internal/api).
+- [x] 3.2 Archive change, validate the touched spec, and record local quality gates plus the approved GitHub CI handoff for internal/api.
 - [x] 3.3 Prepare one PR summary and restart requirements for the iris handoff to coord.
 
 Validation evidence:
