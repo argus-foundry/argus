@@ -70,3 +70,4 @@ macos/.build/
 macos/dist/
 .claude/reviews/
 .gocache-tmp/
+.Codex/worktree/

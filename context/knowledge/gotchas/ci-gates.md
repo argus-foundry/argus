@@ -2,6 +2,10 @@
 
 `make pre-pr` mirrors `.github/workflows/ci.yml` step-for-step (build → vet → fmt-check → lint-pr → vuln → test-cover-gate → workspace-test). Steps run in sequence and the first failure short-circuits the rest, so a formatting miss hides downstream test/lint/coverage failures until fixed — always run the **full** `pre-pr` locally to surface everything in one pass. Per-gate failure recipes:
 
+- **Git fixture commits must isolate `HOME`, including host-side Iris runs.** Use `t.Setenv("HOME", t.TempDir())` so operator Git signing and hooks cannot invoke the real 1Password agent; the self-update and install-signed fixtures otherwise fail with `agent returned an error`. `script/iris-check` defaults package concurrency to `-p=3` on the shared host and preserves explicit `GOFLAGS`.
+
+- **Serve tests must put short reaper intervals on their own daemon instance.** Mutating a package-wide interval races a previous daemon's late-starting background goroutine, even after that daemon's Serve returned; the production default remains constant.
+
 - **`fmt-check`** — run `make fmt` first; goimports rewrites the tree. An unformatted file is the most common CI miss.
 - **`test-cover-gate`** — filtered coverage dropped below the 88% floor. Add tests for code you touched (or under-covered platform-agnostic code) until it clears; the floor ratchets up, never down. Do NOT lower `-min`. Filtered coverage drifts ~0.2% darwin↔linux from platform branches (e.g. `internal/agent/sandbox.go`) — target platform-agnostic code for reliable margin.
 - **`lint-pr`** — uses `--new-from-rev=origin/master`, so it only flags issues your diff introduced (incl. `staticcheck` deprecations like `SA1019` on new lines). Fix them; no blanket `//nolint`. Most common trip: copying an older test's `sim.GetContent(x, y)` — deprecated, so it is fine on the old lines but flagged on yours; use `str, _, _ := sim.Get(x, y)` in new tests.

@@ -296,5 +296,8 @@ func (g *graduationWatcher) advance(taskID, phase string) error {
 		_, _, err = g.runner.StartOrReattach(t, g.cfgFn(), 24, 80, true)
 	}
 	uxlog.Log("[resident] graduation resume task=%s session=%s alive=%t err=%v", taskID, t.SessionID, alive, err)
+	if err == nil {
+		return g.db.SetStatus(taskID, model.StatusInProgress)
+	}
 	return err
 }

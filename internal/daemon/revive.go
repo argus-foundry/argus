@@ -95,9 +95,10 @@ func (r *HeraReviveRunner) KickRerender(taskID string) error {
 		return err
 	}
 	if task.SessionID != oldID {
+		task.SetStatus(model.StatusInProgress)
 		return r.database.Update(task)
 	}
-	return nil
+	return r.database.SetStatus(task.ID, model.StatusInProgress)
 }
 
 // RestartDead restarts a session with no live process, resuming via
@@ -105,6 +106,10 @@ func (r *HeraReviveRunner) KickRerender(taskID string) error {
 // handleResumeTask (internal/api/handlers.go), the same daemon-side
 // dead-session restart the REST API already exposes.
 func (r *HeraReviveRunner) RestartDead(taskID string) error {
+	return r.restartDead(taskID, false, nil)
+}
+
+func (r *HeraReviveRunner) restartDead(taskID string, resumeOnly bool, started func(uint64)) error {
 	task, err := r.database.Get(taskID)
 	if err != nil {
 		return fmt.Errorf("revive restart: load task %s: %w", taskID, err)
@@ -114,13 +119,32 @@ func (r *HeraReviveRunner) RestartDead(taskID string) error {
 	}
 	cfg := r.cfgFn()
 	agent.RefreshResumeSessionID(r.database, task)
+	task.ResumeOnly = resumeOnly
+	if resumeOnly {
+		available, err := agent.ResumableSessionAvailable(task, cfg)
+		if err != nil {
+			return fmt.Errorf("%w: task %s: %w", agent.ErrResumeUnavailable, taskID, err)
+		}
+		if !available || task.SessionID == "" {
+			return fmt.Errorf("%w: task %s conversation unavailable", agent.ErrResumeUnavailable, taskID)
+		}
+	}
 	resume := task.SessionID != ""
 	// No live session to read a size from: use the freshest viewer-reported pane
 	// (else Start's 24x80) so the revived agent commits history at the width a
 	// pane will actually show, instead of always 24x80.
 	rows, cols, source := resolveSpawnSize(r.database, "", nil, time.Now())
 	slog.Info("[spawn-size] revive restart", "task", taskID, "source", source, "rows", rows, "cols", cols)
-	sess, _, err := r.runner.StartOrReattach(task, cfg, rows, cols, resume)
+	var sess agent.SessionHandle
+	if resumeOnly {
+		// Start refuses duplicates rather than adopting somebody else's session.
+		sess, err = r.runner.Start(task, cfg, rows, cols, resume)
+	} else {
+		sess, _, err = r.runner.StartOrReattach(task, cfg, rows, cols, resume)
+	}
+	if started != nil {
+		started(task.StartSequence)
+	}
 	if err != nil {
 		return fmt.Errorf("revive restart: start task %s: %w", taskID, err)
 	}

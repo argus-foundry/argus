@@ -22,6 +22,8 @@ import (
 // on the next startup so hera workers can auto-resume without user intervention.
 const liveTasksAtShutdownFilename = "live-tasks-at-shutdown.json"
 
+const supervisorLiveTasksFilename = "supervisor-live-at-shutdown.json"
+
 func liveTasksAtShutdownPath(dataDir string) string {
 	return filepath.Join(dataDir, liveTasksAtShutdownFilename)
 }
@@ -36,9 +38,16 @@ func liveTasksAtShutdownPath(dataDir string) string {
 // skips this call entirely (agents survive the bounce, so there's nothing to
 // signal; see Daemon.cleanup).
 func writeLiveTasksFile(runner agent.SessionProvider, dataDir string) error {
-	ids := runner.Running()
-	if len(ids) == 0 {
+	if len(runner.Running()) == 0 {
 		return nil
+	}
+	return writeLiveTasksSnapshot(runner, liveTasksAtShutdownPath(dataDir))
+}
+
+func writeLiveTasksSnapshot(runner agent.SessionProvider, path string) error {
+	ids := runner.Running()
+	if ids == nil {
+		ids = []string{}
 	}
 
 	data, err := json.Marshal(ids)
@@ -46,7 +55,6 @@ func writeLiveTasksFile(runner agent.SessionProvider, dataDir string) error {
 		return fmt.Errorf("marshal live tasks: %w", err)
 	}
 
-	path := liveTasksAtShutdownPath(dataDir)
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("write live tasks tmp: %w", err)
@@ -212,9 +220,9 @@ func discardStaleLiveTasksFile(dataDir string) {
 //     role-status), which stays InReview to preserve the #707 / BUG-050
 //     invariant. Scoped to the live set; the true orphans flip the other way.
 //
-//  4. Flips ONLY the true orphans (InProgress rows the supervisor does NOT report
-//     alive — e.g. the supervisor also restarted/crashed) to InReview, leaving
-//     re-attached tasks InProgress.
+//  4. Reconciles true orphans using the pre-shutdown supervisor snapshot and
+//     live Hera bindings as well as InProgress rows when recovery is enabled.
+//     Reattached sessions and closed-out tasks remain untouched.
 //
 //  5. Posts ARGUS_BOUNCED to those true orphans only (they actually lost their
 //     session); re-attached agents were never interrupted and get nothing. In the
@@ -263,10 +271,34 @@ func (d *Daemon) reattachSupervised() {
 	}
 
 	// Flip only the true orphans; re-attached (live) tasks stay InProgress.
-	orphans, err := agent.ReconcileStaleSessionsExcept(d.db, liveSet)
+	previous := map[string]bool{}
+	snapshot := filepath.Join(db.DataDir(), supervisorLiveTasksFilename)
+	if data, err := os.ReadFile(snapshot); err == nil {
+		var ids []string
+		if err := json.Unmarshal(data, &ids); err != nil {
+			slog.Warn("[bounce-recovery] invalid supervisor liveness snapshot", "err", err)
+		} else {
+			for _, id := range ids {
+				previous[id] = true
+			}
+			slog.Info("[bounce-recovery] loaded supervisor liveness snapshot", "count", len(ids))
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("[bounce-recovery] read supervisor liveness snapshot failed", "err", err)
+	}
+	var orphans []string
+	var err error
+	if d.cfgFn().BounceRecovery.Enabled {
+		orphans, err = agent.ReconcileInterruptedSessions(d.db, liveSet, previous)
+	} else {
+		orphans, err = agent.ReconcileStaleSessionsExcept(d.db, liveSet)
+	}
 	if err != nil {
 		slog.Warn("reattach: reconcile stale sessions failed", "err", err)
 		return
+	}
+	if err := os.Remove(snapshot); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("[bounce-recovery] consume supervisor liveness snapshot failed", "err", err)
 	}
 	if len(orphans) > 0 {
 		slog.Info("reattach: reconciled true orphans", "count", len(orphans))

@@ -276,7 +276,8 @@ const (
 	//     CLI treats frontmatter and option-like text as messages, not flags.
 	// 49: resident connector permission rules expand historical and lowercase
 	//     server aliases for both the resident and unattended-worker denials.
-	SupervisorSpawnSurface = 49
+	// 50: automatic recovery carries a resume-only launch constraint.
+	SupervisorSpawnSurface = 50
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -342,7 +343,9 @@ const (
 	//     (add-session-width-index). A supervisor that predates this writes no
 	//     index and the replay falls back to a single width. No wire change.
 	// v17: restart/kick preflight consults authoritative resident-worker identity.
-	SupervisorStreamSurface = 17
+	// v18: supervisor shutdown records live tasks; resume-only launches refuse
+	// missing conversations instead of replaying the original prompt.
+	SupervisorStreamSurface = 18
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -554,6 +557,8 @@ var SupervisorSpawnPaths = []string{
 // to it is far more likely to reach a running agent than not. Classifying an
 // ambiguous file as STREAM is the safe direction.
 var SupervisorStreamPaths = []string{
+	"internal/daemon/bounce.go",               // supervisor shutdown liveness snapshot writer
+	"internal/daemon/types.go",                // resume-only launch constraint and typed refusal
 	"internal/agent/bridge.go",                // per-launch bridge identity read through SessionStatus
 	"internal/agent/rerender_tree.go",         // identity-scoped descendants on repair escalation
 	"internal/agent/width_rerender.go",        // opt-in bounded width repair
@@ -589,8 +594,8 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "ab1c02ce9eff7c2fe61fdc546c634e807101865b0430c95702d4761843bd3eb2"
-	StreamSurfaceDigest = "7d9956cdee0e7aaad62e26e5b800ec00345fde9c803fa09f35d88ca05b11a965"
+	SpawnSurfaceDigest  = "9b3cf2bd62045837ea6179a991671c3e4f5ac44c48ca706bcd1d6fdbe9685b08"
+	StreamSurfaceDigest = "16e3d2f24fcd6f29c628f2a26b3dda36c2dfe96ad65f4f90ae19583eb1ca66fd"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

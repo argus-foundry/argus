@@ -73,6 +73,8 @@ func TestRun_GitResetsHardToOriginMaster(t *testing.T) {
 	if testing.Short() {
 		t.Skip("shells out to git and go")
 	}
+	// Fixture commits must not use the operator's signing agent or Git hooks.
+	t.Setenv("HOME", t.TempDir())
 	gobin := t.TempDir()
 	t.Setenv("GOBIN", gobin)
 

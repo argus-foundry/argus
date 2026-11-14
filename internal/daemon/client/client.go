@@ -106,6 +106,7 @@ type Client struct {
 	// blocked in rpc.Call. Logged for observability — drain goroutines
 	// decrement the counter when the RPC eventually completes.
 	leakedCalls int
+	starts      map[string]startReceipt
 
 	// listUnhealthy is set when the last Daemon.ListSessions read failed (last-writer-wins: concurrent RunningAndIdle callers can overwrite each other; the only consumer is the TUI tick, which calls it from one goroutine, and callers independently treat a nil list as unknown), so a
 	// nil RunningAndIdle result means "unknown", not "no sessions". Zero value =
@@ -298,6 +299,14 @@ func (c *Client) checkResidentSupported(task *model.Task) error {
 
 // Start requests the daemon to start a session and opens a stream for its output.
 func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, error) {
+	if task.ResumeOnly {
+		c.mu.Lock()
+		peer := c.peerProtocol
+		c.mu.Unlock()
+		if peer < 14 {
+			return nil, fmt.Errorf("supervisor protocol %d requires restart for resume-only launches", peer)
+		}
+	}
 	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
 		return nil, err
 	}
@@ -326,10 +335,36 @@ func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		Rows:            rows,
 		Cols:            cols,
 		Resume:          resume,
+		ResumeOnly:      task.ResumeOnly,
 	}
 
 	var resp daemon.StartResp
-	if err := c.callWithTimeout("Daemon.StartSession", req, &resp, startTimeoutFor(task, cfg)); err != nil {
+	c.mu.Lock()
+	if c.starts == nil {
+		c.starts = map[string]startReceipt{}
+	}
+	sequence := c.starts[task.ID].sequence + 1
+	c.starts[task.ID] = startReceipt{sequence: sequence, pending: true}
+	c.mu.Unlock()
+	task.StartSequence = sequence
+	recovery := task.ResumeOnly
+	if err := c.callWithCompletion("Daemon.StartSession", req, &resp, startTimeoutFor(task, cfg), func(err error) {
+		accepted := false
+		c.mu.Lock()
+		if c.starts[task.ID].sequence == sequence {
+			r := startReceipt{sequence: sequence}
+			if err == nil && resp.Error == "" && resp.PID > 0 {
+				r.pid = resp.PID
+			}
+			c.starts[task.ID] = r
+			accepted = true
+		}
+		c.mu.Unlock()
+		if recovery {
+			slog.Info("[bounce-recovery] start RPC completed", "task", task.ID, "sequence", sequence, "pid", resp.PID, "receipt_current", accepted, "transport_error", err, "launch_error", resp.Error)
+			uxlog.Log("[bounce-recovery] start RPC completed task=%s sequence=%d pid=%d receipt_current=%t transport_error=%v launch_error=%s", task.ID, sequence, resp.PID, accepted, err, resp.Error)
+		}
+	}); err != nil {
 		uxlog.Log("client.Start: RPC FAILED task=%s err=%v", task.ID, err)
 		// A timeout specifically means we stopped waiting, not that the
 		// daemon-side start failed — callWithTimeout's dispatch goroutine
@@ -346,6 +381,9 @@ func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 	}
 	if resp.Error != "" {
 		uxlog.Log("client.Start: daemon error task=%s err=%s", task.ID, resp.Error)
+		if resp.ResumeUnavailable {
+			return nil, fmt.Errorf("%w: %s", agent.ErrResumeUnavailable, resp.Error)
+		}
 		// resp.Ambiguous means the daemon's OWN Start call was itself an
 		// ambiguous RPC timeout (e.g. its second hop to the supervisor in P4
 		// supervisor mode) rather than a definitive failure. Re-wrap here so
@@ -777,6 +815,10 @@ func (c *Client) call(method string, args, reply any) error {
 // for legitimately long-running RPCs (e.g. UpdateSelf, which shells out to
 // `go install`).
 func (c *Client) callWithTimeout(method string, args, reply any, timeout time.Duration) error {
+	return c.callWithCompletion(method, args, reply, timeout, nil)
+}
+
+func (c *Client) callWithCompletion(method string, args, reply any, timeout time.Duration, completed func(error)) error {
 	// Guard the dispatch goroutine below against a client with no usable rpc
 	// transport. The normal Connect'd client always has a non-nil c.rpc, but a
 	// partially-constructed client (rpc never set — e.g. a test scaffold or a
@@ -787,11 +829,20 @@ func (c *Client) callWithTimeout(method string, args, reply any, timeout time.Du
 	// the failure on the caller's goroutine where it's handled gracefully.
 	// (`||` short-circuits, so c.rpc is only read when c is non-nil.)
 	if c == nil || c.rpc == nil {
+		if completed != nil {
+			completed(ErrClientClosed)
+		}
 		return ErrClientClosed
 	}
 	rpc := c.rpc
 	ch := make(chan error, 1)
-	go func() { ch <- rpc.Call(method, args, reply) }()
+	go func() {
+		err := rpc.Call(method, args, reply)
+		if completed != nil {
+			completed(err)
+		}
+		ch <- err
+	}()
 	select {
 	case err := <-ch:
 		return err

@@ -117,6 +117,7 @@ func readTranscript(t *testing.T, configDir, worktree, sid string) (main, sub st
 
 func TestMoveTaskAccount_LiveIdleSessionKickedOnTarget(t *testing.T) {
 	f := newMoveFixture(t, true)
+	testutil.NoError(t, f.d.SetStatus("mv", model.StatusInReview))
 	r := &moveRunner{sess: &moveSession{idle: true, alive: true}}
 
 	task, res, err := MoveTaskAccount(f.d, r, AccountMoveInput{TaskID: "mv", Account: "work"})
@@ -133,6 +134,7 @@ func TestMoveTaskAccount_LiveIdleSessionKickedOnTarget(t *testing.T) {
 	got, err := f.d.Get("mv")
 	testutil.NoError(t, err)
 	testutil.Equal(t, got.Account, "work")
+	testutil.Equal(t, got.Status, model.StatusInProgress)
 	testutil.False(t, got.AccountRouted)
 	testutil.NotNil(t, r.kicked)
 	testutil.Equal(t, r.kicked.Account, "work")

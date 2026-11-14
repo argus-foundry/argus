@@ -515,11 +515,8 @@ func dsServeDaemon(t *testing.T) (*Daemon, string) {
 }
 
 func TestServe_DSReaper(t *testing.T) {
-	prev := devStackReapInterval
-	devStackReapInterval = 5 * time.Millisecond
-	t.Cleanup(func() { devStackReapInterval = prev })
-
 	d, sock := dsServeDaemon(t)
+	d.devStackReapEvery = 5 * time.Millisecond
 	wt := filepath.Join(db.DataDir(), "worktrees", "proj", "fin")
 	testutil.NoError(t, d.db.Add(&model.Task{ID: "fin", Name: "fin", Status: model.StatusComplete, Worktree: wt}))
 	d.devStackScan = func() ([]agent.DevStackProc, error) {
@@ -592,11 +589,8 @@ func TestServe_DSReaper(t *testing.T) {
 }
 
 func TestRunDevStackReaper_TicksAndExitsOnDone(t *testing.T) {
-	prev := devStackReapInterval
-	devStackReapInterval = 5 * time.Millisecond
-	t.Cleanup(func() { devStackReapInterval = prev })
-
 	d, _ := dsServeDaemon(t)
+	d.devStackReapEvery = 5 * time.Millisecond
 	scans := make(chan struct{}, 100)
 	wt := filepath.Join(db.DataDir(), "worktrees", "p", "t")
 	testutil.NoError(t, d.db.Add(&model.Task{ID: "x", Name: "x", Status: model.StatusComplete, Worktree: wt}))

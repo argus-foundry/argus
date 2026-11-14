@@ -183,6 +183,7 @@ func graduatedFixture(t *testing.T) (*db.DB, *model.Task, *db.MoveHeraBindingRes
 
 func TestGraduationRestartRetryAndBounce(t *testing.T) {
 	d, w, _ := graduatedFixture(t)
+	testutil.NoError(t, d.SetStatus(w.ID, model.StatusInReview))
 	r := &graduationRunner{sess: &graduationSession{pid: 11}}
 	jobs := 0
 	flipBusy := false
@@ -223,6 +224,9 @@ func TestGraduationRestartRetryAndBounce(t *testing.T) {
 	g.sweep()
 	testutil.Equal(t, r.kicks, 1)
 	testutil.Equal(t, jobs, 2)
+	restarted, err := d.Get(w.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, restarted.Status, model.StatusInProgress)
 	testutil.Equal(t, r.launched.SessionID, w.SessionID)
 	testutil.Equal(t, r.launched.Worktree, w.Worktree)
 	testutil.Equal(t, r.launched.Branch, w.Branch)

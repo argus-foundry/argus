@@ -59,8 +59,8 @@ func record(database *db.DB, orphanIDs []string, alive func(string) bool, now ti
 	recorded := map[string]*Entry{}
 	for _, id := range orphanIDs {
 		t, err := database.Get(id)
-		if err != nil || t == nil || t.Archived || t.IsResident() {
-			slog.Info("[bounce-recovery] skip task (missing, archived or resident)", "task", id)
+		if err != nil || !recordableTask(database, t) {
+			slog.Info("[bounce-recovery] skip task (missing or closed)", "task", id)
 			continue
 		}
 		rd := roleInfo(database, id)
@@ -125,7 +125,7 @@ func recordIdleTeam(database *db.DB, recorded map[string]*Entry, inSet map[strin
 				continue
 			}
 			t, err := database.Get(b.ArgusTaskID)
-			if err != nil || t == nil || t.Archived || t.IsResident() || t.Status != model.StatusInReview {
+			if err != nil || !recordableTask(database, t) || t.Status != model.StatusInReview {
 				continue
 			}
 			rd := roleInfo(database, t.ID)
@@ -153,6 +153,24 @@ func recordIdleTeam(database *db.DB, recorded map[string]*Entry, inSet map[strin
 	return written
 }
 
+func recordableTask(database *db.DB, t *model.Task) bool {
+	if t == nil || t.Archived || t.IsResident() || t.Status == model.StatusComplete {
+		return false
+	}
+	meta, err := database.ListMeta(t.ID, db.HeraMetaNamespace)
+	if err != nil {
+		slog.Warn("[bounce-recovery] close-out lookup failed; skipping record", "task", t.ID, "err", err)
+		return false
+	}
+	for _, kv := range meta {
+		if kv.Key == db.HeraMetaKeyReadyToClose && kv.Value == "true" {
+			slog.Info("[bounce-recovery] skip closing task in ledger", "task", t.ID)
+			return false
+		}
+	}
+	return true
+}
+
 // coordinatorClosed reports that a worker's supervising coordinator task was
 // archived or completed: the user abandoned that orchestration.
 func coordinatorClosed(database *db.DB, coordTask string) bool {
@@ -170,6 +188,9 @@ func coordinatorClosed(database *db.DB, coordTask string) bool {
 func initialStatus(e Entry, inSet map[string]bool) Status {
 	if e.Role == RoleCoordinator {
 		return StatusPending
+	}
+	if e.State == transcriptstate.Idle {
+		return StatusDormant
 	}
 	if e.CoordTask != "" && inSet[e.CoordTask] {
 		return StatusDelegated
