@@ -535,3 +535,60 @@ func TestAutoSwitch_TickAndMoveAccountDoNotRace(t *testing.T) {
 	}
 	<-done
 }
+
+// The resident's stored account vanished (removed from config.toml): BuildCmd would
+// refuse every spawn, so the start recovers onto the list's next valid account.
+func TestStart_RemovedAccountRecoversOntoNextListedAccount(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.recovered("default")
+	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
+		db.ResidentAccountOverride{Account: "work", By: db.OverrideByManual}))
+	delete(se.cfg.Accounts, "work")
+	se.cfg.Resident.Accounts = []string{"work", "default"}
+
+	got := se.restart()
+	testutil.Equal(t, got.task.Account, "") // default, the next valid listed account
+	row, _ := se.db.Get(se.task.ID)
+	testutil.Equal(t, row.Account, "")
+	ov, ok, _ := se.db.ResidentAccountOverride(se.task.ID)
+	testutil.True(t, ok)
+	testutil.Equal(t, ov.By, db.OverrideByAuto)
+	testutil.Equal(t, ov.Account, "default")
+	testutil.False(t, se.db.ResidentLastAutoSwitch(se.task.ID).IsZero()) // cooldown stamped
+	// The old account's storage is unresolvable, so the conversation cannot be
+	// copied: Solo starts fresh and is told so; the board shows it.
+	testutil.Equal(t, got.resume, false)
+	testutil.True(t, got.task.SessionID != "" && got.task.SessionID != se.task.SessionID)
+	testutil.Equal(t, len(se.notif.calls), 1)
+	testutil.Contains(t, se.notif.calls[0].text, "could not be carried over")
+	items := se.boardItems(t)
+	testutil.Equal(t, len(items), 1)
+	testutil.Equal(t, items[0].Kind, "fyi")
+	testutil.Contains(t, items[0].Body, "NOT be carried over")
+	// A later restart is an ordinary one: no further recovery.
+	again := se.restart()
+	testutil.Equal(t, again.task.Account, "")
+	testutil.Equal(t, len(se.notif.calls), 1)
+}
+
+// An account that loses its Claude login directory (still configured) is just as
+// unusable for BuildCmd, and the recovery lands on a valid listed account.
+func TestStart_AccountWithoutClaudeDirRecovers(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.recovered("default")
+	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
+		db.ResidentAccountOverride{Account: "work", By: db.OverrideByAuto}))
+	se.cfg.Accounts["work"] = config.Account{CodexHome: t.TempDir()}
+	got := se.restart()
+	testutil.Equal(t, got.task.Account, "")
+}
+
+func TestResidentAccountUsable(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Accounts = map[string]config.Account{"ok": {ClaudeConfigDir: "/x"}, "cx": {CodexHome: "/y"}}
+	testutil.True(t, residentAccountUsable(cfg, "claude", ""))
+	testutil.True(t, residentAccountUsable(cfg, "claude", "ok"))
+	testutil.False(t, residentAccountUsable(cfg, "claude", "cx"))
+	testutil.False(t, residentAccountUsable(cfg, "claude", "ghost"))
+	testutil.False(t, residentAccountUsable(cfg, "no-such-backend", ""))
+}

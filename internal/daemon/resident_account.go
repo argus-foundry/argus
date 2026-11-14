@@ -289,3 +289,79 @@ func (m *residentManager) hasDraft(sess agent.SessionHandle) bool {
 	draft, found := m.draftView.InputDraft(tail, cols, rows)
 	return found && strings.TrimSpace(draft) != ""
 }
+
+// residentAccountUsable is the check BuildCmd applies at spawn: the stored
+// account must exist and support the resident's backend, or the spawn is refused
+// (never silently run on another login).
+func residentAccountUsable(cfg config.Config, backend, stored string) bool {
+	b, ok := cfg.Backends[backend]
+	return ok && cfg.ValidateAccount(stored) == nil && cfg.AccountSupports(stored, b.Command)
+}
+
+// recoverInvalidAccount handles a resuming resident whose stored account was
+// removed from config.toml or lost its Claude login directory: BuildCmd would
+// refuse every spawn forever, and the tick only runs for a live session. It
+// moves the resident onto the list's first usable account through the normal
+// move core (transcript copy, marker with by=auto, cooldown stamp), then tells
+// Solo and posts a board item. When the old account's storage can no longer be
+// resolved the conversation cannot be copied; Solo starts fresh on the new
+// account and is told so. Returns false when the start must be abandoned.
+func (m *residentManager) recoverInvalidAccount(task *model.Task, cfg config.Config, backend string) bool {
+	from := agent.NormalizeAccount(task.Account)
+	target, notes := agent.ResidentStartAccount(cfg, "", false, agent.AccountUsage(cfg), m.now())
+	for _, n := range notes {
+		residentLog("[resident] accounts list: %s", n)
+	}
+	if !residentAccountUsable(cfg, backend, storedResidentAccount(target)) {
+		m.postNoneUsableOnce(task, cfg, fmt.Sprintf("account %s is gone and no account in resident.accounts can run the resident", from))
+		m.failStart(fmt.Sprintf("account %q is no longer valid and no listed account can run the resident", from))
+		return false
+	}
+	residentLog("[resident] stored account %s is no longer valid; moving to %s", from, target)
+	carried := false
+	_, res, err := agent.MoveResidentAccount(m.db, m.mover, agent.AccountMoveInput{TaskID: task.ID, Account: target, Force: true}, agent.ResidentMoveOpts{By: db.OverrideByAuto, Cfg: &cfg})
+	switch {
+	case err == nil || errors.Is(err, agent.ErrAccountMoveRestartUnknown):
+		carried = res.Resumed
+	default:
+		// The old account's storage is unresolvable, so the transcript cannot be
+		// copied: persist the new account with no conversation and start fresh.
+		residentLog("[resident] move off invalid account %s failed (%v); starting fresh on %s", from, err, target)
+		ov := db.ResidentAccountOverride{Account: target, By: db.OverrideByAuto}
+		if perr := m.db.SetResidentAccountMove(task.ID, storedResidentAccount(target), "", ov); perr != nil {
+			m.failStart(fmt.Sprintf("persist account recovery: %v", perr))
+			return false
+		}
+	}
+	fresh, err := m.db.ResidentTask()
+	if err != nil || fresh == nil {
+		m.failStart(fmt.Sprintf("reload resident after account recovery: %v", err))
+		return false
+	}
+	task.Account, task.SessionID = fresh.Account, fresh.SessionID
+	text := fmt.Sprintf("You were moved from account %s to %s because %s is no longer a valid Claude account. ", from, target, from)
+	body := fmt.Sprintf("Account %s is no longer valid (removed from config or no Claude login), so %s was moved to %s at %s. ", from, cfg.Resident.Name, target, m.now().Format(time.RFC822))
+	if carried {
+		text += "Your conversation carried over. Continue whatever you were doing."
+		body += "The conversation carried over."
+	} else {
+		text += "Your previous conversation could not be carried over, so you are starting fresh: reread your memory folder for open loops and continue."
+		body += "The old account's storage was unavailable, so the conversation could NOT be carried over; Solo restarted fresh."
+	}
+	residentLog("[resident] recovered from invalid account %s -> %s carried=%t", from, target, carried)
+	if serr := m.Send(text, fmt.Sprintf("account-recover-%d", m.now().UnixNano())); serr != nil {
+		residentLog("[resident] account recovery notice to resident failed: %v", serr)
+	}
+	m.postBoard(task, "fyi", fmt.Sprintf("%s moved accounts: %s to %s", cfg.Resident.Name, from, target), body)
+	return true
+}
+
+// postNoneUsableOnce posts the "nothing can run the resident" decision item once
+// per episode (persisted flag shared with the depleted case).
+func (m *residentManager) postNoneUsableOnce(task *model.Task, cfg config.Config, why string) {
+	if m.noneUsableEpisode(task.ID) {
+		return
+	}
+	m.setNoneUsableEpisode(task.ID, true)
+	m.postBoard(task, "decision", fmt.Sprintf("%s cannot start: no usable account", cfg.Resident.Name), why+". Fix resident.accounts or the account config; it will restart automatically.")
+}

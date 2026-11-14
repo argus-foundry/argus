@@ -299,6 +299,11 @@ func (m *residentManager) tick() {
 // seed (restartSessionWithSeedPrompt), so a later crash restart resumes that.
 func (m *residentManager) start(task *model.Task, cfg config.Config, backend string, attempt int) {
 	task.Backend = backend
+	if task.SessionID != "" && !residentAccountUsable(cfg, backend, task.Account) {
+		if !m.recoverInvalidAccount(task, cfg, backend) {
+			return
+		}
+	}
 	task.Model = cfg.Resident.Model
 	task.Account = m.effectiveResidentAccount(task, cfg, backend)
 	task.Sandboxed = agent.IsTaskSandboxed(task, cfg)

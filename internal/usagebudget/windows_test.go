@@ -218,8 +218,11 @@ func TestProbeConfiguredAccountsIncludesResidentList(t *testing.T) {
 		testutil.NoError(t, ProbeConfiguredAccounts(context.Background(), cfg))
 		return dirs
 	}
-	// Listed accounts are probed so a depleted account Solo left can be seen recovering.
+	// While the resident is disabled the list is not probed at all.
 	cfg.Resident.Accounts = []string{"personal", "work"}
+	testutil.Equal(t, len(probe()), 0)
+	cfg.Resident.Enabled = true
+	// Listed accounts are probed so a depleted account Solo left can be seen recovering.
 	testutil.DeepEqual(t, probe(), []string{pDir, wDir})
 	// A trailing auto makes every Claude-capable account a candidate.
 	cfg.Resident.Accounts = []string{"personal", "auto"}
