@@ -7,6 +7,7 @@ import (
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/daemon"
 	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 )
 
 // TestUsageRecheckInterval pins the cadence is far slower than the 1s tick —
@@ -81,4 +82,39 @@ func TestReevaluateUsage_FeedsStatusBar(t *testing.T) {
 	app.reevaluateUsage()
 
 	testutil.Contains(t, app.statusbar.UsageSummary(), "cla 42%s · cdx 76%")
+}
+
+// TestReevaluateUsage_ShowsNamedClaudeAccounts pins that every configured
+// non-default Claude account gets its own entry between cla and cdx
+// (show-all-claude-account-usage): a fresh reading renders as a percentage,
+// a missing one as "—", in configured (sorted) order.
+func TestReevaluateUsage_ShowsNamedClaudeAccounts(t *testing.T) {
+	toml := "[accounts.work]\nclaude_config_dir = \"~/work-claude\"\n" +
+		"[accounts.personal]\nclaude_config_dir = \"~/personal-claude\"\n"
+	app := New(testDBWithConfig(t, toml), agent.NewRunner(nil), true)
+	_, cleanup := wireApp(t, app)
+	defer cleanup()
+
+	stubTUIAccountUsage(t, map[string]usagebudget.Reading{
+		"default":  {Percentage: 99, Window: "five_hour"},
+		"personal": {Percentage: 40, Window: "seven_day"},
+	})
+	app.skewProvider = &fakeSkewClient{resp: daemon.BootInfoResp{
+		ClaudeUsagePct:    100,
+		ClaudeUsageKnown:  true,
+		ClaudeUsageWindow: "seven_day",
+		CodexUsagePct:     53,
+		CodexUsageKnown:   true,
+	}}
+	app.lastUsageCheck = time.Now().Add(-2 * usageRecheckInterval)
+	app.reevaluateUsage()
+
+	testutil.Equal(t, app.statusbar.UsageSummary(), "cla 100%w · personal 40%w · work — · cdx 53%")
+}
+
+// TestClaudeAccountUsage_NoNamedAccounts pins that with only the default
+// account configured there are no extra entries at all.
+func TestClaudeAccountUsage_NoNamedAccounts(t *testing.T) {
+	app := New(testDB(t), agent.NewRunner(nil), true)
+	testutil.Nil(t, app.claudeAccountUsage())
 }

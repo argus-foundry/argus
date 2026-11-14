@@ -2,6 +2,7 @@ package widget
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/model"
@@ -73,6 +74,19 @@ type StatusBar struct {
 	claudeKnown  bool
 	codexPct     float64
 	codexKnown   bool
+
+	// claudeAccounts holds one reading per configured non-default Claude
+	// account (show-all-claude-account-usage), rendered between cla and cdx.
+	claudeAccounts []ClaudeAccountUsage
+}
+
+// ClaudeAccountUsage is one named Claude account's usage reading for the
+// status bar. Known false renders as "—"; Pct is ignored then.
+type ClaudeAccountUsage struct {
+	Name   string
+	Pct    float64
+	Window string
+	Known  bool
 }
 
 // maxPluginBarHints caps how many plugin hints the bar will attempt to render
@@ -121,6 +135,13 @@ func (sb *StatusBar) SetUsage(claudePct float64, claudeKnown bool, codexPct floa
 	sb.claudeKnown = claudeKnown
 	sb.codexPct = codexPct
 	sb.codexKnown = codexKnown
+}
+
+// SetClaudeAccountUsage replaces the per-account Claude readings rendered
+// after the default account's cla entry. nil/empty restores the plain
+// "cla … · cdx …" segment.
+func (sb *StatusBar) SetClaudeAccountUsage(accounts []ClaudeAccountUsage) {
+	sb.claudeAccounts = append([]ClaudeAccountUsage(nil), accounts...)
 }
 
 // SetHeraFocus updates which Hera region holds focus, switching the hint set
@@ -244,21 +265,29 @@ func (sb *StatusBar) UsageSummary() string {
 // fresh one (fix-backend-routing-semantics: this distinction is the entire
 // point of surfacing the readout at all).
 func (sb *StatusBar) usageSummary() string {
-	claude := "—"
-	if sb.claudeKnown {
-		claude = fmt.Sprintf("%.0f%%", sb.claudePct)
-		switch sb.claudeWindow {
-		case "five_hour":
-			claude += "s"
-		case "seven_day":
-			claude += "w"
-		}
+	parts := []string{"cla " + usagePct(sb.claudePct, sb.claudeKnown, sb.claudeWindow)}
+	for _, acct := range sb.claudeAccounts {
+		parts = append(parts, acct.Name+" "+usagePct(acct.Pct, acct.Known, acct.Window))
 	}
-	codex := "—"
-	if sb.codexKnown {
-		codex = fmt.Sprintf("%.0f%%", sb.codexPct)
+	parts = append(parts, "cdx "+usagePct(sb.codexPct, sb.codexKnown, ""))
+	return strings.Join(parts, " · ")
+}
+
+// usagePct renders one usage reading: "—" when unknown, else the rounded
+// percentage with an "s" (session) or "w" (weekly) suffix for the binding
+// Claude window.
+func usagePct(pct float64, known bool, window string) string {
+	if !known {
+		return "—"
 	}
-	return fmt.Sprintf("cla %s · cdx %s", claude, codex)
+	out := fmt.Sprintf("%.0f%%", pct)
+	switch window {
+	case "five_hour":
+		out += "s"
+	case "seven_day":
+		out += "w"
+	}
+	return out
 }
 
 // Draw renders the status bar.

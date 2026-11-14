@@ -2095,9 +2095,41 @@ func (a *App) reevaluateUsage() {
 	if err != nil {
 		return
 	}
+	accounts := a.claudeAccountUsage()
 	a.tapp.QueueUpdateDraw(func() {
 		a.statusbar.SetUsage(info.ClaudeUsagePct, info.ClaudeUsageKnown, info.CodexUsagePct, info.CodexUsageKnown, info.ClaudeUsageWindow)
+		a.statusbar.SetClaudeAccountUsage(accounts)
 	})
+}
+
+// claudeAccountUsage reads every configured non-default Claude account's
+// usage for the status bar (show-all-claude-account-usage). The default
+// account keeps coming from BootInfo. agent.AccountUsage goes through the
+// daemon's per-account RPC in the local TUI; an account it has no valid
+// reading for renders as unknown. Runs on the tick goroutine.
+func (a *App) claudeAccountUsage() []widget.ClaudeAccountUsage {
+	cfg := a.db.Config()
+	var names []string
+	for _, n := range cfg.AccountNamesFor("claude") {
+		if n != config.DefaultAccountName {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	usage := agent.AccountUsage(cfg)
+	out := make([]widget.ClaudeAccountUsage, 0, len(names))
+	known := 0
+	for _, n := range names {
+		r, ok := usage[n]
+		if ok {
+			known++
+		}
+		out = append(out, widget.ClaudeAccountUsage{Name: n, Pct: r.Percentage, Window: r.Window, Known: ok})
+	}
+	uxlog.Log("[usage] status bar claude accounts=%d known=%d", len(names), known)
+	return out
 }
 
 // claimUsageCheck reports whether a usage re-poll should run now, returning
