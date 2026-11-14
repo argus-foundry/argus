@@ -2,7 +2,7 @@
 
 ### Requirement: Done-done predicate
 
-The system SHALL define a role as archivable only when ALL of the following hold, and SHALL refuse with the first failing reason otherwise: its task status is `complete`; the role is not `blocked` and the task is not awaiting input; the task has no unread mail to or from it; no plan-DAG node depends on it that is not itself done or archived; if coordinator-kind, every child role is archived and it owns no open board item; its worktree has no dirty files and its branch is confirmed landed by the merge-safety classifier (or it has neither worktree nor branch); and it is not pinned, resident, or a standing-team member. Any unconfirmed or errored check SHALL refuse.
+The system SHALL define a role as archivable only when ALL of the following hold, and SHALL refuse with the first failing reason otherwise: its task status is `complete`; the role is not `blocked` and the task is not awaiting input; the role has no unread hera mail to or from it; no plan-DAG node depends on it that is not itself done or archived; if coordinator-kind, every child role is archived and it owns no open `decision` board item (open `fyi` items are re-posted to the parent coordinator's board and resolved, not blocking); its worktree has no dirty files and its branch is confirmed landed by the merge-safety classifier (or it has neither worktree nor branch); and it is not pinned, resident, or a standing-team member. Any unconfirmed or errored check SHALL refuse.
 
 #### Scenario: Completed role with a merged PR is archivable
 
@@ -19,6 +19,11 @@ The system SHALL define a role as archivable only when ALL of the following hold
 - **WHEN** the merge-safety classifier returns an error or unknown verdict
 - **THEN** the predicate refuses rather than treating the role as safe
 
+#### Scenario: Sub-coordinator fyi items are pushed to the parent
+
+- **WHEN** a sub-coordinator with two open `fyi` board items and no open `decision` items is archived
+- **THEN** both items appear on the parent coordinator's board and the originals are resolved
+
 #### Scenario: Live dependent refuses
 
 - **WHEN** a not-yet-done plan node is blocked by the role
@@ -26,7 +31,7 @@ The system SHALL define a role as archivable only when ALL of the following hold
 
 ### Requirement: hera_archive coordinator tool
 
-The system SHALL provide a coordinator-only `hera_archive(cwd, [role_name], [orchestrator], [dry_run])` MCP tool with `hera_accept`'s authorization shape (caller holds a live coordinator binding in the target's orchestrator; target is not the caller's own role). With `role_name` it evaluates that role; without it, it sweeps every role the caller coordinates. For each archivable role it SHALL mark the task archived, hide the role, and stop an idle live session; a busy session SHALL cause refusal. It SHALL return the archived roles and each refused role with its reason. With `dry_run` it SHALL write nothing. It SHALL be idempotent on an already-archived role.
+The system SHALL provide a coordinator-only `hera_archive(cwd, [role_name], [orchestrator], [dry_run])` MCP tool with `hera_accept`'s authorization shape (caller holds a live coordinator binding in the target's orchestrator; target is not the caller's own role). With `role_name` it evaluates that role; without it, it sweeps every role the caller coordinates. For each archivable role it SHALL mark the task archived, hide the role, and stop an idle live session, releasing its processes (agent, browser, and any dev stack via the existing finished-task sweepers); a busy session SHALL cause refusal. It SHALL return the archived roles and each refused role with its reason. With `dry_run` it SHALL write nothing. It SHALL be idempotent on an already-archived role.
 
 #### Scenario: Single role archived
 

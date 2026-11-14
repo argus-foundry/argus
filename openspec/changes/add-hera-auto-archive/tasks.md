@@ -20,3 +20,7 @@
 
 - [ ] 4.1 Run `make pre-pr`
 - [ ] 4.2 Run `/ralph-review add-hera-auto-archive`, then `openspec archive add-hera-auto-archive --yes` in the PR
+
+## 5. Process teardown
+
+- [ ] 5.1 Test that an archived task's session is stopped and its dev stack is picked up by the finished-task devstack sweeper (add archived-by-`hera_archive` case)
