@@ -1871,6 +1871,9 @@ func (s *Server) toolHeraAccept(id interface{}, args json.RawMessage) *Response 
 	return toolResult(id, b.String())
 }
 
+// heraArchiveSweepBudget bounds one hera_archive sweep (MCP clients time out at 60s).
+const heraArchiveSweepBudget = 40 * time.Second
+
 // toolHeraArchive implements hera_archive (add-hera-auto-archive): coordinator-
 // only, fail-closed archive of done-done roles. The predicate and the archive
 // action live in internal/hera (ArchivableVerdict / ArchiveRole).
@@ -1928,12 +1931,30 @@ func (s *Server) toolHeraArchive(id interface{}, args json.RawMessage) *Response
 		}
 	}
 
+	// Never archive the caller's own task (a second role bound to it would
+	// stop the calling session), and bound the sweep below the 60s MCP client
+	// deadline: each git check can take seconds, so leave the tail for a
+	// follow-up call instead of timing out and losing the whole result list.
 	results := make([]hera.ArchiveRoleResult, 0, len(targets))
+	deadline := time.Now().Add(heraArchiveSweepBudget)
+	remaining := 0
 	for _, t := range targets {
+		if b, err := store.HeraLiveBindingByRole(t.ID); err == nil && b.ArgusTaskID == caller.task.ID {
+			results = append(results, hera.ArchiveRoleResult{Role: t.Name, Reason: "bound to your own task"})
+			continue
+		}
+		if time.Now().After(deadline) {
+			remaining++
+			continue
+		}
 		results = append(results, hera.ArchiveRole(store, s.heraArchiveRunner, s.heraGitCheck, t, p.DryRun))
 	}
 	slog.Info("[hera] archive", "orch", caller.orch.Name, "targets", len(targets), "dry_run", p.DryRun)
-	return toolResult(id, hera.FormatArchiveResults(results, p.DryRun))
+	out := hera.FormatArchiveResults(results, p.DryRun)
+	if remaining > 0 {
+		out += fmt.Sprintf("- **not evaluated**: %d role(s) left after the time budget; call hera_archive again\n", remaining)
+	}
+	return toolResult(id, out)
 }
 
 func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Response {

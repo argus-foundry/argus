@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
@@ -18,10 +19,14 @@ type ArchiveStore interface {
 	HeraLiveBindingByRole(roleID int64) (*db.HeraBinding, error)
 	HeraRoleStatusFor(roleID int64) (*db.HeraRoleStatus, error)
 	HeraInbox(roleID int64) ([]*db.HeraMessage, error)
+	HeraUnreadFromRole(roleID int64) (int, error)
+	ListHeraLiveBindingsByTask(taskID string) ([]*db.HeraBinding, error)
 	ListHeraBlocks(orchID int64) ([]db.HeraBlock, error)
 	ListHeraRoles(orchID int64, includeArchived bool) ([]*db.HeraRole, error)
 	ListHeraRolesByKind(orchID int64, kind db.HeraRoleKind) ([]*db.HeraRole, error)
 	ListHeraOrchLinks() ([]db.HeraOrchLink, error)
+	HeraBridgedChildOrchs(taskID string, parentOrchID int64) ([]int64, error)
+	EndHeraCoordinatorBindingsForTask(taskID, reason string) (int, error)
 	ListHeraBoardItems(roleID int64, includeResolved bool) ([]*db.HeraBoardItem, error)
 	PostHeraBoardItem(roleID int64, kind, subject, body string) (*db.HeraBoardItem, error)
 	ResolveHeraBoardItem(roleID, id int64, by, note string) error
@@ -82,18 +87,49 @@ func ArchivableVerdict(store ArchiveStore, git GitCheck, role *db.HeraRole) Arch
 	if task.Status != model.StatusComplete {
 		return refuse("task status is %s, not complete", task.Status)
 	}
-	if st, err := store.HeraRoleStatusFor(role.ID); err == nil && st != nil && st.Status == db.HeraStatusBlocked {
+	// A missing status row means "never reported", not blocked; any other
+	// lookup error cannot be confirmed and refuses.
+	if st, err := store.HeraRoleStatusFor(role.ID); err != nil && !errors.Is(err, db.ErrHeraNotFound) {
+		return refuse("role status unreadable (%v)", err)
+	} else if err == nil && st != nil && st.Status == db.HeraStatusBlocked {
 		return refuse("role is blocked (needs input)")
+	}
+	// SetArchived is task-wide: another live role on the same task would lose
+	// its state while staying live (multi-orchestrator join, or a sub-
+	// coordinator's un-ended coordinator hat).
+	bindings, err := store.ListHeraLiveBindingsByTask(task.ID)
+	if err != nil {
+		return refuse("task bindings unreadable (%v)", err)
+	}
+	kids, err := childOrchs(store, role, task.ID)
+	if err != nil {
+		return refuse("orchestrator links unreadable (%v)", err)
+	}
+	bridged := map[int64]bool{}
+	for _, k := range kids {
+		bridged[k] = true
+	}
+	for _, b := range bindings {
+		// The sub-coordinator's own coordinator hat in a bridged child
+		// orchestrator is part of the same unit (children are verified below).
+		if b.RoleID != role.ID && !bridged[b.OrchestratorID] {
+			return refuse("task is also bound to another live role (%d)", b.RoleID)
+		}
 	}
 	if msgs, err := store.HeraInbox(role.ID); err != nil {
 		return refuse("inbox unreadable (%v)", err)
 	} else if len(msgs) > 0 {
-		return refuse("%d unread hera message(s)", len(msgs))
+		return refuse("%d unread hera message(s) to this role", len(msgs))
+	}
+	if n, err := store.HeraUnreadFromRole(role.ID); err != nil {
+		return refuse("outbox unreadable (%v)", err)
+	} else if n > 0 {
+		return refuse("%d message(s) from this role not yet read by their recipient", n)
 	}
 	if v := dependentsVerdict(store, role); !v.Archivable && v.Reason != "" {
 		return v
 	}
-	if v := childrenVerdict(store, role); !v.Archivable && v.Reason != "" {
+	if v := childrenVerdict(store, role, task.ID); !v.Archivable && v.Reason != "" {
 		return v
 	}
 	if task.Branch != "" || task.Worktree != "" {
@@ -133,16 +169,33 @@ func dependentsVerdict(store ArchiveStore, role *db.HeraRole) ArchiveVerdict {
 	return ArchiveVerdict{}
 }
 
-// childOrchs returns the orchestrators this role bridges to (sub-coordinator).
-func childOrchs(store ArchiveStore, roleID int64) ([]int64, error) {
+// childOrchs returns the orchestrators this role bridges to (sub-coordinator):
+// explicit hera_orch_links rows (TUI adopt/re-parent) PLUS child orchestrators
+// whose coordinator hat shares the role's task (plan-DAG kind=subcoord, which
+// writes no link row).
+func childOrchs(store ArchiveStore, role *db.HeraRole, taskID string) ([]int64, error) {
 	links, err := store.ListHeraOrchLinks()
 	if err != nil {
 		return nil, err
 	}
+	seen := map[int64]bool{}
 	var out []int64
 	for _, l := range links {
-		if l.ParentRoleID == roleID {
+		if l.ParentRoleID == role.ID && !seen[l.ChildOrchestratorID] {
+			seen[l.ChildOrchestratorID] = true
 			out = append(out, l.ChildOrchestratorID)
+		}
+	}
+	if taskID != "" {
+		bridged, err := store.HeraBridgedChildOrchs(taskID, role.OrchestratorID)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range bridged {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
 		}
 	}
 	return out, nil
@@ -151,8 +204,8 @@ func childOrchs(store ArchiveStore, roleID int64) ([]int64, error) {
 // childrenVerdict applies the sub-coordinator clause: every non-coordinator
 // child role archived and no open `decision` board item on the child
 // coordinator(s). Open `fyi` items do not block (ArchiveRole pushes them up).
-func childrenVerdict(store ArchiveStore, role *db.HeraRole) ArchiveVerdict {
-	kids, err := childOrchs(store, role.ID)
+func childrenVerdict(store ArchiveStore, role *db.HeraRole, taskID string) ArchiveVerdict {
+	kids, err := childOrchs(store, role, taskID)
 	if err != nil {
 		return refuse("orchestrator links unreadable (%v)", err)
 	}
@@ -184,8 +237,8 @@ func childrenVerdict(store ArchiveStore, role *db.HeraRole) ArchiveVerdict {
 
 // pushFyiUp re-posts a sub-coordinator's open fyi board items to the parent
 // orchestrator's coordinator board and resolves the originals.
-func pushFyiUp(store ArchiveStore, role *db.HeraRole) error {
-	kids, err := childOrchs(store, role.ID)
+func pushFyiUp(store ArchiveStore, role *db.HeraRole, taskID string) error {
+	kids, err := childOrchs(store, role, taskID)
 	if err != nil {
 		return err
 	}
@@ -218,12 +271,23 @@ func pushFyiUp(store ArchiveStore, role *db.HeraRole) error {
 					continue
 				}
 				subject := "[" + role.Name + "] " + it.Subject
-				if len(subject) > 240 {
-					subject = subject[:240]
+				for len(subject) > 240 {
+					_, size := utf8.DecodeLastRuneInString(subject)
+					subject = subject[:len(subject)-size]
 				}
-				if _, err := store.PostHeraBoardItem(parents[0].ID, "fyi", subject, it.Body); err != nil {
+				// Idempotent across retries: a previous attempt that posted but
+				// failed to resolve the original must not post a duplicate.
+				marker := fmt.Sprintf("— moved from %s fyi #%d", role.Name, it.ID)
+				posted, err := alreadyPosted(store, parents[0].ID, marker)
+				if err != nil {
 					errs = append(errs, err)
 					continue
+				}
+				if !posted {
+					if _, err := store.PostHeraBoardItem(parents[0].ID, "fyi", subject, it.Body+"\n\n"+marker); err != nil {
+						errs = append(errs, err)
+						continue
+					}
 				}
 				if err := store.ResolveHeraBoardItem(cr.ID, it.ID, "agent", "pushed to parent coordinator on archive"); err != nil {
 					errs = append(errs, err)
@@ -232,6 +296,19 @@ func pushFyiUp(store ArchiveStore, role *db.HeraRole) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func alreadyPosted(store ArchiveStore, roleID int64, marker string) (bool, error) {
+	items, err := store.ListHeraBoardItems(roleID, true)
+	if err != nil {
+		return false, err
+	}
+	for _, it := range items {
+		if strings.HasSuffix(it.Body, marker) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ArchiveRoleResult is one role's outcome.
@@ -271,7 +348,7 @@ func ArchiveRole(store ArchiveStore, runner ArchiveRunner, git GitCheck, role *d
 		res.Reason = "dry run: archivable"
 		return res
 	}
-	if err := pushFyiUp(store, role); err != nil {
+	if err := pushFyiUp(store, role, taskID); err != nil {
 		res.Reason = fmt.Sprintf("could not push fyi items to parent: %v", err)
 		uxlog.Log("[hera] archive refused role=%s: %s", role.Name, res.Reason)
 		return res
@@ -281,6 +358,9 @@ func ArchiveRole(store ArchiveStore, runner ArchiveRunner, git GitCheck, role *d
 		uxlog.Log("[hera] archive refused role=%s: %s", role.Name, res.Reason)
 		return res
 	}
+	if _, err := store.EndHeraCoordinatorBindingsForTask(taskID, db.HeraEndReasonAccepted); err != nil {
+		uxlog.Log("[hera] archive role=%s: end coordinator hat failed: %v", role.Name, err)
+	}
 	if err := store.ArchiveHeraRoleAs(role.ID, db.HeraActorHuman); err != nil {
 		res.Reason = fmt.Sprintf("task archived but hiding role failed: %v", err)
 		res.Archived = true
@@ -289,6 +369,13 @@ func ArchiveRole(store ArchiveStore, runner ArchiveRunner, git GitCheck, role *d
 	}
 	res.Archived = true
 	if alive {
+		// The predicate ran earlier (git check can take seconds): re-confirm
+		// the session is still idle right before the stop.
+		if !runner.IsIdle(taskID) || runner.BlockedOnPrompt(taskID) {
+			res.Reason = "archived; session became busy so it was left running"
+			uxlog.Log("[hera] archive role=%s: %s", role.Name, res.Reason)
+			return res
+		}
 		if err := runner.Stop(taskID); err != nil {
 			res.Reason = fmt.Sprintf("archived; stopping session failed: %v", err)
 		}

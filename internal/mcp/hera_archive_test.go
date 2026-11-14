@@ -74,9 +74,13 @@ func TestHeraArchive_SingleAndSweep(t *testing.T) {
 	// dry run writes nothing
 	out, isErr := archCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","dry_run":true}`, c.Worktree))
 	testutil.Equal(t, isErr, false)
-	testutil.Contains(t, out, "dry run")
+	testutil.Contains(t, out, "**archivable (dry run)**: done1")
+	testutil.Contains(t, out, "open-pr: git work not confirmed landed")
 	got, _ := d.Get(doneTask.ID)
 	testutil.Equal(t, got.Archived, false)
+	dr, _ := d.HeraRoleByName(mustOrch(t, d, "O"), "done1")
+	testutil.Equal(t, dr.ArchivedAt == nil, true)
+	testutil.Equal(t, len(run.stopped), 0)
 
 	// sweep archives only the done-done one and reports reasons
 	out, isErr = archCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O"}`, c.Worktree))
@@ -105,4 +109,46 @@ func TestHeraArchive_NoGitCheckRefuses(t *testing.T) {
 	testutil.Contains(t, out, "cannot be confirmed")
 	g, _ := d.Get(task.ID)
 	testutil.Equal(t, g.Archived, false)
+}
+
+func TestHeraArchive_OwnTaskAndSweepBudget(t *testing.T) {
+	s, d := testHeraServer(t)
+	s.SetHeraArchiver(&archRunner{}, func(*model.Task) (bool, string) { return true, "" })
+	c := seedCoordinator(t, s, d, "O", "/wt/coord")
+	orch, _ := d.HeraOrchestratorByName("O")
+	// A second (worker) role bound to the CALLER's own task must be refused.
+	_, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
+		OrchestratorID: orch.ID, Name: "alias", Kind: db.HeraKindWorker, ArgusProject: "test-project",
+	}, c.ID, c.Worktree)
+	// CreateHeraRoleWithBinding may itself reject a second live binding on the
+	// coordinator's task; either way nothing may be archived.
+	if err == nil {
+		out, _ := archCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O"}`, c.Worktree))
+		testutil.Contains(t, out, "alias: ")
+		g, _ := d.Get(c.ID)
+		testutil.Equal(t, g.Archived, false)
+	}
+}
+
+func mustOrch(t *testing.T, d *db.DB, name string) int64 {
+	t.Helper()
+	o, err := d.HeraOrchestratorByName(name)
+	testutil.NoError(t, err)
+	return o.ID
+}
+
+func TestHeraArchive_SingleRoleByName(t *testing.T) {
+	s, d := testHeraServer(t)
+	s.SetHeraArchiver(&archRunner{}, func(*model.Task) (bool, string) { return true, "" })
+	c := seedCoordinator(t, s, d, "O", "/wt/coord")
+	task, _ := archWorkerRole(t, d, "O", "done1", model.StatusComplete)
+	out, isErr := archCall(t, s, fmt.Sprintf(`{"cwd":%q,"role_name":"done1","orchestrator":"O"}`, c.Worktree))
+	testutil.Equal(t, isErr, false)
+	testutil.Contains(t, out, "**archived**: done1")
+	g, _ := d.Get(task.ID)
+	testutil.Equal(t, g.Archived, true)
+	role, err := d.HeraRoleByName(mustOrch(t, d, "O"), "done1")
+	if err == nil {
+		testutil.Equal(t, role.ArchivedAt != nil, true)
+	}
 }

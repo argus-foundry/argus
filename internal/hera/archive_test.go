@@ -2,7 +2,11 @@ package hera
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
@@ -219,4 +223,293 @@ func TestArchive_SubCoordinator(t *testing.T) {
 		testutil.NoError(t, err)
 		testutil.Equal(t, len(orig), 0)
 	})
+}
+
+func TestArchivableVerdict_SharedTaskAndOutbox(t *testing.T) {
+	d := archDB(t)
+	orch, _ := d.CreateHeraOrchestrator("o", "master")
+	other, _ := d.CreateHeraOrchestrator("o2", "master")
+
+	t.Run("task also bound to another live role refuses", func(t *testing.T) {
+		task, r := archWorker(t, d, orch.ID, "shared", model.StatusComplete)
+		_, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
+			OrchestratorID: other.ID, Name: "shared-hat", Kind: db.HeraKindFreelance, ArgusProject: "p",
+		}, task.ID, task.Worktree)
+		testutil.NoError(t, err)
+		v := ArchivableVerdict(d, gitOK, r)
+		testutil.Equal(t, v.Archivable, false)
+		testutil.Contains(t, v.Reason, "another live role")
+	})
+	t.Run("unread outbound mail refuses", func(t *testing.T) {
+		_, r := archWorker(t, d, orch.ID, "sender", model.StatusComplete)
+		_, coord := archWorker(t, d, orch.ID, "recipient", model.StatusInProgress)
+		_, err := d.SendHeraMessage(r.ID, coord.ID, "done", "tldr", nil)
+		testutil.NoError(t, err)
+		v := ArchivableVerdict(d, gitOK, r)
+		testutil.Equal(t, v.Archivable, false)
+		testutil.Contains(t, v.Reason, "not yet read")
+	})
+}
+
+// A retry after a partial failure (posted to the parent, original left
+// unresolved) must not duplicate the fyi on the parent board.
+func TestArchive_FyiPushIsIdempotent(t *testing.T) {
+	d := archDB(t)
+	pc, sub, cc, _ := subCoord(t, d)
+	it, err := d.PostHeraBoardItem(cc.ID, "fyi", "heads up", "details")
+	testutil.NoError(t, err)
+	marker := fmt.Sprintf("— moved from sub fyi #%d", it.ID)
+	_, err = d.PostHeraBoardItem(pc.ID, "fyi", "[sub] heads up", "details\n\n"+marker)
+	testutil.NoError(t, err)
+
+	testutil.NoError(t, pushFyiUp(d, sub, ""))
+	up, err := d.ListHeraBoardItems(pc.ID, true)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(up), 1) // no duplicate
+	left, err := d.ListHeraBoardItems(cc.ID, false)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(left), 0) // original now resolved
+}
+
+func TestArchive_FyiSubjectRuneSafe(t *testing.T) {
+	d := archDB(t)
+	pc, sub, cc, _ := subCoord(t, d)
+	long := strings.Repeat("é", 120) // 2 bytes each; a byte cut at 240 could split a rune
+	_, err := d.PostHeraBoardItem(cc.ID, "fyi", long, "details")
+	testutil.NoError(t, err)
+	testutil.NoError(t, pushFyiUp(d, sub, ""))
+	up, err := d.ListHeraBoardItems(pc.ID, true)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(up), 1)
+	if !utf8.ValidString(up[0].Subject) || len(up[0].Subject) > 240 {
+		t.Fatalf("subject not rune-safe/bounded: %d bytes", len(up[0].Subject))
+	}
+}
+
+func TestArchiveRole_SessionTurnsBusyBeforeStop(t *testing.T) {
+	d := archDB(t)
+	orch, _ := d.CreateHeraOrchestrator("o", "master")
+	task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+	run := &flipRunner{fakeArchiveRunner: fakeArchiveRunner{alive: true, idle: true}}
+	res := ArchiveRole(d, run, gitOK, r, false)
+	testutil.Equal(t, res.Archived, true)
+	testutil.Contains(t, res.Reason, "busy")
+	testutil.Equal(t, len(run.stopped), 0)
+	got, _ := d.Get(task.ID)
+	testutil.Equal(t, got.Archived, true)
+}
+
+// flipRunner reports idle on the first IsIdle call (predicate) and busy after.
+type flipRunner struct {
+	fakeArchiveRunner
+	calls int
+}
+
+func (f *flipRunner) IsIdle(string) bool { f.calls++; return f.calls == 1 }
+
+// failStore forces individual lookups to error so each fail-closed branch is
+// pinned: deleting a clause's error handling must fail a test.
+type failStore struct {
+	*db.DB
+	statusErr, inboxErr, outboxErr, blocksErr, linksErr, residentErr, bindingsErr bool
+}
+
+var errBoom = errors.New("boom")
+
+func (f *failStore) HeraRoleStatusFor(id int64) (*db.HeraRoleStatus, error) {
+	if f.statusErr {
+		return nil, errBoom
+	}
+	return f.DB.HeraRoleStatusFor(id)
+}
+func (f *failStore) HeraInbox(id int64) ([]*db.HeraMessage, error) {
+	if f.inboxErr {
+		return nil, errBoom
+	}
+	return f.DB.HeraInbox(id)
+}
+func (f *failStore) HeraUnreadFromRole(id int64) (int, error) {
+	if f.outboxErr {
+		return 0, errBoom
+	}
+	return f.DB.HeraUnreadFromRole(id)
+}
+func (f *failStore) ListHeraBlocks(id int64) ([]db.HeraBlock, error) {
+	if f.blocksErr {
+		return nil, errBoom
+	}
+	return f.DB.ListHeraBlocks(id)
+}
+func (f *failStore) ListHeraOrchLinks() ([]db.HeraOrchLink, error) {
+	if f.linksErr {
+		return nil, errBoom
+	}
+	return f.DB.ListHeraOrchLinks()
+}
+func (f *failStore) IsResidentWorker(id string) (bool, error) {
+	if f.residentErr {
+		return false, errBoom
+	}
+	return f.DB.IsResidentWorker(id)
+}
+func (f *failStore) ListHeraLiveBindingsByTask(id string) ([]*db.HeraBinding, error) {
+	if f.bindingsErr {
+		return nil, errBoom
+	}
+	return f.DB.ListHeraLiveBindingsByTask(id)
+}
+
+func TestArchivableVerdict_FailClosedOnLookupErrors(t *testing.T) {
+	cases := map[string]struct {
+		set  func(*failStore)
+		want string
+	}{
+		"status":   {func(f *failStore) { f.statusErr = true }, "status unreadable"},
+		"inbox":    {func(f *failStore) { f.inboxErr = true }, "inbox unreadable"},
+		"outbox":   {func(f *failStore) { f.outboxErr = true }, "outbox unreadable"},
+		"blocks":   {func(f *failStore) { f.blocksErr = true }, "plan edges unreadable"},
+		"links":    {func(f *failStore) { f.linksErr = true }, "links unreadable"},
+		"resident": {func(f *failStore) { f.residentErr = true }, "unverifiable"},
+		"bindings": {func(f *failStore) { f.bindingsErr = true }, "bindings unreadable"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := archDB(t)
+			orch, _ := d.CreateHeraOrchestrator("o", "master")
+			_, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+			fs := &failStore{DB: d}
+			tc.set(fs)
+			v := ArchivableVerdict(fs, gitOK, r)
+			testutil.Equal(t, v.Archivable, false)
+			testutil.Contains(t, v.Reason, tc.want)
+		})
+	}
+}
+
+func TestArchivableVerdict_ProtectedAndMail(t *testing.T) {
+	t.Run("pinned role", func(t *testing.T) {
+		d := archDB(t)
+		orch, _ := d.CreateHeraOrchestrator("o", "master")
+		_, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+		testutil.NoError(t, d.PinHeraRole(r.ID))
+		r2, _ := d.HeraRole(r.ID)
+		testutil.Contains(t, ArchivableVerdict(d, gitOK, r2).Reason, "pinned")
+	})
+	t.Run("pinned task", func(t *testing.T) {
+		d := archDB(t)
+		orch, _ := d.CreateHeraOrchestrator("o", "master")
+		task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+		task.Pinned = true
+		testutil.NoError(t, d.Update(task))
+		testutil.Contains(t, ArchivableVerdict(d, gitOK, r).Reason, "pinned")
+	})
+	t.Run("resident worker marker", func(t *testing.T) {
+		d := archDB(t)
+		orch, _ := d.CreateHeraOrchestrator("o", "master")
+		task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+		testutil.NoError(t, d.SetMeta(task.ID, "hera", "resident_worker", "true"))
+		testutil.Contains(t, ArchivableVerdict(d, gitOK, r).Reason, "standing-team")
+	})
+	t.Run("unread inbound mail", func(t *testing.T) {
+		d := archDB(t)
+		orch, _ := d.CreateHeraOrchestrator("o", "master")
+		_, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+		_, c := archWorker(t, d, orch.ID, "c", model.StatusInProgress)
+		_, err := d.SendHeraMessage(c.ID, r.ID, "ping", "tldr", nil)
+		testutil.NoError(t, err)
+		testutil.Contains(t, ArchivableVerdict(d, gitOK, r).Reason, "unread hera message")
+	})
+	t.Run("no branch or worktree is archivable with nil git check", func(t *testing.T) {
+		d := archDB(t)
+		orch, _ := d.CreateHeraOrchestrator("o", "master")
+		task := &model.Task{Name: "bare", Status: model.StatusComplete, Project: "p"}
+		testutil.NoError(t, d.Add(task))
+		r, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "bare", Kind: db.HeraKindWorker, ArgusProject: "p"}, task.ID, "")
+		testutil.NoError(t, err)
+		testutil.NoError(t, d.SetStatus(task.ID, model.StatusComplete))
+		testutil.Equal(t, ArchivableVerdict(d, nil, r).Archivable, true)
+	})
+}
+
+// Plan-DAG kind=subcoord shape: ONE task carries the parent worker hat and a
+// child-orchestrator coordinator hat; NO hera_orch_links row is written.
+func materializedSubCoord(t *testing.T, d *db.DB) (pc, sub, cc *db.HeraRole, child *db.HeraOrchestrator, task *model.Task) {
+	t.Helper()
+	parent, err := d.CreateHeraOrchestrator("parent", "master")
+	testutil.NoError(t, err)
+	pt := &model.Task{Name: "pc", Status: model.StatusInProgress, Project: "p"}
+	testutil.NoError(t, d.Add(pt))
+	pc, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: parent.ID, Name: "coord", Kind: db.HeraKindCoordinator, ArgusProject: "p"}, pt.ID, "/wt/pc")
+	testutil.NoError(t, err)
+	task, sub = archWorker(t, d, parent.ID, "sub", model.StatusComplete)
+	child, err = d.CreateHeraOrchestrator("child", "")
+	testutil.NoError(t, err)
+	cc, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: child.ID, Name: "coord", Kind: db.HeraKindCoordinator, ArgusProject: "p"}, task.ID, task.Worktree)
+	testutil.NoError(t, err)
+	return
+}
+
+func TestArchive_MaterializedSubCoordinator(t *testing.T) {
+	t.Run("live child role blocks despite no link row", func(t *testing.T) {
+		d := archDB(t)
+		_, sub, _, child, _ := materializedSubCoord(t, d)
+		archWorker(t, d, child.ID, "kid", model.StatusComplete)
+		v := ArchivableVerdict(d, gitOK, sub)
+		testutil.Equal(t, v.Archivable, false)
+		testutil.Contains(t, v.Reason, "kid")
+	})
+	t.Run("open decision blocks", func(t *testing.T) {
+		d := archDB(t)
+		_, sub, cc, _, _ := materializedSubCoord(t, d)
+		_, err := d.PostHeraBoardItem(cc.ID, "decision", "pick", "b")
+		testutil.NoError(t, err)
+		testutil.Contains(t, ArchivableVerdict(d, gitOK, sub).Reason, "decision")
+	})
+	t.Run("clean sub-coordinator archives, pushes fyi, ends child hat", func(t *testing.T) {
+		d := archDB(t)
+		pc, sub, cc, _, task := materializedSubCoord(t, d)
+		_, err := d.PostHeraBoardItem(cc.ID, "fyi", "note", "body")
+		testutil.NoError(t, err)
+		res := ArchiveRole(d, nil, gitOK, sub, false)
+		testutil.Equal(t, res.Archived, true)
+		up, _ := d.ListHeraBoardItems(pc.ID, false)
+		testutil.Equal(t, len(up), 1)
+		testutil.Equal(t, up[0].Kind, "fyi")
+		live, _ := d.ListHeraLiveBindingsByTask(task.ID)
+		testutil.Equal(t, len(live), 1) // only the sub's own worker hat; coordinator hat ended
+		testutil.Equal(t, live[0].RoleID, sub.ID)
+	})
+	t.Run("dry run touches nothing", func(t *testing.T) {
+		d := archDB(t)
+		pc, sub, cc, _, task := materializedSubCoord(t, d)
+		_, err := d.PostHeraBoardItem(cc.ID, "fyi", "note", "body")
+		testutil.NoError(t, err)
+		res := ArchiveRole(d, nil, gitOK, sub, true)
+		testutil.Equal(t, res.Archived, true)
+		up, _ := d.ListHeraBoardItems(pc.ID, true)
+		testutil.Equal(t, len(up), 0)
+		left, _ := d.ListHeraBoardItems(cc.ID, false)
+		testutil.Equal(t, len(left), 1)
+		r, _ := d.HeraRole(sub.ID)
+		testutil.Equal(t, r.ArchivedAt == nil, true)
+		g, _ := d.Get(task.ID)
+		testutil.Equal(t, g.Archived, false)
+	})
+}
+
+func TestArchiveRole_DeadSessionNeverStopped_RealWorktreeKept(t *testing.T) {
+	d := archDB(t)
+	orch, _ := d.CreateHeraOrchestrator("o", "master")
+	wt := t.TempDir()
+	task := &model.Task{Name: "w", Status: model.StatusComplete, Project: "p", Worktree: wt, Branch: "b"}
+	testutil.NoError(t, d.Add(task))
+	r, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "w", Kind: db.HeraKindWorker, ArgusProject: "p"}, task.ID, wt)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.SetStatus(task.ID, model.StatusComplete))
+	run := &fakeArchiveRunner{alive: false}
+	testutil.Equal(t, ArchiveRole(d, run, gitOK, r, false).Archived, true)
+	testutil.Equal(t, len(run.stopped), 0)
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("worktree must be preserved: %v", err)
+	}
 }

@@ -242,6 +242,17 @@ func (d *DB) HeraWorkerMessageSummary(fromRoleID, toRoleID int64) (string, int, 
 	return line, unread, err
 }
 
+// HeraUnreadFromRole counts messages SENT by roleID that their recipient has not
+// yet read (add-hera-auto-archive: archive must not strand a role's unread
+// outbound mail).
+func (d *DB) HeraUnreadFromRole(roleID int64) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var n int
+	err := d.conn.QueryRow(`SELECT COUNT(*) FROM hera_messages WHERE from_role_id=? AND read_at IS NULL`, roleID).Scan(&n)
+	return n, err
+}
+
 // HeraMessagesForTask returns messages addressed to any role taskID is or was
 // bound to (ended bindings included), in every read state, oldest first. When
 // more than limit match, the newest limit are kept. Read-only: never stamps
