@@ -1871,8 +1871,8 @@ func (s *Server) toolHeraAccept(id interface{}, args json.RawMessage) *Response 
 	return toolResult(id, b.String())
 }
 
-// heraArchiveSweepBudget bounds one hera_archive sweep (MCP clients time out at 60s).
-const heraArchiveSweepBudget = 40 * time.Second
+// heraArchiveSweepBudget bounds when a sweep STARTS another role (MCP clients time out at 60s; one role's git check can take up to 20s more).
+const heraArchiveSweepBudget = 20 * time.Second
 
 // toolHeraArchive implements hera_archive (add-hera-auto-archive): coordinator-
 // only, fail-closed archive of done-done roles. The predicate and the archive

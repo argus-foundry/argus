@@ -983,15 +983,16 @@ func (d *DB) EndHeraBinding(bindingID int64, reason string) error {
 	return nil
 }
 
-// HeraBridgedChildOrchs returns the orchestrators whose COORDINATOR role is (or
-// was) bound to taskID other than parentOrchID: the shape a plan-DAG
+// HeraBridgedChildOrchs returns the orchestrators whose COORDINATOR role is live on, or
+// was accepted-ended (restorable) on, taskID other than parentOrchID: the shape a plan-DAG
 // kind=subcoord node materializes (one task, a worker hat in the parent and a
 // coordinator hat in a child orchestrator), which writes NO hera_orch_links row.
 func (d *DB) HeraBridgedChildOrchs(taskID string, parentOrchID int64) ([]int64, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rows, err := d.conn.Query(`SELECT DISTINCT b.orchestrator_id FROM hera_bindings b JOIN hera_roles r ON r.id=b.role_id
-		WHERE b.argus_task_id=? AND r.kind='coordinator' AND b.orchestrator_id<>?`, taskID, parentOrchID)
+		WHERE b.argus_task_id=? AND r.kind='coordinator' AND b.orchestrator_id<>?
+		  AND (b.ended_at IS NULL OR b.end_reason=?)`, taskID, parentOrchID, HeraEndReasonAccepted)
 	if err != nil {
 		return nil, fmt.Errorf("hera bridged child orchs: %w", err)
 	}

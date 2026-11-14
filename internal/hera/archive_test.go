@@ -513,3 +513,42 @@ func TestArchiveRole_DeadSessionNeverStopped_RealWorktreeKept(t *testing.T) {
 		t.Fatalf("worktree must be preserved: %v", err)
 	}
 }
+
+func TestArchivableVerdict_OutboxIgnoresDeadRecipients(t *testing.T) {
+	d := archDB(t)
+	orch, _ := d.CreateHeraOrchestrator("o", "master")
+	_, r := archWorker(t, d, orch.ID, "sender", model.StatusComplete)
+	_, gone := archWorker(t, d, orch.ID, "gone", model.StatusInProgress)
+	_, err := d.SendHeraMessage(r.ID, gone.ID, "hi", "tldr", nil)
+	testutil.NoError(t, err)
+	testutil.Contains(t, ArchivableVerdict(d, gitOK, r).Reason, "not yet read")
+	testutil.NoError(t, d.ArchiveHeraRole(gone.ID)) // recipient will never read it
+	testutil.Equal(t, ArchivableVerdict(d, gitOK, r).Archivable, true)
+}
+
+func TestArchive_FyiHugeBodyStillMoves(t *testing.T) {
+	d := archDB(t)
+	pc, sub, cc, _ := subCoord(t, d)
+	_, err := d.PostHeraBoardItem(cc.ID, "fyi", "big", strings.Repeat("x", maxFyiBody))
+	testutil.NoError(t, err)
+	testutil.NoError(t, pushFyiUp(d, sub, ""))
+	up, _ := d.ListHeraBoardItems(pc.ID, false)
+	testutil.Equal(t, len(up), 1)
+	testutil.Equal(t, len(up[0].Body) <= maxFyiBody, true)
+}
+
+// A task that only once coordinated an unrelated (ended, non-accepted) orchestrator
+// is not a bridge.
+func TestArchivableVerdict_EndedUnrelatedCoordinatorIsNotBridge(t *testing.T) {
+	d := archDB(t)
+	orch, _ := d.CreateHeraOrchestrator("o", "master")
+	task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+	other, _ := d.CreateHeraOrchestrator("other", "")
+	_, b, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: other.ID, Name: "coord", Kind: db.HeraKindCoordinator, ArgusProject: "p"}, task.ID, task.Worktree)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.EndHeraBinding(b.ID, "user_deleted"))
+	kids, err := childOrchs(d, r, task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(kids), 0)
+	testutil.Equal(t, ArchivableVerdict(d, gitOK, r).Archivable, true)
+}

@@ -11,6 +11,9 @@ import (
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
+// maxFyiBody mirrors the board body cap (db.validBoardContent: 64 KiB).
+const maxFyiBody = 64 * 1024
+
 // ArchiveStore is the narrow DB surface the done-done predicate and
 // ArchiveRole need (add-hera-auto-archive). Satisfied by *db.DB.
 type ArchiveStore interface {
@@ -112,9 +115,15 @@ func ArchivableVerdict(store ArchiveStore, git GitCheck, role *db.HeraRole) Arch
 	for _, b := range bindings {
 		// The sub-coordinator's own coordinator hat in a bridged child
 		// orchestrator is part of the same unit (children are verified below).
-		if b.RoleID != role.ID && !bridged[b.OrchestratorID] {
-			return refuse("task is also bound to another live role (%d)", b.RoleID)
+		if b.RoleID == role.ID {
+			continue
 		}
+		if bridged[b.OrchestratorID] {
+			if br, err := store.HeraRole(b.RoleID); err == nil && br.Kind == db.HeraKindCoordinator {
+				continue
+			}
+		}
+		return refuse("task is also bound to another live role (%d)", b.RoleID)
 	}
 	if msgs, err := store.HeraInbox(role.ID); err != nil {
 		return refuse("inbox unreadable (%v)", err)
@@ -284,7 +293,12 @@ func pushFyiUp(store ArchiveStore, role *db.HeraRole, taskID string) error {
 					continue
 				}
 				if !posted {
-					if _, err := store.PostHeraBoardItem(parents[0].ID, "fyi", subject, it.Body+"\n\n"+marker); err != nil {
+					body := it.Body
+					for len(body) > maxFyiBody-len(marker)-2 {
+						_, size := utf8.DecodeLastRuneInString(body)
+						body = body[:len(body)-size]
+					}
+					if _, err := store.PostHeraBoardItem(parents[0].ID, "fyi", subject, body+"\n\n"+marker); err != nil {
 						errs = append(errs, err)
 						continue
 					}
