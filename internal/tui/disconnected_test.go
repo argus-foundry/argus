@@ -154,3 +154,14 @@ func TestApp_ReresolveAgentPane(t *testing.T) {
 	app.reresolveAgentPane("t", []string{"t"}) // daemon says alive → fresh handle
 	testutil.Equal(t, app.agentPane.Session() == agentview.TerminalAdapter(live), true)
 }
+
+// The Tasks-tab list receives the detached set on every update.
+func TestApp_UpdateDisconnected_FeedsTaskList(t *testing.T) {
+	app, _ := newAppForStreamTest(t)
+	app.tasks = []*model.Task{{ID: "dead", Status: model.StatusInReview}}
+	app.updateDisconnected([]string{}, true)
+	app.updateDisconnected([]string{}, true)
+	testutil.Equal(t, app.tasklist.IsDetached("dead"), true)
+	app.updateDisconnected([]string{"dead"}, true)
+	testutil.Equal(t, app.tasklist.IsDetached("dead"), false)
+}

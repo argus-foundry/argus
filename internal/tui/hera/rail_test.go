@@ -1969,17 +1969,17 @@ func TestRail_CursorToParent(t *testing.T) {
 	})
 }
 
-// show-disconnected-agents D2: disconnected ranks below needs-input and the
-// spinner, above every stale-able resting state (incl. ready_to_close/accepted).
+// grey-detached-status-icon: a detached role keeps its normal glyph, greyed.
 func TestStatusIcon_DisconnectedPrecedence(t *testing.T) {
 	dead := &heramodel.RoleView{Live: true, TaskStatus: "in_review", ReadyToClose: true, Disconnected: true}
 	g, style := statusIcon(dead, false, 0)
-	testutil.Equal(t, g, widget.IconDisconnected)
+	testutil.Equal(t, g, theme.IconReview)
 	testutil.Equal(t, style, theme.StyleDimmed)
 
 	blocked := &heramodel.RoleView{Live: true, NeedsInput: true, Disconnected: true}
-	g, _ = statusIcon(blocked, false, 0)
+	g, style = statusIcon(blocked, false, 0)
 	testutil.Equal(t, g, theme.IconNeedsInput)
+	testutil.Equal(t, style, theme.StyleDimmed)
 
 	// Not disconnected: the resting review glyph is untouched.
 	ok := &heramodel.RoleView{Live: true, TaskStatus: "in_review", ReadyToClose: true}

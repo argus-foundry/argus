@@ -46,6 +46,7 @@ func (a *App) updateDisconnected(runningIDs []string, healthy bool) {
 	}
 	a.disconnectedIDs = ids
 	a.heraPage.SetDisconnected(ids)
+	a.tasklist.SetDetached(ids)
 }
 
 // DisconnectedTaskIDs returns the task IDs whose session is not running as of

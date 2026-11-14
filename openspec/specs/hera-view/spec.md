@@ -2978,27 +2978,32 @@ With `ui.auto_rerender_on_resize` off (the default), a width change of the Hera 
 - **WHEN** the agent pane shows the notice and the coordinator pane has no drift
 - **THEN** only the agent pane's border carries the notice
 
-### Requirement: Rail shows a disconnected glyph for a role whose session is not running
+### Requirement: Rail greys the status icon of a detached role
 
-The Hera rail and plan-view nodes SHALL render a dim grey hollow circle `○` for a live-bound role whose bound task is in_progress or in_review and whose session is absent from the daemon's alive set for 2 consecutive ticks. The glyph SHALL rank below needs-input and the active spinner and above accepted, ready_to_close, failed, done, idle and live. The signal SHALL be suppressed whenever the daemon session list could not be read that tick.
+The Hera rail, plan-view nodes and details-pane roster SHALL render a detached role's normal status icon (the one its other signals would select, with the same precedence as a non-detached role) in the dimmed grey style instead of a disconnected `○`. A role is detached when its live-bound task is in_progress or in_review, not archived, and its session is absent from the daemon's alive set for 2 consecutive ticks; the signal SHALL be suppressed whenever the session list could not be read that tick, and a complete task SHALL never be detached. The grey treatment SHALL apply to every detached role regardless of state. An animated working spinner on a detached role SHALL render as a single static glyph. The details-pane roster status label SHALL show the role's normal state text followed by ` · detached` (e.g. `ready · detached`, `accepted · detached`).
 
-#### Scenario: Dead agent behind a stale ready_to_close
+#### Scenario: Finished worker with an open PR keeps its review icon
 
-- **WHEN** a worker is stamped ready_to_close but its session is gone from the daemon alive set for 2 ticks
-- **THEN** its rail row shows `○`, not the review glyph
+- **WHEN** a worker is stamped ready_to_close and its session is gone from the daemon alive set for 2 ticks
+- **THEN** its rail row shows the ready_to_close icon rendered grey, not `○`
 
-#### Scenario: Blocked prompt outranks disconnected
+#### Scenario: Detached working role does not animate
 
-- **WHEN** a role shows needs-input
-- **THEN** the needs-input glyph is shown, not `○`
+- **WHEN** a detached role would otherwise show the working spinner
+- **THEN** a static grey spinner glyph is shown and it does not change between frames
 
-#### Scenario: Unreadable session list never marks anyone disconnected
+#### Scenario: Roster label names state and detached
+
+- **WHEN** a detached role's state is ready_to_close
+- **THEN** its roster status label reads `ready · detached`
+
+#### Scenario: Unreadable session list never marks anyone detached
 
 - **WHEN** the session-list RPC fails on a tick
-- **THEN** no role is newly marked disconnected
+- **THEN** no role is newly rendered grey as detached
 
-#### Scenario: Completed task is never disconnected
+#### Scenario: Completed task is never detached
 
 - **WHEN** a role's task status is complete and its session is gone
-- **THEN** the accepted glyph is shown, not `○`
+- **THEN** the accepted icon is shown in its normal colour
 
