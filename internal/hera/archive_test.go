@@ -1,0 +1,222 @@
+package hera
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/testutil"
+)
+
+type fakeArchiveRunner struct {
+	alive, idle, blocked bool
+	stopped              []string
+	stopErr              error
+}
+
+func (f *fakeArchiveRunner) IsAlive(string) bool         { return f.alive }
+func (f *fakeArchiveRunner) IsIdle(string) bool          { return f.idle }
+func (f *fakeArchiveRunner) BlockedOnPrompt(string) bool { return f.blocked }
+func (f *fakeArchiveRunner) Stop(id string) error {
+	f.stopped = append(f.stopped, id)
+	return f.stopErr
+}
+
+func gitOK(*model.Task) (bool, string)  { return true, "" }
+func gitBad(*model.Task) (bool, string) { return false, "open PR" }
+
+func archDB(t *testing.T) *db.DB {
+	t.Helper()
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	return d
+}
+
+// archWorker adds a complete worker task+role in orch.
+func archWorker(t *testing.T, d *db.DB, orchID int64, name string, status model.Status) (*model.Task, *db.HeraRole) {
+	t.Helper()
+	task := &model.Task{Name: name, Status: status, Project: "p", Worktree: "/wt/" + name, Branch: "b-" + name}
+	testutil.NoError(t, d.Add(task))
+	role, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
+		OrchestratorID: orchID, Name: name, Kind: db.HeraKindWorker, ArgusProject: "p",
+	}, task.ID, task.Worktree)
+	testutil.NoError(t, err)
+	// SetStatus may be a no-op for in_progress; set explicitly.
+	testutil.NoError(t, d.SetStatus(task.ID, status))
+	return task, role
+}
+
+func TestArchivableVerdict(t *testing.T) {
+	d := archDB(t)
+	orch, err := d.CreateHeraOrchestrator("o", "master")
+	testutil.NoError(t, err)
+
+	t.Run("complete and landed is archivable", func(t *testing.T) {
+		_, r := archWorker(t, d, orch.ID, "ok", model.StatusComplete)
+		v := ArchivableVerdict(d, gitOK, r)
+		testutil.Equal(t, v.Archivable, true)
+	})
+	t.Run("not complete refuses", func(t *testing.T) {
+		_, r := archWorker(t, d, orch.ID, "wip", model.StatusInReview)
+		v := ArchivableVerdict(d, gitOK, r)
+		testutil.Equal(t, v.Archivable, false)
+		testutil.Contains(t, v.Reason, "not complete")
+	})
+	t.Run("git not landed refuses", func(t *testing.T) {
+		_, r := archWorker(t, d, orch.ID, "pr", model.StatusComplete)
+		v := ArchivableVerdict(d, gitBad, r)
+		testutil.Equal(t, v.Archivable, false)
+		testutil.Contains(t, v.Reason, "open PR")
+	})
+	t.Run("nil git check refuses a task with a branch", func(t *testing.T) {
+		_, r := archWorker(t, d, orch.ID, "nogit", model.StatusComplete)
+		v := ArchivableVerdict(d, nil, r)
+		testutil.Equal(t, v.Archivable, false)
+	})
+	t.Run("blocked role refuses", func(t *testing.T) {
+		_, r := archWorker(t, d, orch.ID, "blk", model.StatusComplete)
+		testutil.NoError(t, d.UpsertHeraRoleStatus(r.ID, db.HeraStatusBlocked))
+		v := ArchivableVerdict(d, gitOK, r)
+		testutil.Contains(t, v.Reason, "blocked")
+	})
+	t.Run("coordinator refuses", func(t *testing.T) {
+		v := ArchivableVerdict(d, gitOK, &db.HeraRole{Kind: db.HeraKindCoordinator})
+		testutil.Contains(t, v.Reason, "coordinator")
+	})
+	t.Run("live dependent refuses until done", func(t *testing.T) {
+		_, blocker := archWorker(t, d, orch.ID, "blocker", model.StatusComplete)
+		dep, err := d.CreateHeraPlannedRole(db.CreateHeraRoleInput{
+			OrchestratorID: orch.ID, Name: "dep", Kind: db.HeraKindWorker, ArgusProject: "p", Prompt: "later",
+		})
+		testutil.NoError(t, err)
+		testutil.NoError(t, d.AddHeraBlock(dep.ID, blocker.ID))
+		v := ArchivableVerdict(d, gitOK, blocker)
+		testutil.Contains(t, v.Reason, "depends")
+		testutil.NoError(t, d.UpsertHeraRoleStatus(dep.ID, db.HeraStatusDone))
+		v = ArchivableVerdict(d, gitOK, blocker)
+		testutil.Equal(t, v.Archivable, true)
+	})
+}
+
+func TestArchiveRole(t *testing.T) {
+	t.Run("archives task and role, keeps worktree, stops idle session", func(t *testing.T) {
+		d := archDB(t)
+		orch, _ := d.CreateHeraOrchestrator("o", "master")
+		task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+		run := &fakeArchiveRunner{alive: true, idle: true}
+		res := ArchiveRole(d, run, gitOK, r, false)
+		testutil.Equal(t, res.Archived, true)
+		got, _ := d.Get(task.ID)
+		testutil.Equal(t, got.Archived, true)
+		testutil.Equal(t, got.Worktree, task.Worktree) // never reclaimed
+		testutil.Equal(t, got.Branch, task.Branch)
+		role, _ := d.HeraRole(r.ID)
+		testutil.Equal(t, role.ArchivedAt != nil, true)
+		testutil.DeepEqual(t, run.stopped, []string{task.ID})
+	})
+	t.Run("busy session refuses and writes nothing", func(t *testing.T) {
+		d := archDB(t)
+		orch, _ := d.CreateHeraOrchestrator("o", "master")
+		task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+		run := &fakeArchiveRunner{alive: true, idle: false}
+		res := ArchiveRole(d, run, gitOK, r, false)
+		testutil.Equal(t, res.Archived, false)
+		got, _ := d.Get(task.ID)
+		testutil.Equal(t, got.Archived, false)
+		testutil.Equal(t, len(run.stopped), 0)
+	})
+	t.Run("parked at prompt refuses", func(t *testing.T) {
+		d := archDB(t)
+		orch, _ := d.CreateHeraOrchestrator("o", "master")
+		_, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+		res := ArchiveRole(d, &fakeArchiveRunner{alive: true, idle: true, blocked: true}, gitOK, r, false)
+		testutil.Equal(t, res.Archived, false)
+	})
+	t.Run("dry run writes nothing", func(t *testing.T) {
+		d := archDB(t)
+		orch, _ := d.CreateHeraOrchestrator("o", "master")
+		task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+		res := ArchiveRole(d, &fakeArchiveRunner{}, gitOK, r, true)
+		testutil.Equal(t, res.Archived, true)
+		got, _ := d.Get(task.ID)
+		testutil.Equal(t, got.Archived, false)
+	})
+	t.Run("already archived is idempotent", func(t *testing.T) {
+		d := archDB(t)
+		orch, _ := d.CreateHeraOrchestrator("o", "master")
+		_, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+		first := ArchiveRole(d, nil, gitOK, r, false)
+		testutil.Equal(t, first.Archived, true)
+		r2, _ := d.HeraRole(r.ID)
+		second := ArchiveRole(d, nil, gitOK, r2, false)
+		testutil.Equal(t, second.Archived, true)
+		testutil.Contains(t, second.Reason, "already")
+	})
+	t.Run("stop failure is reported but archive stands", func(t *testing.T) {
+		d := archDB(t)
+		orch, _ := d.CreateHeraOrchestrator("o", "master")
+		task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+		run := &fakeArchiveRunner{alive: true, idle: true, stopErr: errors.New("boom")}
+		res := ArchiveRole(d, run, gitOK, r, false)
+		testutil.Equal(t, res.Archived, true)
+		testutil.Contains(t, res.Reason, "boom")
+		got, _ := d.Get(task.ID)
+		testutil.Equal(t, got.Archived, true)
+	})
+}
+
+// subCoord builds parent orch + sub-coordinator worker role bridging a child orch.
+func subCoord(t *testing.T, d *db.DB) (parentCoord, sub *db.HeraRole, childCoord *db.HeraRole, child *db.HeraOrchestrator) {
+	t.Helper()
+	parent, err := d.CreateHeraOrchestrator("parent", "master")
+	testutil.NoError(t, err)
+	pt := &model.Task{Name: "pc", Status: model.StatusInProgress, Project: "p"}
+	testutil.NoError(t, d.Add(pt))
+	parentCoord, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: parent.ID, Name: "coord", Kind: db.HeraKindCoordinator, ArgusProject: "p"}, pt.ID, "/wt/pc")
+	testutil.NoError(t, err)
+	_, sub = archWorker(t, d, parent.ID, "sub", model.StatusComplete)
+	child, err = d.CreateHeraOrchestrator("child", "master")
+	testutil.NoError(t, err)
+	ct := &model.Task{Name: "cc", Status: model.StatusInProgress, Project: "p"}
+	testutil.NoError(t, d.Add(ct))
+	childCoord, _, err = d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: child.ID, Name: "ccoord", Kind: db.HeraKindCoordinator, ArgusProject: "p"}, ct.ID, "/wt/cc")
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.CreateHeraOrchLink(parent.ID, child.ID, sub.ID))
+	return
+}
+
+func TestArchive_SubCoordinator(t *testing.T) {
+	t.Run("open decision blocks", func(t *testing.T) {
+		d := archDB(t)
+		_, sub, cc, _ := subCoord(t, d)
+		_, err := d.PostHeraBoardItem(cc.ID, "decision", "pick one", "body")
+		testutil.NoError(t, err)
+		v := ArchivableVerdict(d, gitOK, sub)
+		testutil.Equal(t, v.Archivable, false)
+		testutil.Contains(t, v.Reason, "decision")
+	})
+	t.Run("live child role blocks", func(t *testing.T) {
+		d := archDB(t)
+		_, sub, _, child := subCoord(t, d)
+		archWorker(t, d, child.ID, "kid", model.StatusComplete)
+		v := ArchivableVerdict(d, gitOK, sub)
+		testutil.Contains(t, v.Reason, "kid")
+	})
+	t.Run("fyi pushed to parent coordinator board and resolved", func(t *testing.T) {
+		d := archDB(t)
+		pc, sub, cc, _ := subCoord(t, d)
+		_, err := d.PostHeraBoardItem(cc.ID, "fyi", "heads up", "details")
+		testutil.NoError(t, err)
+		res := ArchiveRole(d, nil, gitOK, sub, false)
+		testutil.Equal(t, res.Archived, true)
+		up, err := d.ListHeraBoardItems(pc.ID, false)
+		testutil.NoError(t, err)
+		testutil.Equal(t, len(up), 1)
+		testutil.Equal(t, up[0].Subject, "[sub] heads up")
+		orig, err := d.ListHeraBoardItems(cc.ID, false)
+		testutil.NoError(t, err)
+		testutil.Equal(t, len(orig), 0)
+	})
+}

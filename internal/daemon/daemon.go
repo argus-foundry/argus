@@ -1717,6 +1717,7 @@ func (d *Daemon) Serve(sockPath string) error {
 		if cfg.Hera.Enabled {
 			mcpSrv.SetHeraService(hera.New(d.db, d.notifier), d.db, d.heraSpawnWorker)
 			mcpSrv.SetHeraReviver(d.heraReviveRole)
+			mcpSrv.SetHeraArchiver(d.heraArchiver())
 			mcpSrv.SetHeraGraduationPreflight(d.graduation.preflight)
 		}
 		mcpSrv.SetArtifactManager(d.db)

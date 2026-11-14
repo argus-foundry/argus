@@ -253,8 +253,10 @@ type Server struct {
 	residentFleetReconcile func(*db.DB, hera.SessionChecker) (hera.Summary, error)
 	// residentBackground tracks those async sweeps so tests can wait for them.
 	residentBackground sync.WaitGroup
-	heraSpawn          HeraSpawner // optional; set via SetHeraService (born-bound spawn)
-	heraRevive         HeraReviver // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
+	heraSpawn          HeraSpawner        // optional; set via SetHeraService (born-bound spawn)
+	heraArchiveRunner  hera.ArchiveRunner // optional; set via SetHeraArchiver (add-hera-auto-archive)
+	heraGitCheck       hera.GitCheck      // optional; nil refuses any role with git work
+	heraRevive         HeraReviver        // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
 	// heraGraduationPreflight is set via SetHeraGraduationPreflight.
 	heraGraduationPreflight func(*model.Task) error
 	profileCfg              ConfigStore  // optional; set via SetProfileResolver
@@ -1338,6 +1340,8 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		return s.toolHeraRevive(req.ID, params.Arguments)
 	case "hera_accept":
 		return s.toolHeraAccept(req.ID, params.Arguments)
+	case "hera_archive":
+		return s.toolHeraArchive(req.ID, params.Arguments)
 	case "profile_resolve":
 		return s.toolProfileResolve(req.ID, params.Arguments)
 	case "argus_api_get":
@@ -3170,4 +3174,12 @@ func writeError(w http.ResponseWriter, id interface{}, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(errorResp(id, code, msg)) //nolint:errcheck
+}
+
+// SetHeraArchiver wires the session runner and git-landed check hera_archive
+// uses (add-hera-auto-archive). Either may be nil: a nil runner means no live
+// session is ever stopped; a nil git check refuses any role with git work.
+func (s *Server) SetHeraArchiver(r hera.ArchiveRunner, g hera.GitCheck) {
+	s.heraArchiveRunner = r
+	s.heraGitCheck = g
 }

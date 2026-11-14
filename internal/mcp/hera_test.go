@@ -174,7 +174,7 @@ func TestToolsList_HeraOn(t *testing.T) {
 		"hera_tree_updates", "hera_get_messages",
 		"hera_plan_node", "hera_block", "hera_plan",
 		"hera_plan_node_update", "hera_unblock", "hera_plan_node_cancel",
-		"hera_revive", "hera_accept",
+		"hera_revive", "hera_accept", "hera_archive",
 		"hera_board_post", "hera_board_update", "hera_board_resolve", "hera_board_list",
 	} {
 		if !names[want] {

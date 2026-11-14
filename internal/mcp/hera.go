@@ -267,6 +267,20 @@ var heraToolDefs = []Tool{
 		},
 	},
 	{
+		Name:        "hera_archive",
+		Description: "Archive roles whose work is done-done so they leave the live views (add-hera-auto-archive). A role is archivable only when its task is complete, it is not blocked, has no unread hera mail, no not-yet-done plan node depends on it, a sub-coordinator has all child roles archived and no open decision board items (open fyi items are pushed to your board), and its git work is confirmed landed (merged PR / ancestor) with a clean worktree. Anything unconfirmed is refused with a reason. Archiving marks the task archived, hides the role, and stops an IDLE session (a busy session is refused); it never deletes the worktree or branch. Omit role_name to sweep every role you coordinate; pass dry_run to only report. Top-level coordinators are not archivable here. Coordinator-only.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"cwd":          map[string]interface{}{"type": "string", "description": "Caller's worktree path (use $PWD)"},
+				"role_name":    map[string]interface{}{"type": "string", "description": "(optional) Role to archive. Omit to sweep every role you coordinate."},
+				"orchestrator": map[string]interface{}{"type": "string", "description": "(optional) Disambiguates when the calling task holds multiple live coordinator bindings"},
+				"dry_run":      map[string]interface{}{"type": "boolean", "description": "(optional) Report what would be archived without writing"},
+			},
+			"required": []string{"cwd"},
+		},
+	},
+	{
 		Name:        "hera_spawn_worker",
 		Description: "Spawn a new born-bound worker task under this orchestrator. Caller must hold a live coordinator binding. Creates an argus task (worktree + session) and, transactionally, a worker role + binding pre-bound to it. An orientation prefix naming the coordinator + orchestrator is prepended to the prompt; the verbatim prompt is stored on the role. Defaults the project to the coordinator's own. Leave `backend` unset so [backend_routing] spreads workers across Claude and Codex by remaining usage; pass `archetype` to match the worker's model tier to its task complexity (e.g. big_build for a hard refactor, ci_loop for mechanical work).",
 		InputSchema: map[string]interface{}{
@@ -1855,6 +1869,71 @@ func (s *Server) toolHeraAccept(id interface{}, args json.RawMessage) *Response 
 	fmt.Fprintf(&b, "- **role**: %s\n", target.Name)
 	fmt.Fprintf(&b, "- **flipped**: %v\n", flipped)
 	return toolResult(id, b.String())
+}
+
+// toolHeraArchive implements hera_archive (add-hera-auto-archive): coordinator-
+// only, fail-closed archive of done-done roles. The predicate and the archive
+// action live in internal/hera (ArchivableVerdict / ArchiveRole).
+func (s *Server) toolHeraArchive(id interface{}, args json.RawMessage) *Response {
+	if !s.heraEnabled() {
+		return toolError(id, "hera not configured")
+	}
+	var p struct {
+		Cwd          string `json:"cwd"`
+		RoleName     string `json:"role_name"`
+		Orchestrator string `json:"orchestrator"`
+		DryRun       bool   `json:"dry_run"`
+	}
+	json.Unmarshal(args, &p) //nolint:errcheck
+	if p.Cwd == "" {
+		return toolError(id, "cwd is required")
+	}
+	store, ok := s.heraStore.(hera.ArchiveStore)
+	if !ok {
+		return toolError(id, "hera archive not supported by this store")
+	}
+	caller, err := s.resolveCallerRole(p.Cwd, p.Orchestrator)
+	if err != nil {
+		return toolError(id, err.Error())
+	}
+	if caller.role.Kind != db.HeraKindCoordinator {
+		return toolError(id, fmt.Sprintf(
+			"caller role %q has kind %q; only coordinators may archive roles",
+			caller.role.Name, caller.role.Kind))
+	}
+
+	var targets []*db.HeraRole
+	if name := strings.TrimSpace(p.RoleName); name != "" {
+		target, errResp := s.resolveOrchRole(id, caller.orch.ID, caller.orch.Name, name)
+		if errResp != nil {
+			return errResp
+		}
+		if target.ID == caller.role.ID {
+			return toolError(id, fmt.Sprintf("role %q is your own role; a coordinator is archived by the human or its parent coordinator", target.Name))
+		}
+		targets = []*db.HeraRole{target}
+	} else {
+		roles, err := store.ListHeraRoles(caller.orch.ID, false)
+		if err != nil {
+			return toolError(id, fmt.Sprintf("list roles: %v", err))
+		}
+		for _, r := range roles {
+			if r.ID == caller.role.ID || r.Kind == db.HeraKindCoordinator || r.NukedAt != nil || r.CancelledAt != nil {
+				continue
+			}
+			if _, err := store.HeraLiveBindingByRole(r.ID); err != nil {
+				continue // planned / ended: nothing to archive
+			}
+			targets = append(targets, r)
+		}
+	}
+
+	results := make([]hera.ArchiveRoleResult, 0, len(targets))
+	for _, t := range targets {
+		results = append(results, hera.ArchiveRole(store, s.heraArchiveRunner, s.heraGitCheck, t, p.DryRun))
+	}
+	slog.Info("[hera] archive", "orch", caller.orch.Name, "targets", len(targets), "dry_run", p.DryRun)
+	return toolResult(id, hera.FormatArchiveResults(results, p.DryRun))
 }
 
 func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Response {
