@@ -62,6 +62,10 @@ type taskRecycleRunner struct {
 	runner   agent.SessionRunner
 	cfgFn    func() config.Config
 
+	// repick re-evaluates the resident's account for a recycle (nil elsewhere);
+	// it returns a paragraph to append to the seed prompt, or "".
+	repick func(task *model.Task) string
+
 	// inFlight tracks task IDs with an awaitIdleAndRestart goroutine
 	// currently running, so a second task_recycle call for the same task
 	// (an agent retry, or two independent callers) is rejected outright
@@ -99,6 +103,7 @@ func (d *Daemon) taskRecycleRunner() *taskRecycleRunner {
 	defer d.mu.Unlock()
 	if d.taskRecycler == nil {
 		d.taskRecycler = newTaskRecycleRunner(d.db, d.runner, d.cfgFn)
+		d.taskRecycler.repick = func(t *model.Task) string { return d.residentMgr().repickForRecycle(t) }
 	}
 	return d.taskRecycler
 }
@@ -228,7 +233,13 @@ func (r *taskRecycleRunner) restart(taskID string, buildSeed func(*model.Task) s
 	if task.IsResident() {
 		role = db.InitialPTYRoleResident
 	}
-	err = restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, buildSeed(task), role)
+	seed := buildSeed(task)
+	if task.IsResident() && r.repick != nil {
+		if note := r.repick(task); note != "" {
+			seed += "\n\n" + note
+		}
+	}
+	err = restartSessionWithSeedPrompt(r.database, r.runner, r.cfgFn, task, seed, role)
 	if task.IsResident() {
 		if err == nil {
 			// A watcher request that collided with task_recycle must not survive

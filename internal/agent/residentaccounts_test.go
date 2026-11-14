@@ -109,18 +109,11 @@ func TestDecideResidentAccount(t *testing.T) {
 		{"every listed depleted", []string{"personal", "work"}, "personal", false,
 			map[string]usagebudget.Reading{"personal": full, "work": full}, "", "", true},
 		{"healthy stays", []string{"personal", "work"}, "personal", false, nil, "", "", false},
-		{"moves back up on a fresh reading", []string{"personal", "work"}, "work", false,
-			map[string]usagebudget.Reading{"personal": rd(5, 5, now)}, "personal", ResidentMoveBackUp, false},
-		{"no move back up on an unknown reading", []string{"personal", "work"}, "work", false, nil, "", "", false},
-		{"no move back up on a stale reading", []string{"personal", "work"}, "work", false,
-			map[string]usagebudget.Reading{"personal": rd(5, 5, now.Add(-3*time.Hour))}, "", "", false},
-		{"manual not moved back up", []string{"personal", "work"}, "work", true, nil, "", "", false},
-		{"no move back up while preferred depleted", []string{"personal", "work"}, "work", false,
-			map[string]usagebudget.Reading{"personal": full}, "", "", false},
-		{"auto slot does not chase headroom", []string{"personal", "auto"}, "work", false,
-			map[string]usagebudget.Reading{"personal": full, "work": rd(80, 80, now), "default": rd(1, 1, now)}, "", "", false},
-		{"auto slot returns to explicit", []string{"personal", "auto"}, "work", false,
-			map[string]usagebudget.Reading{"personal": rd(5, 5, now)}, "personal", ResidentMoveBackUp, false},
+		{"running session never moves up when the preferred account recovers", []string{"personal", "work"}, "work", false,
+			map[string]usagebudget.Reading{"personal": rd(5, 5, now)}, "", "", false},
+		{"auto slot never moves up mid-session", []string{"personal", "auto"}, "work", false,
+			map[string]usagebudget.Reading{"personal": rd(5, 5, now)}, "", "", false},
+		{"manual not moved", []string{"personal", "work"}, "work", true, nil, "", "", false},
 		{"not allowed moves onto list (unknown ok when leaving)", []string{"personal"}, "work", false, nil, "personal", ResidentMoveNotAllowed, false},
 		{"manual out of list stays", []string{"personal"}, "work", true, nil, "", "", false},
 		{"unknown reading never depleted", []string{"personal", "work"}, "personal", false, map[string]usagebudget.Reading{}, "", "", false},
@@ -132,6 +125,47 @@ func TestDecideResidentAccount(t *testing.T) {
 			testutil.Equal(t, d.Reason, tt.wantReason)
 			testutil.Equal(t, d.NoneUsable, tt.wantNone)
 			testutil.Equal(t, d.Urgent, tt.wantReason == ResidentMoveDepleted)
+		})
+	}
+}
+
+func TestDecideResidentRestartAccount(t *testing.T) {
+	now := time.Now()
+	full := rd(100, 10, now)
+	tests := []struct {
+		name       string
+		list       []string
+		cur        string
+		allowUp    bool
+		usage      map[string]usagebudget.Reading
+		wantTarget string
+		wantReason string
+	}{
+		{"fresh preferred reading moves up", []string{"personal", "work"}, "work", true,
+			map[string]usagebudget.Reading{"personal": rd(5, 5, now)}, "personal", ResidentMoveBackUp},
+		{"stale preferred reading stays", []string{"personal", "work"}, "work", true,
+			map[string]usagebudget.Reading{"personal": rd(5, 5, now.Add(-3*time.Hour))}, "", ""},
+		{"unknown preferred reading stays", []string{"personal", "work"}, "work", true, nil, "", ""},
+		{"depleted preferred stays", []string{"personal", "work"}, "work", true,
+			map[string]usagebudget.Reading{"personal": full}, "", ""},
+		{"cooldown suppresses move up", []string{"personal", "work"}, "work", false,
+			map[string]usagebudget.Reading{"personal": rd(5, 5, now)}, "", ""},
+		{"a manual pick is re-picked like any account", []string{"personal"}, "work", true, nil, "personal", ResidentMoveNotAllowed},
+		{"depleted current moves on despite cooldown", []string{"personal", "work"}, "personal", false,
+			map[string]usagebudget.Reading{"personal": full}, "work", ResidentMoveDepleted},
+		{"off-list current moves onto the list", []string{"personal"}, "work", false, nil, "personal", ResidentMoveNotAllowed},
+		{"all depleted stays", []string{"personal", "work"}, "work", true,
+			map[string]usagebudget.Reading{"personal": full, "work": full}, "", ""},
+		{"auto slot moves up to an explicit entry", []string{"personal", "auto"}, "work", true,
+			map[string]usagebudget.Reading{"personal": rd(5, 5, now)}, "personal", ResidentMoveBackUp},
+		{"auto slot does not chase headroom", []string{"personal", "auto"}, "work", true,
+			map[string]usagebudget.Reading{"personal": full, "work": rd(80, 80, now), "default": rd(1, 1, now)}, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := DecideResidentRestartAccount(planCfg(tt.list...), tt.cur, tt.allowUp, tt.usage, now)
+			testutil.Equal(t, d.Target, tt.wantTarget)
+			testutil.Equal(t, d.Reason, tt.wantReason)
 		})
 	}
 }

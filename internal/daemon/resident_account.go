@@ -22,6 +22,9 @@ var (
 	// residentSwitchCooldown is the minimum gap between automatic switches. It
 	// is persisted (db.ResidentLastAutoSwitch) so a daemon bounce keeps it.
 	residentSwitchCooldown = 10 * time.Minute
+	// residentOwnRestartWindow is how long after a manual move a restart is
+	// treated as the move's own restart (no re-pick).
+	residentOwnRestartWindow = 2 * time.Minute
 )
 
 // residentMover is the slice of the session runner a resident account move
@@ -42,13 +45,11 @@ func storedResidentAccount(name string) string {
 }
 
 // effectiveResidentAccount is the account a (re)start runs on. A start that
-// will resume an existing conversation (task.SessionID set) NEVER changes the
-// account: the transcript lives under the current account, and switching it here
-// would silently lose the conversation (and skip the debounce, cooldown, notices
-// and marker that the tick path applies). Moves off a depleted or delisted account
-// happen on the tick, through the move core that copies the transcript. Only a
-// fresh start with no conversation yet picks per resident.accounts. Returned in
-// stored form ("" = default).
+// resumes an existing conversation (task.SessionID set) keeps task.Account here:
+// start() has already re-picked it through the move core (repickAtRestart), which
+// copies the transcript so the conversation follows. Only a fresh start with no
+// conversation yet picks per resident.accounts. Returned in stored form
+// ("" = default).
 func (m *residentManager) effectiveResidentAccount(task *model.Task, cfg config.Config, _ string) string {
 	if task.SessionID != "" {
 		return task.Account
@@ -94,6 +95,9 @@ func (m *residentManager) MoveAccount(account string, force bool) (agent.Account
 		residentLog("[resident] manual account move to %q refused: %v", account, err)
 		return res, err
 	}
+	m.mu.Lock()
+	m.manualMoveAt = m.now()
+	m.mu.Unlock()
 	residentLog("[resident] manual account move %s to %s by=%s resumed=%t started=%t", res.From, res.To, by, res.Resumed, res.Started)
 	return res, err
 }
@@ -148,12 +152,14 @@ func (m *residentManager) setNoneUsableEpisode(taskID string, posted bool) {
 	}
 }
 
-// maybeAutoSwitch moves the resident along its resident.accounts list: off a
-// depleted account to the next usable one (urgent), back up to a recovered
-// preferred account, or onto the list when its account is no longer allowed.
-// It runs from tick with a live session. See the resident-agent spec. The
-// rate-limit menu's needs-input state does not block an URGENT move; every
-// other move also needs a quiet session (no pending prompt, no unsent draft).
+// maybeAutoSwitch moves the RUNNING resident along its resident.accounts list:
+// off a depleted account to the next usable one (urgent), or onto the list when
+// its account is no longer allowed. It never moves a healthy session back up to
+// a preferred account that recovered: that happens only at the next restart
+// (repickAtRestart / repickForRecycle). It runs from tick with a live session.
+// See the resident-agent spec. The rate-limit menu's needs-input state does not
+// block an URGENT move; the off-list move also needs a quiet session (no pending
+// prompt, no unsent draft).
 func (m *residentManager) maybeAutoSwitch(task *model.Task, cfg config.Config, sess agent.SessionHandle) {
 	if !cfg.Resident.AutoSwitchAccount || m.mover == nil {
 		m.setSwitchTicks(0)
@@ -164,10 +170,7 @@ func (m *residentManager) maybeAutoSwitch(task *model.Task, cfg config.Config, s
 	cur := agent.NormalizeAccount(task.Account)
 	// A manual hold applies only while the resident is still on the account the
 	// human picked.
-	manual := false
-	if ov, ok, err := m.db.ResidentAccountOverride(task.ID); err == nil && ok {
-		manual = ov.By == db.OverrideByManual && ov.Account == cur
-	}
+	manual := m.manualHold(task.ID, cur)
 	usage := agent.AccountUsage(cfg)
 	dec := agent.DecideResidentAccount(cfg, cur, manual, usage, now)
 	if dec.Target == "" && !dec.NoneUsable {
@@ -204,25 +207,143 @@ func (m *residentManager) maybeAutoSwitch(task *model.Task, cfg config.Config, s
 	m.setSwitchTicks(0)
 	m.setNoneUsableEpisode(task.ID, false)
 	residentLog("[resident] auto switched account %s to %s reason=%s (%s) resumed=%t started=%t restartErr=%v", res.From, res.To, dec.Reason, usageSummary(usage[cur], now), res.Resumed, res.Started, err)
-	var text, subject, body string
-	switch dec.Reason {
-	case agent.ResidentMoveDepleted:
-		text = fmt.Sprintf("You were switched from account %s to %s because %s hit its usage limit. Your conversation carried over. Continue whatever you were doing.", res.From, res.To, res.From)
-		subject = fmt.Sprintf("%s switched accounts: %s to %s", cfg.Resident.Name, res.From, res.To)
-		body = fmt.Sprintf("%s hit its usage limit (%s), so %s was moved to %s at %s. The conversation carried over (resumed=%t).", res.From, usageSummary(usage[cur], now), cfg.Resident.Name, res.To, now.Format(time.RFC822), res.Resumed)
-	case agent.ResidentMoveBackUp:
-		text = fmt.Sprintf("You were moved from account %s back to %s, your preferred account, because it has usage available again. Your conversation carried over. Continue whatever you were doing.", res.From, res.To)
-		subject = fmt.Sprintf("%s moved back to %s", cfg.Resident.Name, res.To)
-		body = fmt.Sprintf("%s has usage available again, so %s was moved from %s back to it at %s. The conversation carried over (resumed=%t).", res.To, cfg.Resident.Name, res.From, now.Format(time.RFC822), res.Resumed)
-	default:
-		text = fmt.Sprintf("You were moved from account %s to %s because %s is no longer in your account list. Your conversation carried over. Continue whatever you were doing.", res.From, res.To, res.From)
-		subject = fmt.Sprintf("%s moved accounts: %s to %s", cfg.Resident.Name, res.From, res.To)
-		body = fmt.Sprintf("%s is no longer in resident.accounts, so %s was moved to %s at %s. The conversation carried over (resumed=%t).", res.From, cfg.Resident.Name, res.To, now.Format(time.RFC822), res.Resumed)
+	conv := "Your conversation carried over."
+	if !res.Resumed {
+		conv = "Your conversation did not carry over."
 	}
-	if serr := m.Send(text, fmt.Sprintf("account-switch-%d", now.UnixNano())); serr != nil {
-		residentLog("[resident] account switch notice to resident failed: %v", serr)
+	m.announceMove(task, cfg, dec.Reason, res.From, res.To, usage[cur], now, conv, true)
+}
+
+// announceMove tells Solo (an [argus] turn, when send is set) and the human (an
+// fyi board item) about an automatic account move. conv is the sentence about
+// whether the conversation came along.
+func (m *residentManager) announceMove(task *model.Task, cfg config.Config, reason, from, to string, rd usagebudget.Reading, now time.Time, conv string, send bool) {
+	text, subject, body := residentMoveNotice(cfg, reason, from, to, rd, now, conv)
+	if send {
+		if serr := m.Send(text, fmt.Sprintf("account-switch-%d", now.UnixNano())); serr != nil {
+			residentLog("[resident] account switch notice to resident failed: %v", serr)
+		}
 	}
 	m.postBoard(task, "fyi", subject, body)
+}
+
+// residentMoveNotice words the notice for a move reason. text is the turn for
+// Solo (or a seed-prompt paragraph); subject and body are the board item.
+func residentMoveNotice(cfg config.Config, reason, from, to string, rd usagebudget.Reading, now time.Time, conv string) (text, subject, body string) {
+	name := cfg.Resident.Name
+	when := now.Format(time.RFC822)
+	switch reason {
+	case agent.ResidentMoveDepleted:
+		text = fmt.Sprintf("You were switched from account %s to %s because %s hit its usage limit. %s Continue whatever you were doing.", from, to, from, conv)
+		subject = fmt.Sprintf("%s switched accounts: %s to %s", name, from, to)
+		body = fmt.Sprintf("%s hit its usage limit (%s), so %s was moved to %s at %s. %s", from, usageSummary(rd, now), name, to, when, conv)
+	case agent.ResidentMoveBackUp:
+		text = fmt.Sprintf("On restart you were moved from account %s back to %s, your preferred account, because it has usage available again. %s Continue whatever you were doing.", from, to, conv)
+		subject = fmt.Sprintf("%s moved back to %s", name, to)
+		body = fmt.Sprintf("%s has usage available again, so %s was moved from %s back to it at %s as part of a restart. %s", to, name, from, when, conv)
+	default:
+		text = fmt.Sprintf("You were moved from account %s to %s because %s is no longer in your account list. %s Continue whatever you were doing.", from, to, from, conv)
+		subject = fmt.Sprintf("%s moved accounts: %s to %s", name, from, to)
+		body = fmt.Sprintf("%s is no longer in resident.accounts, so %s was moved to %s at %s. %s", from, name, to, when, conv)
+	}
+	return text, subject, body
+}
+
+// manualHold reports whether the resident's account was chosen by a manual move
+// and it is still on that account. It only exempts the RUNNING session from the
+// off-list move (so the human's escape hatch is not undone seconds later); a
+// restart re-picks regardless.
+func (m *residentManager) manualHold(taskID, cur string) bool {
+	ov, ok, err := m.db.ResidentAccountOverride(taskID)
+	return err == nil && ok && ov.By == db.OverrideByManual && ov.Account == cur
+}
+
+// restartDecision is the restart-time re-pick for a resident with a conversation
+// or a recycle in front of it. A move-up is allowed only when the automatic
+// switch cooldown is not running, which also keeps a move's own restart from
+// bouncing the resident again. Disabled auto-switch re-picks nothing.
+func (m *residentManager) restartDecision(task *model.Task, cfg config.Config) agent.ResidentDecision {
+	if !cfg.Resident.AutoSwitchAccount || m.mover == nil {
+		return agent.ResidentDecision{}
+	}
+	now := m.now()
+	cur := agent.NormalizeAccount(task.Account)
+	last := m.db.ResidentLastAutoSwitch(task.ID)
+	allowUp := last.IsZero() || now.Sub(last) >= residentSwitchCooldown
+	// A manual `>` pick is a one-time move, not a hold: a restart re-picks per the
+	// list like any other. The restart the move itself performs must not re-pick,
+	// so restarts within residentOwnRestartWindow of a manual move are left alone.
+	m.mu.Lock()
+	own := !m.manualMoveAt.IsZero() && now.Sub(m.manualMoveAt) < residentOwnRestartWindow
+	m.mu.Unlock()
+	if own {
+		return agent.ResidentDecision{}
+	}
+	dec := agent.DecideResidentRestartAccount(cfg, cur, allowUp, agent.AccountUsage(cfg), now)
+	if dec.Target == cur {
+		return agent.ResidentDecision{}
+	}
+	return dec
+}
+
+// repickAtRestart re-evaluates the account when a resuming resident starts
+// (cold start, restart after an exit or crash): a better account is reached
+// through the move core, which copies the transcript, so the conversation
+// resumes there. The row is updated in place; a failed move keeps the current
+// account.
+func (m *residentManager) repickAtRestart(task *model.Task, cfg config.Config) {
+	dec := m.restartDecision(task, cfg)
+	if dec.Target == "" {
+		return
+	}
+	cur := agent.NormalizeAccount(task.Account)
+	now := m.now()
+	_, res, err := agent.MoveResidentAccount(m.db, m.mover, agent.AccountMoveInput{TaskID: task.ID, Account: dec.Target, Force: true}, agent.ResidentMoveOpts{By: db.OverrideByAuto, Cfg: &cfg})
+	if err != nil && !errors.Is(err, agent.ErrAccountMoveRestartUnknown) {
+		residentLog("[resident] restart re-pick %s -> %s (%s) failed, staying: %v", cur, dec.Target, dec.Reason, err)
+		return
+	}
+	fresh, ferr := m.db.ResidentTask()
+	if ferr != nil || fresh == nil {
+		residentLog("[resident] reload resident after restart re-pick failed: %v", ferr)
+		return
+	}
+	task.Account, task.SessionID = fresh.Account, fresh.SessionID
+	m.setSwitchTicks(0)
+	m.setNoneUsableEpisode(task.ID, false)
+	residentLog("[resident] restart re-pick moved %s to %s reason=%s resumed=%t", cur, dec.Target, dec.Reason, res.Resumed)
+	conv := "Your conversation carried over."
+	if !res.Resumed {
+		conv = "Your conversation did not carry over."
+	}
+	m.announceMove(task, cfg, dec.Reason, cur, dec.Target, agent.AccountUsage(cfg)[cur], now, conv, true)
+}
+
+// repickForRecycle re-evaluates the account when the resident is recycled. A
+// recycle starts a brand-new conversation, so there is no transcript to copy:
+// the account is just set (marker by=auto, cooldown stamped) on the task the
+// recycle is about to relaunch. It returns a paragraph for the new session's seed
+// prompt (it cannot be sent as a turn: the outgoing session is about to be
+// killed) and posts the board item. Empty means the account did not change.
+func (m *residentManager) repickForRecycle(task *model.Task) string {
+	cfg := m.cfgFn()
+	dec := m.restartDecision(task, cfg)
+	if dec.Target == "" || !residentAccountUsable(cfg, task.Backend, storedResidentAccount(dec.Target)) {
+		return ""
+	}
+	cur := agent.NormalizeAccount(task.Account)
+	ov := db.ResidentAccountOverride{Account: dec.Target, By: db.OverrideByAuto}
+	if err := m.db.SetResidentAccountMove(task.ID, storedResidentAccount(dec.Target), task.SessionID, ov); err != nil {
+		residentLog("[resident] recycle re-pick %s -> %s failed, staying: %v", cur, dec.Target, err)
+		return ""
+	}
+	task.Account = storedResidentAccount(dec.Target)
+	now := m.now()
+	residentLog("[resident] recycle re-pick moved %s to %s reason=%s", cur, dec.Target, dec.Reason)
+	conv := "This is a fresh session, so there is no earlier conversation to carry over."
+	text, _, _ := residentMoveNotice(cfg, dec.Reason, cur, dec.Target, agent.AccountUsage(cfg)[cur], now, conv)
+	m.announceMove(task, cfg, dec.Reason, cur, dec.Target, agent.AccountUsage(cfg)[cur], now, conv, false)
+	return "[argus] " + text
 }
 
 // sessionIdle reports whether the resident is parked: raw output quiet, or (for

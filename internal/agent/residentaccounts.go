@@ -138,7 +138,9 @@ func ResidentStartAccount(cfg config.Config, cur string, manual bool, usage map[
 
 // ResidentMove reasons.
 const (
-	ResidentMoveDepleted   = "depleted"
+	ResidentMoveDepleted = "depleted"
+	// ResidentMoveBackUp is a restart-time move to a more preferred account that
+	// has recovered; the running tick never makes it.
 	ResidentMoveBackUp     = "move-back-up"
 	ResidentMoveNotAllowed = "not-allowed"
 )
@@ -156,12 +158,15 @@ type ResidentDecision struct {
 	NoneUsable bool
 }
 
-// DecideResidentAccount decides whether the running resident (on normalized
+// DecideResidentAccount decides whether the RUNNING resident (on normalized
 // account cur; manual when its account was chosen by a manual move) should
-// move: off a depleted account to the list's next usable one, back up to a
-// more preferred account that has recovered, or onto the list when its
-// current account is no longer allowed. A manual choice only ever moves when
-// depleted.
+// move: off a depleted account to the list's next usable one, or onto the list
+// when its current account is no longer allowed (a manual pick is exempt from
+// this one, so the human's escape hatch is not undone seconds later; the next
+// restart re-picks per the list regardless). It never moves a healthy,
+// allowed session "back up" to a more preferred account: that only happens at
+// the next restart (DecideResidentRestartAccount), so Solo is never bounced
+// between accounts while it has plenty of room.
 func DecideResidentAccount(cfg config.Config, cur string, manual bool, usage map[string]usagebudget.Reading, now time.Time) ResidentDecision {
 	entries, _ := ResidentAccountEntries(cfg)
 	want, ok := residentWanted(cfg, entries, usage, now)
@@ -174,23 +179,51 @@ func DecideResidentAccount(cfg config.Config, cur string, manual bool, usage map
 	if manual {
 		return ResidentDecision{}
 	}
-	rank := residentRank(cfg, entries, cur)
-	if rank < 0 {
+	if residentRank(cfg, entries, cur) < 0 {
 		if !ok || want == cur {
 			return ResidentDecision{}
 		}
 		return ResidentDecision{Target: want, Reason: ResidentMoveNotAllowed}
 	}
-	// Moving back up needs a FRESH reading showing headroom on a more preferred
-	// listed account: unknown or stale is not "recovered" (it would flap between
-	// a preferred account that is still out of budget and the fallback).
-	for i, e := range entries {
-		if i >= rank {
-			break
-		}
-		if e != config.AutoAccountEntry && residentUsable(cfg, usage, e, now) && AccountReadingFresh(usage[e], now) {
-			return ResidentDecision{Target: e, Reason: ResidentMoveBackUp}
-		}
-	}
 	return ResidentDecision{}
+}
+
+// DecideResidentRestartAccount re-picks the best account when the resident
+// (re)starts: a cold start after an exit or crash, or a recycle. cur is the
+// persisted normalized account (however it was chosen: a manual pick is a
+// one-time move for that session, not a hold), and allowMoveUp is false while the automatic-switch cooldown is running (so a
+// move's own restart can never bounce the resident again).
+//
+// A current account that is depleted, no longer valid for Claude or no longer in
+// the list is replaced by the list's first usable account ("unknown reading =
+// usable" when leaving). A healthy listed account moves UP to a more preferred
+// listed one only when allowMoveUp and that account has a FRESH reading with
+// headroom (a stale or unknown reading is not evidence of recovery). Target is
+// empty when the resident stays put.
+func DecideResidentRestartAccount(cfg config.Config, cur string, allowMoveUp bool, usage map[string]usagebudget.Reading, now time.Time) ResidentDecision {
+	entries, _ := ResidentAccountEntries(cfg)
+	rank := residentRank(cfg, entries, cur)
+	if residentUsable(cfg, usage, cur, now) && rank >= 0 {
+		if !allowMoveUp {
+			return ResidentDecision{}
+		}
+		for i, e := range entries {
+			if i >= rank {
+				break
+			}
+			if e != config.AutoAccountEntry && residentUsable(cfg, usage, e, now) && AccountReadingFresh(usage[e], now) {
+				return ResidentDecision{Target: e, Reason: ResidentMoveBackUp}
+			}
+		}
+		return ResidentDecision{}
+	}
+	want, ok := residentWanted(cfg, entries, usage, now)
+	if !ok || want == cur {
+		return ResidentDecision{}
+	}
+	reason := ResidentMoveNotAllowed
+	if AccountDepleted(usage[cur], now) {
+		reason = ResidentMoveDepleted
+	}
+	return ResidentDecision{Target: want, Reason: reason, Urgent: reason == ResidentMoveDepleted}
 }

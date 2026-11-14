@@ -1,11 +1,13 @@
 package daemon
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/claudesession"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
@@ -42,6 +44,7 @@ func (r *moverRunner) Recycle(t *model.Task, _ config.Config, _, _ uint16) error
 
 type switchEnv struct {
 	*resEnv
+	t     *testing.T
 	mover *moverRunner
 	usage map[string]usagebudget.Reading
 	notif *fakeResNotifier
@@ -61,7 +64,7 @@ func newSwitchEnv(t *testing.T) *switchEnv {
 	home := t.TempDir()
 	e.cfg.Accounts = map[string]config.Account{"work": {ClaudeConfigDir: filepath.Join(home, "work")}}
 	e.cfg.Resident.Accounts = []string{"default", "work"}
-	se := &switchEnv{resEnv: e, notif: &fakeResNotifier{}}
+	se := &switchEnv{resEnv: e, t: t, notif: &fakeResNotifier{}}
 	se.mover = &moverRunner{fakeResRunner: e.run}
 	e.m.mover = se.mover
 	e.m.notifier = func() residentNotifier { return se.notif }
@@ -76,6 +79,11 @@ func newSwitchEnv(t *testing.T) *switchEnv {
 	task, err := e.db.ResidentTask()
 	testutil.NoError(t, err)
 	se.task = task
+	// The conversation exists on disk so a move can carry it over.
+	proj, perr := claudesession.ProjectDirIn(filepath.Join(os.Getenv("HOME"), ".claude"), task.Worktree)
+	testutil.NoError(t, perr)
+	testutil.NoError(t, os.MkdirAll(proj, 0o700))
+	testutil.NoError(t, os.WriteFile(filepath.Join(proj, task.SessionID+".jsonl"), []byte(`{"type":"user","sessionId":"`+task.SessionID+`"}`+"\n"), 0o600))
 	h := &moveHandle{liveHandle: liveHandle{alive: true}, idle: true}
 	e.run.sess[task.ID] = &h.liveHandle
 	se.setSession(h)
@@ -218,38 +226,182 @@ func (se *switchEnv) restart() startCall {
 	return se.run.starts[len(se.run.starts)-1]
 }
 
-func TestStart_ResumeNeverSwitchesAccountOrLosesTheConversation(t *testing.T) {
+// A restart that resumes a conversation moves off a depleted or delisted account
+// through the move core: same conversation, one marker, one notice, one board item.
+func TestStart_RestartMovesOffDelistedDepletedAccountKeepingTheConversation(t *testing.T) {
 	se := newSwitchEnv(t)
 	sid := se.task.SessionID
 	testutil.True(t, sid != "")
-	// The list no longer allows the account the resident runs on, and default is
-	// depleted; a restart still resumes on the SAME account: switching belongs to
-	// the tick (transcript copy, debounce, cooldown, notices).
-	se.cfg.Resident.Accounts = []string{"work"}
+	se.cfg.Resident.Accounts = []string{"work"} // default (the running account) is delisted and depleted
 	got := se.restart()
-	testutil.Equal(t, got.task.Account, "")
+	testutil.Equal(t, got.task.Account, "work")
 	testutil.Equal(t, got.task.SessionID, sid)
 	testutil.Equal(t, got.resume, true)
 	row, _ := se.db.Get(se.task.ID)
-	testutil.Equal(t, row.Account, "")
-	testutil.Equal(t, row.SessionID, sid)
+	testutil.Equal(t, row.Account, "work")
+	ov, ok, _ := se.db.ResidentAccountOverride(se.task.ID)
+	testutil.True(t, ok)
+	testutil.Equal(t, ov.By, db.OverrideByAuto)
+	testutil.Equal(t, len(se.notif.calls), 1)
+	testutil.Contains(t, se.notif.calls[0].text, "Continue whatever you were doing")
+	testutil.Equal(t, len(se.boardItems(t)), 1)
+	testutil.False(t, se.db.ResidentLastAutoSwitch(se.task.ID).IsZero())
+	// The next ordinary restart stays on work: no second move.
+	again := se.restart()
+	testutil.Equal(t, again.task.Account, "work")
+	testutil.Equal(t, len(se.notif.calls), 1)
+}
+
+// With a healthy account and no better one, a restart changes nothing.
+func TestStart_RestartStaysPutWhenNothingIsBetter(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.recovered("default")
+	got := se.restart()
+	testutil.Equal(t, got.task.Account, "")
 	testutil.Equal(t, len(se.notif.calls), 0)
-	testutil.Equal(t, len(se.boardItems(t)), 0)
 	_, ok, _ := se.db.ResidentAccountOverride(se.task.ID)
 	testutil.False(t, ok)
-	testutil.True(t, se.db.ResidentLastAutoSwitch(se.task.ID).IsZero())
+}
+
+// onWork puts the resident on "work" (an earlier auto move), default preferred.
+func (se *switchEnv) onWork(by string, ago time.Duration) {
+	testutil.NoError(se.t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
+		db.ResidentAccountOverride{Account: "work", By: by}))
+	row, _ := se.db.Get(se.task.ID)
+	se.task = row
+	if ago > 0 {
+		old := time.Now().Add(-ago).UTC().Format(db.ResidentTimeFormat)
+		testutil.NoError(se.t, se.db.SetMeta(se.task.ID, db.ResidentMetaNamespace, db.MetaKeyLastAutoSwitch, old))
+	}
+}
+
+func TestStart_RestartPicksPreferredAccountWithAFreshReading(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.recovered("default") // preferred, fresh reading, room
+	se.onWork(db.OverrideByAuto, time.Hour)
+	got := se.restart()
+	testutil.Equal(t, got.task.Account, "")
+	testutil.Equal(t, got.resume, true)
+	testutil.Equal(t, got.task.SessionID, se.task.SessionID)
+	row, _ := se.db.Get(se.task.ID)
+	testutil.Equal(t, row.Account, "")
+	testutil.Equal(t, len(se.notif.calls), 1)
+	testutil.Contains(t, se.notif.calls[0].text, "back to default")
+	items := se.boardItems(t)
+	testutil.Equal(t, len(items), 1)
+	testutil.Equal(t, items[0].Kind, "fyi")
+	ov, _, _ := se.db.ResidentAccountOverride(se.task.ID)
+	testutil.Equal(t, ov.By, db.OverrideByAuto)
+}
+
+func TestStart_RestartStaysWhenPreferredReadingIsStaleOrUnknown(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.onWork(db.OverrideByAuto, time.Hour)
+	stale := time.Now().Add(-3 * time.Hour)
+	se.usage["default"] = usagebudget.Reading{Percentage: 5, FiveHour: &usagebudget.Window{Percentage: 5, ResetAt: time.Now().Add(time.Hour), LastProbedAt: stale}}
+	testutil.Equal(t, se.restart().task.Account, "work")
+	delete(se.usage, "default")
+	testutil.Equal(t, se.restart().task.Account, "work")
+	testutil.Equal(t, len(se.notif.calls), 0)
+}
+
+// A manual `>` pick is a one-time move: its own restart stays put, and a later
+// restart re-picks the best account per the list.
+func TestStart_ManualPickDoesNotSurviveARestart(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.recovered("default")
+	clock := time.Now()
+	se.m.now = func() time.Time { return clock }
+	_, err := se.m.MoveAccount("work", true)
+	testutil.NoError(t, err)
+	row, _ := se.db.Get(se.task.ID)
+	testutil.Equal(t, row.Account, "work")
+	// The move's own restart (or a crash right after it) does not re-pick.
+	testutil.Equal(t, se.restart().task.Account, "work")
+	// Later, the restart re-picks the preferred account (fresh reading, cooldown clear).
+	clock = clock.Add(residentOwnRestartWindow + time.Minute)
+	se.recovered("default")
+	got := se.restart()
+	testutil.Equal(t, got.task.Account, "")
+	testutil.Equal(t, got.resume, true)
+}
+
+// The restart a move performs does not re-run the pick: the cooldown it stamped
+// keeps even a recovered preferred account from pulling Solo straight back.
+func TestStart_MovesOwnRestartDoesNotMoveAgain(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.tickN(2) // depleted default -> work, stamps the cooldown
+	testutil.True(t, se.moved())
+	testutil.Equal(t, len(se.notif.calls), 1)
+	se.recovered("default") // preferred recovers right away
+	got := se.restart()     // the move's restart (or a crash right after it)
+	testutil.Equal(t, got.task.Account, "work")
+	testutil.Equal(t, len(se.notif.calls), 1)
+	testutil.Equal(t, len(se.boardItems(t)), 1)
+}
+
+// A running session with plenty of room never moves, even after the preferred
+// account recovers: moving back up happens only at a restart.
+func TestAutoSwitch_RunningSessionNeverMovesUp(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.recovered("default")
+	se.onWork(db.OverrideByAuto, time.Hour)
+	se.tickN(8)
+	testutil.False(t, se.moved())
+	row, _ := se.db.Get(se.task.ID)
+	testutil.Equal(t, row.Account, "work")
+}
+
+func TestRecycle_RepicksAccountWithoutCarryingAConversation(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.recovered("default")
+	se.onWork(db.OverrideByAuto, time.Hour)
+	task, _ := se.db.Get(se.task.ID)
+	note := se.m.repickForRecycle(task)
+	testutil.Contains(t, note, "back to default")
+	testutil.Contains(t, note, "no earlier conversation")
+	testutil.Equal(t, task.Account, "")
+	row, _ := se.db.Get(se.task.ID)
+	testutil.Equal(t, row.Account, "")
+	testutil.Equal(t, len(se.boardItems(t)), 1)
+	testutil.False(t, se.moved()) // no kick/recycle from the move core: the recycle restarts it
+	testutil.Equal(t, len(se.notif.calls), 0)
+}
+
+func TestRecycle_ManualPickDoesNotSurvive(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.recovered("default")
+	se.onWork(db.OverrideByManual, time.Hour)
+	task, _ := se.db.Get(se.task.ID)
+	testutil.Contains(t, se.m.repickForRecycle(task), "back to default")
+	testutil.Equal(t, task.Account, "")
+}
+
+func TestRecycle_RespectsCooldownAndSetting(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.recovered("default")
+	se.onWork(db.OverrideByAuto, time.Minute) // cooldown running
+	task, _ := se.db.Get(se.task.ID)
+	testutil.Equal(t, se.m.repickForRecycle(task), "")
+	old := time.Now().Add(-time.Hour).UTC().Format(db.ResidentTimeFormat)
+	testutil.NoError(t, se.db.SetMeta(se.task.ID, db.ResidentMetaNamespace, db.MetaKeyLastAutoSwitch, old))
+	se.cfg.Resident.AutoSwitchAccount = false
+	testutil.Equal(t, se.m.repickForRecycle(task), "")
 }
 
 func TestStart_ReattachKeepsTheRunningAccount(t *testing.T) {
 	se := newSwitchEnv(t)
 	se.cfg.Resident.Accounts = []string{"work"}
-	delete(se.run.sess, se.task.ID)
+	// The runner still holds a handle for the task, so the start reattaches
+	// instead of spawning: the process keeps its account, no re-pick.
+	dead := &moveHandle{liveHandle: liveHandle{alive: false}}
 	se.run.reattach = true
-	se.m.runner = se.run
+	se.m.runner = &sessRunner{moverRunner: se.mover, h: dead}
 	se.m.nextAttempt = time.Time{}
 	se.m.tick()
 	row, _ := se.db.Get(se.task.ID)
 	testutil.Equal(t, row.Account, "") // DB account still matches the process that is running
+	testutil.Equal(t, len(se.notif.calls), 0)
 }
 
 func TestStart_FreshStartSkipsDepletedAndMissingListedAccounts(t *testing.T) {
@@ -274,44 +426,11 @@ func TestStart_FirstStartUsesListNotDefault(t *testing.T) {
 	testutil.Equal(t, e.run.starts[0].task.Account, "personal")
 }
 
-func TestAutoSwitch_MovesBackUpWhenPreferredRecovers(t *testing.T) {
-	se := newSwitchEnv(t)
-	// Resident currently on work (auto-moved earlier); default (preferred) shows a fresh reading with room.
-	se.recovered("default")
-	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
-		db.ResidentAccountOverride{Account: "work", By: db.OverrideByAuto}))
-	// Cooldown long past.
-	old := time.Now().Add(-time.Hour).UTC().Format(db.ResidentTimeFormat)
-	testutil.NoError(t, se.db.SetMeta(se.task.ID, db.ResidentMetaNamespace, db.MetaKeyLastAutoSwitch, old))
-	se.tickN(1)
-	testutil.False(t, se.moved())
-	se.tickN(1)
-	testutil.True(t, se.moved())
-	row, _ := se.db.Get(se.task.ID)
-	testutil.Equal(t, row.Account, "")
-	testutil.Contains(t, se.notif.calls[len(se.notif.calls)-1].text, "back to default")
-	testutil.Contains(t, se.notif.calls[len(se.notif.calls)-1].text, "Continue whatever you were doing")
-}
-
-func TestAutoSwitch_ManualChoiceNotMovedBackUp(t *testing.T) {
+func TestAutoSwitch_ManualChoiceNotMoved(t *testing.T) {
 	se := newSwitchEnv(t)
 	se.recovered("default")
-	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
-		db.ResidentAccountOverride{Account: "work", By: db.OverrideByManual}))
-	row, _ := se.db.Get(se.task.ID)
-	se.task = row
+	se.onWork(db.OverrideByManual, 0)
 	se.tickN(6)
-	testutil.False(t, se.moved())
-}
-
-func TestAutoSwitch_CooldownAppliesToMoveBackUp(t *testing.T) {
-	se := newSwitchEnv(t)
-	se.recovered("default")
-	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
-		db.ResidentAccountOverride{Account: "work", By: db.OverrideByAuto}))
-	recent := time.Now().Add(-2 * time.Minute).UTC().Format(db.ResidentTimeFormat)
-	testutil.NoError(t, se.db.SetMeta(se.task.ID, db.ResidentMetaNamespace, db.MetaKeyLastAutoSwitch, recent))
-	se.tickN(5)
 	testutil.False(t, se.moved())
 }
 
@@ -393,6 +512,23 @@ func TestAutoSwitch_WeeklyLimitWaitFooterIsSwitchable(t *testing.T) {
 	testutil.Equal(t, ov.By, db.OverrideByAuto)
 }
 
+// The `>` picker on the Solo tab works while Solo sits on the usage-limit wait
+// screen: raw output never goes quiet, so the picker forces the move (the
+// daemon refuses an unforced one as busy), and the pick is a manual hold.
+func TestMoveAccount_ManualWorksOnLimitWaitScreen(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.h.idle = false
+	se.h.tail = []byte(limitWaitScreen)
+	_, err := se.m.MoveAccount("work", false)
+	testutil.ErrorIs(t, err, agent.ErrAccountMoveBusy)
+	res, err := se.m.MoveAccount("work", true)
+	testutil.NoError(t, err)
+	testutil.Equal(t, res.To, "work")
+	ov, ok, _ := se.db.ResidentAccountOverride(se.task.ID)
+	testutil.True(t, ok)
+	testutil.Equal(t, ov.By, db.OverrideByManual)
+}
+
 func TestAutoSwitch_WorkingScreenIsNotSwitchable(t *testing.T) {
 	se := newSwitchEnv(t)
 	se.h.idle = false
@@ -403,27 +539,6 @@ func TestAutoSwitch_WorkingScreenIsNotSwitchable(t *testing.T) {
 		clock = clock.Add(5 * time.Second)
 		se.m.tick()
 	}
-	testutil.False(t, se.moved())
-}
-
-// The preferred account's reading going stale is NOT recovery: no flapping back
-// to an account that may still be out of budget.
-func TestAutoSwitch_StaleReadingOnPreferredAccountNeverMovesBackUp(t *testing.T) {
-	se := newSwitchEnv(t)
-	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
-		db.ResidentAccountOverride{Account: "work", By: db.OverrideByAuto}))
-	row, _ := se.db.Get(se.task.ID)
-	se.task = row
-	old := time.Now().Add(-time.Hour).UTC().Format(db.ResidentTimeFormat)
-	testutil.NoError(t, se.db.SetMeta(se.task.ID, db.ResidentMetaNamespace, db.MetaKeyLastAutoSwitch, old))
-	// default's depleted reading aged out of the usage cache (older than CacheMaxAge).
-	stale := time.Now().Add(-3 * time.Hour)
-	se.usage["default"] = usagebudget.Reading{Percentage: 100, FiveHour: &usagebudget.Window{Percentage: 100, ResetAt: time.Now().Add(time.Hour), LastProbedAt: stale}}
-	se.tickN(6)
-	testutil.False(t, se.moved())
-	// Absent entirely: same.
-	delete(se.usage, "default")
-	se.tickN(6)
 	testutil.False(t, se.moved())
 }
 
@@ -458,15 +573,11 @@ func TestAutoSwitch_NonUrgentMovesNeedNoPromptAndNoDraft(t *testing.T) {
 	setup := func(t *testing.T) *switchEnv {
 		se := newSwitchEnv(t)
 		se.recovered("default")
-		testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
-			db.ResidentAccountOverride{Account: "work", By: db.OverrideByAuto}))
-		row, _ := se.db.Get(se.task.ID)
-		se.task = row
-		old := time.Now().Add(-time.Hour).UTC().Format(db.ResidentTimeFormat)
-		testutil.NoError(t, se.db.SetMeta(se.task.ID, db.ResidentMetaNamespace, db.MetaKeyLastAutoSwitch, old))
+		se.onWork(db.OverrideByAuto, time.Hour)
+		se.cfg.Resident.Accounts = []string{"default"} // work is no longer listed
 		return se
 	}
-	t.Run("pending prompt blocks move back up", func(t *testing.T) {
+	t.Run("pending prompt blocks an off-list move", func(t *testing.T) {
 		se := setup(t)
 		se.m.waiting = func(string) bool { return true }
 		se.tickN(6)
@@ -475,7 +586,7 @@ func TestAutoSwitch_NonUrgentMovesNeedNoPromptAndNoDraft(t *testing.T) {
 		se.tickN(2)
 		testutil.True(t, se.moved())
 	})
-	t.Run("unsent draft blocks move back up", func(t *testing.T) {
+	t.Run("unsent draft blocks an off-list move", func(t *testing.T) {
 		se := setup(t)
 		draft := true
 		se.m.draftFn = func(agent.SessionHandle) bool { return draft }
