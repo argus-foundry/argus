@@ -27,10 +27,10 @@ func ResidentAccountEntries(cfg config.Config) (entries, notes []string) {
 	seen := map[string]bool{}
 	for i, r := range raw {
 		r = strings.TrimSpace(r)
-		switch {
-		case r == "":
+		switch r {
+		case "":
 			continue
-		case r == config.AutoAccountEntry:
+		case config.AutoAccountEntry:
 			entries = append(entries, config.AutoAccountEntry)
 			if i < len(raw)-1 {
 				notes = append(notes, "entries after auto are ignored")
