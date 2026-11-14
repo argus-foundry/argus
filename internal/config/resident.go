@@ -30,6 +30,11 @@ type ResidentConfig struct {
 	// Model and Account optionally override the resolved model / account.
 	Model   string `toml:"model"`
 	Account string `toml:"account"`
+	// AutoSwitchAccount (default true) lets the daemon move the resident to
+	// another Claude account when its current one is out of usage budget. A
+	// resident move (manual or automatic) stores a runtime override that
+	// outranks Account until Account is edited.
+	AutoSwitchAccount bool `toml:"auto_switch_account"`
 	// AllowTools run ordinary built-ins, Argus tools and reviewed connector
 	// reads/drafts without a prompt. The non-bypass default mode still asks
 	// for unmatched tools; user ask/deny rules and structural Hera tiers win.
@@ -85,8 +90,9 @@ func ExpandResidentConnectorRules(rules []string) []string {
 // DefaultResidentConfig returns the shipped [resident] defaults.
 func DefaultResidentConfig(budget int) ResidentConfig {
 	return ResidentConfig{
-		MaxWorkers:    8,
-		ContextBudget: budget,
+		MaxWorkers:        8,
+		AutoSwitchAccount: true,
+		ContextBudget:     budget,
 		MemoryDir:     "resident",
 		AllowTools: []string{
 			// Explicit built-ins: global allow wildcards are not supported by Claude.

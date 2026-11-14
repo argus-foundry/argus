@@ -216,6 +216,9 @@ func (d *DB) Config() config.Config {
 	if v, ok := kv["resident.account"]; ok {
 		cfg.Resident.Account = v
 	}
+	if v, ok := kv["resident.auto_switch_account"]; ok {
+		cfg.Resident.AutoSwitchAccount = v != "false"
+	}
 
 	// Supervisor config. Absent key ⇒ true (on by default as of P4 — the base
 	// value from DefaultConfig is true, mirroring hera.enabled): agents run

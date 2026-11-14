@@ -28,6 +28,7 @@ const (
 	resKeyMemory           = "resident.memory_dir"
 	resKeyModel            = "resident.model"
 	resKeyAccount          = "resident.account"
+	resKeyAutoSwitch       = "resident.auto_switch_account"
 	// resKeyTools is the read-only pointer row (allow_tools/ask_tools/deny_tools live in
 	// config.toml only).
 	resKeyTools = "resident.tools"
@@ -72,6 +73,7 @@ func (sv *SettingsView) residentRows() []settingsRow {
 		field(resKeyMemory, "Memory dir", r.MemoryDir, "(default)"),
 		field(resKeyModel, "Model", r.Model, "(default)"),
 		field(resKeyAccount, "Account", r.Account, "(default)"),
+		{kind: srResident, key: resKeyAutoSwitch, label: "Auto-switch account when out of budget: " + onOff(r.AutoSwitchAccount)},
 		{kind: srResident, key: resKeyTools, label: "Tool permissions: config.toml"},
 	}
 	if sv.residentMaxWorkersOverridden() {
@@ -169,6 +171,9 @@ func (sv *SettingsView) handleResidentEnter(key string) bool {
 	}
 	if key == resKeyEnabled {
 		return sv.toggleResidentEnabled()
+	}
+	if key == resKeyAutoSwitch {
+		return sv.persistResident(key, strconv.FormatBool(!sv.database.Config().Resident.AutoSwitchAccount))
 	}
 	r := sv.database.Config().Resident
 	buf := ""
@@ -307,4 +312,11 @@ func (sv *SettingsView) renderResidentDetail(screen tcell.Screen, x, y, w, h int
 	if sv.residentReason != "" && h > line-y {
 		widget.DrawText(screen, x, line, w, "Not running: "+sv.residentReason, theme.StyleDimmed)
 	}
+}
+
+func onOff(b bool) string {
+	if b {
+		return "ON"
+	}
+	return "OFF"
 }
