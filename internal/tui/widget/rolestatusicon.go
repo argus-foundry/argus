@@ -12,13 +12,12 @@ import (
 // The caller derives these from its RoleView; this package stays hera-agnostic
 // (it must not import hera, which would cycle).
 type RoleStatusInputs struct {
-	// Disconnected: the bound task's session is not running (absent from the
-	// daemon's alive set past the grace ticks, fail-open on an unreadable list —
-	// agent.DisconnectedIDs). Renders a dim hollow circle. Ranks below
-	// needs-input and the active spinner, ABOVE accepted/ready_to_close/failed/
-	// done/idle/live: those are stale-able resting states, and a dead agent
-	// sitting behind a stale ready_to_close is exactly the case that looks alive
-	// (show-disconnected-agents D2). Complete tasks are never marked upstream.
+	// Disconnected ("detached"): the bound task's session is not running (absent
+	// from the daemon's alive set past the grace ticks, fail-open on an
+	// unreadable list — agent.DisconnectedIDs). It does NOT change which glyph
+	// is chosen (grey-detached-status-icon): the role's normal icon is rendered
+	// in the dimmed grey style, with the Active spinner frozen. Complete tasks
+	// are never marked upstream.
 	Disconnected bool
 	// Accepted: bound task's TaskStatus is complete — coordinator-accepted via
 	// hera_accept, or gater auto-accept on plan-DAG rollforward
@@ -59,7 +58,7 @@ type RoleStatusInputs struct {
 // (BUG-007). `frame` is the current spinner animation frame (the Active case
 // animates via SpinnerFrame); `dim` forces the dimmed style for archived
 // placement (the glyph never lies — only the style dims). Precedence:
-// needs-input → active(spinner) → disconnected(dim ○) → accepted(bold ✓) → ready_to_close → failed(red ✕) → done → idle → live → default.
+// needs-input → active(spinner) → accepted(bold ✓) → ready_to_close → failed(red ✕) → done → idle → live → default.
 //
 // needs-input outranks everything (BUG-A): a worker GENUINELY blocked on a user
 // prompt is the one actionable thing in the subtree — it must never be masked.
@@ -85,10 +84,6 @@ type RoleStatusInputs struct {
 // exclusive in practice). needs-input is content-aware upstream, so a
 // ready_to_close worker merely idling at its done summary (no interactive
 // affordance, not active) still renders the review glyph.
-// IconDisconnected is the hollow grey circle shown when an agent's session is
-// not running (shared by the Hera rail, plan view, and Tasks-tab list).
-const IconDisconnected = '○'
-
 func RoleStatusIcon(in RoleStatusInputs, dim bool, frame int) (rune, tcell.Style) {
 	var glyph rune
 	var style tcell.Style
@@ -96,12 +91,14 @@ func RoleStatusIcon(in RoleStatusInputs, dim bool, frame int) (rune, tcell.Style
 	case in.NeedsInput:
 		glyph, style = theme.IconNeedsInput, theme.StyleNeedsInput
 	case in.Active:
+		// A detached role is not producing output: a static glyph (frame 0).
+		if in.Disconnected {
+			frame = 0
+		}
 		// BUG-F: honest content-derived "producing output now" — outranks the
 		// stale-able ready_to_close/failed/done stamps below. Drops to false the
 		// moment the session idles/exits, so those resting glyphs then return.
 		glyph, style = SpinnerFrame(frame), theme.StyleInProgress
-	case in.Disconnected:
-		glyph, style = IconDisconnected, theme.StyleDimmed
 	case in.Accepted:
 		// add-hera-accept-lifecycle: bold checkmark, distinct from Done's plain
 		// checkmark and ReadyToClose's bold clipboard-check icon.
@@ -121,7 +118,7 @@ func RoleStatusIcon(in RoleStatusInputs, dim bool, frame int) (rune, tcell.Style
 	default:
 		glyph, style = theme.IconMoonOutline, theme.StyleDimmed
 	}
-	if dim {
+	if dim || in.Disconnected {
 		style = theme.StyleDimmed
 	}
 	return glyph, style

@@ -41,12 +41,13 @@ func TestRoleStatusIcon_Precedence(t *testing.T) {
 		{"active over ready_to_close (BUG-F)", RoleStatusInputs{Active: true, ReadyToClose: true}, SpinnerFrame(frame)},
 		{"active over failed", RoleStatusInputs{Active: true, Failed: true}, SpinnerFrame(frame)},
 		{"active over done", RoleStatusInputs{Active: true, Done: true}, SpinnerFrame(frame)},
-		// show-disconnected-agents D2: below needs-input/active, above every resting state.
-		{"needs-input over disconnected", RoleStatusInputs{NeedsInput: true, Disconnected: true}, theme.IconNeedsInput},
-		{"active over disconnected", RoleStatusInputs{Active: true, Disconnected: true}, SpinnerFrame(frame)},
-		{"disconnected over ready_to_close", RoleStatusInputs{Disconnected: true, ReadyToClose: true}, IconDisconnected},
-		{"disconnected over accepted", RoleStatusInputs{Disconnected: true, Accepted: true}, IconDisconnected},
-		{"disconnected over done/idle/live", RoleStatusInputs{Disconnected: true, Done: true, Idle: true, Live: true}, IconDisconnected},
+		// grey-detached-status-icon: Disconnected never changes the glyph choice.
+		{"needs-input detached", RoleStatusInputs{NeedsInput: true, Disconnected: true}, theme.IconNeedsInput},
+		{"active detached → static frame 0", RoleStatusInputs{Active: true, Disconnected: true}, SpinnerFrame(0)},
+		{"detached ready_to_close keeps review glyph", RoleStatusInputs{Disconnected: true, ReadyToClose: true}, theme.IconReview},
+		{"detached accepted keeps check", RoleStatusInputs{Disconnected: true, Accepted: true}, '✓'},
+		{"detached failed keeps ✕", RoleStatusInputs{Disconnected: true, Failed: true}, '✕'},
+		{"detached idle keeps moon", RoleStatusInputs{Disconnected: true, Idle: true, Live: true}, theme.IconMoonOutline},
 		{"active → spinner frame", RoleStatusInputs{Active: true}, SpinnerFrame(frame)},
 		// Resting states (NOT active) rank among themselves exactly as before.
 		{"ready_to_close over failed/done (resting)", RoleStatusInputs{ReadyToClose: true, Failed: true, Done: true}, theme.IconReview},
@@ -121,6 +122,21 @@ func TestRoleStatusIcon_DimForcesDimStyle(t *testing.T) {
 }
 
 func TestRoleStatusIcon_DisconnectedStyle(t *testing.T) {
-	_, style := RoleStatusIcon(RoleStatusInputs{Disconnected: true}, false, 0)
-	testutil.Equal(t, style, theme.StyleDimmed)
+	for _, in := range []RoleStatusInputs{
+		{}, {NeedsInput: true}, {Active: true}, {Accepted: true}, {ReadyToClose: true},
+		{Failed: true}, {Done: true}, {Idle: true}, {Live: true},
+	} {
+		in.Disconnected = true
+		_, style := RoleStatusIcon(in, false, 0)
+		testutil.Equal(t, style, theme.StyleDimmed)
+	}
+}
+
+func TestRoleStatusIcon_DetachedSpinnerStatic(t *testing.T) {
+	in := RoleStatusInputs{Active: true, Disconnected: true}
+	g0, _ := RoleStatusIcon(in, false, 0)
+	for f := 1; f < SpinnerFrameCount(); f++ {
+		g, _ := RoleStatusIcon(in, false, f)
+		testutil.Equal(t, g, g0)
+	}
 }

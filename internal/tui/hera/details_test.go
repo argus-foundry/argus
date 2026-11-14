@@ -656,8 +656,9 @@ func TestRosterStatusText_Precedence(t *testing.T) {
 
 	// show-disconnected-agents: disconnected outranks the stale-able resting
 	// states but not needs-input/working.
-	testutil.Equal(t, rosterStatusText(&heramodel.RoleView{Disconnected: true, ReadyToClose: true}, false), "disconnected")
-	testutil.Equal(t, rosterStatusText(&heramodel.RoleView{Disconnected: true, NeedsInput: true}, false), "needs-input")
+	testutil.Equal(t, rosterStatusText(&heramodel.RoleView{Disconnected: true, ReadyToClose: true}, false), "ready · detached")
+	testutil.Equal(t, rosterStatusText(&heramodel.RoleView{Disconnected: true, ReadyToClose: true}, true), "ready PR · detached")
+	testutil.Equal(t, rosterStatusText(&heramodel.RoleView{Disconnected: true, NeedsInput: true}, false), "needs-input · detached")
 
 	// A coordinator's own task reaching StatusComplete carries no accept
 	// semantics (hera_accept/gater auto-accept only ever act on a worker's

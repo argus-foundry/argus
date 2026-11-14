@@ -64,6 +64,7 @@ type TaskListView struct {
 	tasks         []*model.Task
 	rows          []taskRow
 	running       map[string]bool
+	detached      map[string]bool
 	idle          map[string]bool
 	idleUnvisited map[string]bool          // task IDs idle since user last viewed the agent view
 	needsInput    map[string]bool          // task IDs whose agent appears blocked on a user prompt
@@ -202,6 +203,18 @@ func (tl *TaskListView) SetTasks(tasks []*model.Task) {
 	}
 	tl.clampCursor()
 }
+
+// SetDetached updates the set of detached task IDs (session absent past the
+// grace ticks): their status glyph renders grey.
+func (tl *TaskListView) SetDetached(ids []string) {
+	tl.detached = make(map[string]bool, len(ids))
+	for _, id := range ids {
+		tl.detached[id] = true
+	}
+}
+
+// IsDetached reports whether the task is currently marked detached.
+func (tl *TaskListView) IsDetached(id string) bool { return tl.detached[id] }
 
 // SetRunning updates the set of running task IDs.
 func (tl *TaskListView) SetRunning(ids []string) {
@@ -1492,6 +1505,7 @@ func (tl *TaskListView) drawTaskRow(screen tcell.Screen, x, y, w int, task *mode
 		IdleUnvisited: tl.idleUnvisited[task.ID],
 		Running:       tl.running[task.ID],
 		Idle:          tl.idle[task.ID],
+		Detached:      tl.detached[task.ID],
 	}, tl.animFrame)
 
 	// Build the row. A dimmed cursor (the jump switcher's inactive column)

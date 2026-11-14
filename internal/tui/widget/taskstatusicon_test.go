@@ -48,3 +48,29 @@ func TestCurrentSpinnerFrame(t *testing.T) {
 		t.Errorf("CurrentSpinnerFrame() = %d, out of range [0, %d)", f, SpinnerFrameCount())
 	}
 }
+
+// TestTaskStatusIcon_Detached: a detached task keeps its normal glyph, greyed,
+// with the spinner frozen (grey-detached-status-icon).
+func TestTaskStatusIcon_Detached(t *testing.T) {
+	cases := []struct {
+		name   string
+		status model.Status
+		in     TaskStatusInputs
+		want   rune
+	}{
+		{"in_review", model.StatusInReview, TaskStatusInputs{}, theme.IconReview},
+		{"in_progress needs-input", model.StatusInProgress, TaskStatusInputs{NeedsInput: true}, theme.IconNeedsInput},
+		{"in_progress not running", model.StatusInProgress, TaskStatusInputs{}, theme.IconMoonOutline},
+		{"in_progress running", model.StatusInProgress, TaskStatusInputs{Running: true}, SpinnerFrame(0)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.in.Detached = true
+			for f := 0; f < SpinnerFrameCount(); f++ {
+				g, style := TaskStatusIcon(tc.status, tc.in, f)
+				testutil.Equal(t, g, tc.want)
+				testutil.Equal(t, style, theme.StyleDimmed)
+			}
+		})
+	}
+}
