@@ -22,6 +22,6 @@
 
 ## 4. Ship
 
-- [ ] 4.1 `make pre-pr` clean.
-- [ ] 4.2 `openspec archive grey-detached-status-icon --yes`, `openspec validate --all --strict`, commit.
-- [ ] 4.3 Open PR via iris_gh_pr_create.
+- [x] 4.1 `make pre-pr` clean.
+- [x] 4.2 `openspec archive grey-detached-status-icon --yes`, `openspec validate --all --strict`, commit.
+- [x] 4.3 Open PR via iris_gh_pr_create.
