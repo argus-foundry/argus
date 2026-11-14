@@ -295,7 +295,7 @@ func TestArchiveRole_SessionTurnsBusyBeforeCommitRollsBack(t *testing.T) {
 	run := &flipRunner{fakeArchiveRunner: fakeArchiveRunner{alive: true, idle: true}}
 	res := ArchiveRole(d, run, gitOK, r, false)
 	testutil.Equal(t, res.Archived, false)
-	testutil.Contains(t, res.Reason, "busy")
+	testutil.Contains(t, res.Reason, "became busy") // PreCommit refusal, not the earlier pre-check
 	testutil.Equal(t, len(run.stopped), 0)
 	got, _ := d.Get(task.ID)
 	testutil.Equal(t, got.Archived, false)
@@ -562,6 +562,7 @@ func TestArchivableVerdict_EndedUnrelatedCoordinatorIsNotBridge(t *testing.T) {
 // Gap 1: state that changes AFTER the predicate (e.g. during the slow git
 // check) must still stop the archive.
 func TestArchiveRole_StateChangeDuringGitCheckIsCaught(t *testing.T) {
+	wantReason := map[string]string{"new live binding": "another live role", "new unread mail": "unread", "task reopened": "not complete"}
 	cases := map[string]func(t *testing.T, d *db.DB, orchID int64, task *model.Task, r *db.HeraRole){
 		"new live binding": func(t *testing.T, d *db.DB, _ int64, task *model.Task, _ *db.HeraRole) {
 			o2, _ := d.CreateHeraOrchestrator("o2", "master")
@@ -592,6 +593,9 @@ func TestArchiveRole_StateChangeDuringGitCheckIsCaught(t *testing.T) {
 			}
 			res := ArchiveRole(d, nil, slowGit, r, false)
 			testutil.Equal(t, res.Archived, false)
+			// Reached the IN-TRANSACTION guard (not an earlier Go re-check).
+			testutil.Contains(t, res.Reason, "changed during archive:")
+			testutil.Contains(t, res.Reason, wantReason[name])
 			got, _ := d.Get(task.ID)
 			testutil.Equal(t, got.Archived, false)
 		})
@@ -620,4 +624,53 @@ func TestArchive_SubCoordinatorArchivesChildOrchestrator(t *testing.T) {
 			testutil.Equal(t, o.ArchivedAt != nil, true)
 		})
 	}
+}
+
+// BlockedOnPrompt flipping inside the PreCommit hook also rolls back.
+type promptFlipRunner struct {
+	fakeArchiveRunner
+	calls int
+}
+
+func (p *promptFlipRunner) BlockedOnPrompt(string) bool { p.calls++; return p.calls >= 2 }
+
+func TestArchiveRole_PromptParkedBeforeCommitRollsBack(t *testing.T) {
+	d := archDB(t)
+	orch, _ := d.CreateHeraOrchestrator("o", "master")
+	task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+	run := &promptFlipRunner{fakeArchiveRunner: fakeArchiveRunner{alive: true, idle: true}}
+	res := ArchiveRole(d, run, gitOK, r, false)
+	testutil.Equal(t, res.Archived, false)
+	testutil.Contains(t, res.Reason, "became busy")
+	got, _ := d.Get(task.ID)
+	testutil.Equal(t, got.Archived, false)
+}
+
+// Stop runs only AFTER the archive is committed (so an exit hook cannot race a
+// non-complete status onto an archive in flight).
+type orderRunner struct {
+	fakeArchiveRunner
+	d                                      *db.DB
+	taskID                                 string
+	roleID                                 int64
+	sawArchivedAtStop, sawRoleHiddenAtStop bool
+}
+
+func (o *orderRunner) Stop(id string) error {
+	t, _ := o.d.Get(id)
+	r, _ := o.d.HeraRole(o.roleID)
+	o.sawArchivedAtStop = t != nil && t.Archived
+	o.sawRoleHiddenAtStop = r != nil && r.ArchivedAt != nil
+	return nil
+}
+
+func TestArchiveRole_StopRunsAfterCommit(t *testing.T) {
+	d := archDB(t)
+	orch, _ := d.CreateHeraOrchestrator("o", "master")
+	task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+	run := &orderRunner{fakeArchiveRunner: fakeArchiveRunner{alive: true, idle: true}, d: d, taskID: task.ID, roleID: r.ID}
+	res := ArchiveRole(d, run, gitOK, r, false)
+	testutil.Equal(t, res.Archived, true)
+	testutil.Equal(t, run.sawArchivedAtStop, true)
+	testutil.Equal(t, run.sawRoleHiddenAtStop, true)
 }

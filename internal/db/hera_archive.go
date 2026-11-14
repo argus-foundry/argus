@@ -125,18 +125,21 @@ func (d *DB) ArchiveHeraUnit(in ArchiveUnitInput) (string, error) {
 			formatTime(time.Now()), HeraEndReasonAccepted, taskID, string(HeraKindCoordinator)); err != nil {
 			return fmt.Errorf("end coordinator bindings: %w", err)
 		}
+		// Link-only children (TUI adopt) have a coordinator on a DIFFERENT task:
+		// end those hats too, so no live coordinator outlives its archived orchestrator.
+		for _, k := range kids {
+			if _, err := tx.Exec(`UPDATE hera_bindings SET ended_at=?, end_reason=?
+				WHERE ended_at IS NULL AND orchestrator_id=? AND role_id IN (SELECT id FROM hera_roles WHERE kind=?)`,
+				formatTime(time.Now()), HeraEndReasonAccepted, k, string(HeraKindCoordinator)); err != nil {
+				return fmt.Errorf("end child orchestrator %d coordinator bindings: %w", k, err)
+			}
+		}
 		if err := archiveStep("end_hat"); err != nil {
 			return err
 		}
 		for _, k := range kids {
-			now := formatTime(time.Now())
-			if _, err := tx.Exec(`UPDATE hera_orchestrators SET archived_at=?, pinned_at=NULL WHERE id=? AND archived_at IS NULL`, now, k); err != nil {
+			if _, err := tx.Exec(`UPDATE hera_orchestrators SET archived_at=?, pinned_at=NULL WHERE id=? AND archived_at IS NULL`, formatTime(time.Now()), k); err != nil {
 				return fmt.Errorf("archive child orchestrator %d: %w", k, err)
-			}
-			if _, err := tx.Exec(`UPDATE hera_roles SET cancelled_at=COALESCE(cancelled_at, ?)
-				WHERE orchestrator_id=? AND kind=? AND archived_at IS NULL AND cancelled_at IS NULL
-				  AND NOT EXISTS (SELECT 1 FROM hera_bindings b WHERE b.role_id = hera_roles.id)`, now, k, string(HeraKindWorker)); err != nil {
-				return fmt.Errorf("cancel planned children of %d: %w", k, err)
 			}
 		}
 		if err := archiveStep("child_orch"); err != nil {
@@ -263,6 +266,10 @@ func archiveChildOrchs(tx *sql.Tx, role *HeraRole, taskID string) ([]int64, erro
 
 func archiveUnitKidChecks(tx *sql.Tx, kids []int64) error {
 	for _, k := range kids {
+		var orchName string
+		if err := tx.QueryRow(`SELECT name FROM hera_orchestrators WHERE id=?`, k).Scan(&orchName); err == nil && orchName == ResidentOrchestratorName {
+			return archiveRefuse("child orchestrator is the standing team")
+		}
 		var name string
 		err := tx.QueryRow(`SELECT name FROM hera_roles WHERE orchestrator_id=? AND kind<>'coordinator'
 			AND archived_at IS NULL AND nuked_at IS NULL AND cancelled_at IS NULL LIMIT 1`, k).Scan(&name)
@@ -274,7 +281,8 @@ func archiveUnitKidChecks(tx *sql.Tx, kids []int64) error {
 		}
 		var subj string
 		err = tx.QueryRow(`SELECT i.subject FROM hera_board_items i JOIN hera_roles r ON r.id=i.role_id
-			WHERE r.orchestrator_id=? AND r.kind='coordinator' AND i.kind='decision' AND i.resolved=0 LIMIT 1`, k).Scan(&subj)
+			WHERE r.orchestrator_id=? AND r.kind='coordinator' AND r.archived_at IS NULL AND r.nuked_at IS NULL AND r.cancelled_at IS NULL
+			  AND i.kind='decision' AND i.resolved=0 LIMIT 1`, k).Scan(&subj)
 		switch {
 		case err == nil:
 			return archiveRefuse("open decision board item %q", subj)
@@ -341,7 +349,7 @@ func archivePushFyiUp(tx *sql.Tx, role *HeraRole, kids []int64) (posted, resolve
 			}
 			marker := fmt.Sprintf("— moved from %s fyi #%d", role.Name, it.id)
 			var exists int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM hera_board_items WHERE role_id=? AND body LIKE ?`, parentID, "%"+marker).Scan(&exists); err != nil {
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM hera_board_items WHERE role_id=? AND length(body) >= length(?) AND substr(body, -length(?)) = ?`, parentID, marker, marker, marker).Scan(&exists); err != nil {
 				return nil, nil, err
 			}
 			now := formatTime(time.Now())

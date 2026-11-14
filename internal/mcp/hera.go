@@ -1872,7 +1872,7 @@ func (s *Server) toolHeraAccept(id interface{}, args json.RawMessage) *Response 
 }
 
 // heraArchiveSweepBudget bounds when a sweep STARTS another role (MCP clients time out at 60s; one role's git check can take up to 20s more).
-const heraArchiveSweepBudget = 20 * time.Second
+var heraArchiveSweepBudget = 20 * time.Second
 
 // toolHeraArchive implements hera_archive (add-hera-auto-archive): coordinator-
 // only, fail-closed archive of done-done roles. The predicate and the archive
@@ -1931,18 +1931,13 @@ func (s *Server) toolHeraArchive(id interface{}, args json.RawMessage) *Response
 		}
 	}
 
-	// Never archive the caller's own task (a second role bound to it would
-	// stop the calling session), and bound the sweep below the 60s MCP client
+	// Bound the sweep below the 60s MCP client
 	// deadline: each git check can take seconds, so leave the tail for a
 	// follow-up call instead of timing out and losing the whole result list.
 	results := make([]hera.ArchiveRoleResult, 0, len(targets))
 	deadline := time.Now().Add(heraArchiveSweepBudget)
 	remaining := 0
 	for _, t := range targets {
-		if b, err := store.HeraLiveBindingByRole(t.ID); err == nil && b.ArgusTaskID == caller.task.ID {
-			results = append(results, hera.ArchiveRoleResult{Role: t.Name, Reason: "bound to your own task"})
-			continue
-		}
 		if time.Now().After(deadline) {
 			remaining++
 			continue

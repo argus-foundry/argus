@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/config"
@@ -58,4 +59,27 @@ func TestHeraArchiveGitCheck_CleanLandedVsDirty(t *testing.T) {
 	ok, reason = check(task)
 	testutil.Equal(t, ok, false)
 	testutil.Contains(t, reason, "uncommitted")
+}
+
+// An unlanded branch (not an ancestor of the default) with a CLEAN worktree
+// must refuse on the classifier, not on the dirty check ("Open PR refuses").
+func TestHeraArchiveGitCheck_UnlandedBranchCleanWorktreeRefuses(t *testing.T) {
+	cfg, task := landedRepo(t)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = task.Worktree
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("checkout", "-q", "b")
+	run("commit", "-q", "--allow-empty", "-m", "unmerged work") // b is now ahead of master
+	run("checkout", "-q", "master")
+	check := heraArchiveGitCheck(func() config.Config { return cfg })
+	ok, reason := check(task)
+	testutil.Equal(t, ok, false)
+	if strings.Contains(reason, "uncommitted") {
+		t.Fatalf("refused on dirty check, not the classifier: %q", reason)
+	}
 }

@@ -452,20 +452,15 @@ func (d *DB) ResultTimes() (map[string]time.Time, error) {
 // Unarchiving (archived=false) leaves pinned alone — pinning state survives
 // a round trip through the archive section.
 func (d *DB) SetArchived(id string, archived bool) error {
-	return d.setArchivedGuarded(id, archived, nil)
+	return d.setArchived(id, archived)
 }
 
-func (d *DB) setArchivedGuarded(id string, archived bool, guard func(tx *sql.Tx) error) error {
+func (d *DB) setArchived(id string, archived bool) error {
 	// Both statements (tasks UPDATE + on-archive task_messages DELETE) run in
 	// one SQLite transaction so a crash between them can't leave an archived
 	// row with a queued inbox forever counting against the unread cap.
 	var oldArchived, oldPinned int
 	err := d.WithTx(func(tx *sql.Tx) error {
-		if guard != nil {
-			if gerr := guard(tx); gerr != nil {
-				return gerr
-			}
-		}
 		var err error
 		oldArchived, oldPinned, err = setArchivedTx(tx, id, archived)
 		return err

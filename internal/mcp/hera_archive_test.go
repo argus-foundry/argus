@@ -3,7 +3,9 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
@@ -111,23 +113,24 @@ func TestHeraArchive_NoGitCheckRefuses(t *testing.T) {
 	testutil.Equal(t, g.Archived, false)
 }
 
-func TestHeraArchive_OwnTaskAndSweepBudget(t *testing.T) {
+func TestHeraArchive_SweepBudget(t *testing.T) {
 	s, d := testHeraServer(t)
-	s.SetHeraArchiver(&archRunner{}, func(*model.Task) (bool, string) { return true, "" })
+	old := heraArchiveSweepBudget
+	heraArchiveSweepBudget = 30 * time.Millisecond
+	t.Cleanup(func() { heraArchiveSweepBudget = old })
+	// Each git check outlasts the whole budget, so only the first role is evaluated.
+	s.SetHeraArchiver(&archRunner{}, func(*model.Task) (bool, string) {
+		time.Sleep(60 * time.Millisecond)
+		return true, ""
+	})
 	c := seedCoordinator(t, s, d, "O", "/wt/coord")
-	orch, _ := d.HeraOrchestratorByName("O")
-	// A second (worker) role bound to the CALLER's own task must be refused.
-	_, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
-		OrchestratorID: orch.ID, Name: "alias", Kind: db.HeraKindWorker, ArgusProject: "test-project",
-	}, c.ID, c.Worktree)
-	// CreateHeraRoleWithBinding may itself reject a second live binding on the
-	// coordinator's task; either way nothing may be archived.
-	if err == nil {
-		out, _ := archCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O"}`, c.Worktree))
-		testutil.Contains(t, out, "alias: ")
-		g, _ := d.Get(c.ID)
-		testutil.Equal(t, g.Archived, false)
-	}
+	archWorkerRole(t, d, "O", "a", model.StatusComplete)
+	archWorkerRole(t, d, "O", "b", model.StatusComplete)
+	archWorkerRole(t, d, "O", "c", model.StatusComplete)
+	out, isErr := archCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O"}`, c.Worktree))
+	testutil.Equal(t, isErr, false)
+	testutil.Contains(t, out, "**not evaluated**: 2 role(s)")
+	testutil.Equal(t, strings.Count(out, "**archived**: a"), 1)
 }
 
 func mustOrch(t *testing.T, d *db.DB, name string) int64 {
@@ -141,14 +144,37 @@ func TestHeraArchive_SingleRoleByName(t *testing.T) {
 	s, d := testHeraServer(t)
 	s.SetHeraArchiver(&archRunner{}, func(*model.Task) (bool, string) { return true, "" })
 	c := seedCoordinator(t, s, d, "O", "/wt/coord")
-	task, _ := archWorkerRole(t, d, "O", "done1", model.StatusComplete)
+	task, role := archWorkerRole(t, d, "O", "done1", model.StatusComplete)
 	out, isErr := archCall(t, s, fmt.Sprintf(`{"cwd":%q,"role_name":"done1","orchestrator":"O"}`, c.Worktree))
 	testutil.Equal(t, isErr, false)
 	testutil.Contains(t, out, "**archived**: done1")
 	g, _ := d.Get(task.ID)
 	testutil.Equal(t, g.Archived, true)
-	role, err := d.HeraRoleByName(mustOrch(t, d, "O"), "done1")
-	if err == nil {
-		testutil.Equal(t, role.ArchivedAt != nil, true)
+	got, err := d.HeraRole(role.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.ArchivedAt != nil, true) // looked up by id: HeraRoleByName hides archived roles
+}
+
+// A sweep with two archivable roles archives BOTH (not just the first) and
+// reports the refused one with its reason.
+func TestHeraArchive_SweepArchivesAllArchivable(t *testing.T) {
+	s, d := testHeraServer(t)
+	s.SetHeraArchiver(&archRunner{}, func(task *model.Task) (bool, string) {
+		if task.Worktree == "/wt/open-pr" {
+			return false, "open PR"
+		}
+		return true, ""
+	})
+	c := seedCoordinator(t, s, d, "O", "/wt/coord")
+	t1, _ := archWorkerRole(t, d, "O", "d1", model.StatusComplete)
+	t2, _ := archWorkerRole(t, d, "O", "d2", model.StatusComplete)
+	archWorkerRole(t, d, "O", "open-pr", model.StatusComplete)
+	out, _ := archCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O"}`, c.Worktree))
+	testutil.Contains(t, out, "d1")
+	testutil.Contains(t, out, "d2")
+	testutil.Contains(t, out, "open-pr: git work not confirmed landed: open PR")
+	for _, id := range []string{t1.ID, t2.ID} {
+		g, _ := d.Get(id)
+		testutil.Equal(t, g.Archived, true)
 	}
 }
