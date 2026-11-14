@@ -280,10 +280,7 @@ func pushFyiUp(store ArchiveStore, role *db.HeraRole, taskID string) error {
 					continue
 				}
 				subject := "[" + role.Name + "] " + it.Subject
-				for len(subject) > 240 {
-					_, size := utf8.DecodeLastRuneInString(subject)
-					subject = subject[:len(subject)-size]
-				}
+				subject = truncateUTF8(subject, 240)
 				// Idempotent across retries: a previous attempt that posted but
 				// failed to resolve the original must not post a duplicate.
 				marker := fmt.Sprintf("— moved from %s fyi #%d", role.Name, it.ID)
@@ -293,11 +290,7 @@ func pushFyiUp(store ArchiveStore, role *db.HeraRole, taskID string) error {
 					continue
 				}
 				if !posted {
-					body := it.Body
-					for len(body) > maxFyiBody-len(marker)-2 {
-						_, size := utf8.DecodeLastRuneInString(body)
-						body = body[:len(body)-size]
-					}
+					body := truncateUTF8(it.Body, maxFyiBody-len(marker)-2)
 					if _, err := store.PostHeraBoardItem(parents[0].ID, "fyi", subject, body+"\n\n"+marker); err != nil {
 						errs = append(errs, err)
 						continue
@@ -310,6 +303,23 @@ func pushFyiUp(store ArchiveStore, role *db.HeraRole, taskID string) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// truncateUTF8 cuts s to at most max bytes without splitting a rune. A
+// non-positive max yields "" and the loop always terminates (it stops on an
+// empty string, where DecodeLastRuneInString reports size 0).
+func truncateUTF8(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	for len(s) > max {
+		_, size := utf8.DecodeLastRuneInString(s)
+		if size == 0 {
+			return ""
+		}
+		s = s[:len(s)-size]
+	}
+	return s
 }
 
 func alreadyPosted(store ArchiveStore, roleID int64, marker string) (bool, error) {

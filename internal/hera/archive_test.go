@@ -552,3 +552,12 @@ func TestArchivableVerdict_EndedUnrelatedCoordinatorIsNotBridge(t *testing.T) {
 	testutil.Equal(t, len(kids), 0)
 	testutil.Equal(t, ArchivableVerdict(d, gitOK, r).Archivable, true)
 }
+
+func TestTruncateUTF8(t *testing.T) {
+	testutil.Equal(t, truncateUTF8("abc", 10), "abc")
+	testutil.Equal(t, truncateUTF8("abc", 2), "ab")
+	testutil.Equal(t, truncateUTF8("ééé", 3), "é") // never splits a 2-byte rune
+	testutil.Equal(t, truncateUTF8("abc", 0), "")
+	testutil.Equal(t, truncateUTF8("abc", -5), "") // negative limit must not loop forever
+	testutil.Equal(t, truncateUTF8("", -1), "")
+}
