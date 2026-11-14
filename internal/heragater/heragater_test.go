@@ -3,11 +3,13 @@ package heragater
 import (
 	"database/sql"
 	"errors"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
@@ -46,9 +48,17 @@ type accept struct {
 
 func newGaterFixture(t *testing.T) *gaterFixture {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	d, err := db.OpenInMemory()
 	testutil.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "init"}, {"branch", "argus/1a"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		testutil.NoError(t, cmd.Run())
+	}
+	testutil.NoError(t, d.SetProject("proj", config.Project{Path: repo, Branch: "HEAD"}))
 	f := &gaterFixture{
 		d:          d,
 		matBranch:  map[int64]string{},
@@ -164,6 +174,7 @@ func (f *gaterFixture) seedCoord(t *testing.T, orchName string) int64 {
 // status, returning the role. This is a "blocker" that has already run.
 func (f *gaterFixture) boundWorker(t *testing.T, orchID int64, name string, taskStatus model.Status, roleStatus db.HeraRoleStatusValue) *db.HeraRole {
 	t.Helper()
+	f.seedBranch(t, "argus/"+name)
 	task := &model.Task{Name: name + "-task", Status: taskStatus, Project: "proj", Branch: "argus/" + name}
 	testutil.NoError(t, f.d.Add(task))
 	role, _, err := f.d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
@@ -640,6 +651,8 @@ func TestGater_BaseBranchFromEndedBlockerBinding(t *testing.T) {
 // Returns the orchestrator id.
 func (f *gaterFixture) seedCoordWithBranch(t *testing.T, orchName, baseBranch, coordBranch string) int64 {
 	t.Helper()
+	f.seedBranch(t, baseBranch)
+	f.seedBranch(t, coordBranch)
 	o, err := f.d.CreateHeraOrchestrator(orchName, baseBranch)
 	testutil.NoError(t, err)
 	coordTask := &model.Task{Name: "coord-task", Status: model.StatusInProgress, Project: "proj", Branch: coordBranch}
@@ -649,6 +662,16 @@ func (f *gaterFixture) seedCoordWithBranch(t *testing.T, orchName, baseBranch, c
 	}, coordTask.ID, "/wt/coord")
 	testutil.NoError(t, err)
 	return o.ID
+}
+
+func (f *gaterFixture) seedBranch(t *testing.T, branch string) {
+	t.Helper()
+	if branch == "" {
+		return
+	}
+	cmd := exec.Command("git", "update-ref", "refs/heads/"+branch, "HEAD")
+	cmd.Dir = f.d.Config().Projects["proj"].Path
+	testutil.NoError(t, cmd.Run())
 }
 
 // TestGater_RootUsesExplicitOrchestratorBase covers the delta scenario "Root node

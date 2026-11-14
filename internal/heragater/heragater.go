@@ -34,6 +34,7 @@ import (
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // defaultInterval matches the retired depswatcher / cron tick — the workflow is
@@ -515,7 +516,14 @@ func (w *Watcher) materializeNode(node *db.HeraRole) {
 	// snapshot drives base selection, worker context, and the coordinator notice.
 	blockerIDs, _ := w.db.HeraBlockersOf(node.ID)
 	blockerBranches := w.resolveBlockerBranches(blockerIDs)
-	branch, winningBlockerID := w.resolveBaseBranch(node, blockerBranches)
+	branch, winningBlockerID, sourceProject := w.resolveBaseBranch(node, blockerBranches)
+	if branch != "" {
+		if sourceProject != project || !agent.BranchExistsInProject(w.db.Config().Projects[project].Path, branch) {
+			w.logf("[heragater] base %q not in project %s; using project default", branch, project)
+			uxlog.Log("[heragater] base %q not in project %s; using project default", branch, project)
+			branch, winningBlockerID = "", 0
+		}
+	}
 
 	// Route on node kind (add-hera-subcoord-nodes). A subcoord node materializes
 	// via the sub-coord seam (a distinct coordinator agent owning a child
@@ -625,10 +633,11 @@ type blockerBranch struct {
 	bindingID int64
 	name      string
 	branch    string
+	project   string
 }
 
 // resolveBlockerBranches takes one materialization-time snapshot of every
-// blocker's display name, latest binding id, and task branch. A missing binding,
+// blocker's display name, latest binding id, and task branch/project. A missing binding,
 // task, or branch is retained as an entry with an empty branch so fan-in workers
 // can see that the blocker exists but its branch is unavailable.
 func (w *Watcher) resolveBlockerBranches(blockerIDs []int64) []blockerBranch {
@@ -647,6 +656,7 @@ func (w *Watcher) resolveBlockerBranches(blockerIDs []int64) []blockerBranch {
 		resolved.bindingID = binding.ID
 		if task, taskErr := w.db.Get(binding.ArgusTaskID); taskErr == nil && task != nil {
 			resolved.branch = task.Branch
+			resolved.project = task.Project
 		}
 		out = append(out, resolved)
 	}
@@ -672,7 +682,9 @@ func (w *Watcher) resolveBlockerBranches(blockerIDs []int64) []blockerBranch {
 // then applies the project default, as before this change). Every step degrades to
 // "" on a miss — never a panic — so an orchestrator with no coordinator, or a
 // coordinator with no branch, falls through to the historical behavior.
-func (w *Watcher) resolveBaseBranch(node *db.HeraRole, blockers []blockerBranch) (branch string, winningBlockerID int64) {
+// The selected source project travels with the branch so materializeNode can
+// reject foreign task provenance even when repositories share a branch name.
+func (w *Watcher) resolveBaseBranch(node *db.HeraRole, blockers []blockerBranch) (branch string, winningBlockerID int64, sourceProject string) {
 	var bestBindingID int64
 	for _, blocker := range blockers {
 		if blocker.branch == "" {
@@ -682,14 +694,16 @@ func (w *Watcher) resolveBaseBranch(node *db.HeraRole, blockers []blockerBranch)
 			bestBindingID = blocker.bindingID
 			branch = blocker.branch
 			winningBlockerID = blocker.roleID
+			sourceProject = blocker.project
 		}
 	}
 	if branch != "" {
 		// A blocker branch resolved — non-root path, unchanged.
-		return branch, winningBlockerID
+		return branch, winningBlockerID, sourceProject
 	}
 	// Root node: no blocker branch. Resolve the configurable root base.
-	return w.resolveRootBaseBranch(node), 0
+	branch, sourceProject = w.resolveRootBaseBranch(node)
+	return branch, 0, sourceProject
 }
 
 func fanInBranchContext(blockers []blockerBranch, winningBlockerID int64, branch string) string {
@@ -718,42 +732,42 @@ func fanInBranchContext(blockers []blockerBranch, winningBlockerID int64, branch
 // resolveRootBaseBranch resolves a ROOT node's base branch
 // (add-hera-plan-base-branch): explicit orchestrator base_branch → coordinator
 // role's bound-task branch → "". Logs which source won. Never panics.
-func (w *Watcher) resolveRootBaseBranch(node *db.HeraRole) string {
+func (w *Watcher) resolveRootBaseBranch(node *db.HeraRole) (string, string) {
 	if orch, err := w.db.HeraOrchestrator(node.OrchestratorID); err == nil && orch.BaseBranch != "" {
 		w.logf("[heragater] root base for node %d (%s): %q (source=explicit)", node.ID, node.Name, orch.BaseBranch)
-		return orch.BaseBranch
+		return orch.BaseBranch, node.ArgusProject
 	}
-	if branch := w.coordinatorBranch(node.OrchestratorID); branch != "" {
+	if branch, project := w.coordinatorBase(node.OrchestratorID); branch != "" {
 		w.logf("[heragater] root base for node %d (%s): %q (source=coordinator)", node.ID, node.Name, branch)
-		return branch
+		return branch, project
 	}
 	w.logf("[heragater] root base for node %d (%s): \"\" (source=project-default)", node.ID, node.Name)
-	return ""
+	return "", node.ArgusProject
 }
 
-// coordinatorBranch returns the branch of the orchestrator's coordinator role's
-// bound task, or "" if no coordinator role, no live/last binding, or no task
+// coordinatorBase returns the branch and project of the coordinator role's
+// bound task, or empty strings if no coordinator role, no live/last binding, or no task
 // branch is resolvable. Mirrors the blocker path's live-then-latest binding
 // fallback so a coordinator that has gone idle still resolves.
-func (w *Watcher) coordinatorBranch(orchID int64) string {
+func (w *Watcher) coordinatorBase(orchID int64) (string, string) {
 	coords, err := w.db.ListHeraRolesByKind(orchID, db.HeraKindCoordinator)
 	if err != nil || len(coords) == 0 {
-		return ""
+		return "", ""
 	}
 	coordID := coords[0].ID
 	binding, err := w.db.HeraLiveBindingByRole(coordID)
 	if err != nil {
 		bindings, lErr := w.db.ListHeraBindingsByRole(coordID)
 		if lErr != nil || len(bindings) == 0 {
-			return ""
+			return "", ""
 		}
 		binding = bindings[0] // most recent first
 	}
 	t, err := w.db.Get(binding.ArgusTaskID)
 	if err != nil || t == nil {
-		return ""
+		return "", ""
 	}
-	return t.Branch
+	return t.Branch, t.Project
 }
 
 // holdAndPing notifies the coordinator that a node is held behind a failed

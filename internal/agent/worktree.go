@@ -103,6 +103,30 @@ func isValidRef(repoDir, ref string) bool {
 	return cmd.Run() == nil
 }
 
+// BranchExistsInProject checks a derived base using worktree start-point
+// resolution, refreshing remote refs best-effort before deciding it is absent.
+// Explicit user-supplied bases must still go through CreateWorktree unchanged.
+func BranchExistsInProject(projectPath, branch string) bool {
+	if projectPath == "" || branch == "" {
+		return false
+	}
+	fetchWorktreeRefs(projectPath, branch)
+	return isValidRef(projectPath, resolveStartPoint(projectPath, branch)+"^{commit}")
+}
+
+func fetchWorktreeRefs(projectPath, branch string) {
+	if branch == "HEAD" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "fetch", "--all")
+	cmd.Dir = projectPath
+	if out, err := cmd.CombinedOutput(); err != nil {
+		uxlog.Log("[worktree] git fetch --all failed (continuing): %v: %s", err, strings.TrimSpace(string(out)))
+	}
+}
+
 // isHeadUnborn reports whether repoDir's currently checked-out branch has
 // zero commits (e.g. a freshly `git init`'d repo before its first commit).
 // On an unborn branch, HEAD does not resolve to a commit, so it cannot be
@@ -164,15 +188,7 @@ func CreateWorktree(projectPath, projectName, taskName, baseBranch, branchNamesp
 	// filesystems, it deletes origin/HEAD (confusing the symbolic ref with
 	// branch "head"), which causes origin/master to be lost on alternating
 	// fetches.
-	if baseBranch != "HEAD" {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		fetchCmd := exec.CommandContext(ctx, "git", "fetch", "--all")
-		fetchCmd.Dir = projectPath
-		if out, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
-			uxlog.Log("[worktree] git fetch --all failed (continuing): %v: %s", fetchErr, strings.TrimSpace(string(out)))
-		}
-	}
+	fetchWorktreeRefs(projectPath, baseBranch)
 
 	// Resolve baseBranch to a valid ref. If the local branch doesn't exist,
 	// try remote-tracking branches (origin/<branch>, upstream/<branch>).
