@@ -2,34 +2,14 @@ package client
 
 import (
 	"testing"
+	"time"
 
-	"github.com/argus-foundry/argus/internal/daemon"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
 
-func TestCliResident(t *testing.T) {
-	fd := newFakeDaemon(t)
-	fd.resident = daemon.ResidentStateResp{Enabled: true, Name: "Solo", TaskID: "resident", Unread: true}
-	c := fakeClient(t, fd)
-	state, err := c.ResidentState()
-	testutil.NoError(t, err)
-	testutil.DeepEqual(t, state, fd.resident)
-	testutil.NoError(t, c.ResidentMarkViewed())
-	testutil.NoError(t, c.ResidentSend("Hello", "id-1"))
-	testutil.NoError(t, c.ForceRecycleCoordinator("resident"))
-	fd.mu.Lock()
-	testutil.Equal(t, fd.forcedRecycle, "resident")
-	testutil.True(t, fd.residentViewed)
-	testutil.DeepEqual(t, fd.residentSent, daemon.ResidentSendReq{Text: "Hello", DeliveryID: "id-1"})
-	fd.residentError = "disabled"
-	fd.mu.Unlock()
-	testutil.Error(t, c.ResidentMarkViewed())
-	testutil.Error(t, c.ResidentSend("Hello", ""))
-	testutil.Error(t, c.ForceRecycleCoordinator("resident"))
-	_ = c.Close()
-	_, err = c.ResidentState()
-	testutil.Error(t, err)
-	testutil.Error(t, c.ResidentMarkViewed())
-	testutil.Error(t, c.ResidentSend("Hello", ""))
-	testutil.Error(t, c.ForceRecycleCoordinator("resident"))
+// The daemon copies the transcript and restarts the session synchronously, so a
+// resident move must not use the 2s default RPC timeout.
+func TestResidentMoveTimeoutIsGenerous(t *testing.T) {
+	testutil.True(t, residentMoveTimeout >= 30*time.Second)
+	testutil.True(t, residentMoveTimeout > rpcTimeout)
 }

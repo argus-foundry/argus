@@ -97,6 +97,16 @@ func ProbeConfiguredAccounts(ctx context.Context, cfg config.Config) error {
 			accounts = append(accounts, tier.Account)
 		}
 	}
+	// resident.accounts entries are probed too: without a reading, an account the
+	// resident left (depleted) would age out and never be seen recovering. A
+	// trailing "auto" makes every Claude-capable account a candidate.
+	for _, account := range cfg.Resident.Accounts {
+		if account == config.AutoAccountEntry {
+			accounts = append(accounts, cfg.AccountNamesFor("claude")...)
+			continue
+		}
+		accounts = append(accounts, account)
+	}
 	for _, account := range accounts {
 		if seen[account] {
 			continue

@@ -99,6 +99,11 @@ type residentManager struct {
 	// account switch (see maybeAutoSwitch); only tick and MoveAccount touch them.
 	switchTicks  int
 	noneEligible bool
+	noneLoaded   bool // noneEligible was read from task_meta
+	// draftFn reports an unsent composer draft (nil = read the rendered screen).
+	draftFn   func(agent.SessionHandle) bool
+	draftMu   sync.Mutex
+	draftView agent.ScreenRenderer
 
 	mu           sync.Mutex
 	failures     int

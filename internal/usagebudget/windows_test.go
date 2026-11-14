@@ -201,3 +201,29 @@ func TestNamedProbeIsolatedAndBridgeSkips(t *testing.T) {
 	testutil.NoError(t, ProbeConfiguredAccounts(context.Background(), cfg))
 	testutil.Equal(t, len(dirs), 1)
 }
+
+func TestProbeConfiguredAccountsIncludesResidentList(t *testing.T) {
+	resetState(t)
+	cfg := config.DefaultConfig()
+	pDir, wDir, xDir := t.TempDir(), t.TempDir(), t.TempDir()
+	cfg.Accounts = map[string]config.Account{"personal": {ClaudeConfigDir: pDir}, "work": {ClaudeConfigDir: wDir}, "extra": {ClaudeConfigDir: xDir}}
+	orig := startAccountUsageSession
+	defer func() { startAccountUsageSession = orig }()
+	probe := func() []string {
+		var dirs []string
+		startAccountUsageSession = func(_ context.Context, _, configDir string) (usageSession, error) {
+			dirs = append(dirs, configDir)
+			return nil, errors.New("skip")
+		}
+		testutil.NoError(t, ProbeConfiguredAccounts(context.Background(), cfg))
+		return dirs
+	}
+	// Listed accounts are probed so a depleted account Solo left can be seen recovering.
+	cfg.Resident.Accounts = []string{"personal", "work"}
+	testutil.DeepEqual(t, probe(), []string{pDir, wDir})
+	// A trailing auto makes every Claude-capable account a candidate.
+	cfg.Resident.Accounts = []string{"personal", "auto"}
+	got := probe()
+	testutil.Equal(t, len(got), 3)
+	testutil.Equal(t, got[0], pDir)
+}

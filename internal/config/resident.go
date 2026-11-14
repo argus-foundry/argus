@@ -38,6 +38,10 @@ type ResidentConfig struct {
 	// ["default"]. The resident runs on the first usable entry; see
 	// agent.ResidentAccountPlan.
 	Accounts []string `toml:"accounts"`
+	// LegacyAccount is the pre-list single `account` key. config.toml still
+	// honours it as a one-element Accounts (with a logged deprecation) when
+	// `accounts` is not set; nothing else reads it.
+	LegacyAccount string `toml:"account"`
 	// AutoSwitchAccount (default true) lets the daemon move the resident to
 	// along its Accounts list when its current account is out of usage budget
 	// (and back up when a preferred one recovers). With it off the list only

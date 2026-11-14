@@ -15,12 +15,19 @@ import (
 const (
 	MetaKeyAccountOverride = "account_override"
 	MetaKeyLastAutoSwitch  = "last_auto_switch_at"
+	// MetaKeyNoneUsablePosted is "1" while the all-accounts-depleted board item
+	// for the current episode has been posted (persisted so a daemon bounce does
+	// not repost it).
+	MetaKeyNoneUsablePosted = "none_usable_posted"
 )
 
 // Who chose a resident account override.
 const (
 	OverrideByManual = "manual"
 	OverrideByAuto   = "auto"
+	// OverrideByFollow marks a human pick of "auto" in the picker: the human
+	// asked Solo to follow headroom, so it holds nothing and starts no cooldown.
+	OverrideByFollow = "follow"
 )
 
 // ResidentAccountOverride records which account the resident was last moved to

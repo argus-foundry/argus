@@ -83,6 +83,16 @@ func residentUsable(cfg config.Config, usage map[string]usagebudget.Reading, nam
 	return cfg.ValidateAccount(name) == nil && cfg.AccountSupports(name, residentClaudeCommand) && !AccountDepleted(usage[name], now)
 }
 
+// AccountReadingFresh reports whether r has at least one live (valid, fresh)
+// window, i.e. positive evidence about the account right now. An account whose
+// reading went stale or was never read is NOT fresh: moving UP to a preferred
+// account requires it, because a stale "no depleted window" is indistinguishable
+// from an account that is still out of budget.
+func AccountReadingFresh(r usagebudget.Reading, now time.Time) bool {
+	five, week := usagebudget.LiveWindows(r, now)
+	return five != nil || week != nil
+}
+
 // residentWanted is the account the list wants right now: the first non-depleted
 // entry, with "auto" picking the lowest-usage non-depleted Claude account.
 func residentWanted(cfg config.Config, entries []string, usage map[string]usagebudget.Reading, now time.Time) (string, bool) {
@@ -137,6 +147,10 @@ const (
 type ResidentDecision struct {
 	// Target and Reason are set when a move is due; both empty otherwise.
 	Target, Reason string
+	// Urgent is true only for a move off a depleted account: the session cannot
+	// run turns there, so the move proceeds even past a pending prompt. Every
+	// other move waits for a quiet session (no prompt, no unsent draft).
+	Urgent bool
 	// NoneUsable means the current account is depleted and no listed account
 	// can take over.
 	NoneUsable bool
@@ -155,17 +169,28 @@ func DecideResidentAccount(cfg config.Config, cur string, manual bool, usage map
 		if !ok {
 			return ResidentDecision{NoneUsable: true}
 		}
-		return ResidentDecision{Target: want, Reason: ResidentMoveDepleted}
+		return ResidentDecision{Target: want, Reason: ResidentMoveDepleted, Urgent: true}
 	}
-	if manual || !ok || want == cur {
+	if manual {
 		return ResidentDecision{}
 	}
 	rank := residentRank(cfg, entries, cur)
 	if rank < 0 {
+		if !ok || want == cur {
+			return ResidentDecision{}
+		}
 		return ResidentDecision{Target: want, Reason: ResidentMoveNotAllowed}
 	}
-	if residentRank(cfg, entries, want) < rank {
-		return ResidentDecision{Target: want, Reason: ResidentMoveBackUp}
+	// Moving back up needs a FRESH reading showing headroom on a more preferred
+	// listed account: unknown or stale is not "recovered" (it would flap between
+	// a preferred account that is still out of budget and the fallback).
+	for i, e := range entries {
+		if i >= rank {
+			break
+		}
+		if e != config.AutoAccountEntry && residentUsable(cfg, usage, e, now) && AccountReadingFresh(usage[e], now) {
+			return ResidentDecision{Target: e, Reason: ResidentMoveBackUp}
+		}
 	}
 	return ResidentDecision{}
 }

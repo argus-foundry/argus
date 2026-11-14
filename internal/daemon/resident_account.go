@@ -41,33 +41,32 @@ func storedResidentAccount(name string) string {
 	return name
 }
 
-// effectiveResidentAccount is the account the resident starts on: its persisted
-// account kept while the resident.accounts list allows it (or a manual move
-// chose it) and it is not depleted, otherwise the list's first usable account.
-// Returned in stored form ("" = default).
+// effectiveResidentAccount is the account a (re)start runs on. A start that
+// will resume an existing conversation (task.SessionID set) NEVER changes the
+// account: the transcript lives under the current account, and switching it here
+// would silently lose the conversation (and skip the debounce, cooldown, notices
+// and marker that the tick path applies). Moves off a depleted or delisted account
+// happen on the tick, through the move core that copies the transcript. Only a
+// fresh start with no conversation yet picks per resident.accounts. Returned in
+// stored form ("" = default).
 func (m *residentManager) effectiveResidentAccount(task *model.Task, cfg config.Config, _ string) string {
-	by := db.OverrideByAuto
-	if ov, ok, err := m.db.ResidentAccountOverride(task.ID); err != nil {
-		residentLog("[resident] account marker read failed, treating as automatic: %v", err)
-	} else if ok {
-		by = ov.By
+	if task.SessionID != "" {
+		return task.Account
 	}
 	cur := ""
-	if task.SessionID != "" || task.Account != "" || by == db.OverrideByManual {
+	if task.Account != "" {
 		cur = agent.NormalizeAccount(task.Account)
 	}
-	picked, notes := agent.ResidentStartAccount(cfg, cur, by == db.OverrideByManual, agent.AccountUsage(cfg), m.now())
+	picked, notes := agent.ResidentStartAccount(cfg, cur, false, agent.AccountUsage(cfg), m.now())
 	for _, n := range notes {
 		residentLog("[resident] accounts list: %s", n)
-	}
-	if cur != "" && picked != cur {
-		residentLog("[resident] start account %s -> %s per resident.accounts", cur, picked)
 	}
 	return storedResidentAccount(picked)
 }
 
 // MoveAccount is the manual resident account move (RPC). It refuses a busy
-// session unless force is set.
+// session unless force is set. A named account is a manual hold; picking "auto"
+// asks Solo to follow headroom, so it holds nothing.
 func (m *residentManager) MoveAccount(account string, force bool) (agent.AccountMoveResult, error) {
 	cfg := m.cfgFn()
 	if !cfg.Resident.Enabled {
@@ -83,52 +82,113 @@ func (m *residentManager) MoveAccount(account string, force bool) (agent.Account
 	if task == nil {
 		return agent.AccountMoveResult{}, errors.New("the resident has not started yet")
 	}
-	_, res, err := agent.MoveResidentAccount(m.db, m.mover, agent.AccountMoveInput{TaskID: task.ID, Account: account, Force: force}, agent.ResidentMoveOpts{By: db.OverrideByManual, Cfg: &cfg})
+	by := db.OverrideByManual
+	if strings.TrimSpace(account) == agent.AutoMoveTarget {
+		by = db.OverrideByFollow
+	}
+	_, res, err := agent.MoveResidentAccount(m.db, m.mover, agent.AccountMoveInput{TaskID: task.ID, Account: account, Force: force}, agent.ResidentMoveOpts{By: by, Cfg: &cfg})
+	m.mu.Lock()
 	m.switchTicks = 0
+	m.mu.Unlock()
 	if err != nil && !errors.Is(err, agent.ErrAccountMoveRestartUnknown) {
 		residentLog("[resident] manual account move to %q refused: %v", account, err)
 		return res, err
 	}
-	residentLog("[resident] manual account move %s to %s resumed=%t started=%t", res.From, res.To, res.Resumed, res.Started)
+	residentLog("[resident] manual account move %s to %s by=%s resumed=%t started=%t", res.From, res.To, by, res.Resumed, res.Started)
 	return res, err
 }
 
+// setSwitchTicks updates the tick-loop counter under the manager mutex (MoveAccount
+// runs on the RPC goroutine).
+func (m *residentManager) setSwitchTicks(n int) {
+	m.mu.Lock()
+	m.switchTicks = n
+	m.mu.Unlock()
+}
+
+func (m *residentManager) bumpSwitchTicks() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.switchTicks++
+	return m.switchTicks
+}
+
+// noneUsableEpisode reads the persisted "board item posted" flag once, then
+// serves it from memory.
+func (m *residentManager) noneUsableEpisode(taskID string) bool {
+	m.mu.Lock()
+	loaded, v := m.noneLoaded, m.noneEligible
+	m.mu.Unlock()
+	if loaded {
+		return v
+	}
+	posted := m.metaValues(taskID)[db.MetaKeyNoneUsablePosted] == "1"
+	m.mu.Lock()
+	m.noneLoaded, m.noneEligible = true, posted
+	m.mu.Unlock()
+	return posted
+}
+
+// setNoneUsableEpisode records the episode flag in memory and, when it changed,
+// in task_meta.
+func (m *residentManager) setNoneUsableEpisode(taskID string, posted bool) {
+	was := m.noneUsableEpisode(taskID)
+	m.mu.Lock()
+	m.noneEligible = posted
+	m.mu.Unlock()
+	if was == posted {
+		return
+	}
+	val := "0"
+	if posted {
+		val = "1"
+	}
+	if err := m.db.SetMeta(taskID, db.ResidentMetaNamespace, db.MetaKeyNoneUsablePosted, val); err != nil {
+		residentLog("[resident] persisting none-usable episode flag failed: %v", err)
+	}
+}
+
 // maybeAutoSwitch moves the resident along its resident.accounts list: off a
-// depleted account to the next usable one, back up to a recovered preferred
-// account, or onto the list when its account is no longer allowed. It runs from
-// tick with a live session. See the resident-agent spec for the conditions; the
-// rate-limit menu's needs-input state deliberately does not block it.
+// depleted account to the next usable one (urgent), back up to a recovered
+// preferred account, or onto the list when its account is no longer allowed.
+// It runs from tick with a live session. See the resident-agent spec. The
+// rate-limit menu's needs-input state does not block an URGENT move; every
+// other move also needs a quiet session (no pending prompt, no unsent draft).
 func (m *residentManager) maybeAutoSwitch(task *model.Task, cfg config.Config, sess agent.SessionHandle) {
 	if !cfg.Resident.AutoSwitchAccount || m.mover == nil {
-		m.switchTicks, m.noneEligible = 0, false
+		m.setSwitchTicks(0)
+		m.setNoneUsableEpisode(task.ID, false)
 		return
 	}
 	now := m.now()
 	cur := agent.NormalizeAccount(task.Account)
+	// A manual hold applies only while the resident is still on the account the
+	// human picked.
 	manual := false
 	if ov, ok, err := m.db.ResidentAccountOverride(task.ID); err == nil && ok {
-		manual = ov.By == db.OverrideByManual
+		manual = ov.By == db.OverrideByManual && ov.Account == cur
 	}
 	usage := agent.AccountUsage(cfg)
 	dec := agent.DecideResidentAccount(cfg, cur, manual, usage, now)
 	if dec.Target == "" && !dec.NoneUsable {
-		m.switchTicks, m.noneEligible = 0, false
+		m.setSwitchTicks(0)
+		m.setNoneUsableEpisode(task.ID, false)
 		return
 	}
-	if !m.sessionIdle(task.ID, sess, now) || m.runner.HasPendingRestart(task.ID) || m.recycling(task.ID) || agent.AccountMoveInFlight(task.ID) {
-		m.switchTicks = 0
+	quiet := dec.Urgent || dec.NoneUsable || (!m.waiting(task.ID) && !m.hasDraft(sess))
+	if !quiet || !m.sessionIdle(task.ID, sess, now) || m.runner.HasPendingRestart(task.ID) || m.recycling(task.ID) || agent.AccountMoveInFlight(task.ID) {
+		m.setSwitchTicks(0)
 		return
 	}
-	m.switchTicks++
-	if m.switchTicks < residentSwitchConfirmTicks {
+	if m.bumpSwitchTicks() < residentSwitchConfirmTicks {
 		return
 	}
 	if last := m.db.ResidentLastAutoSwitch(task.ID); !last.IsZero() && now.Sub(last) < residentSwitchCooldown {
 		return
 	}
 	if dec.NoneUsable {
-		if !m.noneEligible {
-			m.noneEligible = true
+		if !m.noneUsableEpisode(task.ID) {
+			m.setNoneUsableEpisode(task.ID, true)
 			residentLog("[resident] auto switch from %s refused: every account in resident.accounts is depleted (%s)", cur, usageSummary(usage[cur], now))
 			m.postBoard(task, "decision",
 				fmt.Sprintf("%s is out of usage budget on every listed account", cfg.Resident.Name),
@@ -141,7 +201,8 @@ func (m *residentManager) maybeAutoSwitch(task *model.Task, cfg config.Config, s
 		residentLog("[resident] auto switch %s -> %s (%s) failed: %v", cur, dec.Target, dec.Reason, err)
 		return
 	}
-	m.switchTicks, m.noneEligible = 0, false
+	m.setSwitchTicks(0)
+	m.setNoneUsableEpisode(task.ID, false)
 	residentLog("[resident] auto switched account %s to %s reason=%s (%s) resumed=%t started=%t restartErr=%v", res.From, res.To, dec.Reason, usageSummary(usage[cur], now), res.Resumed, res.Started, err)
 	var text, subject, body string
 	switch dec.Reason {
@@ -208,4 +269,23 @@ func usageSummary(r usagebudget.Reading, now time.Time) string {
 		return "no live reading"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// hasDraft reports an unsent composer draft on the resident's screen. Unknown
+// (not Claude's composer, or no marker on screen) reads as no draft, so it can
+// never block a move forever.
+func (m *residentManager) hasDraft(sess agent.SessionHandle) bool {
+	if m.draftFn != nil {
+		return m.draftFn(sess)
+	}
+	cs, ok := sess.(agent.ContentIdleSession)
+	if !ok {
+		return false
+	}
+	cols, rows := cs.PTYSize()
+	tail := agent.SubstantiveTail(cs.RecentOutputTail, 64*1024, agent.NeedsInputMaxExpandBytes)
+	m.draftMu.Lock()
+	defer m.draftMu.Unlock()
+	draft, found := m.draftView.InputDraft(tail, cols, rows)
+	return found && strings.TrimSpace(draft) != ""
 }

@@ -75,7 +75,7 @@ func (sv *SettingsView) residentRows() []settingsRow {
 		field(resKeyMemory, "Memory dir", r.MemoryDir, "(default)"),
 		field(resKeyModel, "Model", r.Model, "(default)"),
 		{kind: srResident, key: resKeyAccounts, label: "Accounts: " + sv.residentAccountsSummary(r.Accounts)},
-		{kind: srResident, key: resKeyAutoSwitch, label: "Auto-switch account when out of budget: " + onOff(r.AutoSwitchAccount)},
+		{kind: srResident, key: resKeyAutoSwitch, label: "Auto-switch account when out of budget: " + onOff(r.AutoSwitchAccount) + sv.residentAutoSwitchSuffix()},
 		{kind: srResident, key: resKeyTools, label: "Tool permissions: config.toml"},
 	}
 	if sv.residentMaxWorkersOverridden() {
@@ -188,6 +188,10 @@ func (sv *SettingsView) handleResidentEnter(key string) bool {
 		return true
 	}
 	if key == resKeyAutoSwitch {
+		_ = sv.database.Config() // refresh config.toml source metadata
+		if sv.residentAutoSwitchOverridden() {
+			return sv.residentNotify("auto_switch_account is defined in config.toml — read-only")
+		}
 		return sv.persistResident(key, strconv.FormatBool(!sv.database.Config().Resident.AutoSwitchAccount))
 	}
 	r := sv.database.Config().Resident
@@ -376,4 +380,16 @@ func (sv *SettingsView) SaveResidentAccounts(list []string) bool {
 		return sv.residentNotify("could not save %s: %v", resKeyAccounts, err)
 	}
 	return sv.persistResident(resKeyAccounts, val)
+}
+
+func (sv *SettingsView) residentAutoSwitchOverridden() bool {
+	d := sv.accountDB()
+	return d != nil && d.ResidentAutoSwitchFromConfigToml()
+}
+
+func (sv *SettingsView) residentAutoSwitchSuffix() string {
+	if sv.residentAutoSwitchOverridden() {
+		return " (config.toml)"
+	}
+	return ""
 }

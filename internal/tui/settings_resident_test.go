@@ -277,3 +277,21 @@ func TestSettingsResident_AccountsRemoteReadOnly(t *testing.T) {
 	testutil.Equal(t, opened, 0)
 	testutil.Contains(t, sv.residentMsg, "read-only")
 }
+
+func TestSettingsResident_ConfigTomlMarksAutoSwitchAndAccountsReadOnly(t *testing.T) {
+	sv := testSettingsViewWithConfigToml(t, "[resident]\nauto_switch_account = false\naccount = \"work\"\n")
+	sv.setCategory(catResident)
+	// auto_switch_account from config.toml: marked and not toggled by Enter.
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAutoSwitch)
+	testutil.Contains(t, sv.SelectedRow().label, "OFF (config.toml)")
+	testutil.True(t, sv.handleEnter())
+	testutil.Contains(t, sv.residentMsg, "read-only")
+	testutil.False(t, sv.database.Config().Resident.AutoSwitchAccount)
+	// A legacy `account` in config.toml is read as a one-element accounts list and is read-only.
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAccounts)
+	testutil.Contains(t, sv.SelectedRow().label, "work (config.toml)")
+	opened := 0
+	sv.OnEditResidentAccounts = func() { opened++ }
+	testutil.True(t, sv.handleEnter())
+	testutil.Equal(t, opened, 0)
+}

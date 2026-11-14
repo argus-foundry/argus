@@ -322,3 +322,29 @@ func TestResidentDefaults_NoWriteToolAllowed(t *testing.T) {
 	testutil.Equal(t, in(r.DenyTools, "mcp__claude_ai_Slack__slack_send_message"), true)
 	testutil.Equal(t, in(r.DenyTools, "mcp__claude_ai_Slack__slack_schedule_message"), true)
 }
+
+func TestResidentLegacyAccountTomlReadAsList(t *testing.T) {
+	write := func(body string) *FileLoader {
+		p := filepath.Join(t.TempDir(), "config.toml")
+		testutil.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+		return NewFileLoader(p)
+	}
+	// Legacy single account: honoured as a one-element list, and marks the setting config.toml-owned.
+	l := write("[resident]\naccount = \"personal\"\n")
+	got := l.Apply(DefaultConfig())
+	testutil.DeepEqual(t, got.Resident.Accounts, []string{"personal"})
+	testutil.True(t, l.ResidentAccountsDefined())
+	// The list wins over the legacy key when both are present.
+	l = write("[resident]\naccount = \"personal\"\naccounts = [\"work\", \"auto\"]\n")
+	got = l.Apply(DefaultConfig())
+	testutil.DeepEqual(t, got.Resident.Accounts, []string{"work", "auto"})
+	// auto_switch_account provenance.
+	l = write("[resident]\nauto_switch_account = false\n")
+	got = l.Apply(DefaultConfig())
+	testutil.True(t, l.ResidentAutoSwitchDefined())
+	testutil.False(t, got.Resident.AutoSwitchAccount)
+	l = write("[resident]\nname = \"x\"\n")
+	l.Apply(DefaultConfig())
+	testutil.False(t, l.ResidentAutoSwitchDefined())
+	testutil.False(t, l.ResidentAccountsDefined())
+}

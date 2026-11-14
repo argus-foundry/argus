@@ -112,6 +112,9 @@ func (d *DB) ResidentWorkerCount() (int, error) {
 
 func (d *DB) ResidentMaxWorkersFromConfigToml() bool { return d.cfgLoader.ResidentMaxWorkersDefined() }
 
+// ResidentAutoSwitchFromConfigToml reports a config.toml [resident] auto_switch_account override.
+func (d *DB) ResidentAutoSwitchFromConfigToml() bool { return d.cfgLoader.ResidentAutoSwitchDefined() }
+
 // ResidentAccountsFromConfigToml reports a config.toml [resident] accounts override.
 func (d *DB) ResidentAccountsFromConfigToml() bool { return d.cfgLoader.ResidentAccountsDefined() }
 

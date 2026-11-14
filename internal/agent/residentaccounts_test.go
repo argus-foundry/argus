@@ -109,14 +109,19 @@ func TestDecideResidentAccount(t *testing.T) {
 		{"every listed depleted", []string{"personal", "work"}, "personal", false,
 			map[string]usagebudget.Reading{"personal": full, "work": full}, "", "", true},
 		{"healthy stays", []string{"personal", "work"}, "personal", false, nil, "", "", false},
-		{"moves back up", []string{"personal", "work"}, "work", false, nil, "personal", ResidentMoveBackUp, false},
+		{"moves back up on a fresh reading", []string{"personal", "work"}, "work", false,
+			map[string]usagebudget.Reading{"personal": rd(5, 5, now)}, "personal", ResidentMoveBackUp, false},
+		{"no move back up on an unknown reading", []string{"personal", "work"}, "work", false, nil, "", "", false},
+		{"no move back up on a stale reading", []string{"personal", "work"}, "work", false,
+			map[string]usagebudget.Reading{"personal": rd(5, 5, now.Add(-3*time.Hour))}, "", "", false},
 		{"manual not moved back up", []string{"personal", "work"}, "work", true, nil, "", "", false},
 		{"no move back up while preferred depleted", []string{"personal", "work"}, "work", false,
 			map[string]usagebudget.Reading{"personal": full}, "", "", false},
 		{"auto slot does not chase headroom", []string{"personal", "auto"}, "work", false,
 			map[string]usagebudget.Reading{"personal": full, "work": rd(80, 80, now), "default": rd(1, 1, now)}, "", "", false},
-		{"auto slot returns to explicit", []string{"personal", "auto"}, "work", false, nil, "personal", ResidentMoveBackUp, false},
-		{"not allowed moves onto list", []string{"personal"}, "work", false, nil, "personal", ResidentMoveNotAllowed, false},
+		{"auto slot returns to explicit", []string{"personal", "auto"}, "work", false,
+			map[string]usagebudget.Reading{"personal": rd(5, 5, now)}, "personal", ResidentMoveBackUp, false},
+		{"not allowed moves onto list (unknown ok when leaving)", []string{"personal"}, "work", false, nil, "personal", ResidentMoveNotAllowed, false},
 		{"manual out of list stays", []string{"personal"}, "work", true, nil, "", "", false},
 		{"unknown reading never depleted", []string{"personal", "work"}, "personal", false, map[string]usagebudget.Reading{}, "", "", false},
 	}
@@ -126,6 +131,7 @@ func TestDecideResidentAccount(t *testing.T) {
 			testutil.Equal(t, d.Target, tt.wantTarget)
 			testutil.Equal(t, d.Reason, tt.wantReason)
 			testutil.Equal(t, d.NoneUsable, tt.wantNone)
+			testutil.Equal(t, d.Urgent, tt.wantReason == ResidentMoveDepleted)
 		})
 	}
 }
