@@ -24,7 +24,7 @@ func TestAccountWrite_DeleteSoleReference(t *testing.T) {
 			case "artifact_home":
 				toml = "[project_artifact_accounts]\np = \"work\"\n"
 			case "resident_config":
-				toml = "[resident]\naccount = \"work\"\n"
+				toml = "[resident]\naccounts = [\"personal\", \"work\"]\n"
 			}
 			srv, d := accountsServer(t, toml)
 			original := config.Account{Label: "Work", ClaudeConfigDir: filepath.Join(t.TempDir(), "login")}

@@ -2,10 +2,11 @@ package tui
 
 import (
 	"fmt"
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 	"strings"
 	"time"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
