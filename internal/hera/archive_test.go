@@ -561,3 +561,116 @@ func TestTruncateUTF8(t *testing.T) {
 	testutil.Equal(t, truncateUTF8("abc", -5), "") // negative limit must not loop forever
 	testutil.Equal(t, truncateUTF8("", -1), "")
 }
+
+// --- Closing the three accepted gaps (PR #1223 follow-up) ---
+
+// Gap 1: state that changes AFTER the predicate (e.g. during the slow git
+// check) must still stop the archive.
+func TestArchiveRole_StateChangeDuringGitCheckIsCaught(t *testing.T) {
+	cases := map[string]func(t *testing.T, d *db.DB, orchID int64, task *model.Task, r *db.HeraRole){
+		"new live binding": func(t *testing.T, d *db.DB, _ int64, task *model.Task, _ *db.HeraRole) {
+			o2, _ := d.CreateHeraOrchestrator("o2", "master")
+			_, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o2.ID, Name: "late", Kind: db.HeraKindFreelance, ArgusProject: "p"}, task.ID, task.Worktree)
+			testutil.NoError(t, err)
+		},
+		"new unread mail": func(t *testing.T, d *db.DB, orchID int64, _ *model.Task, r *db.HeraRole) {
+			_, c := archWorker(t, d, orchID, "c", model.StatusInProgress)
+			_, err := d.SendHeraMessage(c.ID, r.ID, "late", "tldr", nil)
+			testutil.NoError(t, err)
+		},
+		"task reopened": func(t *testing.T, d *db.DB, _ int64, task *model.Task, _ *db.HeraRole) {
+			testutil.NoError(t, d.SetStatus(task.ID, model.StatusInProgress))
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := archDB(t)
+			orch, _ := d.CreateHeraOrchestrator("o", "master")
+			task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+			slowGit := func(*model.Task) (bool, string) {
+				mutate(t, d, orch.ID, task, r) // lands while the git check runs
+				return true, ""
+			}
+			res := ArchiveRole(d, nil, slowGit, r, false)
+			testutil.Equal(t, res.Archived, false)
+			got, _ := d.Get(task.ID)
+			testutil.Equal(t, got.Archived, false)
+		})
+	}
+}
+
+// The in-transaction guard alone (bypassing the pre-write re-check) also holds.
+func TestSetArchivedIfQuiet_GuardsInsideTx(t *testing.T) {
+	d := archDB(t)
+	orch, _ := d.CreateHeraOrchestrator("o", "master")
+	task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+	_, c := archWorker(t, d, orch.ID, "c", model.StatusInProgress)
+	_, err := d.SendHeraMessage(c.ID, r.ID, "late", "tldr", nil)
+	testutil.NoError(t, err)
+	err = d.SetArchivedIfQuiet(task.ID, r.ID, nil)
+	if err == nil {
+		t.Fatal("expected guard to refuse with unread mail")
+	}
+	got, _ := d.Get(task.ID)
+	testutil.Equal(t, got.Archived, false)
+}
+
+// Gap 2: archiving a sub-coordinator also archives its child orchestrator.
+func TestArchive_SubCoordinatorArchivesChildOrchestrator(t *testing.T) {
+	for name, build := range map[string]func(*testing.T, *db.DB) (*db.HeraRole, *db.HeraOrchestrator){
+		"plan-DAG shape (no link row)": func(t *testing.T, d *db.DB) (*db.HeraRole, *db.HeraOrchestrator) {
+			_, sub, _, child, _ := materializedSubCoord(t, d)
+			return sub, child
+		},
+		"explicit link": func(t *testing.T, d *db.DB) (*db.HeraRole, *db.HeraOrchestrator) {
+			_, sub, _, child := subCoord(t, d)
+			return sub, child
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := archDB(t)
+			sub, child := build(t, d)
+			res := ArchiveRole(d, nil, gitOK, sub, false)
+			testutil.Equal(t, res.Archived, true)
+			o, err := d.HeraOrchestrator(child.ID)
+			testutil.NoError(t, err)
+			testutil.Equal(t, o.ArchivedAt != nil, true)
+		})
+	}
+}
+
+// Gap 3: a failed finishing step is a refusal that a retry completes, never a
+// silently half-archived unit reported as success.
+type failEndStore struct {
+	*db.DB
+	failEnd bool
+}
+
+func (f *failEndStore) EndHeraCoordinatorBindingsForTask(taskID, reason string) (int, error) {
+	if f.failEnd {
+		return 0, errBoom
+	}
+	return f.DB.EndHeraCoordinatorBindingsForTask(taskID, reason)
+}
+
+func TestArchiveRole_PartialFailureIsRetryable(t *testing.T) {
+	d := archDB(t)
+	_, sub, _, child, task := materializedSubCoord(t, d)
+	fs := &failEndStore{DB: d, failEnd: true}
+
+	res := ArchiveRole(fs, nil, gitOK, sub, false)
+	testutil.Equal(t, res.Archived, false)
+	testutil.Contains(t, res.Reason, "retry")
+	r, _ := d.HeraRole(sub.ID)
+	testutil.Equal(t, r.ArchivedAt == nil, true) // role still visible => sweep will retry
+
+	fs.failEnd = false
+	res = ArchiveRole(fs, nil, gitOK, r, false)
+	testutil.Equal(t, res.Archived, true)
+	r, _ = d.HeraRole(sub.ID)
+	testutil.Equal(t, r.ArchivedAt != nil, true)
+	o, _ := d.HeraOrchestrator(child.ID)
+	testutil.Equal(t, o.ArchivedAt != nil, true)
+	live, _ := d.ListHeraLiveBindingsByTask(task.ID)
+	testutil.Equal(t, len(live), 1) // only the sub's own worker hat
+}

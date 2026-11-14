@@ -34,7 +34,8 @@ type ArchiveStore interface {
 	PostHeraBoardItem(roleID int64, kind, subject, body string) (*db.HeraBoardItem, error)
 	ResolveHeraBoardItem(roleID, id int64, by, note string) error
 	IsResidentWorker(taskID string) (bool, error)
-	SetArchived(id string, archived bool) error
+	SetArchivedIfQuiet(taskID string, roleID int64, bridgedOrchIDs []int64) error
+	ArchiveHeraOrchestrator(id int64) error
 	ArchiveHeraRoleAs(id int64, actor db.HeraActor) error
 }
 
@@ -372,29 +373,52 @@ func ArchiveRole(store ArchiveStore, runner ArchiveRunner, git GitCheck, role *d
 		res.Reason = "dry run: archivable"
 		return res
 	}
+	// The predicate ran before a possibly slow git check: re-run every cheap
+	// clause now (git result reused) so the window to the writes is tiny, and
+	// SetArchivedIfQuiet re-checks the racy clauses inside the write tx.
+	if v2 := ArchivableVerdict(store, func(*model.Task) (bool, string) { return true, "" }, role); !v2.Archivable {
+		res.Reason = "changed during archive: " + v2.Reason
+		uxlog.Log("[hera] archive refused role=%s: %s", role.Name, res.Reason)
+		return res
+	}
+	kids, err := childOrchs(store, role, taskID)
+	if err != nil {
+		res.Reason = fmt.Sprintf("orchestrator links unreadable: %v", err)
+		uxlog.Log("[hera] archive refused role=%s: %s", role.Name, res.Reason)
+		return res
+	}
 	if err := pushFyiUp(store, role, taskID); err != nil {
 		res.Reason = fmt.Sprintf("could not push fyi items to parent: %v", err)
 		uxlog.Log("[hera] archive refused role=%s: %s", role.Name, res.Reason)
 		return res
 	}
-	if err := store.SetArchived(taskID, true); err != nil {
+	if err := store.SetArchivedIfQuiet(taskID, role.ID, kids); err != nil {
 		res.Reason = fmt.Sprintf("archive task: %v", err)
 		uxlog.Log("[hera] archive refused role=%s: %s", role.Name, res.Reason)
 		return res
 	}
+	// Everything below is idempotent and the role is hidden LAST: any failure
+	// leaves the role visible, so the next call re-runs the remaining steps
+	// instead of stranding a half-archived unit.
+	partial := func(step string, err error) ArchiveRoleResult {
+		res.Reason = fmt.Sprintf("task archived but %s failed (retry hera_archive): %v", step, err)
+		uxlog.Log("[hera] archive partial role=%s: %s", role.Name, res.Reason)
+		return res
+	}
 	if _, err := store.EndHeraCoordinatorBindingsForTask(taskID, db.HeraEndReasonAccepted); err != nil {
-		uxlog.Log("[hera] archive role=%s: end coordinator hat failed: %v", role.Name, err)
+		return partial("ending the child coordinator binding", err)
+	}
+	for _, k := range kids {
+		if err := store.ArchiveHeraOrchestrator(k); err != nil && !errors.Is(err, db.ErrHeraNotFound) {
+			return partial(fmt.Sprintf("archiving child orchestrator %d", k), err)
+		}
 	}
 	if err := store.ArchiveHeraRoleAs(role.ID, db.HeraActorHuman); err != nil {
-		res.Reason = fmt.Sprintf("task archived but hiding role failed: %v", err)
-		res.Archived = true
-		uxlog.Log("[hera] archive role=%s: %s", role.Name, res.Reason)
-		return res
+		return partial("hiding the role", err)
 	}
 	res.Archived = true
 	if alive {
-		// The predicate ran earlier (git check can take seconds): re-confirm
-		// the session is still idle right before the stop.
+		// The session was idle at the start; confirm again right before the stop.
 		if !runner.IsIdle(taskID) || runner.BlockedOnPrompt(taskID) {
 			res.Reason = "archived; session became busy so it was left running"
 			uxlog.Log("[hera] archive role=%s: %s", role.Name, res.Reason)

@@ -452,6 +452,69 @@ func (d *DB) ResultTimes() (map[string]time.Time, error) {
 // Unarchiving (archived=false) leaves pinned alone — pinning state survives
 // a round trip through the archive section.
 func (d *DB) SetArchived(id string, archived bool) error {
+	return d.setArchivedGuarded(id, archived, nil)
+}
+
+// SetArchivedIfQuiet archives taskID only if, INSIDE the same transaction as
+// the archive writes, the task is still complete, no live hera binding other
+// than roleID's holds it (a coordinator-kind hat in one of bridgedOrchIDs is
+// the sub-coordinator's own and is allowed), roleID has no unread inbound mail,
+// and roleID has no unread mail to a live recipient (add-hera-auto-archive:
+// closes the check-then-archive race the predicate alone leaves open).
+func (d *DB) SetArchivedIfQuiet(taskID string, roleID int64, bridgedOrchIDs []int64) error {
+	return d.setArchivedGuarded(taskID, true, func(tx *sql.Tx) error {
+		var status string
+		if err := tx.QueryRow(`SELECT status FROM tasks WHERE id=?`, taskID).Scan(&status); err != nil {
+			return fmt.Errorf("guard: load task: %w", err)
+		}
+		if st, perr := model.ParseStatus(status); perr != nil || st != model.StatusComplete {
+			return fmt.Errorf("guard: task status is %s, not complete", status)
+		}
+		rows, err := tx.Query(`SELECT b.role_id, b.orchestrator_id, r.kind FROM hera_bindings b JOIN hera_roles r ON r.id=b.role_id
+			WHERE b.argus_task_id=? AND b.ended_at IS NULL`, taskID)
+		if err != nil {
+			return fmt.Errorf("guard: bindings: %w", err)
+		}
+		allowed := map[int64]bool{}
+		for _, o := range bridgedOrchIDs {
+			allowed[o] = true
+		}
+		var bad int64
+		for rows.Next() {
+			var rid, oid int64
+			var kind string
+			if err := rows.Scan(&rid, &oid, &kind); err != nil {
+				rows.Close()
+				return err
+			}
+			if rid != roleID && (!allowed[oid] || kind != string(HeraKindCoordinator)) {
+				bad = rid
+			}
+		}
+		rows.Close()
+		if bad != 0 {
+			return fmt.Errorf("guard: task is also bound to another live role (%d)", bad)
+		}
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM hera_messages WHERE to_role_id=? AND read_at IS NULL`, roleID).Scan(&n); err != nil {
+			return fmt.Errorf("guard: inbox: %w", err)
+		}
+		if n > 0 {
+			return fmt.Errorf("guard: %d unread hera message(s) arrived", n)
+		}
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM hera_messages m JOIN hera_roles r ON r.id=m.to_role_id
+			WHERE m.from_role_id=? AND m.read_at IS NULL AND r.archived_at IS NULL AND r.nuked_at IS NULL
+			  AND EXISTS (SELECT 1 FROM hera_bindings b WHERE b.role_id=r.id AND b.ended_at IS NULL)`, roleID).Scan(&n); err != nil {
+			return fmt.Errorf("guard: outbox: %w", err)
+		}
+		if n > 0 {
+			return fmt.Errorf("guard: %d sent message(s) not yet read", n)
+		}
+		return nil
+	})
+}
+
+func (d *DB) setArchivedGuarded(id string, archived bool, guard func(tx *sql.Tx) error) error {
 	// Both statements (tasks UPDATE + on-archive task_messages DELETE) run in
 	// one SQLite transaction so a crash between them can't leave an archived
 	// row with a queued inbox forever counting against the unread cap.
@@ -463,6 +526,11 @@ func (d *DB) SetArchived(id string, archived bool) error {
 		)
 		if gerr := residentGuard(tx, id); gerr != nil {
 			return gerr
+		}
+		if guard != nil {
+			if gerr := guard(tx); gerr != nil {
+				return gerr
+			}
 		}
 		if archived {
 			if gerr := graduationPendingGuard(tx, id); gerr != nil {

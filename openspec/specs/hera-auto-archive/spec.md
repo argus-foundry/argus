@@ -70,3 +70,21 @@ Archiving via `hera_archive` SHALL NOT remove the worktree or delete any local o
 - **WHEN** a role with a worktree whose branch merged is archived by `hera_archive`
 - **THEN** the worktree directory and branch still exist afterward
 
+### Requirement: Archive is race-safe and completes or retries
+
+`hera_archive` SHALL re-run the cheap done-done clauses immediately before writing, and the task archive SHALL re-verify inside its own database transaction that the task is still `complete`, that no other live role is bound to it (a sub-coordinator's own coordinator hat excepted), and that no unread hera mail arrived to or from the role. Archiving a sub-coordinator SHALL also end its child coordinator binding and archive its child orchestrator(s). The role SHALL be hidden last; if any finishing step fails the tool SHALL report the role as refused with a retry reason (never as archived), and a later call SHALL complete the remaining idempotent steps.
+
+#### Scenario: State changing during the git check stops the archive
+
+- **WHEN** a new live binding, unread mail, or a status reopen lands while the git check is running
+- **THEN** nothing is archived and the role is reported refused
+
+#### Scenario: Sub-coordinator archive archives its child orchestrator
+
+- **WHEN** a done-done sub-coordinator is archived
+- **THEN** its child orchestrator is archived and its child coordinator binding ended
+
+#### Scenario: Partial failure is retryable
+
+- **WHEN** ending the child coordinator binding fails after the task archive write
+- **THEN** the role stays visible and is reported refused ("retry"), and a repeat call finishes the archive
