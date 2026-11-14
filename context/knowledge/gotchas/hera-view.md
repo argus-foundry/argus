@@ -1,5 +1,7 @@
 # Native Hera View (`internal/tui/hera`)
 
+- **Gater-derived plan bases must resolve in the target project and cannot inherit a foreign task's branch, even if that name exists in both repos.** Validate before the worker/subcoord split, clearing unsuitable bases so CreateAndStart uses the target default; explicit `hera_spawn_worker(branch=...)` still fails on invalid refs.
+
 M6a scaffolds the native Hera view: a `HeraPage` (rail | coordinator pane | agent pane) replacing the old DAG tab. Only the LEFT rail is live and READ-ONLY; the two right panes are placeholders (6b adds PTY feeds; 6c adds mutations). M6b makes the two right panes REAL terminal feeds and wires rail selection to them.
 
 ## Display label is "Projects"; every internal name stays "Hera"
