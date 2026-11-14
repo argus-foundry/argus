@@ -1645,6 +1645,11 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 		return false, ""
 	}
 	// runner.KickRerender already logs via slog with task=, cols=, rows=.
+	if err := s.db.SetStatus(taskID, model.StatusInProgress); err != nil {
+		uxlog.Log("[rerender] restart status write failed task=%s err=%v", taskID, err)
+		//nolint:gosec // G706: slog encodes these as structured attributes, escaping control characters.
+		slog.Warn("[rerender] restart status write failed", "task", taskID, "err", err)
+	}
 	return true, ""
 }
 

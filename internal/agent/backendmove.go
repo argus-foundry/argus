@@ -178,6 +178,10 @@ func MoveTaskBackend(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 		return nil, AccountMoveResult{}, fmt.Errorf("restart on backend %q failed, task left on %q: %w", toName, res.FromBackend, err)
 	}
 	res.Started = true
+	if err := database.SetStatus(task.ID, model.StatusInProgress); err != nil {
+		return task, res, fmt.Errorf("persist restarted backend move status: %w", err)
+	}
+	task.SetStatus(model.StatusInProgress)
 	logBackendMove(task.ID, res, "restarted in place with handoff")
 	return task, res, nil
 }

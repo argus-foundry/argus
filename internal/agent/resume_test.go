@@ -7,10 +7,38 @@ import (
 	"time"
 
 	"github.com/argus-foundry/argus/internal/claudesession"
+	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
+
+func TestPrepareResume_RecoveryNeverStartsFresh(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, tc := range []struct {
+		name, id string
+		resume   bool
+	}{
+		{"empty identity", "", false}, {"missing transcript", "gone", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &model.Task{ID: "t", Backend: "claude", Worktree: t.TempDir(), SessionID: tc.id, ResumeOnly: true}
+			_, err := prepareResume(task, config.DefaultConfig(), tc.resume)
+			testutil.ErrorIs(t, err, ErrResumeUnavailable)
+			testutil.Equal(t, task.SessionID, tc.id)
+		})
+	}
+	t.Run("available conversation resumes", func(t *testing.T) {
+		const id = "11111111-1111-7111-9111-111111111111"
+		worktree := t.TempDir()
+		seedClaudeTranscript(t, os.Getenv("HOME"), worktree, id, time.Time{})
+		task := &model.Task{ID: "t", Backend: "claude", Worktree: worktree, SessionID: id, ResumeOnly: true}
+		resume, err := prepareResume(task, config.DefaultConfig(), true)
+		testutil.NoError(t, err)
+		testutil.True(t, resume)
+		testutil.Equal(t, task.SessionID, id)
+	})
+}
 
 // seedClaudeTranscript writes a UUID-named transcript into the Claude project
 // dir for worktree so claudesession.List discovers it, optionally stamping its

@@ -142,6 +142,7 @@ func (c *sessionCore) StartSession(req *StartReq, resp *StartResp) error {
 	task := &model.Task{
 		ID:              req.TaskID,
 		SessionID:       req.SessionID,
+		ResumeOnly:      req.ResumeOnly,
 		Prompt:          req.Prompt,
 		Project:         req.Project,
 		Backend:         req.Backend,
@@ -169,6 +170,7 @@ func (c *sessionCore) StartSession(req *StartReq, resp *StartResp) error {
 		// since the outer clock starts before the inner one, but that's an
 		// implicit timing property, not a contract).
 		resp.Ambiguous = errors.Is(err, agent.ErrStartAmbiguous)
+		resp.ResumeUnavailable = errors.Is(err, agent.ErrResumeUnavailable)
 		return nil
 	}
 	resp.PID = sess.PID()

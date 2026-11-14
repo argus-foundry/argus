@@ -289,6 +289,11 @@ func (s *Server) handlePatchTaskRuntime(w http.ResponseWriter, r *http.Request) 
 			}
 			return
 		}
+		if err := s.db.SetStatus(id, model.StatusInProgress); err != nil {
+			uxlog.Log("[api] runtime: restart status write failed task=%s err=%v", id, err)
+			s.writeRestartFailure(w, id, "store_failed", true, false, err)
+			return
+		}
 		s.emitRuntimeChanged(id, req.Apply, changed, true)
 		s.writeRuntimeOK(w, s.freshTask(id, &cand), req.Apply, changed, true, live)
 		return

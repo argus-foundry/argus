@@ -1,11 +1,13 @@
 package bouncerecovery
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/notify"
@@ -250,12 +252,32 @@ func nextPending(entries map[string]*Entry, now time.Time) *Entry {
 func (w *Worker) resume(e *Entry, entries map[string]*Entry, now time.Time) {
 	// Re-check reality right before acting: a human may have gotten there first.
 	t, err := w.store.Get(e.TaskID)
+	meta, metaErr := w.store.ListMetaByNamespace("hera")
+	if metaErr != nil {
+		slog.Warn("[bounce-recovery] close-out check failed; deferring", "task", e.TaskID, "err", metaErr)
+		return
+	}
+	pendingRPC := false
+	if pending, ok := w.runner.(interface{ ResumePending(string) bool }); ok {
+		pendingRPC = pending.ResumePending(e.TaskID)
+	}
 	switch {
-	case err != nil || t == nil || t.Archived || t.Status == model.StatusComplete:
+	case err != nil || t == nil || t.Archived || t.Status == model.StatusComplete || meta[e.TaskID]["ready_to_close"] == "true":
 		slog.Info("[bounce-recovery] skip: task gone, archived or complete", "task", e.TaskID, "err", err)
 		w.mark(e, StatusSuperseded)
 		return
+	case pendingRPC:
+		e.NextAt = now.Add(retryBackoff[0])
+		slog.Info("[bounce-recovery] prior start still pending; deferring retry", "task", e.TaskID)
+		w.mark(e, StatusPending)
+		return
 	case w.runner.IsAlive(e.TaskID) || t.Status == model.StatusInProgress:
+		if owned, ok := w.runner.(interface{ OwnsLiveSession(string) bool }); ok && e.Attempts > 0 && owned.OwnsLiveSession(e.TaskID) {
+			slog.Info("[bounce-recovery] prior start confirmed alive; delivering owed note", "task", e.TaskID)
+			uxlog.Log("[bounce-recovery] prior start confirmed task=%s", e.TaskID)
+			w.resumed(e, entries, now)
+			return
+		}
 		slog.Info("[bounce-recovery] skip: already resumed by someone else", "task", e.TaskID, "status", t.Status)
 		w.mark(e, StatusSuperseded)
 		return
@@ -264,6 +286,14 @@ func (w *Worker) resume(e *Entry, entries map[string]*Entry, now time.Time) {
 	e.Attempts++
 	w.lastStart = now
 	if err := w.runner.Resume(e.TaskID); err != nil {
+		if errors.Is(err, agent.ErrResumeUnavailable) {
+			e.Reason = "no_transcript"
+			_ = w.store.SetMeta(e.TaskID, Namespace, "reason", e.Reason)
+			slog.Warn("[bounce-recovery] refusing fresh launch: conversation unavailable", "task", e.TaskID, "err", err)
+			uxlog.Log("[bounce-recovery] refusing fresh launch task=%s: %v", e.TaskID, err)
+			w.mark(e, StatusFailed)
+			return
+		}
 		if e.Attempts >= MaxAttempts {
 			slog.Error("[bounce-recovery] resume failed, giving up", "task", e.TaskID, "attempts", e.Attempts, "err", err)
 			w.mark(e, StatusFailed)
@@ -275,6 +305,10 @@ func (w *Worker) resume(e *Entry, entries map[string]*Entry, now time.Time) {
 		w.mark(e, StatusPending)
 		return
 	}
+	w.resumed(e, entries, now)
+}
+
+func (w *Worker) resumed(e *Entry, entries map[string]*Entry, now time.Time) {
 	e.NextAt = time.Time{}
 	e.NoteState = ""
 	w.mark(e, StatusResumed)

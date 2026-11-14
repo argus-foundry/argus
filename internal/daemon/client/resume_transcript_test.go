@@ -38,6 +38,24 @@ func TestResumeIDWire(t *testing.T) {
 	waitStatus(t, database, task.ID, model.StatusInReview)
 }
 
+func TestSupOnly(t *testing.T) {
+	_, sc, database := supE2E(t)
+	_, err := sc.Hello()
+	testutil.NoError(t, err)
+	// The fake executable would leave launch-args if the supervisor ever
+	// took its ordinary missing-transcript fresh-launch branch.
+	bin := filepath.Join(t.TempDir(), "claude")
+	testutil.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\ntouch launch-args\n"), 0o700))
+	testutil.NoError(t, database.SetBackend("fixture", config.Backend{Command: bin}))
+	task := &model.Task{ID: "strict", Backend: "fixture", Worktree: t.TempDir(), SessionID: "missing", ResumeOnly: true, Prompt: "original mission"}
+	_, err = sc.Start(task, database.Config(), 24, 80, true)
+	testutil.ErrorIs(t, err, agent.ErrResumeUnavailable)
+	testutil.Equal(t, task.SessionID, "missing")
+	testutil.Nil(t, sc.Get(task.ID))
+	_, err = os.Stat(filepath.Join(task.Worktree, "launch-args"))
+	testutil.True(t, os.IsNotExist(err))
+}
+
 func TestSupResumeID(t *testing.T) {
 	isolateResumeProbeCLI(t)
 	d, supervisorClient, database := supE2E(t)

@@ -303,6 +303,7 @@ func TestPatchTaskRuntime_Restart(t *testing.T) {
 		task := &model.Task{Name: "live", Status: model.StatusInProgress}
 		testutil.NoError(t, d.Add(task))
 		startCat(t, srv, d, task)
+		testutil.NoError(t, d.SetStatus(task.ID, model.StatusInReview))
 		_, rev := runtimeGet(t, srv, task.ID)
 		sink := installAPISink(t)
 		w := runtimePatch(srv, task.ID, `{"prompt":"p2","apply":"restart","force":true}`, ifMatch(rev))
@@ -313,6 +314,7 @@ func TestPatchTaskRuntime_Restart(t *testing.T) {
 		testutil.Equal(t, body["live"], any(true))
 		got, _ := d.Get(task.ID)
 		testutil.Equal(t, got.Prompt, "p2")
+		testutil.Equal(t, got.Status, model.StatusInProgress)
 		testutil.Equal(t, body["revision"], any(runtimeRevision(got)))
 		evs := runtimeChangedEvents(sink)
 		testutil.Equal(t, len(evs), 1)

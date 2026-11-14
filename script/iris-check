@@ -26,6 +26,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Bound package concurrency on the shared host while preserving explicit caller
+# settings. All tests, race detection, timeout and coverage checks stay enabled.
+export GOFLAGS="${GOFLAGS:--p=3}"
+
 usage() {
 	echo "usage: script/iris-check <pre-pr|lint|fmt|vet|vuln|test|cover|build>" >&2
 }
