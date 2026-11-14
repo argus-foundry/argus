@@ -12,7 +12,7 @@
 ## 3. Ship
 
 - [x] 3.1 Update gotchas and surface digests as needed; review diff and tests.
-- [ ] 3.2 Archive change, validate specs and pass make pre-pr.
+- [ ] 3.2 Archive change, validate specs and complete quality gates (approved exception: GitHub CI gates internal/api).
 - [x] 3.3 Prepare one PR summary and restart requirements for the iris handoff to coord.
 
 Validation evidence:
@@ -20,5 +20,5 @@ Validation evidence:
 - Feature regressions and the final full daemon race/coverage suite pass.
 - All 905 API top-level tests pass in disjoint 453/452 batches with race detection and the unchanged 300-second timeout.
 - Combined complete coverage is 89.3%, above the 88% filtered floor; all 790 workspace tests pass.
-- Host build/vet/format/lint/vulnerability checks pass. The standard full gate remains blocked by the API package's aggregate 300-second timeout, also reproduced on clean master; no push is authorized by that result.
+- Host build/vet/format/lint/vulnerability checks pass. The API package's aggregate 300-second timeout also reproduces on clean master 2eb92987 (300.79s versus 300.87s with the same settings). Aaron explicitly approved push/PR creation with GitHub CI as the gate for internal/api; every other required gate is clean.
 - The bounce-recovery base spec validates strictly. Global strict validation retains missing-scenario failures in untouched desktop-web-workspace, git-integration and rest-api specs.
