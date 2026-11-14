@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,6 +60,8 @@ type FileLoader struct {
 	// account settings the file defines (see AccountSources).
 	accountSources            AccountSources
 	residentMaxWorkersDefined bool
+	residentAccountsDefined   bool
+	residentAutoSwitchDefined bool
 	residentSources           ResidentSources
 	// projectsDefined holds project names the most recent Apply found under [projects.<name>].
 	projectsDefined map[string]bool
@@ -104,6 +107,8 @@ func (l *FileLoader) Apply(base Config) Config {
 		l.backendRoutingTierDefined = false
 		l.accountSources = AccountSources{}
 		l.residentMaxWorkersDefined = false
+		l.residentAccountsDefined = false
+		l.residentAutoSwitchDefined = false
 		l.residentSources = ResidentSources{}
 		l.projectsDefined = nil
 		if l.err != nil && prevErr == nil {
@@ -134,6 +139,8 @@ func (l *FileLoader) Apply(base Config) Config {
 		l.backendRoutingTierDefined = false
 		l.accountSources = AccountSources{}
 		l.residentMaxWorkersDefined = false
+		l.residentAccountsDefined = false
+		l.residentAutoSwitchDefined = false
 		l.residentSources = ResidentSources{}
 		l.projectsDefined = nil
 		if prevErr == nil {
@@ -144,6 +151,14 @@ func (l *FileLoader) Apply(base Config) Config {
 	l.backendRoutingTierDefined = meta.IsDefined("backend_routing", "tier") && len(merged.BackendRouting.Tiers) > 0
 	l.accountSources = accountSourcesFrom(meta)
 	l.residentMaxWorkersDefined = meta.IsDefined("resident", "max_workers")
+	l.residentAccountsDefined = meta.IsDefined("resident", "accounts") || meta.IsDefined("resident", "account")
+	l.residentAutoSwitchDefined = meta.IsDefined("resident", "auto_switch_account")
+	if legacy := strings.TrimSpace(merged.Resident.LegacyAccount); legacy != "" && !meta.IsDefined("resident", "accounts") {
+		merged.Resident.Accounts = []string{legacy}
+		if changed {
+			slog.Warn("argus config: [resident] account is deprecated; read as accounts = [...]", "account", legacy)
+		}
+	}
 	l.residentSources = ResidentSources{WorkerAccounts: map[string]bool{}}
 	for _, key := range meta.Keys() {
 		if len(key) == 3 && key[0] == "resident" && key[1] == "worker_accounts" {
@@ -289,4 +304,26 @@ func (l *FileLoader) ResidentMaxWorkersDefined() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.residentMaxWorkersDefined
+}
+
+// ResidentAccountsDefined reports whether config.toml sets [resident] accounts
+// (Settings then shows the list read-only).
+func (l *FileLoader) ResidentAccountsDefined() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.residentAccountsDefined
+}
+
+// ResidentAutoSwitchDefined reports whether config.toml sets [resident]
+// auto_switch_account (Settings then shows the toggle read-only).
+func (l *FileLoader) ResidentAutoSwitchDefined() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.residentAutoSwitchDefined
 }

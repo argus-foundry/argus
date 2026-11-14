@@ -88,6 +88,22 @@ type residentManager struct {
 	// doorbell for the committed message (nil = store only: tests, no notifier).
 	commitNotice func(noticeID, from, to int64, body, tldr string) (*db.HeraMessage, error)
 	ringNotice   func(msg *db.HeraMessage)
+	// mover restarts the resident in place for an account move (nil = moves
+	// and the automatic switch are unavailable: tests, no runner).
+	mover residentMover
+	// idleTracker adds content-aware idleness to the raw signal for the
+	// automatic switch (see sessionIdle).
+	idleTracker agent.ContentIdleTracker
+
+	// switchTicks and noneEligible are tick-loop state for the automatic
+	// account switch (see maybeAutoSwitch); only tick and MoveAccount touch them.
+	switchTicks  int
+	noneEligible bool
+	noneLoaded   bool // noneEligible was read from task_meta
+	// draftFn reports an unsent composer draft (nil = read the rendered screen).
+	draftFn   func(agent.SessionHandle) bool
+	draftMu   sync.Mutex
+	draftView agent.ScreenRenderer
 
 	mu           sync.Mutex
 	failures     int
@@ -255,6 +271,11 @@ func (m *residentManager) tick() {
 		m.startFailure = ""
 		m.mu.Unlock()
 		m.reason("")
+		// The manual move's own restart has completed: a later restart re-picks.
+		if !m.runner.HasPendingRestart(task.ID) {
+			m.takeManualPending(task.ID)
+		}
+		m.maybeAutoSwitch(task, cfg, sess)
 		return
 	}
 	if m.runner.HasPendingRestart(task.ID) || m.recycling(task.ID) {
@@ -282,8 +303,24 @@ func (m *residentManager) tick() {
 // seed (restartSessionWithSeedPrompt), so a later crash restart resumes that.
 func (m *residentManager) start(task *model.Task, cfg config.Config, backend string, attempt int) {
 	task.Backend = backend
+	// Every restart re-picks the best account, except the one a manual move itself
+	// caused. A live process (a reattach) is not a restart and never changes
+	// account: it is already running on the persisted one.
+	own := false
+	if m.runner.Get(task.ID) == nil {
+		own = m.beginRestart(task)
+	}
+	if task.SessionID != "" {
+		if !residentAccountUsable(cfg, backend, task.Account) {
+			if !m.recoverInvalidAccount(task, cfg, backend) {
+				return
+			}
+		} else if !own && m.runner.Get(task.ID) == nil {
+			m.repickAtRestart(task, cfg)
+		}
+	}
 	task.Model = cfg.Resident.Model
-	task.Account = cfg.Resident.Account
+	task.Account = m.effectiveResidentAccount(task, cfg, backend)
 	task.Sandboxed = agent.IsTaskSandboxed(task, cfg)
 
 	m.seedResidentMemory(cfg)
@@ -524,6 +561,9 @@ func (d *Daemon) residentMgr() *residentManager {
 			srv := d.apiServer
 			d.mu.Unlock()
 			return srv != nil && srv.ResidentWaiting()
+		}
+		if mv, ok := d.runner.(residentMover); ok {
+			m.mover = mv
 		}
 		d.resident = m
 	})

@@ -103,7 +103,12 @@ func TestSmoke_ResidentView_CreationKeysInert(t *testing.T) {
 			// spawn, new coordinator, pin, kanban ±, adopt, clear archive, cleanup, move account, bounce
 			// One settle for the whole burst: a key that wrongly opened a modal would
 			// swallow the rest, which the mode/focus assertions below still catch.
-			for _, r := range []rune{'w', 'n', 'P', 'm', 'M', 'J', 'c', 'C', '>', 'B'} {
+			keys := []rune{'w', 'n', 'P', 'm', 'M', 'J', 'c', 'C', '>', 'B'}
+			if !onWorker {
+				// `>` on the resident's own row opens the account picker; it has its own tests.
+				keys = []rune{'w', 'n', 'P', 'm', 'M', 'J', 'c', 'C', 'B'}
+			}
+			for _, r := range keys {
 				f.a.tapp.QueueEvent(rune1(r))
 			}
 			syncUI(t, f.a.tapp)

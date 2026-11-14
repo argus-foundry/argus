@@ -396,12 +396,14 @@ func TestPaletteApplicableActions_ResidentTabFollowsKeymapPolicy(t *testing.T) {
 	}
 	// Resident row selected: only the inbox among rail actions.
 	testutil.True(t, got[label(keymap.ActHeraInbox)])
+	// The resident's own row can also move accounts (daemon RPC), workers cannot.
+	testutil.True(t, got[label(keymap.ActHeraMoveAccount)])
 	for _, act := range []keymap.Action{keymap.ActHeraDelete, keymap.ActHeraArchive, keymap.ActHeraRename, keymap.ActHeraStatAdv, keymap.ActHeraStatRev} {
 		testutil.False(t, got[label(act)])
 	}
 	// Never offered on this tab, whatever the selection.
 	inert := []keymap.Action{keymap.ActHeraSpawn, keymap.ActHeraNewCoord, keymap.ActHeraPin, keymap.ActHeraKanbanAdv,
-		keymap.ActHeraKanbanRev, keymap.ActHeraAdopt, keymap.ActHeraClear, keymap.ActHeraCleanup, keymap.ActHeraMoveAccount}
+		keymap.ActHeraKanbanRev, keymap.ActHeraAdopt, keymap.ActHeraClear, keymap.ActHeraCleanup}
 	for _, act := range inert {
 		testutil.False(t, got[label(act)])
 	}
@@ -416,6 +418,7 @@ func TestPaletteApplicableActions_ResidentTabFollowsKeymapPolicy(t *testing.T) {
 	for _, act := range inert {
 		testutil.False(t, got[label(act)])
 	}
+	testutil.False(t, got[label(keymap.ActHeraMoveAccount)])
 }
 
 func TestPaletteApplicableActions_AgentViewResidentRowFollowsEnabled(t *testing.T) {

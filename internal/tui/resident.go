@@ -1,15 +1,24 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"time"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/daemon"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/tui/hera"
+	"github.com/argus-foundry/argus/internal/tui/modal"
 	"github.com/argus-foundry/argus/internal/tui/widget"
+	"github.com/argus-foundry/argus/internal/usagebudget"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
@@ -426,4 +435,142 @@ func residentTabLabel(local bool, cfg config.ResidentConfig) string {
 		return cfg.Name
 	}
 	return ""
+}
+
+// runResidentAccountMove moves the standing resident through the daemon (the
+// only place that can serialize with its ensure loop). The move runs off the
+// UI thread; the result is a status-bar notice.
+func (a *App) runResidentAccountMove(t *model.Task, target string, force bool) {
+	fn := a.residentMoveFn
+	if fn == nil {
+		c := a.daemonClient
+		if c == nil {
+			a.statusbar.SetError("Move account needs the daemon")
+			return
+		}
+		fn = func(account string, force bool) (daemon.ResidentMoveAccountResp, error) {
+			return c.ResidentMoveAccount(account, force)
+		}
+	}
+	a.statusbar.SetInfo(fmt.Sprintf("Moving %s to %s…", t.Name, target))
+	uxlog.Log("[account] resident move requested target=%s force=%t", target, force)
+	go func() {
+		resp, err := fn(target, force)
+		a.tapp.QueueUpdateDraw(func() {
+			a.statusbar.ClearInfo()
+			if err != nil {
+				uxlog.Log("[account] resident move failed: %v", err)
+				msg := strings.TrimPrefix(err.Error(), agent.ErrAccount.Error()+": ")
+				a.statusbar.SetError("Move account failed: " + msg)
+				return
+			}
+			note := fmt.Sprintf("Moved %s: %s → %s", t.Name, resp.From, resp.To)
+			if !resp.Resumed {
+				note += " (no transcript; started fresh)"
+			}
+			if resp.Unknown {
+				note += " (restart pending; the daemon will finish it)"
+			}
+			uxlog.Log("[account] resident move done %s→%s resumed=%t started=%t", resp.From, resp.To, resp.Resumed, resp.Started)
+			a.flashNotice(note)
+		})
+	}()
+}
+
+// openResidentAccounts opens the ordered account-list editor for Settings ->
+// Resident -> Accounts. Usage readings may be a daemon RPC, so they are read
+// off the UI thread; the modal is shown back on it.
+func (a *App) openResidentAccounts() {
+	if a.residentAccountsModal != nil || a.mode == modeResidentAccounts {
+		return
+	}
+	cfg := a.db.Config()
+	go func() {
+		usage := agent.AccountUsage(cfg)
+		now := time.Now()
+		entries := residentAccountEntries(cfg, usage, now)
+		a.tapp.QueueUpdateDraw(func() {
+			if a.residentAccountsModal != nil {
+				return
+			}
+			a.residentAccountsPrev, _ = a.pages.GetFrontPage()
+			a.residentAccountsModal = modal.NewAccountListModal("Resident accounts (first with budget wins)", config.AutoAccountEntry, entries)
+			a.mode = modeResidentAccounts
+			a.pages.AddPage("residentaccounts", a.residentAccountsModal, true, true)
+			a.pages.SwitchToPage("residentaccounts")
+			a.tapp.SetFocus(a.residentAccountsModal)
+			uxlog.Log("[resident] accounts editor open entries=%d", len(entries))
+		})
+	}()
+}
+
+// residentAccountEntries builds the editor rows: the configured list first (in
+// order, checked), then every other Claude-capable account, then <auto>.
+func residentAccountEntries(cfg config.Config, usage map[string]usagebudget.Reading, now time.Time) []modal.AccountListEntry {
+	known := cfg.AccountNamesFor("claude")
+	isKnown := map[string]bool{}
+	for _, n := range known {
+		isKnown[n] = true
+	}
+	detail := func(name string) string {
+		r, ok := usage[name]
+		if !ok {
+			return ""
+		}
+		five, week := usagebudget.LiveWindows(r, now)
+		return usageDetail(windowPct(five), windowPct(week))
+	}
+	var out []modal.AccountListEntry
+	listed := map[string]bool{}
+	for _, n := range cfg.Resident.Accounts {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			n = config.DefaultAccountName
+		}
+		if listed[n] || (n != config.AutoAccountEntry && !isKnown[n]) {
+			continue
+		}
+		listed[n] = true
+		if n == config.AutoAccountEntry {
+			continue // appended last below
+		}
+		out = append(out, modal.AccountListEntry{Name: n, Detail: detail(n), Checked: true})
+	}
+	if len(cfg.Resident.Accounts) == 0 {
+		out = append(out, modal.AccountListEntry{Name: config.DefaultAccountName, Detail: detail(config.DefaultAccountName), Checked: true})
+		listed[config.DefaultAccountName] = true
+	}
+	for _, n := range known {
+		if !listed[n] {
+			out = append(out, modal.AccountListEntry{Name: n, Detail: detail(n)})
+		}
+	}
+	return append(out, modal.AccountListEntry{Name: config.AutoAccountEntry, Label: "<auto>", Detail: "any account, most headroom", Checked: listed[config.AutoAccountEntry]})
+}
+
+func (a *App) handleResidentAccountsKey(event *tcell.EventKey) {
+	m := a.residentAccountsModal
+	m.InputHandler()(event, func(tview.Primitive) {})
+	switch {
+	case m.Canceled():
+		uxlog.Log("[resident] accounts editor canceled")
+		a.closeResidentAccounts()
+	case m.Saved():
+		list := m.Selected()
+		a.closeResidentAccounts()
+		uxlog.Log("[resident] accounts editor saved list=%v", list)
+		a.settings.SaveResidentAccounts(list)
+	}
+}
+
+func (a *App) closeResidentAccounts() {
+	a.mode = modeTaskList
+	a.residentAccountsModal = nil
+	a.pages.RemovePage("residentaccounts")
+	prev := a.residentAccountsPrev
+	a.residentAccountsPrev = ""
+	if prev == "residentaccounts" {
+		prev = ""
+	}
+	a.restorePageFocus(prev)
 }

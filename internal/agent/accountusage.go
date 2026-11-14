@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/usagebudget"
@@ -97,4 +98,13 @@ func storedAccount(name string) string {
 		return ""
 	}
 	return name
+}
+
+// AccountDepleted reports whether a reading shows the account out of budget at
+// now: a live (valid, fresh) five-hour or weekly window at 100% or more. A
+// missing, stale or reset reading is never depleted (unknown fails open), which
+// matches how headroom routing treats accounts it has no reading for.
+func AccountDepleted(r usagebudget.Reading, now time.Time) bool {
+	five, week := usagebudget.LiveWindows(r, now)
+	return (five != nil && five.Percentage >= 100) || (week != nil && week.Percentage >= 100)
 }

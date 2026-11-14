@@ -1,7 +1,9 @@
 package client
 
 import (
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/daemon"
 )
@@ -36,6 +38,23 @@ func (c *Client) ResidentMarkViewed() error {
 		return fmt.Errorf("%s", resp.Error)
 	}
 	return nil
+}
+
+// residentMoveTimeout bounds Daemon.ResidentMoveAccount: the daemon copies the
+// transcript and restarts the session synchronously, far past the 2s default.
+const residentMoveTimeout = 60 * time.Second
+
+// ResidentMoveAccount moves the resident to account ("auto", "default" or a
+// configured name) and returns the result. Call off the UI thread.
+func (c *Client) ResidentMoveAccount(account string, force bool) (daemon.ResidentMoveAccountResp, error) {
+	var resp daemon.ResidentMoveAccountResp
+	if err := c.callWithTimeout("Daemon.ResidentMoveAccount", &daemon.ResidentMoveAccountReq{Account: account, Force: force}, &resp, residentMoveTimeout); err != nil {
+		return resp, err
+	}
+	if resp.Error != "" {
+		return resp, errors.New(resp.Error)
+	}
+	return resp, nil
 }
 
 // ResidentSend queues an idle-gated message; a nonempty deliveryID deduplicates it.

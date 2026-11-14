@@ -9,6 +9,10 @@ import (
 	"unicode/utf8"
 )
 
+// AutoAccountEntry is the Accounts entry meaning "any Claude-capable account,
+// most headroom first". It is only honoured alone or as the last entry.
+const AutoAccountEntry = "auto"
+
 // ResidentNameMaxRunes bounds the resident's display name.
 const ResidentNameMaxRunes = 12
 
@@ -27,9 +31,22 @@ type ResidentConfig struct {
 	ContextBudget int `toml:"context_budget"`
 	// MemoryDir is the vault-relative working-memory folder. Independent of Name.
 	MemoryDir string `toml:"memory_dir"`
-	// Model and Account optionally override the resolved model / account.
-	Model   string `toml:"model"`
-	Account string `toml:"account"`
+	// Model optionally overrides the resolved model.
+	Model string `toml:"model"`
+	// Accounts is the ordered preference list of Claude accounts (default
+	// included), optionally ending in AutoAccountEntry. Unset means
+	// ["default"]. The resident runs on the first usable entry; see
+	// agent.ResidentAccountPlan.
+	Accounts []string `toml:"accounts"`
+	// LegacyAccount is the pre-list single `account` key. config.toml still
+	// honours it as a one-element Accounts (with a logged deprecation) when
+	// `accounts` is not set; nothing else reads it.
+	LegacyAccount string `toml:"account"`
+	// AutoSwitchAccount (default true) lets the daemon move the resident to
+	// along its Accounts list when its current account is out of usage budget
+	// (and back up when a preferred one recovers). With it off the list only
+	// decides the account at start.
+	AutoSwitchAccount bool `toml:"auto_switch_account"`
 	// AllowTools run ordinary built-ins, Argus tools and reviewed connector
 	// reads/drafts without a prompt. The non-bypass default mode still asks
 	// for unmatched tools; user ask/deny rules and structural Hera tiers win.
@@ -85,9 +102,10 @@ func ExpandResidentConnectorRules(rules []string) []string {
 // DefaultResidentConfig returns the shipped [resident] defaults.
 func DefaultResidentConfig(budget int) ResidentConfig {
 	return ResidentConfig{
-		MaxWorkers:    8,
-		ContextBudget: budget,
-		MemoryDir:     "resident",
+		MaxWorkers:        8,
+		AutoSwitchAccount: true,
+		ContextBudget:     budget,
+		MemoryDir:         "resident",
 		AllowTools: []string{
 			// Explicit built-ins: global allow wildcards are not supported by Claude.
 			"Bash",

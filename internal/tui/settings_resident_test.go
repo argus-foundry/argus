@@ -38,7 +38,7 @@ func TestSettingsResident_CategoryAndRows(t *testing.T) {
 	sv := testSettingsView(t)
 	testutil.Equal(t, catResident.Label(), "Resident")
 	sv.setCategory(catResident)
-	testutil.Equal(t, len(sv.rows), 9)
+	testutil.Equal(t, len(sv.rows), 10)
 	selectRowInCategory(t, sv, catResident, srResident, resKeyName)
 	testutil.Contains(t, sv.SelectedRow().label, "(required)")
 	selectRowInCategory(t, sv, catResident, srResident, resKeyTools)
@@ -157,8 +157,6 @@ func TestSettingsResident_Validation(t *testing.T) {
 	testutil.Equal(t, sv.database.Config().Resident.MemoryDir, "notes")
 	residentEditField(t, sv, resKeyModel, "opus")
 	testutil.Equal(t, sv.database.Config().Resident.Model, "opus")
-	residentEditField(t, sv, resKeyAccount, "work")
-	testutil.Equal(t, sv.database.Config().Resident.Account, "work")
 
 	// Enabled resident cannot lose its name.
 	residentEnableKB(t, sv)
@@ -225,4 +223,75 @@ func TestSettingsResident_PasteAndRender(t *testing.T) {
 		selectRowInCategory(t, sv, catResident, srResident, k)
 		sv.Draw(drawSim(t))
 	}
+}
+
+func TestSettingsResident_AutoSwitchToggle(t *testing.T) {
+	sv := testSettingsView(t)
+	sv.setCategory(catResident)
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAutoSwitch)
+	testutil.Contains(t, sv.SelectedRow().label, "ON") // default on
+	testutil.True(t, sv.handleEnter())
+	testutil.False(t, sv.database.Config().Resident.AutoSwitchAccount)
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAutoSwitch)
+	testutil.Contains(t, sv.SelectedRow().label, "OFF")
+	testutil.True(t, sv.handleEnter())
+	testutil.True(t, sv.database.Config().Resident.AutoSwitchAccount)
+}
+
+func TestSettingsResident_AccountsRowAndSave(t *testing.T) {
+	sv := testSettingsView(t)
+	sv.setCategory(catResident)
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAccounts)
+	testutil.Contains(t, sv.SelectedRow().label, "default (unset)")
+
+	testutil.True(t, sv.SaveResidentAccounts([]string{"personal", "default", "auto"}))
+	testutil.DeepEqual(t, sv.database.Config().Resident.Accounts, []string{"personal", "default", "auto"})
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAccounts)
+	testutil.Contains(t, sv.SelectedRow().label, "personal, default, <auto>")
+
+	// An empty selection clears the key, and the legacy single value cannot resurface.
+	testutil.NoError(t, sv.database.SetConfigValue("resident.account", "work"))
+	testutil.True(t, sv.SaveResidentAccounts(nil))
+	testutil.Equal(t, len(sv.database.Config().Resident.Accounts), 0)
+}
+
+func TestSettingsResident_AccountsEnterOpensEditor(t *testing.T) {
+	sv := testSettingsView(t)
+	sv.setCategory(catResident)
+	opened := 0
+	sv.OnEditResidentAccounts = func() { opened++ }
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAccounts)
+	testutil.True(t, sv.handleEnter())
+	testutil.Equal(t, opened, 1)
+	testutil.False(t, sv.IsEditing())
+}
+
+func TestSettingsResident_AccountsRemoteReadOnly(t *testing.T) {
+	sv := testSettingsView(t)
+	sv.remote = true
+	sv.setCategory(catResident)
+	opened := 0
+	sv.OnEditResidentAccounts = func() { opened++ }
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAccounts)
+	testutil.True(t, sv.handleEnter())
+	testutil.Equal(t, opened, 0)
+	testutil.Contains(t, sv.residentMsg, "read-only")
+}
+
+func TestSettingsResident_ConfigTomlMarksAutoSwitchAndAccountsReadOnly(t *testing.T) {
+	sv := testSettingsViewWithConfigToml(t, "[resident]\nauto_switch_account = false\naccount = \"work\"\n")
+	sv.setCategory(catResident)
+	// auto_switch_account from config.toml: marked and not toggled by Enter.
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAutoSwitch)
+	testutil.Contains(t, sv.SelectedRow().label, "OFF (config.toml)")
+	testutil.True(t, sv.handleEnter())
+	testutil.Contains(t, sv.residentMsg, "read-only")
+	testutil.False(t, sv.database.Config().Resident.AutoSwitchAccount)
+	// A legacy `account` in config.toml is read as a one-element accounts list and is read-only.
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAccounts)
+	testutil.Contains(t, sv.SelectedRow().label, "work (config.toml)")
+	opened := 0
+	sv.OnEditResidentAccounts = func() { opened++ }
+	testutil.True(t, sv.handleEnter())
+	testutil.Equal(t, opened, 0)
 }

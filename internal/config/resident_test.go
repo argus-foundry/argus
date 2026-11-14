@@ -17,7 +17,8 @@ func TestResidentDefaults(t *testing.T) {
 	testutil.Equal(t, r.MemoryDir, "resident")
 	testutil.Equal(t, r.ContextBudget, cfg.Hera.CoordinatorContextBudget)
 	testutil.Equal(t, r.Model, "")
-	testutil.Equal(t, r.Account, "")
+	testutil.Equal(t, len(r.Accounts), 0) // unset means ["default"] downstream
+	testutil.True(t, r.AutoSwitchAccount)
 	testutil.Equal(t, len(r.DenyTools) > 0, true)
 	testutil.Equal(t, len(r.AskTools) > 0, true)
 }
@@ -137,19 +138,21 @@ name = "Dot"
 context_budget = 123000
 memory_dir = "assistant"
 model = "opus"
-account = "work"
+accounts = ["work", "auto"]
 allow_tools = ["c"]
 ask_tools = ["a"]
 deny_tools = ["b"]
 `), 0o644))
-	got := NewFileLoader(p).Apply(DefaultConfig())
+	loader := NewFileLoader(p)
+	got := loader.Apply(DefaultConfig())
+	testutil.True(t, loader.ResidentAccountsDefined())
 	r := got.Resident
 	testutil.Equal(t, r.Enabled, true)
 	testutil.Equal(t, r.Name, "Dot")
 	testutil.Equal(t, r.ContextBudget, 123000)
 	testutil.Equal(t, r.MemoryDir, "assistant")
 	testutil.Equal(t, r.Model, "opus")
-	testutil.Equal(t, r.Account, "work")
+	testutil.DeepEqual(t, r.Accounts, []string{"work", "auto"})
 	testutil.DeepEqual(t, r.AllowTools, []string{"c"})
 	testutil.DeepEqual(t, r.AskTools, []string{"a"})
 	testutil.DeepEqual(t, r.DenyTools, []string{"b"})
@@ -318,4 +321,30 @@ func TestResidentDefaults_NoWriteToolAllowed(t *testing.T) {
 	// Slack send/schedule stay refused outright, never merely prompted.
 	testutil.Equal(t, in(r.DenyTools, "mcp__claude_ai_Slack__slack_send_message"), true)
 	testutil.Equal(t, in(r.DenyTools, "mcp__claude_ai_Slack__slack_schedule_message"), true)
+}
+
+func TestResidentLegacyAccountTomlReadAsList(t *testing.T) {
+	write := func(body string) *FileLoader {
+		p := filepath.Join(t.TempDir(), "config.toml")
+		testutil.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+		return NewFileLoader(p)
+	}
+	// Legacy single account: honoured as a one-element list, and marks the setting config.toml-owned.
+	l := write("[resident]\naccount = \"personal\"\n")
+	got := l.Apply(DefaultConfig())
+	testutil.DeepEqual(t, got.Resident.Accounts, []string{"personal"})
+	testutil.True(t, l.ResidentAccountsDefined())
+	// The list wins over the legacy key when both are present.
+	l = write("[resident]\naccount = \"personal\"\naccounts = [\"work\", \"auto\"]\n")
+	got = l.Apply(DefaultConfig())
+	testutil.DeepEqual(t, got.Resident.Accounts, []string{"work", "auto"})
+	// auto_switch_account provenance.
+	l = write("[resident]\nauto_switch_account = false\n")
+	got = l.Apply(DefaultConfig())
+	testutil.True(t, l.ResidentAutoSwitchDefined())
+	testutil.False(t, got.Resident.AutoSwitchAccount)
+	l = write("[resident]\nname = \"x\"\n")
+	l.Apply(DefaultConfig())
+	testutil.False(t, l.ResidentAutoSwitchDefined())
+	testutil.False(t, l.ResidentAccountsDefined())
 }

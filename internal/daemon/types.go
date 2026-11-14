@@ -521,6 +521,25 @@ type ResidentStateResp struct {
 	Reason         string
 }
 
+// ResidentMoveAccountReq moves the resident to another Claude account: a
+// configured name, "default", or "auto".
+type ResidentMoveAccountReq struct {
+	Account string
+	Force   bool
+}
+
+// ResidentMoveAccountResp reports a resident account move.
+type ResidentMoveAccountResp struct {
+	OK      bool
+	Error   string
+	From    string `json:",omitempty"`
+	To      string `json:",omitempty"`
+	Resumed bool
+	Started bool
+	// Unknown means the persisted move may not have restarted the session yet.
+	Unknown bool `json:",omitempty"`
+}
+
 // ResidentSendReq is the request to deliver text to the resident through the
 // reliable, idle-gated notify bus. DeliveryID is optional; supplying one makes
 // the send idempotent (exactly-once per ID).

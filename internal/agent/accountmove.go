@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/claudesession"
 	"github.com/argus-foundry/argus/internal/config"
@@ -148,6 +149,38 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	if strings.TrimSpace(in.Backend) != "" {
 		return MoveTaskBackend(database, runner, in)
 	}
+	return moveAccount(database, runner, in, nil)
+}
+
+// ResidentMoveOpts configures a resident account move. By is db.OverrideByManual
+// or db.OverrideByAuto and is recorded in the override.
+type ResidentMoveOpts struct {
+	By string
+	// Cfg, when set, is the config the move validates against (the daemon
+	// passes the same config its decision used); nil reads database.Config().
+	Cfg *config.Config
+}
+
+// MoveResidentAccount moves the resident agent to another Claude account with
+// the same copy-transcript-then-kick-resume flow as MoveTaskAccount. It is the
+// only path that may move the resident: the generic entry points refuse it.
+// Who chose the account is recorded as a marker (db.ResidentAccountOverride)
+// in the same transaction as the row's account, so it survives restarts; the
+// resident.accounts list is never rewritten. An "auto" target considers only
+// accounts whose live usage is not depleted.
+func MoveResidentAccount(database *db.DB, runner accountMoveRunner, in AccountMoveInput, opts ResidentMoveOpts) (*model.Task, AccountMoveResult, error) {
+	if strings.TrimSpace(in.Backend) != "" {
+		return nil, AccountMoveResult{}, fmt.Errorf("%w: the resident cannot move to another backend", ErrAccount)
+	}
+	if opts.By == "" {
+		opts.By = db.OverrideByManual
+	}
+	return moveAccount(database, runner, in, &opts)
+}
+
+// moveAccount is the shared move core; resident is non-nil only for the
+// resident-specific entry point.
+func moveAccount(database *db.DB, runner accountMoveRunner, in AccountMoveInput, resident *ResidentMoveOpts) (*model.Task, AccountMoveResult, error) {
 	if !claimAccountMove(in.TaskID) {
 		return nil, AccountMoveResult{}, errAccountMovePending
 	}
@@ -159,12 +192,18 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	if err != nil {
 		return nil, AccountMoveResult{}, err
 	}
-	if task.IsResident() {
+	if task.IsResident() != (resident != nil) {
+		if resident != nil {
+			return nil, AccountMoveResult{}, fmt.Errorf("%w: task %s is not the resident", ErrAccount, task.ID)
+		}
 		// Reject before the transcript copy: SetTaskAccount would refuse
 		// later, leaving a copied transcript behind in the target account.
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: %w", ErrAccount, db.ErrResidentProtected)
 	}
 	cfg := database.Config()
+	if resident != nil && resident.Cfg != nil {
+		cfg = *resident.Cfg
+	}
 	backend, err := ResolveBackend(task, cfg)
 	if err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: %w", ErrAccount, err)
@@ -179,7 +218,13 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	// resident workers, and picking it first would refuse a move that an
 	// enabled account could have satisfied.
 	var eligible func(string) bool
-	if worker, werr := database.IsResidentWorker(task.ID); werr != nil {
+	var noneMsg string
+	if resident != nil {
+		now := time.Now()
+		usage := AccountUsage(cfg)
+		eligible = func(name string) bool { return !AccountDepleted(usage[name], now) }
+		noneMsg = "no other Claude account is available (every other account is depleted or unusable)"
+	} else if worker, werr := database.IsResidentWorker(task.ID); werr != nil {
 		uxlog.Log("[resident] move refused task=%s: worker identity lookup failed: %v", task.ID, werr)
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: resident worker identity: %w", ErrAccount, werr)
 	} else if worker {
@@ -187,12 +232,14 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 			return residentWorkerMoveCause(task, cfg, task.Backend, name) == nil
 		}
 	}
-	to, err := resolveMoveTarget(cfg, backend.Command, from, in.Account, eligible)
+	to, err := resolveMoveTarget(cfg, backend.Command, from, in.Account, eligible, noneMsg)
 	if err != nil {
 		return nil, AccountMoveResult{}, err
 	}
-	if err := refuseIneligibleResidentWorkerMove(database, task, cfg, task.Backend, to); err != nil {
-		return nil, AccountMoveResult{}, err
+	if resident == nil {
+		if err := refuseIneligibleResidentWorkerMove(database, task, cfg, task.Backend, to); err != nil {
+			return nil, AccountMoveResult{}, err
+		}
 	}
 
 	if runner != nil && runner.HasPendingRestart(task.ID) {
@@ -233,7 +280,13 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 			moved.SessionID = model.GenerateSessionID()
 		}
 	}
-	if err := database.SetTaskAccountMove(task.ID, moved.Account, routed, moved.SessionID); err != nil {
+	if resident != nil {
+		routed = false
+		ov := db.ResidentAccountOverride{Account: to, By: resident.By}
+		if err := database.SetResidentAccountMove(task.ID, moved.Account, moved.SessionID, ov); err != nil {
+			return nil, AccountMoveResult{}, fmt.Errorf("persist resident account move: %w", err)
+		}
+	} else if err := database.SetTaskAccountMove(task.ID, moved.Account, routed, moved.SessionID); err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("persist account move: %w", err)
 	}
 	task.Account, task.AccountRouted, task.SessionID = moved.Account, routed, moved.SessionID
@@ -263,10 +316,14 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 		return task, res, fmt.Errorf("%w: %w", ErrAccountMoveRestartUnknown, err)
 	}
 	res.Started = true
-	if err := database.SetStatus(task.ID, model.StatusInProgress); err != nil {
-		return task, res, fmt.Errorf("persist restarted account move status: %w", err)
+	// The resident is not a lifecycle-managed task (residentGuard refuses status
+	// writes), so only ordinary tasks record the restarted status.
+	if resident == nil {
+		if err := database.SetStatus(task.ID, model.StatusInProgress); err != nil {
+			return task, res, fmt.Errorf("persist restarted account move status: %w", err)
+		}
+		task.SetStatus(model.StatusInProgress)
 	}
-	task.SetStatus(model.StatusInProgress)
 	logAccountMove(task.ID, res, "restarted in place")
 	return task, res, nil
 }
@@ -284,7 +341,7 @@ func liveSession(runner accountMoveRunner, taskID string) SessionHandle {
 
 // resolveMoveTarget validates the requested target and resolves "auto".
 // A non-nil eligible restricts the auto candidates to accounts it accepts.
-func resolveMoveTarget(cfg config.Config, backendCommand, from, requested string, eligible func(string) bool) (string, error) {
+func resolveMoveTarget(cfg config.Config, backendCommand, from, requested string, eligible func(string) bool, noneMsg string) (string, error) {
 	target := strings.TrimSpace(requested)
 	if target == "" {
 		return "", fmt.Errorf("%w: account is required", ErrAccount)
@@ -292,6 +349,10 @@ func resolveMoveTarget(cfg config.Config, backendCommand, from, requested string
 	if target == AutoMoveTarget {
 		picked, scores, ok := pickMoveTargetWhere(cfg, AccountUsage(cfg), backendCommand, from, eligible)
 		if !ok {
+			if eligible != nil && noneMsg != "" {
+				uxlog.Log("[account] auto move refused: %s", noneMsg)
+				return "", fmt.Errorf("%w: %s", ErrAccount, noneMsg)
+			}
 			if eligible != nil {
 				uxlog.Log("[resident] auto move refused: no other account is eligible for a resident worker")
 				return "", fmt.Errorf("%w: resident workers can only move to an enabled account whose backend family supports unattended workers (no other eligible account)", ErrAccount)
@@ -417,6 +478,11 @@ func copyTree(src, dst string) error {
 func PreviewMoveTarget(database *db.DB, task *model.Task, cfg config.Config, usage map[string]usagebudget.Reading, backendCommand, exclude string) (string, bool) {
 	var keep func(string) bool
 	if database != nil && task != nil {
+		if task.IsResident() {
+			now := time.Now()
+			picked, _, ok := pickMoveTargetWhere(cfg, usage, backendCommand, exclude, func(name string) bool { return !AccountDepleted(usage[name], now) })
+			return picked, ok
+		}
 		worker, err := database.IsResidentWorker(task.ID)
 		if err != nil {
 			uxlog.Log("[resident] move preview: worker identity lookup failed task=%s: %v", task.ID, err)

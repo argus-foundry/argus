@@ -468,7 +468,7 @@ func TestResidentSections_ListOnlyAllowedRailKeys(t *testing.T) {
 		testutil.Contains(t, body, bind.String())
 	}
 	for _, act := range []keymap.Action{keymap.ActHeraSpawn, keymap.ActHeraNewCoord, keymap.ActHeraPin,
-		keymap.ActHeraKanbanAdv, keymap.ActHeraAdopt, keymap.ActHeraCleanup, keymap.ActHeraClear, keymap.ActHeraMoveAccount} {
+		keymap.ActHeraKanbanAdv, keymap.ActHeraAdopt, keymap.ActHeraCleanup, keymap.ActHeraClear} {
 		if strings.Contains(body, km.ActionLabel(act)) {
 			t.Errorf("inert action %q leaked into resident help", act)
 		}
