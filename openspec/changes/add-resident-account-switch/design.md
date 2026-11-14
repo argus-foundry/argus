@@ -36,10 +36,10 @@ In `residentManager.tick`, in the branch where the resident session is alive, ca
 
 1. `cfg.Resident.AutoSwitchAccount` is on (default true).
 2. The current account's reading, through `usagebudget.LiveWindows`, has a live window with `Percentage >= 100`. This is the existing "depleted" meaning (Codex routing treats depleted as 100%; headroom routing treats over-threshold as no headroom). No reading, stale reading or an unparseable reading never triggers (fail open: unknown is not depleted). No new threshold is introduced.
-3. The session is idle by the raw `IsIdle` signal and the resident is not Waiting on a confirmation (needs-input), so a turn or a pending prompt is never interrupted.
+3. The session is idle by the raw `IsIdle` signal, so a running turn is never interrupted. A needs-input state does NOT block (approved tweak): the usage-limit menu is itself a prompt and the two cannot be told apart cheaply; preferring the switch loses only the pending prompt since the transcript resumes.
 4. No move/recycle/restart/graduation is in flight (`AccountMoveInFlight`, `HasPendingRestart`, `m.recycling`).
 5. Conditions 2 to 4 hold on two consecutive ticks (`residentSwitchConfirmTicks = 2`, about 10s) so a transient reading or a brief idle blip cannot trigger it.
-6. Cooldown: the last automatic switch was at least `residentSwitchCooldown` (30 min) ago. The last switch time is persisted in resident meta (`last_auto_switch_at`) so a daemon bounce does not reset it.
+6. Cooldown: the last automatic switch was at least `residentSwitchCooldown` (10 min) ago. The last switch time is persisted in resident meta (`last_auto_switch_at`) so a daemon bounce does not reset it.
 
 Target: `pickMoveTargetWhere` over Claude-capable accounts excluding the current one, with a filter that rejects accounts whose live reading is depleted. Lowest usage wins (equivalently most headroom); unknown counts as 0, matching manual auto. If none qualifies the manager does nothing except log once per distinct situation and post one board item (D5) per episode ("no eligible account"), then keeps retrying each tick quietly (the cooldown only starts after an actual switch).
 
@@ -56,7 +56,7 @@ A `resident_switch_account` MCP tool would have to restart the very session that
 Every automatic switch:
 
 - `residentLog` (uxlog) and `slog.Info` with from, to, readings, resumed (the daemon never calls `uxlog.Init`, so both are required).
-- A reliable `ResidentSend` system turn beginning `[argus] ` (so last-exchange extraction skips it): "Switched from <from> to <to>: <from> hit its usage limit. Your conversation carried over."
+- A reliable `ResidentSend` system turn beginning `[argus] ` (so last-exchange extraction skips it): "You were switched from <from> to <to> because <from> hit its usage limit. Your conversation carried over. Continue whatever you were doing."
 - A board item on the resident coordinator's human board (kind `info`, subject "Solo switched accounts: <from> to <to>", body with usage numbers and time). The board already auto-shows unread items in the resident tab. A refusal for lack of an eligible account posts a board item of kind `blocked`.
 
 Manual moves log the same way and show a status-bar notice in the TUI; no board item (the human just did it).
