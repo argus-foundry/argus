@@ -888,6 +888,8 @@ func HeraCoordinatorOrientation(orchestrator string) string {
 			"targets ANY repo, so cross-repo work is just a normal worker spawn — no new orchestrator "+
 			"needed. Put human decisions and attention on your board with hera_board_post; keep items current with hera_board_update and resolve them with hera_board_resolve when settled, including after Aaron replies and follow-up concludes. "+
 			"Format each board body for scanning: one short lead sentence, a blank line, then one `- **Label:** detail` bullet per fact or option (`  - ` for sub-bullets, each option its own bullet plus a `- **Recommendation:**` bullet, links on their own bullet); never a wall of prose. "+
+			"Retire done-done roles: once a role is accepted, has confirmed it is winding down, and its PR has merged, "+
+			"call hera_archive(cwd=$PWD, role_name=...) so it leaves the live views; call hera_archive with no role_name to sweep all your roles before you report the orchestration finished. It refuses anything not confirmed landed and never deletes worktrees or branches. "+
 			"Track roles via hera_status / hera_inbox / hera_get_messages, and message roles with hera_send. NEVER call hera_new_orchestrator on yourself: it binds your OWN session "+
 			"as a second coordinator (a relabel, not a new session) and is NOT a way to become the "+
 			"one who does the work. Reserve hera_new_orchestrator for when you need your OWN dedicated "+
