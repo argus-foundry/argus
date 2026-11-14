@@ -1,13 +1,17 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/daemon"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/tui/hera"
 	"github.com/argus-foundry/argus/internal/tui/widget"
 	"github.com/argus-foundry/argus/internal/uxlog"
@@ -426,4 +430,44 @@ func residentTabLabel(local bool, cfg config.ResidentConfig) string {
 		return cfg.Name
 	}
 	return ""
+}
+
+// runResidentAccountMove moves the standing resident through the daemon (the
+// only place that can serialize with its ensure loop). The move runs off the
+// UI thread; the result is a status-bar notice.
+func (a *App) runResidentAccountMove(t *model.Task, target string, force bool) {
+	fn := a.residentMoveFn
+	if fn == nil {
+		c := a.daemonClient
+		if c == nil {
+			a.statusbar.SetError("Move account needs the daemon")
+			return
+		}
+		fn = func(account string, force bool) (daemon.ResidentMoveAccountResp, error) {
+			return c.ResidentMoveAccount(account, force)
+		}
+	}
+	a.statusbar.SetInfo(fmt.Sprintf("Moving %s to %s…", t.Name, target))
+	uxlog.Log("[account] resident move requested target=%s force=%t", target, force)
+	go func() {
+		resp, err := fn(target, force)
+		a.tapp.QueueUpdateDraw(func() {
+			a.statusbar.ClearInfo()
+			if err != nil {
+				uxlog.Log("[account] resident move failed: %v", err)
+				msg := strings.TrimPrefix(err.Error(), agent.ErrAccount.Error()+": ")
+				a.statusbar.SetError("Move account failed: " + msg)
+				return
+			}
+			note := fmt.Sprintf("Moved %s: %s → %s", t.Name, resp.From, resp.To)
+			if !resp.Resumed {
+				note += " (no transcript; started fresh)"
+			}
+			if resp.Unknown {
+				note += " (restart pending; the daemon will finish it)"
+			}
+			uxlog.Log("[account] resident move done %s→%s resumed=%t started=%t", resp.From, resp.To, resp.Resumed, resp.Started)
+			a.flashNotice(note)
+		})
+	}()
 }

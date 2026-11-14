@@ -109,6 +109,14 @@ func (a *App) accountMoveChoices(t *model.Task) ([]modal.AccountChoice, string) 
 		}
 		rows = append([]modal.AccountChoice{auto}, all...)
 	}
+	if t.IsResident() {
+		// The resident moves between Claude accounts only: a backend handoff
+		// would drop its conversation and is refused daemon-side.
+		if len(rows) == 0 {
+			return nil, noMoveNotice
+		}
+		return rows, ""
+	}
 	if cur == backendkind.Codex {
 		for _, n := range cfg.AccountNamesFor("claude") {
 			five, week := usagebudget.LiveWindows(usage[n], now)
@@ -326,6 +334,10 @@ func (a *App) closeAccountPicker() {
 // restarts in place through the runner; an exited one is started here through
 // startSession. Remotely the daemon does both.
 func (a *App) runAccountMove(t *model.Task, target string, force bool) {
+	if t.IsResident() {
+		a.runResidentAccountMove(t, target, force)
+		return
+	}
 	if a.graduationPendingBlocked(t.ID, "account move") {
 		return
 	}

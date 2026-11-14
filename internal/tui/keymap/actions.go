@@ -356,6 +356,10 @@ const (
 	// ResidentWorkerOnly: works on worker rows and is inert on the resident's
 	// own row (the standing coordinator is protected from the rail).
 	ResidentWorkerOnly
+	// ResidentOwnRowOnly: works only on the resident's own row (the account
+	// picker moves the standing resident through the daemon) and is inert on
+	// worker rows.
+	ResidentOwnRowOnly
 )
 
 // residentRailPolicy is the resident tab's key allowlist, as data. Every
@@ -377,7 +381,7 @@ var residentRailPolicy = map[Action]ResidentAccess{
 	ActHeraAdopt:       ResidentInert,
 	ActHeraClear:       ResidentInert,
 	ActHeraCleanup:     ResidentInert,
-	ActHeraMoveAccount: ResidentInert,
+	ActHeraMoveAccount: ResidentOwnRowOnly,
 }
 
 // ResidentRailAccess reports how the resident tab treats a rail action;

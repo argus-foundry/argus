@@ -38,7 +38,7 @@ func TestSettingsResident_CategoryAndRows(t *testing.T) {
 	sv := testSettingsView(t)
 	testutil.Equal(t, catResident.Label(), "Resident")
 	sv.setCategory(catResident)
-	testutil.Equal(t, len(sv.rows), 9)
+	testutil.Equal(t, len(sv.rows), 10)
 	selectRowInCategory(t, sv, catResident, srResident, resKeyName)
 	testutil.Contains(t, sv.SelectedRow().label, "(required)")
 	selectRowInCategory(t, sv, catResident, srResident, resKeyTools)
@@ -225,4 +225,17 @@ func TestSettingsResident_PasteAndRender(t *testing.T) {
 		selectRowInCategory(t, sv, catResident, srResident, k)
 		sv.Draw(drawSim(t))
 	}
+}
+
+func TestSettingsResident_AutoSwitchToggle(t *testing.T) {
+	sv := testSettingsView(t)
+	sv.setCategory(catResident)
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAutoSwitch)
+	testutil.Contains(t, sv.SelectedRow().label, "ON") // default on
+	testutil.True(t, sv.handleEnter())
+	testutil.False(t, sv.database.Config().Resident.AutoSwitchAccount)
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAutoSwitch)
+	testutil.Contains(t, sv.SelectedRow().label, "OFF")
+	testutil.True(t, sv.handleEnter())
+	testutil.True(t, sv.database.Config().Resident.AutoSwitchAccount)
 }

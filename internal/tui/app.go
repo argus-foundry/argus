@@ -369,10 +369,11 @@ type App struct {
 	residentUnreadPending bool
 	residentUnreadAt      time.Time
 	residentPolledAt      time.Time
-	residentMarkViewedFn  func() error                             // test seam; default daemonClient.ResidentMarkViewed
-	residentStateFn       func() (daemon.ResidentStateResp, error) // test seam; default daemonClient.ResidentState
-	onSwitchTab           func(widget.Tab)                         // test seam: records every switchTab target
-	onPersistLastTab      func(widget.Tab)                         // test seam: records every last-tab persistence write
+	residentMarkViewedFn  func() error                                                             // test seam; default daemonClient.ResidentMarkViewed
+	residentStateFn       func() (daemon.ResidentStateResp, error)                                 // test seam; default daemonClient.ResidentState
+	residentMoveFn        func(account string, force bool) (daemon.ResidentMoveAccountResp, error) // test seam; default daemonClient.ResidentMoveAccount
+	onSwitchTab           func(widget.Tab)                                                         // test seam: records every switchTab target
+	onPersistLastTab      func(widget.Tab)                                                         // test seam: records every last-tab persistence write
 	agentState            agentview.State
 	daemonConnected       bool
 	tasks                 []*model.Task

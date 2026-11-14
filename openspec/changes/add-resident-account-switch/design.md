@@ -67,7 +67,7 @@ Manual moves log the same way and show a status-bar notice in the TUI; no board 
 
 ### D7: TUI
 
-In the resident tab, `>` on the resident's own row calls the existing `openAccountPicker`, parameterized so it lists only Claude accounts plus "auto" (no handoff/Codex rows, since backend moves are refused) and calls `ResidentMoveAccount` instead of the in-process task move. `>` on a worker row is unchanged. `resident-tui`'s "move is inert" language is about Hera re-parenting, not this account move. In `--remote` mode the resident tab does not exist, so there is nothing to wire.
+In the resident tab, `>` on the resident's own row calls the existing `openAccountPicker`, parameterized so it lists only Claude accounts plus "auto" (no handoff/Codex rows, since backend moves are refused) and calls `ResidentMoveAccount` instead of the in-process task move. `>` on a worker row stays inert (new `ResidentOwnRowOnly` policy in the keymap data). `resident-tui`'s "move is inert" language is about Hera re-parenting, not this account move. In `--remote` mode the resident tab does not exist, so there is nothing to wire.
 
 ## Risks
 

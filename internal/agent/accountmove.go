@@ -470,6 +470,11 @@ func copyTree(src, dst string) error {
 func PreviewMoveTarget(database *db.DB, task *model.Task, cfg config.Config, usage map[string]usagebudget.Reading, backendCommand, exclude string) (string, bool) {
 	var keep func(string) bool
 	if database != nil && task != nil {
+		if task.IsResident() {
+			now := time.Now()
+			picked, _, ok := pickMoveTargetWhere(cfg, usage, backendCommand, exclude, func(name string) bool { return !AccountDepleted(usage[name], now) })
+			return picked, ok
+		}
 		worker, err := database.IsResidentWorker(task.ID)
 		if err != nil {
 			uxlog.Log("[resident] move preview: worker identity lookup failed task=%s: %v", task.ID, err)

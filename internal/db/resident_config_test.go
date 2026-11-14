@@ -37,3 +37,15 @@ func TestConfigReadsResidentKeys(t *testing.T) {
 	testutil.NoError(t, d.SetConfigValue("resident.context_budget", "nope"))
 	testutil.Equal(t, d.Config().Resident.ContextBudget, d.Config().Hera.CoordinatorContextBudget)
 }
+
+func TestConfigResidentAutoSwitchAccount(t *testing.T) {
+	d, err := OpenInMemory()
+	testutil.NoError(t, err)
+	defer func() { _ = d.Close() }()
+
+	testutil.True(t, d.Config().Resident.AutoSwitchAccount) // default on
+	testutil.NoError(t, d.SetConfigValue("resident.auto_switch_account", "false"))
+	testutil.False(t, d.Config().Resident.AutoSwitchAccount)
+	testutil.NoError(t, d.SetConfigValue("resident.auto_switch_account", "true"))
+	testutil.True(t, d.Config().Resident.AutoSwitchAccount)
+}

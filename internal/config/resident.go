@@ -93,7 +93,7 @@ func DefaultResidentConfig(budget int) ResidentConfig {
 		MaxWorkers:        8,
 		AutoSwitchAccount: true,
 		ContextBudget:     budget,
-		MemoryDir:     "resident",
+		MemoryDir:         "resident",
 		AllowTools: []string{
 			// Explicit built-ins: global allow wildcards are not supported by Claude.
 			"Bash",

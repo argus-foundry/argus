@@ -94,7 +94,10 @@ func (f *residentFixture) selectTask(t *testing.T, id string) {
 	f.p.Machine().ToRail() // JumpToTask parks focus in the pane; keys under test are rail keys
 }
 
-type residentCalls struct{ n map[string]int }
+type residentCalls struct {
+	n        map[string]int
+	moveTask string
+}
 
 func (f *residentFixture) wire() *residentCalls {
 	c := &residentCalls{n: map[string]int{}}
@@ -118,7 +121,7 @@ func (f *residentFixture) wire() *residentCalls {
 	f.p.OnBounceWorker = rec("bounce")
 	f.p.OnReattach = rec("reattach")
 	f.p.OnInbox = func(string) { c.n["inbox"]++ }
-	f.p.OnMoveAccount = func(string) { c.n["move"]++ }
+	f.p.OnMoveAccount = func(id string) { c.n["move"]++; c.moveTask = id }
 	return c
 }
 
@@ -163,6 +166,15 @@ func TestResidentMode_InertKeysFireNothing(t *testing.T) {
 	inert := []*tcell.EventKey{
 		key('w'), key('n'), key('P'), key('m'), key('M'), key('J'), key('c'), key('C'), key('>'), key('B'),
 	}
+	// `>` is the resident's own account move: live on its row, inert on workers.
+	withoutMove := func(evs []*tcell.EventKey) (out []*tcell.EventKey) {
+		for _, ev := range evs {
+			if ev.Rune() != '>' {
+				out = append(out, ev)
+			}
+		}
+		return out
+	}
 	for _, onWorker := range []bool{false, true} {
 		name := "resident row"
 		if onWorker {
@@ -177,12 +189,34 @@ func TestResidentMode_InertKeysFireNothing(t *testing.T) {
 			}
 			clear(calls.n) // navigation itself may reattach; only the keys under test count
 			h := f.p.InputHandler()
-			for _, ev := range inert {
+			keys := inert
+			if !onWorker {
+				keys = withoutMove(inert)
+			}
+			for _, ev := range keys {
 				h(ev, noFocus)
 			}
 			testutil.Equal(t, len(calls.n), 0)
 		})
 	}
+}
+
+func TestResidentMode_MoveAccountOnlyOnResidentRow(t *testing.T) {
+	f := newResidentFixture(t)
+	f.enter(t)
+	calls := f.wire()
+	residentTask, err := f.d.ResidentTask()
+	testutil.NoError(t, err)
+
+	h := f.p.InputHandler()
+	h(key('>'), noFocus)
+	testutil.Equal(t, calls.n["move"], 1)
+	testutil.Equal(t, calls.moveTask, residentTask.ID)
+
+	f.selectTask(t, f.workers[0])
+	clear(calls.n)
+	h(key('>'), noFocus)
+	testutil.Equal(t, calls.n["move"], 0)
 }
 
 func TestResidentMode_AllowedKeysActOnWorkerRowsOnly(t *testing.T) {

@@ -42,7 +42,7 @@ func TestResidentRailAccess(t *testing.T) {
 		{ActHeraAdopt, ResidentInert},
 		{ActHeraClear, ResidentInert},
 		{ActHeraCleanup, ResidentInert},
-		{ActHeraMoveAccount, ResidentInert},
+		{ActHeraMoveAccount, ResidentOwnRowOnly},
 		{Action("hera_rail.unknown"), ResidentInert},
 	}
 	for _, c := range cases {
@@ -56,7 +56,7 @@ func TestResidentRailAccess(t *testing.T) {
 
 func TestResidentRailActionsFollowContextOrder(t *testing.T) {
 	got := ResidentRailActions()
-	want := []Action{ActHeraRename, ActHeraArchive, ActHeraStatAdv, ActHeraStatRev, ActHeraInbox, ActHeraDelete}
+	want := []Action{ActHeraRename, ActHeraArchive, ActHeraStatAdv, ActHeraStatRev, ActHeraInbox, ActHeraMoveAccount, ActHeraDelete}
 	if len(got) != len(want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
@@ -69,7 +69,7 @@ func TestResidentRailActionsFollowContextOrder(t *testing.T) {
 
 func TestResidentHelpRowsUseLiveBindings(t *testing.T) {
 	rows := DefaultKeymap().ResidentHelpRows()
-	if len(rows) != 6 {
+	if len(rows) != 7 {
 		t.Fatalf("rows=%v", rows)
 	}
 	for _, r := range rows {

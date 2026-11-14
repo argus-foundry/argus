@@ -1786,6 +1786,8 @@ func ResidentRailAllows(act keymap.Action, sel heramodel.Selection) bool {
 		return true
 	case keymap.ResidentWorkerOnly:
 		return sel.IsWorkerOrFreelance() && !ResidentRowInert(sel)
+	case keymap.ResidentOwnRowOnly:
+		return sel.IsCoordinator()
 	default:
 		return false
 	}
