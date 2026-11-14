@@ -144,6 +144,7 @@ Always `t.TempDir()` for paths and `t.Setenv("HOME", t.TempDir())` for code that
 
 ## HTTP Tests
 
+- **API server fixtures must shut down their server and wait for `idleWatcherDone` before closing the database.** Otherwise each fixture leaves a five-second watcher polling a closed database for the rest of the package run, adding background work and log noise.
 - **`httptest.NewServer`** for end-to-end (real socket + client). Use this for SSE, auth middleware, integration paths.
 - **`httptest.NewRecorder` + `handler.ServeHTTP`** for handler unit tests — faster, no port.
 - **SSE**: assert against `bufio.Scanner` over `resp.Body`; cancel via `context.WithCancel` to exercise cleanup.

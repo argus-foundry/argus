@@ -72,7 +72,7 @@ func TestResidentWaitingChangeReachesSlog(t *testing.T) {
 // fires no push, while a plain task's emits session.idle and fires exactly one.
 func TestIdleWatcherTick_ResidentSkipsPush(t *testing.T) {
 	if testing.Short() {
-		t.Skip("starts real PTY-backed sessions and waits for the idle threshold")
+		t.Skip("starts real PTY-backed sessions")
 	}
 	for _, tc := range []struct {
 		name      string
@@ -131,6 +131,8 @@ func TestIdleWatcherTick_ResidentSkipsPush(t *testing.T) {
 			id := task.ID
 			t.Cleanup(func() { _ = srv.runner.Stop(id); <-sess.Done() })
 
+			runner := &idleTransitionRunner{SessionRunner: srv.runner, id: id}
+			srv.runner = runner
 			state := newIdleWatcherState()
 			srv.idleWatcherTick(state) // baseline: records busy state
 			_, err = srv.runner.Get(id).WriteInput([]byte("x"), agentview.OriginUser)
@@ -144,15 +146,9 @@ func TestIdleWatcherTick_ResidentSkipsPush(t *testing.T) {
 				}
 				return false
 			}
-			// Tick until the idle transition is observed in the event stream.
-			deadline := time.Now().Add(10 * time.Second)
-			for time.Now().Before(deadline) && !sawIdle() {
-				time.Sleep(250 * time.Millisecond)
-				srv.idleWatcherTick(state)
-			}
-			if !sawIdle() {
-				t.Fatalf("no %s event for the task within 10s", tc.eventType)
-			}
+			runner.idle = true
+			srv.idleWatcherTick(state)
+			testutil.True(t, sawIdle())
 			if tc.wantHits > 0 {
 				for end := time.Now().Add(5 * time.Second); time.Now().Before(end) && hits.Load() < tc.wantHits; {
 					time.Sleep(50 * time.Millisecond)

@@ -40,6 +40,7 @@ func (w *wtFakeWatcher) EventChan() <-chan fsnotify.Event { return w.events }
 func (w *wtFakeWatcher) ErrorChan() <-chan error          { return w.errs }
 
 func TestWtWatchBudget(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"entry", "process", "add failure", "new watcher failure"} {
 		t.Run(mode, func(t *testing.T) {
 			h, _ := newTestHub(t)
@@ -131,6 +132,7 @@ func TestWtWatchBudget(t *testing.T) {
 }
 
 func TestWtColdSlowWalk(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHub(t)
 	h.coldTimeout = 30 * time.Millisecond
 	h.fetch = func(id, wt string, o gitutil.Options) gitutil.GitStatusRefreshMsg {
@@ -159,6 +161,7 @@ func TestWtColdSlowWalk(t *testing.T) {
 }
 
 func TestWtWatchFileBudget(t *testing.T) {
+	t.Parallel()
 	for _, files := range []bool{false, true} {
 		t.Run(fmt.Sprint(files), func(t *testing.T) {
 			h, _ := newTestHub(t)
@@ -208,6 +211,7 @@ func TestWtDegradedStatus(t *testing.T) {
 }
 
 func TestWtWatchSymlinkDirectory(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHub(t)
 	h.countFiles = true
 	h.budget = &wtWatchBudget{limit: 100}
@@ -226,6 +230,7 @@ func TestWtWatchSymlinkDirectory(t *testing.T) {
 }
 
 func TestWtWatchIgnoresRetiredEvents(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHub(t)
 	h.budget = &wtWatchBudget{limit: 100}
 	w := &wtFakeWatcher{}
@@ -243,6 +248,7 @@ func TestWtWatchIgnoresRetiredEvents(t *testing.T) {
 }
 
 func TestWtWatchRootRemoval(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHub(t)
 	h.budget = &wtWatchBudget{limit: 100}
 	w := &wtFakeWatcher{}

@@ -19,6 +19,7 @@ func (w *wtQuietWatcher) EventChan() <-chan fsnotify.Event { return nil }
 func (w *wtQuietWatcher) ErrorChan() <-chan error          { return nil }
 
 func TestWtRefreshRecountsWatches(t *testing.T) {
+	t.Parallel()
 	if !wtWatchFiles {
 		t.Skip("Darwin implicit child accounting")
 	}
@@ -63,6 +64,7 @@ func (w *wtCloseFailure) Close() error {
 }
 
 func TestWtFailedTeardownKeepsReservations(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"remove", "degrade"} {
 		t.Run(mode, func(t *testing.T) {
 			h, _ := newTestHub(t)
