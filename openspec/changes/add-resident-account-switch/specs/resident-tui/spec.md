@@ -13,3 +13,22 @@ In the resident tab, `>` on the resident's own row SHALL open the account picker
 
 - **WHEN** the picker opens for the resident
 - **THEN** no Codex or other-CLI handoff rows are listed
+
+### Requirement: Settings edits the resident's accounts as an ordered multi-select list
+
+Settings -> Resident SHALL show `Accounts` as one row summarizing the ordered list (for example `personal, default, auto`; `default` when unset). Enter on the row SHALL open an editor listing every Claude-capable account plus `<auto>`, each with a checkbox, its position in the list when checked, and its current usage percentages when known. Space SHALL toggle the entry under the cursor; `K` and `J` SHALL move a checked entry up or down; `<auto>` SHALL always sort last; Enter SHALL save and Esc SHALL cancel. The saved order SHALL be what the daemon uses (stored as the `resident.accounts` database key). When config.toml sets `resident.accounts` the row SHALL be marked `(config.toml)` and Enter SHALL only explain that it is read-only. Editing is local only; `--remote` shows the row read-only. An empty selection SHALL save as the default list.
+
+#### Scenario: Reorder and save
+
+- **WHEN** the editor opens with `default` checked and the user checks `personal`, moves it above `default`, and presses Enter
+- **THEN** `resident.accounts` is saved as `personal, default` and the row shows it
+
+#### Scenario: Auto sorts last
+
+- **WHEN** `<auto>` is checked along with two accounts
+- **THEN** it is listed after them regardless of cursor moves
+
+#### Scenario: config.toml wins
+
+- **WHEN** config.toml defines `[resident] accounts`
+- **THEN** the row shows `(config.toml)` and Enter opens no editor

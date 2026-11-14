@@ -157,8 +157,6 @@ func TestSettingsResident_Validation(t *testing.T) {
 	testutil.Equal(t, sv.database.Config().Resident.MemoryDir, "notes")
 	residentEditField(t, sv, resKeyModel, "opus")
 	testutil.Equal(t, sv.database.Config().Resident.Model, "opus")
-	residentEditField(t, sv, resKeyAccount, "work")
-	testutil.Equal(t, sv.database.Config().Resident.Account, "work")
 
 	// Enabled resident cannot lose its name.
 	residentEnableKB(t, sv)
@@ -238,4 +236,44 @@ func TestSettingsResident_AutoSwitchToggle(t *testing.T) {
 	testutil.Contains(t, sv.SelectedRow().label, "OFF")
 	testutil.True(t, sv.handleEnter())
 	testutil.True(t, sv.database.Config().Resident.AutoSwitchAccount)
+}
+
+func TestSettingsResident_AccountsRowAndSave(t *testing.T) {
+	sv := testSettingsView(t)
+	sv.setCategory(catResident)
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAccounts)
+	testutil.Contains(t, sv.SelectedRow().label, "default (unset)")
+
+	testutil.True(t, sv.SaveResidentAccounts([]string{"personal", "default", "auto"}))
+	testutil.DeepEqual(t, sv.database.Config().Resident.Accounts, []string{"personal", "default", "auto"})
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAccounts)
+	testutil.Contains(t, sv.SelectedRow().label, "personal, default, <auto>")
+
+	// An empty selection clears the key, and the legacy single value cannot resurface.
+	testutil.NoError(t, sv.database.SetConfigValue("resident.account", "work"))
+	testutil.True(t, sv.SaveResidentAccounts(nil))
+	testutil.Equal(t, len(sv.database.Config().Resident.Accounts), 0)
+}
+
+func TestSettingsResident_AccountsEnterOpensEditor(t *testing.T) {
+	sv := testSettingsView(t)
+	sv.setCategory(catResident)
+	opened := 0
+	sv.OnEditResidentAccounts = func() { opened++ }
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAccounts)
+	testutil.True(t, sv.handleEnter())
+	testutil.Equal(t, opened, 1)
+	testutil.False(t, sv.IsEditing())
+}
+
+func TestSettingsResident_AccountsRemoteReadOnly(t *testing.T) {
+	sv := testSettingsView(t)
+	sv.remote = true
+	sv.setCategory(catResident)
+	opened := 0
+	sv.OnEditResidentAccounts = func() { opened++ }
+	selectRowInCategory(t, sv, catResident, srResident, resKeyAccounts)
+	testutil.True(t, sv.handleEnter())
+	testutil.Equal(t, opened, 0)
+	testutil.Contains(t, sv.residentMsg, "read-only")
 }

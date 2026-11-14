@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -27,7 +28,8 @@ const (
 	resKeyBudget           = "resident.context_budget"
 	resKeyMemory           = "resident.memory_dir"
 	resKeyModel            = "resident.model"
-	resKeyAccount          = "resident.account"
+	resKeyAccounts         = "resident.accounts"
+	resKeyLegacyAccount    = "resident.account" // pre-list single account; cleared on every list save
 	resKeyAutoSwitch       = "resident.auto_switch_account"
 	// resKeyTools is the read-only pointer row (allow_tools/ask_tools/deny_tools live in
 	// config.toml only).
@@ -72,7 +74,7 @@ func (sv *SettingsView) residentRows() []settingsRow {
 		field(resKeyMaxWorkers, "Max workers", strconv.Itoa(r.MaxWorkers), "(default)"),
 		field(resKeyMemory, "Memory dir", r.MemoryDir, "(default)"),
 		field(resKeyModel, "Model", r.Model, "(default)"),
-		field(resKeyAccount, "Account", r.Account, "(default)"),
+		{kind: srResident, key: resKeyAccounts, label: "Accounts: " + sv.residentAccountsSummary(r.Accounts)},
 		{kind: srResident, key: resKeyAutoSwitch, label: "Auto-switch account when out of budget: " + onOff(r.AutoSwitchAccount)},
 		{kind: srResident, key: resKeyTools, label: "Tool permissions: config.toml"},
 	}
@@ -166,11 +168,24 @@ func (sv *SettingsView) handleResidentEnter(key string) bool {
 	if key == resKeyTools {
 		return true
 	}
+	if key == resKeyAccounts {
+		_ = sv.database.Config() // refresh config.toml source metadata
+		if sv.residentAccountsOverridden() {
+			return sv.residentNotify("accounts is defined in config.toml — read-only")
+		}
+	}
 	if !sv.residentEditable() {
 		return sv.residentNotify("Resident settings are read-only in --remote mode")
 	}
 	if key == resKeyEnabled {
 		return sv.toggleResidentEnabled()
+	}
+	if key == resKeyAccounts {
+		if sv.OnEditResidentAccounts == nil {
+			return true
+		}
+		sv.OnEditResidentAccounts()
+		return true
 	}
 	if key == resKeyAutoSwitch {
 		return sv.persistResident(key, strconv.FormatBool(!sv.database.Config().Resident.AutoSwitchAccount))
@@ -188,8 +203,6 @@ func (sv *SettingsView) handleResidentEnter(key string) bool {
 		buf = r.MemoryDir
 	case resKeyModel:
 		buf = r.Model
-	case resKeyAccount:
-		buf = r.Account
 	}
 	sv.residentMsg = ""
 	sv.resEdit = residentEdit{active: true, key: key, buf: buf}
@@ -295,8 +308,8 @@ func (sv *SettingsView) renderResidentDetail(screen tcell.Screen, x, y, w, h int
 		text = "Vault-relative folder for working memory. Independent of the name."
 	case resKeyModel:
 		text = "Optional model override. Empty uses the resolved default."
-	case resKeyAccount:
-		text = "Optional account override. Empty uses the default account."
+	case resKeyAccounts:
+		text = "Ordered account preference. Enter edits: Space toggles, K/J reorder, <auto> = any account by most headroom (last). The resident runs on the first account with budget; config.toml overrides are read-only."
 	case resKeyTools:
 		text = "allow_tools, ask_tools and deny_tools are edited in config.toml under [resident]."
 	}
@@ -319,4 +332,48 @@ func onOff(b bool) string {
 		return "ON"
 	}
 	return "OFF"
+}
+
+// residentAccountsOverridden reports a config.toml [resident] accounts value.
+func (sv *SettingsView) residentAccountsOverridden() bool {
+	d := sv.accountDB()
+	return d != nil && d.ResidentAccountsFromConfigToml()
+}
+
+// residentAccountsSummary renders the ordered list for the row ("default" when
+// unset), marking a config.toml-owned value.
+func (sv *SettingsView) residentAccountsSummary(list []string) string {
+	parts := make([]string, 0, len(list))
+	for _, a := range list {
+		if a == config.AutoAccountEntry {
+			a = "<auto>"
+		}
+		parts = append(parts, a)
+	}
+	out := "default (unset)"
+	if len(parts) > 0 {
+		out = strings.Join(parts, ", ")
+	}
+	if sv.residentAccountsOverridden() {
+		out += " (config.toml)"
+	}
+	return out
+}
+
+// SaveResidentAccounts persists the edited ordered list. An empty list clears
+// the key so the default list applies; the legacy single-account key is always
+// cleared so it cannot resurface as a one-element list.
+func (sv *SettingsView) SaveResidentAccounts(list []string) bool {
+	val := ""
+	if len(list) > 0 {
+		b, err := json.Marshal(list)
+		if err != nil {
+			return sv.residentNotify("could not encode accounts: %v", err)
+		}
+		val = string(b)
+	}
+	if err := sv.database.SetConfigValue(resKeyLegacyAccount, ""); err != nil {
+		return sv.residentNotify("could not save %s: %v", resKeyAccounts, err)
+	}
+	return sv.persistResident(resKeyAccounts, val)
 }

@@ -179,7 +179,8 @@ func TestResident_NonClaudeDefaultFallsBackOrRefuses(t *testing.T) {
 func TestResident_ModelAccountOverrides(t *testing.T) {
 	e := newResEnv(t)
 	e.cfg.Resident.Model = "opus"
-	e.cfg.Resident.Account = "work"
+	e.cfg.Accounts = map[string]config.Account{"work": {ClaudeConfigDir: t.TempDir()}}
+	e.cfg.Resident.Accounts = []string{"work"}
 	e.m.tick()
 	testutil.Equal(t, e.run.starts[0].task.Model, "opus")
 	testutil.Equal(t, e.run.starts[0].task.Account, "work")

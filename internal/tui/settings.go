@@ -321,6 +321,9 @@ type SettingsView struct {
 	// OnResidentChange fires after any persisted resident setting change with
 	// the current name and enabled flag; the header tab label hooks here.
 	OnResidentChange func(name string, enabled bool)
+	// OnEditResidentAccounts opens the ordered account-list editor (the App
+	// owns the modal).
+	OnEditResidentAccounts func()
 
 	editTodoProjectBuf string
 	editingTodoTag     bool

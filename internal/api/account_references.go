@@ -1,6 +1,7 @@
 package api
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/argus-foundry/argus/internal/config"
@@ -28,7 +29,7 @@ func (s *Server) accountReferences(cfg config.Config, name string) (accountRefer
 		return refs, err
 	}
 	refs.Tasks = tasks
-	refs.Resident = cfg.Resident.Account == name
+	refs.Resident = slices.Contains(cfg.Resident.Accounts, name)
 	for project, account := range cfg.ProjectArtifactAccounts {
 		if account == name {
 			refs.ArtifactProjects = append(refs.ArtifactProjects, project)

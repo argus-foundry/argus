@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/argus-foundry/argus/internal/config"
 )
@@ -213,8 +214,18 @@ func (d *DB) Config() config.Config {
 	if v, ok := kv["resident.model"]; ok {
 		cfg.Resident.Model = v
 	}
-	if v, ok := kv["resident.account"]; ok {
-		cfg.Resident.Account = v
+	// resident.accounts is a JSON array. A pre-list database holds the single
+	// resident.account; read it as a one-element list so a hand-set account
+	// survives (the old key is otherwise gone).
+	if v := kv["resident.accounts"]; v != "" {
+		var list []string
+		if err := json.Unmarshal([]byte(v), &list); err != nil {
+			slog.Warn("[resident] invalid accounts setting", "err", err)
+		} else {
+			cfg.Resident.Accounts = list
+		}
+	} else if old := strings.TrimSpace(kv["resident.account"]); old != "" {
+		cfg.Resident.Accounts = []string{old}
 	}
 	if v, ok := kv["resident.auto_switch_account"]; ok {
 		cfg.Resident.AutoSwitchAccount = v != "false"

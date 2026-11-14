@@ -9,6 +9,10 @@ import (
 	"unicode/utf8"
 )
 
+// AutoAccountEntry is the Accounts entry meaning "any Claude-capable account,
+// most headroom first". It is only honoured alone or as the last entry.
+const AutoAccountEntry = "auto"
+
 // ResidentNameMaxRunes bounds the resident's display name.
 const ResidentNameMaxRunes = 12
 
@@ -27,13 +31,17 @@ type ResidentConfig struct {
 	ContextBudget int `toml:"context_budget"`
 	// MemoryDir is the vault-relative working-memory folder. Independent of Name.
 	MemoryDir string `toml:"memory_dir"`
-	// Model and Account optionally override the resolved model / account.
-	Model   string `toml:"model"`
-	Account string `toml:"account"`
+	// Model optionally overrides the resolved model.
+	Model string `toml:"model"`
+	// Accounts is the ordered preference list of Claude accounts (default
+	// included), optionally ending in AutoAccountEntry. Unset means
+	// ["default"]. The resident runs on the first usable entry; see
+	// agent.ResidentAccountPlan.
+	Accounts []string `toml:"accounts"`
 	// AutoSwitchAccount (default true) lets the daemon move the resident to
-	// another Claude account when its current one is out of usage budget. A
-	// resident move (manual or automatic) stores a runtime override that
-	// outranks Account until Account is edited.
+	// along its Accounts list when its current account is out of usage budget
+	// (and back up when a preferred one recovers). With it off the list only
+	// decides the account at start.
 	AutoSwitchAccount bool `toml:"auto_switch_account"`
 	// AllowTools run ordinary built-ins, Argus tools and reviewed connector
 	// reads/drafts without a prompt. The non-bypass default mode still asks

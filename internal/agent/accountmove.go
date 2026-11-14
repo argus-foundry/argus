@@ -282,7 +282,7 @@ func moveAccount(database *db.DB, runner accountMoveRunner, in AccountMoveInput,
 	}
 	if resident != nil {
 		routed = false
-		ov := db.ResidentAccountOverride{Account: to, Base: cfg.Resident.Account, By: resident.By}
+		ov := db.ResidentAccountOverride{Account: to, By: resident.By}
 		if err := database.SetResidentAccountMove(task.ID, moved.Account, moved.SessionID, ov); err != nil {
 			return nil, AccountMoveResult{}, fmt.Errorf("persist resident account move: %w", err)
 		}

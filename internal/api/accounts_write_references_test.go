@@ -72,7 +72,7 @@ func TestAccountWrite_DeleteSoleReference(t *testing.T) {
 			testutil.DeepEqual(t, after.ProjectAccounts, before.ProjectAccounts)
 			testutil.DeepEqual(t, after.ProjectArtifactAccounts, before.ProjectArtifactAccounts)
 			testutil.Equal(t, after.ArtifactAccount("p"), before.ArtifactAccount("p"))
-			testutil.Equal(t, after.Resident.Account, before.Resident.Account)
+			testutil.DeepEqual(t, after.Resident.Accounts, before.Resident.Accounts)
 			testutil.DeepEqual(t, after.BackendRouting, before.BackendRouting)
 			testutil.Equal(t, len(rs.configChanged()), 0)
 		})

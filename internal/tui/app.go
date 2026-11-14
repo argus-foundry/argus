@@ -90,6 +90,7 @@ const (
 	modeMergeSafetyPopup // Merge-safety review popup (single-role nuke / global Cleanup)
 	modeInbox            // Read-only task message inbox viewer (`i`)
 	modeAccountPicker    // Move-task-to-account picker (`>`)
+	modeResidentAccounts // Settings -> Resident -> Accounts ordered list editor
 	modeArtifacts
 )
 
@@ -232,6 +233,8 @@ type App struct {
 	accountPickerTask     *model.Task
 	accountPickerForce    bool
 	accountPickerPrevPage string
+	residentAccountsModal *modal.AccountListModal
+	residentAccountsPrev  string
 
 	inboxModal          *modal.InboxModal
 	inboxTaskID         string
@@ -842,6 +845,7 @@ func New(database store.Store, runner agent.SessionProvider, daemonConnected boo
 		app.refreshResidentTab()
 		app.syncResidentBox()
 	}
+	app.settings.OnEditResidentAccounts = app.openResidentAccounts
 	app.settings.OnHostSleepUpdate = func() {
 		app.tapp.QueueUpdateDraw(func() { app.settings.Refresh() })
 	}
@@ -4326,6 +4330,10 @@ func (a *App) handleGlobalKey(event *tcell.EventKey) *tcell.EventKey {
 	}
 	if a.mode == modeAccountPicker && a.accountPicker != nil {
 		a.handleAccountPickerKey(event)
+		return nil
+	}
+	if a.mode == modeResidentAccounts && a.residentAccountsModal != nil {
+		a.handleResidentAccountsKey(event)
 		return nil
 	}
 	if a.mode == modeArtifacts && a.artifactBrowser != nil {

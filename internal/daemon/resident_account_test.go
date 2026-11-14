@@ -60,6 +60,7 @@ func newSwitchEnv(t *testing.T) *switchEnv {
 	e := newResEnv(t)
 	home := t.TempDir()
 	e.cfg.Accounts = map[string]config.Account{"work": {ClaudeConfigDir: filepath.Join(home, "work")}}
+	e.cfg.Resident.Accounts = []string{"default", "work"}
 	se := &switchEnv{resEnv: e, notif: &fakeResNotifier{}}
 	se.mover = &moverRunner{fakeResRunner: e.run}
 	e.m.mover = se.mover
@@ -67,12 +68,11 @@ func newSwitchEnv(t *testing.T) *switchEnv {
 	// The real clock is what usage windows are judged against.
 	e.m.now = time.Now
 	now := time.Now()
-	se.usage = map[string]usagebudget.Reading{
-		"default": {FiveHour: win(100, now)},
-		"work":    {FiveHour: win(20, now)},
-	}
+	se.usage = map[string]usagebudget.Reading{"work": {Percentage: 20, FiveHour: win(20, now)}}
 	t.Cleanup(agent.SetAccountUsageSource(func(config.Config) map[string]usagebudget.Reading { return se.usage }))
-	e.m.tick() // first start
+	e.m.tick() // first start, on default (the list's first entry)
+	// Then default runs out of budget.
+	se.usage["default"] = usagebudget.Reading{Percentage: 100, FiveHour: win(100, now)}
 	task, err := e.db.ResidentTask()
 	testutil.NoError(t, err)
 	se.task = task
@@ -203,46 +203,121 @@ func TestAutoSwitch_CooldownSurvivesManagerRestart(t *testing.T) {
 	testutil.True(t, se.moved())
 }
 
-func TestEffectiveAccount_OverrideWinsThenDropsOnSettingChange(t *testing.T) {
-	se := newSwitchEnv(t)
-	se.usage["default"] = usagebudget.Reading{}
-	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
-		db.ResidentAccountOverride{Account: "work", Base: "", By: db.OverrideByManual}))
-
-	// A crash restart starts on the override, not on resident.account.
+// restart simulates a crash restart of the resident session.
+func (se *switchEnv) restart() startCall {
 	delete(se.run.sess, se.task.ID)
 	se.m.runner = se.run
 	se.m.nextAttempt = time.Time{}
 	se.m.tick()
-	got := se.run.starts[len(se.run.starts)-1]
-	testutil.Equal(t, got.task.Account, "work")
-	testutil.Equal(t, got.resume, true)
-
-	// Editing resident.account clears the override.
-	se.cfg.Resident.Account = "other"
-	delete(se.run.sess, se.task.ID)
-	se.m.nextAttempt = time.Time{}
-	se.m.tick()
-	got = se.run.starts[len(se.run.starts)-1]
-	testutil.Equal(t, got.task.Account, "other")
-	_, ok, _ := se.db.ResidentAccountOverride(se.task.ID)
-	testutil.False(t, ok)
+	return se.run.starts[len(se.run.starts)-1]
 }
 
-func TestEffectiveAccount_DeletedAccountDropsOverride(t *testing.T) {
+func TestStart_PersistedAccountKeptWhileAllowedAndNotDepleted(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.usage["default"] = usagebudget.Reading{}
+	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
+		db.ResidentAccountOverride{Account: "work", By: db.OverrideByAuto}))
+	got := se.restart()
+	testutil.Equal(t, got.task.Account, "work")
+	testutil.Equal(t, got.resume, true)
+}
+
+func TestStart_ListChangeRepicksUnlessManual(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.usage["default"] = usagebudget.Reading{}
+	se.cfg.Resident.Accounts = []string{"default"}
+	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
+		db.ResidentAccountOverride{Account: "work", By: db.OverrideByAuto}))
+	testutil.Equal(t, se.restart().task.Account, "") // work not allowed: back to default
+
+	// A manual move outside the list holds across the restart.
+	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
+		db.ResidentAccountOverride{Account: "work", By: db.OverrideByManual}))
+	testutil.Equal(t, se.restart().task.Account, "work")
+}
+
+func TestStart_SkipsDepletedAndMissingListedAccounts(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.cfg.Resident.Accounts = []string{"ghost", "default", "work"}
+	// default is depleted (setup), so the list lands on work; ghost is skipped.
+	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "default", se.task.SessionID,
+		db.ResidentAccountOverride{Account: "default", By: db.OverrideByAuto}))
+	testutil.Equal(t, se.restart().task.Account, "work")
+}
+
+func TestStart_FirstStartUsesListNotDefault(t *testing.T) {
+	e := newResEnv(t)
+	e.cfg.Accounts = map[string]config.Account{"personal": {ClaudeConfigDir: t.TempDir()}}
+	e.cfg.Resident.Accounts = []string{"personal"}
+	t.Cleanup(agent.SetAccountUsageSource(func(config.Config) map[string]usagebudget.Reading { return nil }))
+	e.m.tick()
+	testutil.Equal(t, e.run.starts[0].task.Account, "personal")
+}
+
+func TestAutoSwitch_MovesBackUpWhenPreferredRecovers(t *testing.T) {
+	se := newSwitchEnv(t)
+	// Resident currently on work (auto-moved earlier); default (preferred) recovered.
+	se.usage["default"] = usagebudget.Reading{}
+	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
+		db.ResidentAccountOverride{Account: "work", By: db.OverrideByAuto}))
+	// Cooldown long past.
+	old := time.Now().Add(-time.Hour).UTC().Format(db.ResidentTimeFormat)
+	testutil.NoError(t, se.db.SetMeta(se.task.ID, db.ResidentMetaNamespace, db.MetaKeyLastAutoSwitch, old))
+	se.tickN(1)
+	testutil.False(t, se.moved())
+	se.tickN(1)
+	testutil.True(t, se.moved())
+	row, _ := se.db.Get(se.task.ID)
+	testutil.Equal(t, row.Account, "")
+	testutil.Contains(t, se.notif.calls[len(se.notif.calls)-1].text, "back to default")
+	testutil.Contains(t, se.notif.calls[len(se.notif.calls)-1].text, "Continue whatever you were doing")
+}
+
+func TestAutoSwitch_ManualChoiceNotMovedBackUp(t *testing.T) {
 	se := newSwitchEnv(t)
 	se.usage["default"] = usagebudget.Reading{}
 	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
 		db.ResidentAccountOverride{Account: "work", By: db.OverrideByManual}))
-	delete(se.cfg.Accounts, "work")
-	delete(se.run.sess, se.task.ID)
-	se.m.runner = se.run
-	se.m.nextAttempt = time.Time{}
-	se.m.tick()
-	got := se.run.starts[len(se.run.starts)-1]
-	testutil.Equal(t, got.task.Account, "")
-	_, ok, _ := se.db.ResidentAccountOverride(se.task.ID)
-	testutil.False(t, ok)
+	row, _ := se.db.Get(se.task.ID)
+	se.task = row
+	se.tickN(6)
+	testutil.False(t, se.moved())
+}
+
+func TestAutoSwitch_CooldownAppliesToMoveBackUp(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.usage["default"] = usagebudget.Reading{}
+	testutil.NoError(t, se.db.SetResidentAccountMove(se.task.ID, "work", se.task.SessionID,
+		db.ResidentAccountOverride{Account: "work", By: db.OverrideByAuto}))
+	recent := time.Now().Add(-2 * time.Minute).UTC().Format(db.ResidentTimeFormat)
+	testutil.NoError(t, se.db.SetMeta(se.task.ID, db.ResidentMetaNamespace, db.MetaKeyLastAutoSwitch, recent))
+	se.tickN(5)
+	testutil.False(t, se.moved())
+}
+
+func TestAutoSwitch_FollowsListOrderNotLowestUsage(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.cfg.Accounts["third"] = config.Account{ClaudeConfigDir: filepath.Join(t.TempDir(), "third")}
+	se.cfg.Resident.Accounts = []string{"default", "work", "third"}
+	now := time.Now()
+	se.usage["work"] = usagebudget.Reading{Percentage: 90, FiveHour: win(90, now)}
+	se.usage["third"] = usagebudget.Reading{Percentage: 1, FiveHour: win(1, now)}
+	se.tickN(2)
+	testutil.True(t, se.moved())
+	ov, _, _ := se.db.ResidentAccountOverride(se.task.ID)
+	testutil.Equal(t, ov.Account, "work") // next in the list, not third (lowest usage)
+}
+
+func TestAutoSwitch_AutoEntryPicksMostHeadroom(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.cfg.Accounts["third"] = config.Account{ClaudeConfigDir: filepath.Join(t.TempDir(), "third")}
+	se.cfg.Resident.Accounts = []string{"default", "auto"}
+	now := time.Now()
+	se.usage["work"] = usagebudget.Reading{Percentage: 60, FiveHour: win(60, now)}
+	se.usage["third"] = usagebudget.Reading{Percentage: 5, FiveHour: win(5, now)}
+	se.tickN(2)
+	ov, _, _ := se.db.ResidentAccountOverride(se.task.ID)
+	testutil.Equal(t, ov.Account, "third")
 }
 
 func TestMoveAccount_ManualAndRefusals(t *testing.T) {

@@ -23,13 +23,12 @@ const (
 	OverrideByAuto   = "auto"
 )
 
-// ResidentAccountOverride is a runtime account choice made by a resident move.
-// It outranks resident.account until that setting changes (Base no longer
-// matches) or the account becomes invalid. Account is the normalized name
-// ("default" for the default account).
+// ResidentAccountOverride records which account the resident was last moved to
+// and by whom: a "manual" choice holds (it may even be outside resident.accounts
+// and is never moved back up the list), an "auto" one follows the list.
+// Account is the normalized name ("default" for the default account).
 type ResidentAccountOverride struct {
 	Account string `json:"account"`
-	Base    string `json:"base"`
 	By      string `json:"by"`
 	At      string `json:"at"`
 }

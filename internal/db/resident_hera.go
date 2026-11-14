@@ -112,6 +112,9 @@ func (d *DB) ResidentWorkerCount() (int, error) {
 
 func (d *DB) ResidentMaxWorkersFromConfigToml() bool { return d.cfgLoader.ResidentMaxWorkersDefined() }
 
+// ResidentAccountsFromConfigToml reports a config.toml [resident] accounts override.
+func (d *DB) ResidentAccountsFromConfigToml() bool { return d.cfgLoader.ResidentAccountsDefined() }
+
 // IsResidentOrchestrator uses the resident task's binding as identity. A legacy
 // user orchestrator named resident is a collision, not the standing team, and
 // must remain visible and renameable so the operator can resolve it.

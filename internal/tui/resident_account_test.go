@@ -87,9 +87,7 @@ func TestSmoke_ResidentAccountPicker_FailureShowsError(t *testing.T) {
 		t.Fatal("resident move RPC not called")
 	}
 	waitForCond(t, a.tapp, "error shown", func() bool {
-		var got string
-		readUI(t, a.tapp, func() { got = a.statusbar.Error() })
-		return strings.Contains(got, "no other Claude account")
+		return strings.Contains(a.statusbar.Error(), "no other Claude account")
 	})
 }
 

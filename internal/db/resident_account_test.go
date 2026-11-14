@@ -19,7 +19,7 @@ func TestResidentAccountMove(t *testing.T) {
 	testutil.False(t, ok)
 	testutil.True(t, d.ResidentLastAutoSwitch(res.ID).IsZero())
 
-	ov := ResidentAccountOverride{Account: "work", Base: "", By: OverrideByAuto}
+	ov := ResidentAccountOverride{Account: "work", By: OverrideByAuto}
 	testutil.NoError(t, d.SetResidentAccountMove(res.ID, "work", "sid-1", ov))
 	got, err := d.Get(res.ID)
 	testutil.NoError(t, err)
