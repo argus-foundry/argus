@@ -116,7 +116,7 @@ func (m *residentManager) maybeAutoSwitch(task *model.Task, cfg config.Config, s
 		m.switchTicks, m.noneEligible = 0, false
 		return
 	}
-	if !sess.IsIdle() || m.runner.HasPendingRestart(task.ID) || m.recycling(task.ID) || agent.AccountMoveInFlight(task.ID) {
+	if !m.sessionIdle(task.ID, sess, now) || m.runner.HasPendingRestart(task.ID) || m.recycling(task.ID) || agent.AccountMoveInFlight(task.ID) {
 		m.switchTicks = 0
 		return
 	}
@@ -127,7 +127,7 @@ func (m *residentManager) maybeAutoSwitch(task *model.Task, cfg config.Config, s
 	if last := m.db.ResidentLastAutoSwitch(task.ID); !last.IsZero() && now.Sub(last) < residentSwitchCooldown {
 		return
 	}
-	_, res, err := agent.MoveResidentAccount(m.db, m.mover, agent.AccountMoveInput{TaskID: task.ID, Account: agent.AutoMoveTarget}, agent.ResidentMoveOpts{By: db.OverrideByAuto, Cfg: &cfg})
+	_, res, err := agent.MoveResidentAccount(m.db, m.mover, agent.AccountMoveInput{TaskID: task.ID, Account: agent.AutoMoveTarget, Force: true}, agent.ResidentMoveOpts{By: db.OverrideByAuto, Cfg: &cfg})
 	if err != nil && !errors.Is(err, agent.ErrAccountMoveRestartUnknown) {
 		if !m.noneEligible && errors.Is(err, agent.ErrAccount) {
 			m.noneEligible = true
@@ -149,6 +149,19 @@ func (m *residentManager) maybeAutoSwitch(task *model.Task, cfg config.Config, s
 	m.postBoard(task, "fyi",
 		fmt.Sprintf("%s switched accounts: %s to %s", cfg.Resident.Name, res.From, res.To),
 		fmt.Sprintf("%s hit its usage limit (%s), so %s was moved to %s at %s. The conversation carried over (resumed=%t).", res.From, usageSummary(usage[cur], now), cfg.Resident.Name, res.To, now.Format(time.RFC822), res.Resumed))
+}
+
+// sessionIdle reports whether the resident is parked: raw output quiet, or (for
+// a session that keeps repainting while it waits, e.g. Claude Code's "Continuing
+// automatically ... Esc to cancel" usage-limit wait) its emulated screen stable
+// with no working affordance. Force is passed to the move only after this
+// check, so the move's own busy refusal (raw idle only) cannot block a switch
+// off a limit-parked session.
+func (m *residentManager) sessionIdle(taskID string, sess agent.SessionHandle, now time.Time) bool {
+	if cs, ok := sess.(agent.ContentIdleSession); ok {
+		return m.idleTracker.IsIdle(taskID, cs, now)
+	}
+	return sess.IsIdle()
 }
 
 // postBoard puts an item on the resident coordinator's human board; failures

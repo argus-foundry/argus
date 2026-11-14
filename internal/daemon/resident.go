@@ -91,6 +91,9 @@ type residentManager struct {
 	// mover restarts the resident in place for an account move (nil = moves
 	// and the automatic switch are unavailable: tests, no runner).
 	mover residentMover
+	// idleTracker adds content-aware idleness to the raw signal for the
+	// automatic switch (see sessionIdle).
+	idleTracker agent.ContentIdleTracker
 
 	// switchTicks and noneEligible are tick-loop state for the automatic
 	// account switch (see maybeAutoSwitch); only tick and MoveAccount touch them.

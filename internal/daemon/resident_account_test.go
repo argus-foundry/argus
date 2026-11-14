@@ -17,7 +17,10 @@ import (
 type moveHandle struct {
 	liveHandle
 	idle bool
+	tail []byte // RecentOutputTail; nil keeps the handle raw-idle-only
 }
+
+func (h *moveHandle) RecentOutputTail(int) []byte { return h.tail }
 
 func (h *moveHandle) IsIdle() bool        { return h.idle }
 func (h *moveHandle) PTYSize() (int, int) { return 100, 40 }
@@ -261,4 +264,49 @@ func TestMoveAccount_ManualAndRefusals(t *testing.T) {
 	se.cfg.Resident.Enabled = false
 	_, err = se.m.MoveAccount("default", true)
 	testutil.Contains(t, err.Error(), "not enabled")
+}
+
+// Solo parked on its weekly limit: five-hour at 0%, weekly at 100%, Claude
+// Code's persistent wait footer on screen, output never quiet for 3s.
+const limitWaitScreen = "You've hit your weekly limit \u00b7 resets Nov 17 at 12am (America/Los_Angeles)\r\n" +
+	"\r\n\u26a0Usage limit reached \u00b7 limit resets Nov 17 at 12am\r\n" +
+	"Continuing automatically at Nov 17 at 12am \u00b7 Esc to cancel\r\n" +
+	"manual mode on\r\n"
+
+func TestAutoSwitch_WeeklyLimitWaitFooterIsSwitchable(t *testing.T) {
+	se := newSwitchEnv(t)
+	now := time.Now()
+	se.usage["default"] = usagebudget.Reading{
+		FiveHour: win(0, now),
+		SevenDay: &usagebudget.Window{Percentage: 100, ResetAt: now.Add(96 * time.Hour), LastProbedAt: now},
+	}
+	se.usage["work"] = usagebudget.Reading{SevenDay: &usagebudget.Window{Percentage: 3, ResetAt: now.Add(96 * time.Hour), LastProbedAt: now}}
+	// Not raw-idle (the footer keeps repainting), but the screen is parked.
+	se.h.idle = false
+	se.h.tail = []byte(limitWaitScreen)
+	clock := now
+	se.m.now = func() time.Time { return clock }
+	for i := 0; i < 8 && !se.moved(); i++ {
+		clock = clock.Add(5 * time.Second)
+		se.m.tick()
+	}
+	testutil.True(t, se.moved())
+	// The move was forced past its raw-idle busy check, to the other account.
+	ov, ok, _ := se.db.ResidentAccountOverride(se.task.ID)
+	testutil.True(t, ok)
+	testutil.Equal(t, ov.Account, "work")
+	testutil.Equal(t, ov.By, db.OverrideByAuto)
+}
+
+func TestAutoSwitch_WorkingScreenIsNotSwitchable(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.h.idle = false
+	se.h.tail = []byte("\u273b Thinking\u2026 (12s \u00b7 esc to interrupt)\r\n")
+	clock := time.Now()
+	se.m.now = func() time.Time { return clock }
+	for i := 0; i < 8; i++ {
+		clock = clock.Add(5 * time.Second)
+		se.m.tick()
+	}
+	testutil.False(t, se.moved())
 }

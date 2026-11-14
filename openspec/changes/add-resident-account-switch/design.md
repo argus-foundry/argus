@@ -36,14 +36,14 @@ In `residentManager.tick`, in the branch where the resident session is alive, ca
 
 1. `cfg.Resident.AutoSwitchAccount` is on (default true).
 2. The current account's reading, through `usagebudget.LiveWindows`, has a live window with `Percentage >= 100`. This is the existing "depleted" meaning (Codex routing treats depleted as 100%; headroom routing treats over-threshold as no headroom). No reading, stale reading or an unparseable reading never triggers (fail open: unknown is not depleted). No new threshold is introduced.
-3. The session is idle by the raw `IsIdle` signal, so a running turn is never interrupted. A needs-input state does NOT block (approved tweak): the usage-limit menu is itself a prompt and the two cannot be told apart cheaply; preferring the switch loses only the pending prompt since the transcript resumes.
+3. The session is parked: raw-idle, or content-idle through `agent.ContentIdleTracker` (stable emulated screen, no working affordance). The content path exists because Claude Code's usage-limit wait footer ("Continuing automatically at ... Esc to cancel", seen on a live weekly-limit repro) can keep repainting so raw output never goes quiet; a working screen ("esc to interrupt") never counts. A running turn is never interrupted. A needs-input state does NOT block (approved tweak): the usage-limit menu is itself a prompt and the two cannot be told apart cheaply; preferring the switch loses only the pending prompt since the transcript resumes.
 4. No move/recycle/restart/graduation is in flight (`AccountMoveInFlight`, `HasPendingRestart`, `m.recycling`).
 5. Conditions 2 to 4 hold on two consecutive ticks (`residentSwitchConfirmTicks = 2`, about 10s) so a transient reading or a brief idle blip cannot trigger it.
 6. Cooldown: the last automatic switch was at least `residentSwitchCooldown` (10 min) ago. The last switch time is persisted in resident meta (`last_auto_switch_at`) so a daemon bounce does not reset it.
 
 Target: `pickMoveTargetWhere` over Claude-capable accounts excluding the current one, with a filter that rejects accounts whose live reading is depleted. Lowest usage wins (equivalently most headroom); unknown counts as 0, matching manual auto. If none qualifies the manager does nothing except log once per distinct situation and post one board item (D5) per episode ("no eligible account"), then keeps retrying each tick quietly (the cooldown only starts after an actual switch).
 
-The move uses the D2 function with `Force: false`. Because it runs only on idle, no turn is lost; the transcript is carried over, so Solo resumes the same conversation on the new account.
+The move uses the D2 function with `Force: true`, passed only after the parked check above (the move's own busy check is raw-idle only and would otherwise refuse the repainting limit-wait screen). Because it runs only on a parked session, no turn is lost; the transcript is carried over, so Solo resumes the same conversation on the new account.
 
 Known limitation: depletion is detected from the cached usage reading (bridge reading when the bridge is live, else the periodic probe), so a hard limit can be noticed up to one probe interval late when the bridge is absent. Reading the on-screen limit banner is a named follow-up; it was not added now because it needs a new screen-scrape signal with its own false-positive surface.
 
