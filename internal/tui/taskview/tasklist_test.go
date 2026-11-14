@@ -3209,8 +3209,8 @@ func TestDrawTaskRow_PluginBadge(t *testing.T) {
 		screen.Show()
 		var line string
 		for c := 0; c < 40; c++ {
-			r, _, _, _ := screen.GetContent(c, 0)
-			line += string(r)
+			s, _, _ := screen.Get(c, 0)
+			line += s
 		}
 		return line
 	}
