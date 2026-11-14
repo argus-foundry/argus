@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/tui/badge"
 	"github.com/argus-foundry/argus/internal/tui/keymap"
 	"github.com/argus-foundry/argus/internal/tui/theme"
 	"github.com/argus-foundry/argus/internal/tui/widget"
@@ -67,6 +68,7 @@ type TaskListView struct {
 	idle          map[string]bool
 	idleUnvisited map[string]bool          // task IDs idle since user last viewed the agent view
 	needsInput    map[string]bool          // task IDs whose agent appears blocked on a user prompt
+	badges        map[string]badge.Badge   // task ID → plugin badge (task_meta key "badge")
 	prStates      map[string]model.PRState // task ID → cached GitHub PR review state (from task_meta "pr")
 	heraWorkers   map[string]bool          // task IDs that are hera-spawned workers (task_meta hera.role=worker)
 	heraCoords    map[string]bool          // task IDs that hold a hera coordinator role (task_meta hera.role=coordinator)
@@ -258,6 +260,10 @@ func (tl *TaskListView) SetPRStates(states map[string]model.PRState) {
 	}
 	tl.prStates = states
 }
+
+// SetBadges installs the plugin task-badge cache (task ID → badge). Expired
+// badges are filtered at draw time.
+func (tl *TaskListView) SetBadges(b map[string]badge.Badge) { tl.badges = b }
 
 // PRStateFor returns the cached PR review state for a task ID, or PRNone when
 // no state is cached. Used by callers (and tests) that need to inspect the
@@ -1531,6 +1537,13 @@ func (tl *TaskListView) drawTaskRow(screen tcell.Screen, x, y, w int, task *mode
 	if prChar, prStyle, ok := theme.PRGlyph(tl.prStates[task.ID]); ok {
 		screen.SetContent(col, y, prChar, nil, prStyle)
 		col += 2 // PR indicator + space
+	}
+
+	// Plugin badge cell: one tone-tinted glyph, only when an unexpired badge
+	// exists. Icon-only so the name column keeps its room.
+	if b, ok := tl.badges[task.ID]; ok && !b.Expired(time.Now()) {
+		screen.SetContent(col, y, b.Icon, nil, b.Style())
+		col += 2
 	}
 
 	// Hera-role indicator cell. Only consumes width when the task participates in

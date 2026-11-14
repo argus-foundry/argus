@@ -15,6 +15,7 @@ import (
 
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/tui/badge"
 	"github.com/argus-foundry/argus/internal/tui/theme"
 	"github.com/argus-foundry/argus/internal/tui/widget"
 	"github.com/argus-foundry/argus/internal/uxlog"
@@ -234,6 +235,7 @@ type Rail struct {
 	// the same best-effort source the Details roster reads. A managed role whose
 	// bound task has a non-empty "url" renders a PR indicator. nil → no PR cells.
 	prMeta map[string]map[string]string
+	badges map[string]badge.Badge
 
 	// onSelectionChanged fires (with the selected row's ref) whenever the
 	// cursor lands on a different selectable row. 6b binds the panes off it;
@@ -316,6 +318,22 @@ func (r *Rail) SetFocused(v bool) { r.focused = v }
 // SetPRMeta wires the best-effort "pr" namespace cache so managed rail rows can
 // render a PR indicator. Pass nil to clear it (the indicator just won't render).
 func (r *Rail) SetPRMeta(m map[string]map[string]string) { r.prMeta = m }
+
+// SetBadges wires the plugin task-badge cache (taskID -> badge). A role row
+// draws the bound task's unexpired badge glyph in its right-aligned tag slot.
+func (r *Rail) SetBadges(m map[string]badge.Badge) { r.badges = m }
+
+// roleBadge returns the role's bound task's badge when present and unexpired.
+func (r *Rail) roleBadge(role *heramodel.RoleView) (badge.Badge, bool) {
+	if role == nil || role.TaskID == "" {
+		return badge.Badge{}, false
+	}
+	b, ok := r.badges[role.TaskID]
+	if !ok || b.Expired(time.Now()) {
+		return badge.Badge{}, false
+	}
+	return b, true
+}
 
 // SetNeverCollapse pins every orchestrator open (resident view).
 func (r *Rail) SetNeverCollapse(v bool) { r.neverCollapse = v }
@@ -2519,6 +2537,7 @@ func (r *Rail) drawRoleRow(screen tcell.Screen, x, y, w int, row railRow, select
 		tagStyle = theme.StyleDimmed
 	}
 	var tags []string
+	var tagStyles []tcell.Style
 	if role.GraduationPendingRestart {
 		widget.DrawText(screen, col, y, remaining, "graduation pending restart · "+role.Name, theme.StyleInReview)
 		drawInd()
@@ -2526,9 +2545,15 @@ func (r *Rail) drawRoleRow(screen tcell.Screen, x, y, w int, row railRow, select
 	}
 	if n := r.unread[role.TaskID]; n > 0 && role.TaskID != "" {
 		tags = append(tags, fmt.Sprintf("✉%d", n))
+		tagStyles = append(tagStyles, tagStyle)
 	}
 	if r.rolePR(role) {
 		tags = append(tags, prTag)
+		tagStyles = append(tagStyles, tagStyle)
+	}
+	if b, ok := r.roleBadge(role); ok {
+		tags = append(tags, string(b.Icon))
+		tagStyles = append(tagStyles, b.Style())
 	}
 	tagW := 0
 	for _, tg := range tags {
@@ -2539,7 +2564,7 @@ func (r *Rail) drawRoleRow(screen tcell.Screen, x, y, w int, row railRow, select
 		tx := x + rightW
 		for i := len(tags) - 1; i >= 0; i-- {
 			tx -= runewidth.StringWidth(tags[i])
-			widget.DrawText(screen, tx, y, runewidth.StringWidth(tags[i]), tags[i], tagStyle)
+			widget.DrawText(screen, tx, y, runewidth.StringWidth(tags[i]), tags[i], tagStyles[i])
 			tx--
 		}
 		drawInd()

@@ -8,6 +8,7 @@ import (
 
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/tui/badge"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
@@ -71,6 +72,7 @@ type rebuildSnapshot struct {
 	// publish proves they are still the current ones.
 	prevPristine *heramodel.Model
 	prevPRMeta   map[string]map[string]string
+	prevBadges   map[string]badge.Badge
 }
 
 // rebuildResult is what a build hands back to the tview goroutine.
@@ -79,6 +81,7 @@ type rebuildResult struct {
 	pristine heramodel.Model // untouched clone kept for the next equality compare
 	prMeta   map[string]map[string]string
 	prOK     bool // prMeta was read successfully
+	badges   map[string]badge.Badge
 	equal    bool // identical to the previously published state
 	err      error
 	buildDur time.Duration
@@ -125,6 +128,7 @@ func (p *HeraPage) takeSnapshot() *rebuildSnapshot {
 		tierResolverFactory: p.tierResolverFactory,
 		prevPristine:        p.lastPristine,
 		prevPRMeta:          p.prMeta,
+		prevBadges:          p.badges,
 	}
 	if p.tasksKnown {
 		s.tasks = make([]*model.Task, len(p.tasks))
@@ -168,9 +172,17 @@ func (p *HeraPage) buildFromSnapshot(s *rebuildSnapshot) rebuildResult {
 			res.prMeta, res.prOK = pr, true
 		}
 	}
+	if br, ok := s.reader.(badge.Reader); ok {
+		if raw, berr := br.ListMetaByKey(badge.Key); berr == nil {
+			res.badges = badge.Select(raw)
+		} else {
+			uxlog.Log("[badge] hera rail: read failed: %v", berr)
+		}
+	}
 	res.pristine = m.Clone()
 	res.equal = s.prevPristine != nil &&
 		(!res.prOK || reflect.DeepEqual(s.prevPRMeta, res.prMeta)) &&
+		reflect.DeepEqual(s.prevBadges, res.badges) &&
 		reflect.DeepEqual(*s.prevPristine, res.pristine)
 	res.buildDur = time.Since(start)
 	return res
@@ -188,6 +200,8 @@ func (p *HeraPage) applyResult(res rebuildResult) {
 		p.prMeta = res.prMeta
 	}
 	p.rail.SetPRMeta(p.prMeta)
+	p.badges = res.badges
+	p.rail.SetBadges(p.badges)
 	// SetModel rebuilt the model's backing arrays, so the prior Selection
 	// pointers are stale — re-derive and rebind (task IDs usually unchanged, so
 	// bindPane is a no-op and the emulators are preserved).

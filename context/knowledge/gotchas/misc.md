@@ -413,3 +413,9 @@
 - **A regular rollout inode may still be a hard link to credentials.** Before transfer, require opened-fd Nlink=1 and native session_meta for the indexed thread with the move-specific 4 MiB budget (context readers retain 64 KiB); rewind that same descriptor before copying so validation does not truncate the conversation.
 
 - **`POST /api/tasks/{id}/reveal` validates on the symlink-resolved path right before `open`, and the launcher/GOOS are Server seams.** Worktree mode additionally rejects final symlinks/non-directories via Lstat and uses fixed `open -a Finder` arguments so a post-check swap cannot activate a bundle. Lexical pre-screen (absolute, `..`, NUL, `.git` segment case-insensitively) then `EvalSymlinks` + `filepath.Rel` containment + a second `.git` check on the resolved relative path (a symlink to `.git` would otherwise pass); only regular files in file mode. Tests must never run real `open`.
+
+## Plugin task badge (add-plugin-task-badge)
+
+- **A badge `icon` must be exactly one rune AND one terminal cell (`runewidth`) — a colour emoji is 2 cells and is rejected, not drawn.** The task-list cell and rail tag slot both assume width 1; widths are checked once in `badge.Parse`.
+- **Badge expiry is checked at draw time, never at read time.** The hera rebuild's equal-model gate compares the parsed badge map (including `ExpiresAt`), so an expiring badge does not need a data change to disappear on the next draw.
+- **The badge read is local-mode only:** `badge.Reader` is an optional interface `*db.DB` implements and `apistore` deliberately does not; the hera rebuild type-asserts `s.reader` (not the `tasksReader` wrapper, which hides it).

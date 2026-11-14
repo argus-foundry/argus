@@ -40,6 +40,7 @@ import (
 	"github.com/argus-foundry/argus/internal/profiles"
 	"github.com/argus-foundry/argus/internal/scheduler"
 	"github.com/argus-foundry/argus/internal/skew"
+	"github.com/argus-foundry/argus/internal/tui/badge"
 	"github.com/argus-foundry/argus/internal/tui/gitpanel"
 	"github.com/argus-foundry/argus/internal/tui/hera"
 	"github.com/argus-foundry/argus/internal/tui/keyenc"
@@ -3964,6 +3965,7 @@ func (a *App) refreshTasksWithIDs(runningIDs, idleIDs []string, allowCachedTasks
 	prStates := a.readPRStates()
 	managed := a.readManagedTasks()
 	a.tasklist.SetPRStates(prStates)
+	a.tasklist.SetBadges(a.readBadges())
 	a.tasklist.SetHeraWorkers(heraWorkers)
 	a.tasklist.SetHeraCoordinators(heraCoordinators)
 	a.tasklist.SetManagedTasks(managed)
@@ -4078,6 +4080,22 @@ func (a *App) readPRStates() map[string]model.PRState {
 		out[taskID] = s
 	}
 	return out
+}
+
+// readBadges reads plugin task badges (task_meta key "badge", any namespace).
+// Local mode only: the remote store does not implement badge.Reader, so the
+// remote TUI shows no badges.
+func (a *App) readBadges() map[string]badge.Badge {
+	r, ok := a.db.(badge.Reader)
+	if !ok {
+		return nil
+	}
+	raw, err := r.ListMetaByKey(badge.Key)
+	if err != nil {
+		uxlog.Log("[badge] tui: read badge meta failed: %v", err)
+		return nil
+	}
+	return badge.Select(raw)
 }
 
 // readHeraRoles reads the task_meta "hera" namespace ONCE and partitions bound

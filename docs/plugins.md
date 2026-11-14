@@ -187,6 +187,20 @@ Today the handler requires the master token (see footnote on the endpoint table 
 
 The HTTP body cap is 1 MiB. Per-key value size is otherwise unbounded.
 
+### Task badge (TUI)
+
+A plugin can mark a task in the TUI task list and Hera rail without argus knowing about the plugin: write a `badge` key in your own namespace whose value is a JSON string:
+
+```json
+{ "namespace": "my-plugin", "key": "badge", "value": "{\"icon\":\"󰩃\",\"tone\":\"ok\",\"expires_at\":\"2026-11-14T20:00:00Z\"}" }
+```
+
+- `icon` (required): exactly **one** glyph, one terminal cell wide. Use a Nerd Font glyph (the TUI's other icons are Nerd Font), e.g. nf-md-dog `U+F0A43`. A colour emoji is two cells wide and the badge is **ignored**.
+- `tone` (optional): `neutral` (default, dim), `ok` (green), `warn` (amber), `alert` (red).
+- `expires_at` (optional, RFC3339): the badge disappears after this time, with no rewrite needed.
+- Icon only, no label. One badge per task; if several namespaces write one, the alphabetically first namespace with a valid badge wins. Invalid badges are ignored silently.
+- TUI-only: the web SPA, macOS app and `--remote` TUI do not show badges.
+
 ## MCP tool registration
 
 A plugin can extend argus's MCP surface at runtime. Argus proxies tool invocations from any connected Claude session through to the plugin's HTTP callback URL and returns the plugin's response to the client.

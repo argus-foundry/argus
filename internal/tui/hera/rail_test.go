@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/db"
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/badge"
 	"github.com/argus-foundry/argus/internal/tui/theme"
 	"github.com/argus-foundry/argus/internal/tui/widget"
 	"github.com/gdamore/tcell/v2"
@@ -2001,4 +2003,35 @@ func TestStampDisconnected(t *testing.T) {
 	testutil.Equal(t, r[2].Disconnected, false)
 	testutil.Equal(t, r[3].Disconnected, false)
 	testutil.Equal(t, m.Freelance[0].Disconnected, true)
+}
+
+func TestRail_PluginBadgeTag(t *testing.T) {
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	defer sim.Fini()
+	sim.SetSize(24, 10)
+
+	r := NewRail()
+	r.SetModel(heramodel.Model{Active: []heramodel.OrchView{{ID: 1, Name: "orch", Roles: []heramodel.RoleView{
+		{RoleID: 11, Name: "a-very-long-worker-name-here", Kind: db.HeraKindWorker, Live: true, TaskID: "twk"},
+	}}}})
+	r.SetPRMeta(map[string]map[string]string{"twk": {"url": "u", "state": "awaiting-review"}})
+	r.SetBadges(map[string]badge.Badge{"twk": {Icon: 'D', Tone: "ok"}})
+	r.SetRect(0, 0, 24, 10)
+	r.Draw(sim)
+	sim.Show()
+	var line string
+	for x := 0; x < 24; x++ {
+		s, _, _ := sim.Get(x, 4)
+		line += s
+	}
+	// Name truncates; PR tag and badge stay.
+	testutil.Contains(t, line, "PR")
+	testutil.Contains(t, line, "D")
+
+	_, ok := r.roleBadge(&heramodel.RoleView{TaskID: "none"})
+	testutil.Equal(t, ok, false)
+	r.SetBadges(map[string]badge.Badge{"twk": {Icon: 'D', ExpiresAt: time.Now().Add(-time.Minute)}})
+	_, ok = r.roleBadge(&heramodel.RoleView{TaskID: "twk"})
+	testutil.Equal(t, ok, false)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/tui/badge"
 	"github.com/argus-foundry/argus/internal/tui/keymap"
 	"github.com/argus-foundry/argus/internal/tui/planview"
 	"github.com/argus-foundry/argus/internal/tui/terminal"
@@ -109,6 +110,7 @@ type HeraPage struct {
 	// (resize-without-restart).
 	autoRerender func() bool
 	prMeta       map[string]map[string]string
+	badges       map[string]badge.Badge
 	// needsInput is the authoritative per-task needs-input set the App pushes each
 	// tick (App.needsInputIDs — the SAME idle-gated agent.DetectNeedsInput set the
 	// task list consumes). doRefresh threads it into heramodel.BuildModel so each live role

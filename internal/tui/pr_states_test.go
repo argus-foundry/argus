@@ -166,3 +166,17 @@ func TestMergeManagedFromMeta_OverlapDeduplicates(t *testing.T) {
 	testutil.Equal(t, got["coord-only"], true)
 	testutil.Equal(t, len(got), 2)
 }
+
+func TestReadBadges_AcrossNamespaces(t *testing.T) {
+	d := testDB(t)
+	app := New(d, agent.NewRunner(nil), false)
+	testutil.NoError(t, d.SetMetaBatch("t1", "iris", map[string]string{"badge": `{"icon":"d","tone":"ok"}`}))
+	testutil.NoError(t, d.SetMetaBatch("t2", "iris", map[string]string{"badge": `junk`}))
+	testutil.NoError(t, d.SetMetaBatch("t3", "iris", map[string]string{"other": `{"icon":"d"}`}))
+	got := app.readBadges()
+	testutil.Equal(t, got["t1"].Icon, 'd')
+	_, has2 := got["t2"]
+	_, has3 := got["t3"]
+	testutil.Equal(t, has2, false)
+	testutil.Equal(t, has3, false)
+}

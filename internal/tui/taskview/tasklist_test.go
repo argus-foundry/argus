@@ -7,6 +7,7 @@ import (
 
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/tui/badge"
 	"github.com/argus-foundry/argus/internal/tui/theme"
 	"github.com/argus-foundry/argus/internal/tui/widget"
 	"github.com/gdamore/tcell/v2"
@@ -3190,5 +3191,36 @@ func TestTaskSection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			testutil.Equal(t, taskSection(tc.t), tc.want)
 		})
+	}
+}
+
+func TestDrawTaskRow_PluginBadge(t *testing.T) {
+	draw := func(b badge.Badge, has bool) string {
+		screen := tcell.NewSimulationScreen("UTF-8")
+		if err := screen.Init(); err != nil {
+			t.Fatal(err)
+		}
+		screen.SetSize(40, 3)
+		tl := NewTaskListView()
+		if has {
+			tl.SetBadges(map[string]badge.Badge{"1": b})
+		}
+		tl.drawTaskRow(screen, 0, 0, 40, &model.Task{ID: "1", Name: "my-task", Status: model.StatusPending}, false)
+		screen.Show()
+		var line string
+		for c := 0; c < 40; c++ {
+			r, _, _, _ := screen.GetContent(c, 0)
+			line += string(r)
+		}
+		return line
+	}
+	live := badge.Badge{Icon: 'D', Tone: "ok"}
+	testutil.Contains(t, draw(live, true), "D my-task")
+	expired := badge.Badge{Icon: 'D', ExpiresAt: time.Now().Add(-time.Hour)}
+	if strings.Contains(draw(expired, true), "D my-task") {
+		t.Error("expired badge must not draw")
+	}
+	if strings.Contains(draw(live, false), "D my-task") {
+		t.Error("no badge must not draw")
 	}
 }

@@ -259,3 +259,33 @@ func (d *DB) DeleteMetaNamespaceForTask(taskID, namespace string) (int, error) {
 	n, _ := res.RowsAffected()
 	return int(n), nil
 }
+
+// ListMetaByKey returns every (taskID → namespace → value) row whose key
+// matches, across all namespaces. One query; used by the TUI plugin-badge
+// reader so it does not need to know plugin namespaces.
+func (d *DB) ListMetaByKey(key string) (map[string]map[string]string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	rows, err := d.conn.Query(
+		`SELECT task_id, namespace, value FROM task_meta WHERE key=? ORDER BY task_id ASC, namespace ASC`,
+		key,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list meta by key: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]map[string]string)
+	for rows.Next() {
+		var taskID, ns, value string
+		if err := rows.Scan(&taskID, &ns, &value); err != nil {
+			return nil, fmt.Errorf("scan meta by key: %w", err)
+		}
+		if out[taskID] == nil {
+			out[taskID] = make(map[string]string)
+		}
+		out[taskID][ns] = value
+	}
+	return out, rows.Err()
+}
