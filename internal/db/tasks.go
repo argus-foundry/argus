@@ -455,123 +455,74 @@ func (d *DB) SetArchived(id string, archived bool) error {
 	return d.setArchivedGuarded(id, archived, nil)
 }
 
-// SetArchivedIfQuiet archives taskID only if, INSIDE the same transaction as
-// the archive writes, the task is still complete, no live hera binding other
-// than roleID's holds it (a coordinator-kind hat in one of bridgedOrchIDs is
-// the sub-coordinator's own and is allowed), roleID has no unread inbound mail,
-// and roleID has no unread mail to a live recipient (add-hera-auto-archive:
-// closes the check-then-archive race the predicate alone leaves open).
-func (d *DB) SetArchivedIfQuiet(taskID string, roleID int64, bridgedOrchIDs []int64) error {
-	return d.setArchivedGuarded(taskID, true, func(tx *sql.Tx) error {
-		var status string
-		if err := tx.QueryRow(`SELECT status FROM tasks WHERE id=?`, taskID).Scan(&status); err != nil {
-			return fmt.Errorf("guard: load task: %w", err)
-		}
-		if st, perr := model.ParseStatus(status); perr != nil || st != model.StatusComplete {
-			return fmt.Errorf("guard: task status is %s, not complete", status)
-		}
-		rows, err := tx.Query(`SELECT b.role_id, b.orchestrator_id, r.kind FROM hera_bindings b JOIN hera_roles r ON r.id=b.role_id
-			WHERE b.argus_task_id=? AND b.ended_at IS NULL`, taskID)
-		if err != nil {
-			return fmt.Errorf("guard: bindings: %w", err)
-		}
-		allowed := map[int64]bool{}
-		for _, o := range bridgedOrchIDs {
-			allowed[o] = true
-		}
-		var bad int64
-		for rows.Next() {
-			var rid, oid int64
-			var kind string
-			if err := rows.Scan(&rid, &oid, &kind); err != nil {
-				rows.Close()
-				return err
-			}
-			if rid != roleID && (!allowed[oid] || kind != string(HeraKindCoordinator)) {
-				bad = rid
-			}
-		}
-		rows.Close()
-		if bad != 0 {
-			return fmt.Errorf("guard: task is also bound to another live role (%d)", bad)
-		}
-		var n int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM hera_messages WHERE to_role_id=? AND read_at IS NULL`, roleID).Scan(&n); err != nil {
-			return fmt.Errorf("guard: inbox: %w", err)
-		}
-		if n > 0 {
-			return fmt.Errorf("guard: %d unread hera message(s) arrived", n)
-		}
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM hera_messages m JOIN hera_roles r ON r.id=m.to_role_id
-			WHERE m.from_role_id=? AND m.read_at IS NULL AND r.archived_at IS NULL AND r.nuked_at IS NULL
-			  AND EXISTS (SELECT 1 FROM hera_bindings b WHERE b.role_id=r.id AND b.ended_at IS NULL)`, roleID).Scan(&n); err != nil {
-			return fmt.Errorf("guard: outbox: %w", err)
-		}
-		if n > 0 {
-			return fmt.Errorf("guard: %d sent message(s) not yet read", n)
-		}
-		return nil
-	})
-}
-
 func (d *DB) setArchivedGuarded(id string, archived bool, guard func(tx *sql.Tx) error) error {
 	// Both statements (tasks UPDATE + on-archive task_messages DELETE) run in
 	// one SQLite transaction so a crash between them can't leave an archived
 	// row with a queued inbox forever counting against the unread cap.
 	var oldArchived, oldPinned int
 	err := d.WithTx(func(tx *sql.Tx) error {
-		var (
-			res sql.Result
-			err error
-		)
-		if gerr := residentGuard(tx, id); gerr != nil {
-			return gerr
-		}
 		if guard != nil {
 			if gerr := guard(tx); gerr != nil {
 				return gerr
 			}
 		}
-		if archived {
-			if gerr := graduationPendingGuard(tx, id); gerr != nil {
-				return gerr
-			}
-		}
-		if qerr := tx.QueryRow(`SELECT archived, pinned FROM tasks WHERE id=?`, id).Scan(&oldArchived, &oldPinned); qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
-			return qerr
-		}
-		if archived {
-			res, err = tx.Exec(`UPDATE tasks SET archived=1, pinned=0 WHERE id=?`, id)
-		} else {
-			res, err = tx.Exec(`UPDATE tasks SET archived=0 WHERE id=?`, id)
-		}
-		if err != nil {
-			return err
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
-		}
-		// On archive, drop queued messages so a stale recipient doesn't sit on
-		// the unread cap blocking other senders. Unarchive leaves messages
-		// alone (there are none — the cleanup ran when the task was archived).
-		if archived {
-			if _, err := tx.Exec(`DELETE FROM task_messages WHERE from_task_id=? OR to_task_id=?`, id, id); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(`DELETE FROM task_meta WHERE task_id=?`, id); err != nil {
-				return err
-			}
-		}
-		return nil
+		var err error
+		oldArchived, oldPinned, err = setArchivedTx(tx, id, archived)
+		return err
 	})
-	if err == nil && archived {
-		events.Emit(model.EventTypeTaskArchived, id, nil)
-	}
 	if err == nil {
-		emitSectionChange(id, oldArchived != 0, oldPinned != 0, archived, pinnedAfterArchive(archived, oldPinned != 0))
+		emitArchivedEvents(id, archived, oldArchived, oldPinned)
 	}
 	return err
+}
+
+// setArchivedTx is the archive write body, usable inside a caller's
+// transaction (ArchiveHeraUnit). It returns the prior archived/pinned flags
+// for emitArchivedEvents, which the caller runs AFTER commit.
+func setArchivedTx(tx *sql.Tx, id string, archived bool) (oldArchived, oldPinned int, err error) {
+	if gerr := residentGuard(tx, id); gerr != nil {
+		return 0, 0, gerr
+	}
+	if archived {
+		if gerr := graduationPendingGuard(tx, id); gerr != nil {
+			return 0, 0, gerr
+		}
+	}
+	if qerr := tx.QueryRow(`SELECT archived, pinned FROM tasks WHERE id=?`, id).Scan(&oldArchived, &oldPinned); qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
+		return 0, 0, qerr
+	}
+	var res sql.Result
+	if archived {
+		res, err = tx.Exec(`UPDATE tasks SET archived=1, pinned=0 WHERE id=?`, id)
+	} else {
+		res, err = tx.Exec(`UPDATE tasks SET archived=0 WHERE id=?`, id)
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return 0, 0, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	}
+	// On archive, drop queued messages so a stale recipient doesn't sit on
+	// the unread cap blocking other senders. Unarchive leaves messages
+	// alone (there are none — the cleanup ran when the task was archived).
+	if archived {
+		if _, err := tx.Exec(`DELETE FROM task_messages WHERE from_task_id=? OR to_task_id=?`, id, id); err != nil {
+			return 0, 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM task_meta WHERE task_id=?`, id); err != nil {
+			return 0, 0, err
+		}
+	}
+	return oldArchived, oldPinned, nil
+}
+
+func emitArchivedEvents(id string, archived bool, oldArchived, oldPinned int) {
+	if archived {
+		events.Emit(model.EventTypeTaskArchived, id, nil)
+	}
+	emitSectionChange(id, oldArchived != 0, oldPinned != 0, archived, pinnedAfterArchive(archived, oldPinned != 0))
 }
 
 func pinnedAfterArchive(archived, oldPinned bool) bool {

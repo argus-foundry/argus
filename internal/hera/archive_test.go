@@ -262,7 +262,7 @@ func TestArchive_FyiPushIsIdempotent(t *testing.T) {
 	_, err = d.PostHeraBoardItem(pc.ID, "fyi", "[sub] heads up", "details\n\n"+marker)
 	testutil.NoError(t, err)
 
-	testutil.NoError(t, pushFyiUp(d, sub, ""))
+	testutil.Equal(t, ArchiveRole(d, nil, gitOK, sub, false).Archived, true)
 	up, err := d.ListHeraBoardItems(pc.ID, true)
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(up), 1) // no duplicate
@@ -277,7 +277,7 @@ func TestArchive_FyiSubjectRuneSafe(t *testing.T) {
 	long := strings.Repeat("é", 120) // 2 bytes each; a byte cut at 240 could split a rune
 	_, err := d.PostHeraBoardItem(cc.ID, "fyi", long, "details")
 	testutil.NoError(t, err)
-	testutil.NoError(t, pushFyiUp(d, sub, ""))
+	testutil.Equal(t, ArchiveRole(d, nil, gitOK, sub, false).Archived, true)
 	up, err := d.ListHeraBoardItems(pc.ID, true)
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(up), 1)
@@ -286,17 +286,21 @@ func TestArchive_FyiSubjectRuneSafe(t *testing.T) {
 	}
 }
 
-func TestArchiveRole_SessionTurnsBusyBeforeStop(t *testing.T) {
+// The session turning busy between the idle check and commit rolls the whole
+// archive back (idleness is the PreCommit hook): nothing is archived, no stop.
+func TestArchiveRole_SessionTurnsBusyBeforeCommitRollsBack(t *testing.T) {
 	d := archDB(t)
 	orch, _ := d.CreateHeraOrchestrator("o", "master")
 	task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
 	run := &flipRunner{fakeArchiveRunner: fakeArchiveRunner{alive: true, idle: true}}
 	res := ArchiveRole(d, run, gitOK, r, false)
-	testutil.Equal(t, res.Archived, true)
+	testutil.Equal(t, res.Archived, false)
 	testutil.Contains(t, res.Reason, "busy")
 	testutil.Equal(t, len(run.stopped), 0)
 	got, _ := d.Get(task.ID)
-	testutil.Equal(t, got.Archived, true)
+	testutil.Equal(t, got.Archived, false)
+	role, _ := d.HeraRole(r.ID)
+	testutil.Equal(t, role.ArchivedAt == nil, true)
 }
 
 // flipRunner reports idle on the first IsIdle call (predicate) and busy after.
@@ -529,12 +533,12 @@ func TestArchivableVerdict_OutboxIgnoresDeadRecipients(t *testing.T) {
 func TestArchive_FyiHugeBodyStillMoves(t *testing.T) {
 	d := archDB(t)
 	pc, sub, cc, _ := subCoord(t, d)
-	_, err := d.PostHeraBoardItem(cc.ID, "fyi", "big", strings.Repeat("x", maxFyiBody))
+	_, err := d.PostHeraBoardItem(cc.ID, "fyi", "big", strings.Repeat("x", 64*1024))
 	testutil.NoError(t, err)
-	testutil.NoError(t, pushFyiUp(d, sub, ""))
+	testutil.Equal(t, ArchiveRole(d, nil, gitOK, sub, false).Archived, true)
 	up, _ := d.ListHeraBoardItems(pc.ID, false)
 	testutil.Equal(t, len(up), 1)
-	testutil.Equal(t, len(up[0].Body) <= maxFyiBody, true)
+	testutil.Equal(t, len(up[0].Body) <= 64*1024, true)
 }
 
 // A task that only once coordinated an unrelated (ended, non-accepted) orchestrator
@@ -551,15 +555,6 @@ func TestArchivableVerdict_EndedUnrelatedCoordinatorIsNotBridge(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(kids), 0)
 	testutil.Equal(t, ArchivableVerdict(d, gitOK, r).Archivable, true)
-}
-
-func TestTruncateUTF8(t *testing.T) {
-	testutil.Equal(t, truncateUTF8("abc", 10), "abc")
-	testutil.Equal(t, truncateUTF8("abc", 2), "ab")
-	testutil.Equal(t, truncateUTF8("ééé", 3), "é") // never splits a 2-byte rune
-	testutil.Equal(t, truncateUTF8("abc", 0), "")
-	testutil.Equal(t, truncateUTF8("abc", -5), "") // negative limit must not loop forever
-	testutil.Equal(t, truncateUTF8("", -1), "")
 }
 
 // --- Closing the three accepted gaps (PR #1223 follow-up) ---
@@ -587,8 +582,12 @@ func TestArchiveRole_StateChangeDuringGitCheckIsCaught(t *testing.T) {
 			d := archDB(t)
 			orch, _ := d.CreateHeraOrchestrator("o", "master")
 			task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
+			calls := 0
 			slowGit := func(*model.Task) (bool, string) {
-				mutate(t, d, orch.ID, task, r) // lands while the git check runs
+				calls++
+				if calls == 2 { // lands after the predicate passed, during the pre-tx re-check
+					mutate(t, d, orch.ID, task, r)
+				}
 				return true, ""
 			}
 			res := ArchiveRole(d, nil, slowGit, r, false)
@@ -597,22 +596,6 @@ func TestArchiveRole_StateChangeDuringGitCheckIsCaught(t *testing.T) {
 			testutil.Equal(t, got.Archived, false)
 		})
 	}
-}
-
-// The in-transaction guard alone (bypassing the pre-write re-check) also holds.
-func TestSetArchivedIfQuiet_GuardsInsideTx(t *testing.T) {
-	d := archDB(t)
-	orch, _ := d.CreateHeraOrchestrator("o", "master")
-	task, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
-	_, c := archWorker(t, d, orch.ID, "c", model.StatusInProgress)
-	_, err := d.SendHeraMessage(c.ID, r.ID, "late", "tldr", nil)
-	testutil.NoError(t, err)
-	err = d.SetArchivedIfQuiet(task.ID, r.ID, nil)
-	if err == nil {
-		t.Fatal("expected guard to refuse with unread mail")
-	}
-	got, _ := d.Get(task.ID)
-	testutil.Equal(t, got.Archived, false)
 }
 
 // Gap 2: archiving a sub-coordinator also archives its child orchestrator.
@@ -637,40 +620,4 @@ func TestArchive_SubCoordinatorArchivesChildOrchestrator(t *testing.T) {
 			testutil.Equal(t, o.ArchivedAt != nil, true)
 		})
 	}
-}
-
-// Gap 3: a failed finishing step is a refusal that a retry completes, never a
-// silently half-archived unit reported as success.
-type failEndStore struct {
-	*db.DB
-	failEnd bool
-}
-
-func (f *failEndStore) EndHeraCoordinatorBindingsForTask(taskID, reason string) (int, error) {
-	if f.failEnd {
-		return 0, errBoom
-	}
-	return f.DB.EndHeraCoordinatorBindingsForTask(taskID, reason)
-}
-
-func TestArchiveRole_PartialFailureIsRetryable(t *testing.T) {
-	d := archDB(t)
-	_, sub, _, child, task := materializedSubCoord(t, d)
-	fs := &failEndStore{DB: d, failEnd: true}
-
-	res := ArchiveRole(fs, nil, gitOK, sub, false)
-	testutil.Equal(t, res.Archived, false)
-	testutil.Contains(t, res.Reason, "retry")
-	r, _ := d.HeraRole(sub.ID)
-	testutil.Equal(t, r.ArchivedAt == nil, true) // role still visible => sweep will retry
-
-	fs.failEnd = false
-	res = ArchiveRole(fs, nil, gitOK, r, false)
-	testutil.Equal(t, res.Archived, true)
-	r, _ = d.HeraRole(sub.ID)
-	testutil.Equal(t, r.ArchivedAt != nil, true)
-	o, _ := d.HeraOrchestrator(child.ID)
-	testutil.Equal(t, o.ArchivedAt != nil, true)
-	live, _ := d.ListHeraLiveBindingsByTask(task.ID)
-	testutil.Equal(t, len(live), 1) // only the sub's own worker hat
 }

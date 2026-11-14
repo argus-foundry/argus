@@ -34,7 +34,7 @@ The system SHALL define a role as archivable only when ALL of the following hold
 
 ### Requirement: hera_archive coordinator tool
 
-The system SHALL provide a coordinator-only `hera_archive(cwd, [role_name], [orchestrator], [dry_run])` MCP tool with `hera_accept`'s authorization shape (caller holds a live coordinator binding in the target's orchestrator; target is not the caller's own role). With `role_name` it evaluates that role; without it, it sweeps every role the caller coordinates. For each archivable role it SHALL mark the task archived, hide the role, and stop an idle live session, releasing its processes (agent, browser, and any dev stack via the existing finished-task sweepers); a busy session SHALL cause refusal, and the session SHALL be re-checked idle immediately before the stop. The tool SHALL refuse a role bound to the caller's own task, and a sweep SHALL stop evaluating after a bounded time budget and report how many roles remain. It SHALL return the archived roles and each refused role with its reason. With `dry_run` it SHALL write nothing. The archive primitive SHALL be idempotent on an already-archived role (archived roles are no longer addressable by name through the tool, which reports them as not found).
+The system SHALL provide a coordinator-only `hera_archive(cwd, [role_name], [orchestrator], [dry_run])` MCP tool with `hera_accept`'s authorization shape (caller holds a live coordinator binding in the target's orchestrator; target is not the caller's own role). With `role_name` it evaluates that role; without it, it sweeps every role the caller coordinates. For each archivable role it SHALL mark the task archived, hide the role, and stop an idle live session, releasing its processes (agent, browser, and any dev stack via the existing finished-task sweepers); a busy session SHALL cause refusal. The tool SHALL refuse a role bound to the caller's own task, and a sweep SHALL stop evaluating after a bounded time budget and report how many roles remain. It SHALL return the archived roles and each refused role with its reason. With `dry_run` it SHALL write nothing. The archive primitive SHALL be idempotent on an already-archived role (archived roles are no longer addressable by name through the tool, which reports them as not found).
 
 #### Scenario: Single role archived
 
@@ -70,21 +70,21 @@ Archiving via `hera_archive` SHALL NOT remove the worktree or delete any local o
 - **WHEN** a role with a worktree whose branch merged is archived by `hera_archive`
 - **THEN** the worktree directory and branch still exist afterward
 
-### Requirement: Archive is race-safe and completes or retries
+### Requirement: Archive is race-safe and atomic
 
-`hera_archive` SHALL re-run the cheap done-done clauses immediately before writing, and the task archive SHALL re-verify inside its own database transaction that the task is still `complete`, that no other live role is bound to it (a sub-coordinator's own coordinator hat excepted), and that no unread hera mail arrived to or from the role. Archiving a sub-coordinator SHALL also end its child coordinator binding and archive its child orchestrator(s). The role SHALL be hidden last; if any finishing step fails the tool SHALL report the role as refused with a retry reason (never as archived), and a later call SHALL complete the remaining idempotent steps.
+`hera_archive` SHALL perform every DB-side re-verification and every write in ONE database transaction: the task is still `complete`; the role and task are not pinned, resident or standing-team; the role is not `blocked`; no other live role is bound to the task (a sub-coordinator's own coordinator hat excepted); no unread hera mail to the role or sent by it to a live recipient; no live plan-DAG dependent; every child role archived; no open `decision` board item. In that same transaction it SHALL re-post the sub-coordinator's open `fyi` items to the parent coordinator's board, end the child coordinator binding(s), archive the child orchestrator(s) (both `hera_orch_links` children and plan-DAG `kind=subcoord` children), archive the task, and hide the role. Git safety SHALL be checked before the transaction and re-checked immediately before it opens (a git subprocess must not run under the database lock), and session idleness SHALL be re-checked as the last step before commit. If any check or write fails, the whole transaction SHALL roll back, nothing SHALL be written, and the tool SHALL report the role as refused with the reason. Events SHALL be emitted only after commit.
 
-#### Scenario: State changing during the git check stops the archive
+#### Scenario: State changing after the predicate stops the archive
 
-- **WHEN** a new live binding, unread mail, or a status reopen lands while the git check is running
-- **THEN** nothing is archived and the role is reported refused
+- **WHEN** a new live binding, unread mail, a reopened status, a live dependent, a live child role, or an open decision item appears after the predicate passed
+- **THEN** the transaction rolls back and nothing is archived
+
+#### Scenario: Any failing write step rolls everything back
+
+- **WHEN** the fyi push-up, the child coordinator binding end, the child orchestrator archive, the task archive, or the role hide fails
+- **THEN** none of the other writes persist and the role is reported refused
 
 #### Scenario: Sub-coordinator archive archives its child orchestrator
 
 - **WHEN** a done-done sub-coordinator is archived
-- **THEN** its child orchestrator is archived and its child coordinator binding ended
-
-#### Scenario: Partial failure is retryable
-
-- **WHEN** ending the child coordinator binding fails after the task archive write
-- **THEN** the role stays visible and is reported refused ("retry"), and a repeat call finishes the archive
+- **THEN** its child orchestrator is archived, its child coordinator binding is ended, and its open fyi items are on the parent board, all in one commit
