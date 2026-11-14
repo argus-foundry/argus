@@ -51,6 +51,7 @@ func (w *wtMeterWatcher) Add(path string) error {
 }
 
 func TestWtWatchAddGap(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("real kqueue interleaving")
 	}
@@ -108,6 +109,7 @@ func TestWtWatchAddGap(t *testing.T) {
 }
 
 func TestWtDescriptorCycles(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("real kqueue descriptor cycles")
 	}
@@ -165,6 +167,7 @@ func TestWtDescriptorCycles(t *testing.T) {
 }
 
 func TestWtPartialAddCleanup(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("real kqueue partial Add")
 	}

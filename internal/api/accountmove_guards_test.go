@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"testing/synctest"
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/db"
@@ -98,20 +99,19 @@ func TestMoveAccountResidentGate(t *testing.T) {
 }
 
 func TestMoveAccountPendingRestart(t *testing.T) {
-	if testing.Short() {
-		t.Skip("waits for bounded restart probe deadline")
-	}
 	runner := &moveTestRunner{live: &moveTestSession{idle: true}, probePending: true}
 	f := newCodexAPIFixture(t, runner, true)
-	w := postMove(f.srv, f.task.ID, `{"account":"cx"}`)
-	testutil.Equal(t, w.Code, http.StatusInternalServerError)
-	body := decodeBody(t, w)
-	testutil.Equal(t, body["code"], any("restart_unknown"))
-	testutil.Equal(t, body["started"], any(false))
-	testutil.Equal(t, body["rolled_back"], any(false))
-	got, err := f.d.Get(f.task.ID)
-	testutil.NoError(t, err)
-	testutil.Equal(t, got.Account, "cx")
-	testutil.Nil(t, runner.started)
-	testutil.True(t, runner.probeCalls > 1)
+	synctest.Test(t, func(t *testing.T) {
+		w := postMove(f.srv, f.task.ID, `{"account":"cx"}`)
+		testutil.Equal(t, w.Code, http.StatusInternalServerError)
+		body := decodeBody(t, w)
+		testutil.Equal(t, body["code"], any("restart_unknown"))
+		testutil.Equal(t, body["started"], any(false))
+		testutil.Equal(t, body["rolled_back"], any(false))
+		got, err := f.d.Get(f.task.ID)
+		testutil.NoError(t, err)
+		testutil.Equal(t, got.Account, "cx")
+		testutil.Nil(t, runner.started)
+		testutil.True(t, runner.probeCalls > 1)
+	})
 }

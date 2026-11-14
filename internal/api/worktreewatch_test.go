@@ -34,6 +34,8 @@ func wtRepo(t *testing.T) string {
 
 type wtRecorder struct{ ch chan model.Event }
 
+// Hub-only tests own their repositories and can run in parallel. Tests using
+// testServer must stay serial because that fixture changes HOME.
 func newTestHub(t *testing.T) (*wtHub, *wtRecorder) {
 	t.Helper()
 	rec := &wtRecorder{ch: make(chan model.Event, 64)}
@@ -67,6 +69,7 @@ func (r *wtRecorder) none(t *testing.T, d time.Duration) {
 }
 
 func TestWorktreeWatcher(t *testing.T) {
+	t.Parallel()
 	t.Run("agent and external edits publish a changed revision", func(t *testing.T) {
 		repo := wtRepo(t)
 		h, rec := newTestHub(t)
@@ -163,6 +166,7 @@ func TestWorktreeWatcher(t *testing.T) {
 }
 
 func TestWtHubStatus(t *testing.T) {
+	t.Parallel()
 	t.Run("cold then cached then stale", func(t *testing.T) {
 		repo := wtRepo(t)
 		h, _ := newTestHub(t)

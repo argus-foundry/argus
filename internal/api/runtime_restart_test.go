@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
@@ -84,9 +84,6 @@ func TestRuntimeKickUnknown(t *testing.T) {
 }
 
 func TestRuntimeKickPending(t *testing.T) {
-	if testing.Short() {
-		t.Skip("waits for the restart deadline")
-	}
 	srv, d := testServer(t)
 	task := addStopped(t, d, nil)
 	runner := &runtimeKickRunner{SessionRunner: srv.runner, live: &runtimeKickSession{pid: 100}}
@@ -94,18 +91,20 @@ func TestRuntimeKickPending(t *testing.T) {
 	srv.runner = runner
 	_, rev := runtimeGet(t, srv, task.ID)
 	sink := installAPISink(t)
-	w := runtimePatch(srv, task.ID, `{"prompt":"replacement","apply":"restart"}`, ifMatch(rev))
-	testutil.Equal(t, w.Code, http.StatusInternalServerError)
-	body := decodeBody(t, w)
-	testutil.Equal(t, body["code"], any("restart_unknown"))
-	testutil.Equal(t, body["started"], any(false))
-	testutil.Equal(t, body["settings_applied"], any(true))
-	testutil.Equal(t, runner.starts, 0)
-	events := runtimeChangedEvents(sink)
-	testutil.Equal(t, len(events), 1)
-	if len(events) == 1 {
-		testutil.Equal(t, events[0]["started"], any(false))
-	}
+	synctest.Test(t, func(t *testing.T) {
+		w := runtimePatch(srv, task.ID, `{"prompt":"replacement","apply":"restart"}`, ifMatch(rev))
+		testutil.Equal(t, w.Code, http.StatusInternalServerError)
+		body := decodeBody(t, w)
+		testutil.Equal(t, body["code"], any("restart_unknown"))
+		testutil.Equal(t, body["started"], any(false))
+		testutil.Equal(t, body["settings_applied"], any(true))
+		testutil.Equal(t, runner.starts, 0)
+		events := runtimeChangedEvents(sink)
+		testutil.Equal(t, len(events), 1)
+		if len(events) == 1 {
+			testutil.Equal(t, events[0]["started"], any(false))
+		}
+	})
 }
 
 func TestRuntimeKickLaunchFailure(t *testing.T) {
@@ -147,34 +146,39 @@ func (r *runtimeKickRunner) ProbeRestart(string) (bool, bool, error) {
 
 func TestRuntimeKickSlowPrelaunch(t *testing.T) {
 	if testing.Short() {
-		t.Skip("waits for the restart deadline with a real PTY runner")
+		t.Skip("uses a real PTY runner")
 	}
 	srv, d := testServer(t)
 	task := &model.Task{Name: "slow restart", Status: model.StatusInProgress}
 	testutil.NoError(t, d.Add(task))
+	release, finished := make(chan struct{}), make(chan struct{})
+	rejected := errors.New("injected rejection after delay")
+	// The exit goroutine belongs to the real runner, outside the synctest
+	// bubble. Its failure callback runs after it clears the pending restart.
+	srv.runner = agent.NewRunner(func(_ string, err error, _ bool, _ []byte) {
+		if errors.Is(err, rejected) {
+			close(finished)
+		}
+	})
 	startCat(t, srv, d, task)
 	_, rev := runtimeGet(t, srv, task.ID)
-	release, finished := make(chan struct{}), make(chan struct{})
 	restore := agent.SetPrelaunchForTest(func(context.Context, *model.Task, config.Config) error {
 		<-release
-		defer close(finished)
-		return errors.New("injected rejection after delay")
+		return rejected
 	})
 	defer restore()
-	w := runtimePatch(srv, task.ID, `{"prompt":"slow candidate","apply":"restart","force":true}`, ifMatch(rev))
-	testutil.True(t, srv.runner.HasPendingRestart(task.ID))
-	close(release)
-	<-finished
-	deadline := time.Now().Add(time.Second)
-	for srv.runner.HasPendingRestart(task.ID) && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	testutil.False(t, srv.runner.HasPendingRestart(task.ID))
-	testutil.Equal(t, w.Code, http.StatusInternalServerError)
-	body := decodeBody(t, w)
-	testutil.Equal(t, body["code"], any("restart_unknown"))
-	testutil.Equal(t, body["started"], any(false))
-	testutil.Equal(t, body["settings_applied"], any(true))
+	synctest.Test(t, func(t *testing.T) {
+		w := runtimePatch(srv, task.ID, `{"prompt":"slow candidate","apply":"restart","force":true}`, ifMatch(rev))
+		testutil.True(t, srv.runner.HasPendingRestart(task.ID))
+		close(release)
+		<-finished
+		testutil.False(t, srv.runner.HasPendingRestart(task.ID))
+		testutil.Equal(t, w.Code, http.StatusInternalServerError)
+		body := decodeBody(t, w)
+		testutil.Equal(t, body["code"], any("restart_unknown"))
+		testutil.Equal(t, body["started"], any(false))
+		testutil.Equal(t, body["settings_applied"], any(true))
+	})
 }
 
 type runtimeUncheckedRunner struct{ agent.SessionRunner }

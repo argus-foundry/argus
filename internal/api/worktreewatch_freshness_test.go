@@ -17,6 +17,7 @@ import (
 )
 
 func TestWtDiscardTimeout(t *testing.T) {
+	t.Parallel()
 	h, rec := newTestHub(t)
 	repo := wtRepo(t)
 	_, err := h.status(context.Background(), "t", repo, gitutil.Options{})
@@ -65,6 +66,7 @@ func TestWtArchivedRead(t *testing.T) {
 }
 
 func TestWtSymlinkRoot(t *testing.T) {
+	t.Parallel()
 	repo := wtRepo(t)
 	link := filepath.Join(t.TempDir(), "root")
 	testutil.NoError(t, os.Symlink(repo, link))
@@ -79,6 +81,7 @@ func TestWtSymlinkRoot(t *testing.T) {
 }
 
 func TestWtSameSummaryEdit(t *testing.T) {
+	t.Parallel()
 	repo := wtRepo(t)
 	testutil.NoError(t, os.WriteFile(filepath.Join(repo, "f.txt"), []byte("first\n"), 0o600))
 	h, rec := newTestHub(t)
@@ -98,6 +101,7 @@ func TestWtSameSummaryEdit(t *testing.T) {
 }
 
 func TestWtInflightFollowup(t *testing.T) {
+	t.Parallel()
 	h, rec := newTestHub(t)
 	started, release := make(chan struct{}), make(chan struct{})
 	var calls, active, maxActive atomic.Int32
@@ -142,6 +146,7 @@ func assertDiscardBody(t *testing.T, w *httptest.ResponseRecorder, status int, c
 }
 
 func TestWtPendingFollowupStale(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHub(t)
 	first, second := make(chan struct{}), make(chan struct{})
 	releaseFirst, releaseSecond := make(chan struct{}), make(chan struct{})

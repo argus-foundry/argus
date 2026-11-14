@@ -52,22 +52,24 @@ func TestAccountDefaults_EventAfterCommit(t *testing.T) {
 	testutil.DeepEqual(t, observed, []string{"work"})
 }
 func TestAccountWrite_AuthMiddleware(t *testing.T) {
-	for _, principal := range []string{"master", "device", "scope", "invalid", "missing"} {
-		t.Run(principal, func(t *testing.T) {
-			for _, route := range []struct {
-				method, path, body string
-				crud               bool
-				good               int
-			}{
-				{"POST", "/api/accounts", `{"name":"new","claude_config_dir":"/tmp/qa-new"}`, true, 201},
-				{"PATCH", "/api/accounts/work", `{"label":"new"}`, true, 200},
-				{"DELETE", "/api/accounts/work", "", true, 204},
-				{"PUT", "/api/account-defaults", `{"account":"work"}`, false, 200},
-				{"PUT", "/api/projects/argus/account", `{"account":"work"}`, false, 200},
-				{"GET", "/api/account-defaults", "", false, 200},
-			} {
-				t.Run(route.method+route.path, func(t *testing.T) {
-					srv := defaultsServer(t, "")
+	for _, route := range []struct {
+		method, path, body string
+		crud               bool
+		good               int
+	}{
+		{"POST", "/api/accounts", `{"name":"new","claude_config_dir":"/tmp/qa-new"}`, true, 201},
+		{"PATCH", "/api/accounts/work", `{"label":"new"}`, true, 200},
+		{"DELETE", "/api/accounts/work", "", true, 204},
+		{"PUT", "/api/account-defaults", `{"account":"work"}`, false, 200},
+		{"PUT", "/api/projects/argus/account", `{"account":"work"}`, false, 200},
+		{"GET", "/api/account-defaults", "", false, 200},
+	} {
+		t.Run(route.method+route.path, func(t *testing.T) {
+			srv := defaultsServer(t, "")
+			// Rejected requests run first; the master mutation runs last so create,
+			// delete, and patch each see the same untouched fixture as before.
+			for _, principal := range []string{"missing", "invalid", "scope", "device", "master"} {
+				t.Run(principal, func(t *testing.T) {
 					token := "test-token"
 					switch principal {
 					case "device":

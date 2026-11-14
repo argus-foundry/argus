@@ -33,7 +33,12 @@ func accountsServer(t *testing.T, toml string) (*Server, *db.DB) {
 		task := &model.Task{Name: name, Prompt: prompt, Project: project, Backend: backend, Account: account, Status: model.StatusInProgress}
 		return task, d.Add(task)
 	}
-	return New(d, agent.NewRunner(nil), "test-token", creator, nil), d
+	srv := New(d, agent.NewRunner(nil), "test-token", creator, nil)
+	t.Cleanup(func() {
+		testutil.NoError(t, srv.Shutdown(context.Background()))
+		<-srv.idleWatcherDone
+	})
+	return srv, d
 }
 
 const twoAccountsTOML = `

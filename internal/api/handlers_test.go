@@ -3669,7 +3669,8 @@ func TestIdleWatcherTick_DrivesNotifyPath(t *testing.T) {
 
 	// Now write some input so lastInputAt > zero and prime the
 	// shouldFireIdlePush input-presence gate.
-	_, _ = sess.WriteInput([]byte("primer\n"), agentview.OriginUser)
+	_, err = sess.WriteInput([]byte("primer\n"), agentview.OriginUser)
+	testutil.NoError(t, err)
 	time.Sleep(50 * time.Millisecond)
 
 	// Force the state into "busy seen" so the next tick can transition to
@@ -4305,13 +4306,27 @@ func TestHandleListSkills_DBClosed(t *testing.T) {
 
 // --- idleWatcherTick fires through full body via real idle session ---
 
-// TestIdleWatcherTick_FullFiringPath waits past the runner's idleThreshold
-// (3s) so the session enters the runner.Idle() set, primes WriteInput,
-// then ticks twice to drive the busy → idle transition through every
-// branch including db.Get + name fallback + push.Notify.
+// idleTransitionRunner controls the watcher's snapshot while retaining the real
+// session for input timestamps, output, and lifecycle. The runner's idle threshold
+// is tested in internal/agent; these tests exercise the API's transition handling.
+type idleTransitionRunner struct {
+	agent.SessionRunner
+	id   string
+	idle bool
+}
+
+func (r *idleTransitionRunner) RunningAndIdle() ([]string, []string) {
+	if r.idle {
+		return []string{r.id}, []string{r.id}
+	}
+	return []string{r.id}, nil
+}
+
+// TestIdleWatcherTick_FullFiringPath drives a busy-to-idle snapshot through
+// db.Get and push.Notify with a real session and push manager.
 func TestIdleWatcherTick_FullFiringPath(t *testing.T) {
 	if testing.Short() {
-		t.Skip("waits 3s for the session to be observed as idle")
+		t.Skip("starts a real PTY-backed session")
 	}
 	srv, d, _ := pushTestServer(t)
 
@@ -4331,21 +4346,23 @@ func TestIdleWatcherTick_FullFiringPath(t *testing.T) {
 	})
 
 	// Push some input through so lastInput is set in the past.
-	_, _ = sess.WriteInput([]byte("primer\n"), agentview.OriginUser)
-	time.Sleep(150 * time.Millisecond)
+	_, err = sess.WriteInput([]byte("primer\n"), agentview.OriginUser)
+	testutil.NoError(t, err)
+	runner := &idleTransitionRunner{SessionRunner: srv.runner, id: task.ID}
+	srv.runner = runner
 
 	// First tick: session is busy (recently produced output). Records baseline.
 	state := newIdleWatcherState()
 	srv.idleWatcherTick(state)
 
-	// Wait past idleThreshold (3s) so the session is reported as idle.
-	time.Sleep(3500 * time.Millisecond)
+	// Report the idle snapshot deterministically.
+	runner.idle = true
 
 	// Second tick: session is now idle and shouldFireIdlePush returns true.
 	srv.idleWatcherTick(state)
 	// pushedAt should be recorded.
 	if state.pushedAt[task.ID].IsZero() {
-		t.Logf("idle session not seen as idle yet — runner may need longer; this is acceptable for cov purposes")
+		t.Fatal("idle transition did not record a push")
 	}
 }
 
@@ -4354,7 +4371,7 @@ func TestIdleWatcherTick_FullFiringPath(t *testing.T) {
 // the row was deleted between session start and the watch tick).
 func TestIdleWatcherTick_DBGetReturnsNil(t *testing.T) {
 	if testing.Short() {
-		t.Skip("waits for runner idle threshold")
+		t.Skip("starts a real PTY-backed session")
 	}
 	srv, d, _ := pushTestServer(t)
 
@@ -4374,19 +4391,21 @@ func TestIdleWatcherTick_DBGetReturnsNil(t *testing.T) {
 	})
 
 	_, _ = sess.WriteInput([]byte("primer\n"), agentview.OriginUser)
-	time.Sleep(150 * time.Millisecond)
+	runner := &idleTransitionRunner{SessionRunner: srv.runner, id: task.ID}
+	srv.runner = runner
 
 	state := newIdleWatcherState()
 	srv.idleWatcherTick(state)
 
-	// Wait past idleThreshold.
-	time.Sleep(3500 * time.Millisecond)
+	// Report the idle snapshot deterministically.
+	runner.idle = true
 
 	// Delete the DB row mid-flight to simulate the racy "task vanished"
 	// case. The session is still running so the runner snapshot still has
 	// it, but db.Get returns nil.
 	testutil.NoError(t, d.Delete(task.ID))
 	srv.idleWatcherTick(state)
+	testutil.False(t, state.pushedAt[task.ID].IsZero())
 }
 
 // --- parseMultipartTaskForm error path ---
