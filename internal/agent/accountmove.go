@@ -164,10 +164,10 @@ type ResidentMoveOpts struct {
 // MoveResidentAccount moves the resident agent to another Claude account with
 // the same copy-transcript-then-kick-resume flow as MoveTaskAccount. It is the
 // only path that may move the resident: the generic entry points refuse it.
-// The choice is stored as a runtime override (db.ResidentAccountOverride) in
-// the same transaction as the row's account, so it survives restarts and
-// outranks resident.account until that setting changes. An "auto" target
-// considers only accounts whose live usage is not depleted.
+// Who chose the account is recorded as a marker (db.ResidentAccountOverride)
+// in the same transaction as the row's account, so it survives restarts; the
+// resident.accounts list is never rewritten. An "auto" target considers only
+// accounts whose live usage is not depleted.
 func MoveResidentAccount(database *db.DB, runner accountMoveRunner, in AccountMoveInput, opts ResidentMoveOpts) (*model.Task, AccountMoveResult, error) {
 	if strings.TrimSpace(in.Backend) != "" {
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: the resident cannot move to another backend", ErrAccount)
