@@ -197,30 +197,49 @@ func TestReapOrphanedClaudeSessions_StopErrorSwallowed_ContinuesOthers(t *testin
 
 // TestRunner_Stop_TriggersReap asserts Runner.Stop fires the reap check with
 // the stopped task's worktree, and that Stop's own return is not delayed by
-// it (the fake list call blocks briefly before signaling — Stop must return
-// well before that).
+// it (the fake list call cannot finish until after Stop returns).
 func TestRunner_Stop_TriggersReap(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	seen := make(chan string, 1)
+	release, reaped := make(chan struct{}), make(chan struct{})
 	stubBackgroundSessions(t,
 		func(ctx context.Context, cwd, configDir string) ([]claudeagents.Session, error) {
-			time.Sleep(50 * time.Millisecond)
+			defer close(reaped)
 			seen <- cwd
+			<-release
 			return nil, nil
 		},
 		func(ctx context.Context, id, configDir string) error { return nil },
 	)
+	t.Cleanup(func() {
+		close(release)
+		select {
+		case <-reaped:
+		case <-time.After(2 * time.Second):
+			t.Error("reap goroutine did not finish")
+		}
+	})
 
 	r := NewRunner(nil)
 	worktree := t.TempDir()
 	task := &model.Task{ID: "t-reap", Name: "test", Worktree: worktree}
-	_, err := r.Start(task, runnerTestConfig(), 24, 80, false)
+	cfg := runnerTestConfig()
+	// A fast-exiting command races the exit watcher removing the session.
+	cfg.Backends["test"] = config.Backend{Command: "cat"}
+	sess, err := r.Start(task, cfg, 24, 80, false)
 	testutil.NoError(t, err)
+	if err != nil {
+		return
+	}
+	t.Cleanup(func() { _ = sess.Stop(); <-sess.Done() })
 
-	stopStart := time.Now()
-	err = r.Stop("t-reap")
-	testutil.NoError(t, err)
-	if elapsed := time.Since(stopStart); elapsed >= 50*time.Millisecond {
-		t.Errorf("Stop took %v — the reap goroutine appears to be blocking it", elapsed)
+	stopped := make(chan error, 1)
+	go func() { stopped <- r.Stop("t-reap") }()
+	select {
+	case err := <-stopped:
+		testutil.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop blocked on the reap goroutine")
 	}
 
 	select {
