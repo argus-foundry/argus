@@ -59,30 +59,27 @@ func TestResidentStartAccount(t *testing.T) {
 	weekFull := rd(0, 100, now)
 	ok := rd(20, 20, now)
 	tests := []struct {
-		name   string
-		list   []string
-		cur    string
-		manual bool
-		usage  map[string]usagebudget.Reading
-		want   string
+		name  string
+		list  []string
+		cur   string
+		usage map[string]usagebudget.Reading
+		want  string
 	}{
-		{"fresh start first listed", []string{"personal", "work"}, "", false, nil, "personal"},
-		{"fresh start skips depleted", []string{"personal", "work"}, "", false, map[string]usagebudget.Reading{"personal": full}, "work"},
-		{"weekly alone depletes", []string{"personal", "work"}, "", false, map[string]usagebudget.Reading{"personal": weekFull}, "work"},
-		{"keeps allowed current", []string{"personal", "work"}, "work", false, map[string]usagebudget.Reading{"personal": ok}, "work"},
-		{"current depleted moves on", []string{"personal", "work"}, "personal", false, map[string]usagebudget.Reading{"personal": full}, "work"},
-		{"current not in list, auto marker", []string{"work"}, "personal", false, nil, "work"},
-		{"manual out of list kept", []string{"work"}, "personal", true, nil, "personal"},
-		{"manual depleted repicked", []string{"work"}, "personal", true, map[string]usagebudget.Reading{"personal": full}, "work"},
-		{"auto entry picks most headroom", []string{"personal", "auto"}, "", false, map[string]usagebudget.Reading{"personal": full, "default": rd(50, 50, now), "work": rd(5, 5, now)}, "work"},
-		{"auto covers unlisted current", []string{"personal", "auto"}, "work", false, map[string]usagebudget.Reading{"personal": full}, "work"},
-		{"all depleted keeps current", []string{"personal", "work"}, "work", false, map[string]usagebudget.Reading{"personal": full, "work": full}, "work"},
-		{"all depleted first start uses first listed", []string{"personal", "work"}, "", false, map[string]usagebudget.Reading{"personal": full, "work": full}, "personal"},
-		{"default list", nil, "", false, nil, "default"},
+		{"fresh start first listed", []string{"personal", "work"}, "", nil, "personal"},
+		{"fresh start skips depleted", []string{"personal", "work"}, "", map[string]usagebudget.Reading{"personal": full}, "work"},
+		{"weekly alone depletes", []string{"personal", "work"}, "", map[string]usagebudget.Reading{"personal": weekFull}, "work"},
+		{"keeps allowed current", []string{"personal", "work"}, "work", map[string]usagebudget.Reading{"personal": ok}, "work"},
+		{"current depleted moves on", []string{"personal", "work"}, "personal", map[string]usagebudget.Reading{"personal": full}, "work"},
+		{"current not in list, auto marker", []string{"work"}, "personal", nil, "work"},
+		{"auto entry picks most headroom", []string{"personal", "auto"}, "", map[string]usagebudget.Reading{"personal": full, "default": rd(50, 50, now), "work": rd(5, 5, now)}, "work"},
+		{"auto covers unlisted current", []string{"personal", "auto"}, "work", map[string]usagebudget.Reading{"personal": full}, "work"},
+		{"all depleted keeps current", []string{"personal", "work"}, "work", map[string]usagebudget.Reading{"personal": full, "work": full}, "work"},
+		{"all depleted first start uses first listed", []string{"personal", "work"}, "", map[string]usagebudget.Reading{"personal": full, "work": full}, "personal"},
+		{"default list", nil, "", nil, "default"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, _ := ResidentStartAccount(planCfg(tt.list...), tt.cur, tt.manual, tt.usage, now)
+			got, _ := ResidentStartAccount(planCfg(tt.list...), tt.cur, tt.usage, now)
 			testutil.Equal(t, got, tt.want)
 		})
 	}

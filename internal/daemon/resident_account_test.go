@@ -310,20 +310,74 @@ func TestStart_RestartStaysWhenPreferredReadingIsStaleOrUnknown(t *testing.T) {
 func TestStart_ManualPickDoesNotSurviveARestart(t *testing.T) {
 	se := newSwitchEnv(t)
 	se.recovered("default")
-	clock := time.Now()
-	se.m.now = func() time.Time { return clock }
 	_, err := se.m.MoveAccount("work", true)
 	testutil.NoError(t, err)
 	row, _ := se.db.Get(se.task.ID)
 	testutil.Equal(t, row.Account, "work")
-	// The move's own restart (or a crash right after it) does not re-pick.
+	// The move's own restart (or a crash right after it) does not re-pick, however
+	// long ago the move was.
 	testutil.Equal(t, se.restart().task.Account, "work")
-	// Later, the restart re-picks the preferred account (fresh reading, cooldown clear).
-	clock = clock.Add(residentOwnRestartWindow + time.Minute)
+	// Any later restart re-picks the preferred account (fresh reading, cooldown clear).
 	se.recovered("default")
 	got := se.restart()
 	testutil.Equal(t, got.task.Account, "")
 	testutil.Equal(t, got.resume, true)
+}
+
+// The own-restart flag is persisted: it survives a new manager (daemon bounce)
+// and is consumed exactly once.
+func TestManualMovePendingIsPersistedAndConsumedOnce(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.usage["default"] = usagebudget.Reading{}
+	_, err := se.m.MoveAccount("work", true)
+	testutil.NoError(t, err)
+	m2 := newResidentManager(se.db, se.run, se.m.cfgFn)
+	testutil.True(t, m2.takeManualPending(se.task.ID))
+	testutil.False(t, m2.takeManualPending(se.task.ID))
+	testutil.False(t, se.m.takeManualPending(se.task.ID))
+}
+
+// `>` on a dead, backed-off Solo launches promptly on the picked account and is
+// not undone by the restart-time re-pick, even with the preferred account recovered.
+func TestMoveAccount_DeadSoloWithLargeBackoffLaunchesOnPickedAccount(t *testing.T) {
+	se := newSwitchEnv(t)
+	delete(se.run.sess, se.task.ID)
+	se.m.runner = se.run
+	se.m.nextAttempt = time.Now().Add(5 * time.Minute)
+	se.m.failures = 6
+	se.recovered("default")
+	_, err := se.m.MoveAccount("work", true)
+	testutil.NoError(t, err)
+	n := len(se.run.starts)
+	se.m.tick()
+	testutil.Equal(t, len(se.run.starts), n+1)
+	testutil.Equal(t, se.run.starts[n].task.Account, "work")
+}
+
+// A manual pick of an off-list account must not pin Solo there: a later restart
+// that stays put (every listed account depleted) ends the exemption, so once a
+// listed account recovers the tick moves off it.
+func TestStart_StayPutRestartEndsManualOffListExemption(t *testing.T) {
+	se := newSwitchEnv(t)
+	se.cfg.Resident.Accounts = []string{"default"} // work is off-list
+	_, err := se.m.MoveAccount("work", true)
+	testutil.NoError(t, err)
+	testutil.Equal(t, se.restart().task.Account, "work") // the move's own restart
+	ov, ok, _ := se.db.ResidentAccountOverride(se.task.ID)
+	testutil.True(t, ok)
+	testutil.Equal(t, ov.By, db.OverrideByManual)
+	// Another restart while the only listed account (default) is depleted: stays.
+	got := se.restart()
+	testutil.Equal(t, got.task.Account, "work")
+	_, ok, _ = se.db.ResidentAccountOverride(se.task.ID)
+	testutil.False(t, ok) // marker cleared, no exemption left
+	// default recovers; the running session moves off the off-list account.
+	se.recovered("default")
+	se.setSession(&moveHandle{liveHandle: liveHandle{alive: true}, idle: true})
+	se.tickN(3)
+	testutil.True(t, se.moved())
+	row, _ := se.db.Get(se.task.ID)
+	testutil.Equal(t, row.Account, "")
 }
 
 // The restart a move performs does not re-run the pick: the cooldown it stamped

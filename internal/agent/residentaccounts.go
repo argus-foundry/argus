@@ -112,15 +112,14 @@ func residentWanted(cfg config.Config, entries []string, usage map[string]usageb
 }
 
 // ResidentStartAccount picks the account a resident (re)start runs on. cur is
-// the persisted account (normalized; "" when unknown) and manual says it was
-// chosen by a manual move. The persisted account is kept when the list allows
-// it (or it was a manual choice) and it is not depleted; otherwise the list's
+// the persisted account (normalized; "" when unknown). The persisted account is
+// kept when the list allows it and it is not depleted; otherwise the list's
 // first usable account wins; with every candidate depleted the persisted
 // account (when it still exists) or the first listed entry is used so the
 // resident still starts.
-func ResidentStartAccount(cfg config.Config, cur string, manual bool, usage map[string]usagebudget.Reading, now time.Time) (account string, notes []string) {
+func ResidentStartAccount(cfg config.Config, cur string, usage map[string]usagebudget.Reading, now time.Time) (account string, notes []string) {
 	entries, notes := ResidentAccountEntries(cfg)
-	if cur != "" && residentUsable(cfg, usage, cur, now) && (manual || residentRank(cfg, entries, cur) >= 0) {
+	if cur != "" && residentUsable(cfg, usage, cur, now) && residentRank(cfg, entries, cur) >= 0 {
 		return cur, notes
 	}
 	if want, ok := residentWanted(cfg, entries, usage, now); ok {

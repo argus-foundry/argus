@@ -22,9 +22,6 @@ var (
 	// residentSwitchCooldown is the minimum gap between automatic switches. It
 	// is persisted (db.ResidentLastAutoSwitch) so a daemon bounce keeps it.
 	residentSwitchCooldown = 10 * time.Minute
-	// residentOwnRestartWindow is how long after a manual move a restart is
-	// treated as the move's own restart (no re-pick).
-	residentOwnRestartWindow = 2 * time.Minute
 )
 
 // residentMover is the slice of the session runner a resident account move
@@ -58,7 +55,7 @@ func (m *residentManager) effectiveResidentAccount(task *model.Task, cfg config.
 	if task.Account != "" {
 		cur = agent.NormalizeAccount(task.Account)
 	}
-	picked, notes := agent.ResidentStartAccount(cfg, cur, false, agent.AccountUsage(cfg), m.now())
+	picked, notes := agent.ResidentStartAccount(cfg, cur, agent.AccountUsage(cfg), m.now())
 	for _, n := range notes {
 		residentLog("[resident] accounts list: %s", n)
 	}
@@ -66,8 +63,9 @@ func (m *residentManager) effectiveResidentAccount(task *model.Task, cfg config.
 }
 
 // MoveAccount is the manual resident account move (RPC). It refuses a busy
-// session unless force is set. A named account is a manual hold; picking "auto"
-// asks Solo to follow headroom, so it holds nothing.
+// session unless force is set. A manual move is a one-time escape hatch: the
+// restart it performs does not re-pick (persisted manual_move_pending flag), but
+// the next restart or recycle does.
 func (m *residentManager) MoveAccount(account string, force bool) (agent.AccountMoveResult, error) {
 	cfg := m.cfgFn()
 	if !cfg.Resident.Enabled {
@@ -87,16 +85,25 @@ func (m *residentManager) MoveAccount(account string, force bool) (agent.Account
 	if strings.TrimSpace(account) == agent.AutoMoveTarget {
 		by = db.OverrideByFollow
 	}
+	// Persist "this move's own restart must not re-pick" before the move, so a
+	// daemon bounce or a long restart backoff cannot lose it.
+	if err := m.db.SetMeta(task.ID, db.ResidentMetaNamespace, db.MetaKeyManualMovePending, "1"); err != nil {
+		return agent.AccountMoveResult{}, fmt.Errorf("record manual move: %w", err)
+	}
 	_, res, err := agent.MoveResidentAccount(m.db, m.mover, agent.AccountMoveInput{TaskID: task.ID, Account: account, Force: force}, agent.ResidentMoveOpts{By: by, Cfg: &cfg})
 	m.mu.Lock()
 	m.switchTicks = 0
 	m.mu.Unlock()
 	if err != nil && !errors.Is(err, agent.ErrAccountMoveRestartUnknown) {
 		residentLog("[resident] manual account move to %q refused: %v", account, err)
+		m.clearManualPending(task.ID)
 		return res, err
 	}
+	// A dead or crash-looping resident launches on the picked account promptly
+	// instead of waiting out the restart backoff.
 	m.mu.Lock()
-	m.manualMoveAt = m.now()
+	m.failures = 0
+	m.nextAttempt = time.Time{}
 	m.mu.Unlock()
 	residentLog("[resident] manual account move %s to %s by=%s resumed=%t started=%t", res.From, res.To, by, res.Resumed, res.Started)
 	return res, err
@@ -168,8 +175,8 @@ func (m *residentManager) maybeAutoSwitch(task *model.Task, cfg config.Config, s
 	}
 	now := m.now()
 	cur := agent.NormalizeAccount(task.Account)
-	// A manual hold applies only while the resident is still on the account the
-	// human picked.
+	// A manual pick only exempts the running session from the off-list rule, and
+	// only while the resident is still on the account the human picked.
 	manual := m.manualHold(task.ID, cur)
 	usage := agent.AccountUsage(cfg)
 	dec := agent.DecideResidentAccount(cfg, cur, manual, usage, now)
@@ -258,6 +265,41 @@ func (m *residentManager) manualHold(taskID, cur string) bool {
 	return err == nil && ok && ov.By == db.OverrideByManual && ov.Account == cur
 }
 
+// clearManualPending drops the persisted own-restart flag.
+func (m *residentManager) clearManualPending(taskID string) {
+	if err := m.db.SetMeta(taskID, db.ResidentMetaNamespace, db.MetaKeyManualMovePending, "0"); err != nil {
+		residentLog("[resident] clearing manual move flag failed: %v", err)
+	}
+}
+
+// takeManualPending reports whether the restart now beginning is the one a manual
+// move itself caused, and consumes the flag (exactly once).
+func (m *residentManager) takeManualPending(taskID string) bool {
+	if m.metaValues(taskID)[db.MetaKeyManualMovePending] != "1" {
+		return false
+	}
+	m.clearManualPending(taskID)
+	return true
+}
+
+// beginRestart is the restart-time bookkeeping every start and recycle runs once
+// before it picks an account. It consumes the manual-move flag and reports
+// whether this restart is the manual move's own (which must not re-pick). Any
+// OTHER restart ends a manual pick's exemption from the off-list rule, even when
+// the re-pick stays put, so a manual pick of an off-list account can never pin
+// Solo there after a later restart.
+func (m *residentManager) beginRestart(task *model.Task) (own bool) {
+	if m.takeManualPending(task.ID) {
+		return true
+	}
+	if m.manualHold(task.ID, agent.NormalizeAccount(task.Account)) {
+		if err := m.db.ClearResidentAccountOverride(task.ID); err != nil {
+			residentLog("[resident] clearing manual marker at restart failed: %v", err)
+		}
+	}
+	return false
+}
+
 // restartDecision is the restart-time re-pick for a resident with a conversation
 // or a recycle in front of it. A move-up is allowed only when the automatic
 // switch cooldown is not running, which also keeps a move's own restart from
@@ -270,15 +312,6 @@ func (m *residentManager) restartDecision(task *model.Task, cfg config.Config) a
 	cur := agent.NormalizeAccount(task.Account)
 	last := m.db.ResidentLastAutoSwitch(task.ID)
 	allowUp := last.IsZero() || now.Sub(last) >= residentSwitchCooldown
-	// A manual `>` pick is a one-time move, not a hold: a restart re-picks per the
-	// list like any other. The restart the move itself performs must not re-pick,
-	// so restarts within residentOwnRestartWindow of a manual move are left alone.
-	m.mu.Lock()
-	own := !m.manualMoveAt.IsZero() && now.Sub(m.manualMoveAt) < residentOwnRestartWindow
-	m.mu.Unlock()
-	if own {
-		return agent.ResidentDecision{}
-	}
 	dec := agent.DecideResidentRestartAccount(cfg, cur, allowUp, agent.AccountUsage(cfg), now)
 	if dec.Target == cur {
 		return agent.ResidentDecision{}
@@ -327,6 +360,9 @@ func (m *residentManager) repickAtRestart(task *model.Task, cfg config.Config) {
 // killed) and posts the board item. Empty means the account did not change.
 func (m *residentManager) repickForRecycle(task *model.Task) string {
 	cfg := m.cfgFn()
+	if m.beginRestart(task) {
+		return ""
+	}
 	dec := m.restartDecision(task, cfg)
 	if dec.Target == "" || !residentAccountUsable(cfg, task.Backend, storedResidentAccount(dec.Target)) {
 		return ""
@@ -429,7 +465,7 @@ func residentAccountUsable(cfg config.Config, backend, stored string) bool {
 // account and is told so. Returns false when the start must be abandoned.
 func (m *residentManager) recoverInvalidAccount(task *model.Task, cfg config.Config, backend string) bool {
 	from := agent.NormalizeAccount(task.Account)
-	target, notes := agent.ResidentStartAccount(cfg, "", false, agent.AccountUsage(cfg), m.now())
+	target, notes := agent.ResidentStartAccount(cfg, "", agent.AccountUsage(cfg), m.now())
 	for _, n := range notes {
 		residentLog("[resident] accounts list: %s", n)
 	}

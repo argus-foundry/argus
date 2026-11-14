@@ -15,6 +15,10 @@ import (
 const (
 	MetaKeyAccountOverride = "account_override"
 	MetaKeyLastAutoSwitch  = "last_auto_switch_at"
+	// MetaKeyManualMovePending is "1" from a manual move until the next restart
+	// (start or recycle) consumes it: that restart is the move's own and must not
+	// re-pick the account.
+	MetaKeyManualMovePending = "manual_move_pending"
 	// MetaKeyNoneUsablePosted is "1" while the all-accounts-depleted board item
 	// for the current episode has been posted (persisted so a daemon bounce does
 	// not repost it).

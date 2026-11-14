@@ -97,7 +97,6 @@ type residentManager struct {
 
 	// switchTicks and noneEligible are tick-loop state for the automatic
 	// account switch (see maybeAutoSwitch); only tick and MoveAccount touch them.
-	manualMoveAt time.Time // last manual move (guarded by mu)
 	switchTicks  int
 	noneEligible bool
 	noneLoaded   bool // noneEligible was read from task_meta
@@ -272,6 +271,10 @@ func (m *residentManager) tick() {
 		m.startFailure = ""
 		m.mu.Unlock()
 		m.reason("")
+		// The manual move's own restart has completed: a later restart re-picks.
+		if !m.runner.HasPendingRestart(task.ID) {
+			m.takeManualPending(task.ID)
+		}
 		m.maybeAutoSwitch(task, cfg, sess)
 		return
 	}
@@ -300,14 +303,19 @@ func (m *residentManager) tick() {
 // seed (restartSessionWithSeedPrompt), so a later crash restart resumes that.
 func (m *residentManager) start(task *model.Task, cfg config.Config, backend string, attempt int) {
 	task.Backend = backend
+	// Every restart re-picks the best account, except the one a manual move itself
+	// caused. A live process (a reattach) is not a restart and never changes
+	// account: it is already running on the persisted one.
+	own := false
+	if m.runner.Get(task.ID) == nil {
+		own = m.beginRestart(task)
+	}
 	if task.SessionID != "" {
 		if !residentAccountUsable(cfg, backend, task.Account) {
 			if !m.recoverInvalidAccount(task, cfg, backend) {
 				return
 			}
-		} else if m.runner.Get(task.ID) == nil {
-			// Every restart re-picks the best account. A live process (a reattach)
-			// never changes account: it is already running on the persisted one.
+		} else if !own && m.runner.Get(task.ID) == nil {
 			m.repickAtRestart(task, cfg)
 		}
 	}

@@ -316,10 +316,14 @@ func moveAccount(database *db.DB, runner accountMoveRunner, in AccountMoveInput,
 		return task, res, fmt.Errorf("%w: %w", ErrAccountMoveRestartUnknown, err)
 	}
 	res.Started = true
-	if err := database.SetStatus(task.ID, model.StatusInProgress); err != nil {
-		return task, res, fmt.Errorf("persist restarted account move status: %w", err)
+	// The resident is not a lifecycle-managed task (residentGuard refuses status
+	// writes), so only ordinary tasks record the restarted status.
+	if resident == nil {
+		if err := database.SetStatus(task.ID, model.StatusInProgress); err != nil {
+			return task, res, fmt.Errorf("persist restarted account move status: %w", err)
+		}
+		task.SetStatus(model.StatusInProgress)
 	}
-	task.SetStatus(model.StatusInProgress)
 	logAccountMove(task.ID, res, "restarted in place")
 	return task, res, nil
 }
