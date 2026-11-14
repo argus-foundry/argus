@@ -263,6 +263,10 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 		return task, res, fmt.Errorf("%w: %w", ErrAccountMoveRestartUnknown, err)
 	}
 	res.Started = true
+	if err := database.SetStatus(task.ID, model.StatusInProgress); err != nil {
+		return task, res, fmt.Errorf("persist restarted account move status: %w", err)
+	}
+	task.SetStatus(model.StatusInProgress)
 	logAccountMove(task.ID, res, "restarted in place")
 	return task, res, nil
 }

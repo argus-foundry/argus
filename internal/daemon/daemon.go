@@ -179,6 +179,7 @@ type Daemon struct {
 	// and stop (nil = the real agent functions). Test seams, set before Serve.
 	devStackScan       func() ([]agent.DevStackProc, error)
 	devStackStop       func(worktree string, o agent.StopOptions)
+	devStackReapEvery  time.Duration     // test override; zero uses the production interval
 	shutdownOnce       sync.Once         // closes done exactly once across concurrent Shutdown callers
 	ready              chan struct{}     // closed when Serve has set listener (or failed)
 	sockPath           string            // set by Serve, used by cleanup

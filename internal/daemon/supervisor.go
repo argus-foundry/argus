@@ -337,10 +337,13 @@ func (s *Supervisor) Shutdown() {
 // cleanup runs on Serve's exit goroutine. It stops every agent (StopAll),
 // removes the socket/pid files iff we still own them, and releases the flock
 // last so a supervisor waiting to take over only proceeds once cleanup is done.
-// Mirrors Daemon.cleanup minus the daemon-only coordination teardown and the
-// bounce live-tasks persistence (a bounce file is a DB/daemon concern).
+// Records liveness before stopping so the next daemon can recover sessions even
+// when their task statuses were stale. No database access is needed here.
 func (s *Supervisor) cleanup() {
 	slog.Info("supervisor shutting down")
+	if err := writeLiveTasksSnapshot(s.runner, filepath.Join(filepath.Dir(s.sockPath), supervisorLiveTasksFilename)); err != nil {
+		slog.Warn("[bounce-recovery] supervisor liveness snapshot failed", "err", err)
+	}
 
 	s.runner.StopAll()
 

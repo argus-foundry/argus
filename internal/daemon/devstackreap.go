@@ -17,7 +17,7 @@ import (
 // its task was already finished" (the deliberate-resume signal) is observed
 // within seconds, not a minute — a slower tick would misread a short-lived
 // task as a resume. A var only so the loop test can shorten it.
-var devStackReapInterval = 10 * time.Second
+const devStackReapInterval = 10 * time.Second
 
 // devStackReapGraceTicks is how many consecutive ticks a worktree must stay
 // eligible before its stack is stopped (~60s at the default interval), so an
@@ -292,7 +292,11 @@ func (d *Daemon) runDevStackReaper() {
 		r.stop = d.devStackStop
 	}
 	r.cancel = d.done
-	ticker := time.NewTicker(devStackReapInterval)
+	interval := d.devStackReapEvery
+	if interval <= 0 {
+		interval = devStackReapInterval
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {

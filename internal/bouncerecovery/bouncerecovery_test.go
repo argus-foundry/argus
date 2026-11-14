@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
@@ -104,7 +105,7 @@ func TestRecord_PolicyMatrix(t *testing.T) {
 	testutil.DeepEqual(t, got["c"].Options, []string{"a", "b"})
 	testutil.Equal(t, got["w1"].Status, StatusDelegated)
 	testutil.Equal(t, got["w1"].CoordTask, "c")
-	testutil.Equal(t, got["w2"].Status, StatusDelegated) // idle workers are still listed to their coordinator
+	testutil.Equal(t, got["w2"].Status, StatusDormant) // idle workers remain listed, never auto-resumed
 	testutil.Equal(t, got["plain-idle"].Status, StatusDormant)
 	testutil.Equal(t, got["plain-mid"].Status, StatusPending)
 	testutil.Equal(t, got["plain-mid"].Role, RolePlain)
@@ -209,15 +210,24 @@ func TestBuildNote(t *testing.T) {
 }
 
 type fakeRunner struct {
-	alive   map[string]bool
-	settled map[string]bool
-	failFor map[string]int // remaining failures
-	started []string
+	alive     map[string]bool
+	settled   map[string]bool
+	failFor   map[string]int // remaining failures
+	started   []string
+	owned     map[string]bool
+	resumeErr error
+	pending   map[string]bool
 }
+
+func (f *fakeRunner) OwnsLiveSession(id string) bool { return f.owned[id] }
+func (f *fakeRunner) ResumePending(id string) bool   { return f.pending[id] }
 
 func (f *fakeRunner) IsAlive(id string) bool { return f.alive[id] }
 func (f *fakeRunner) Settled(id string) bool { return f.settled[id] }
 func (f *fakeRunner) Resume(id string) error {
+	if f.resumeErr != nil {
+		return f.resumeErr
+	}
 	if f.failFor[id] > 0 {
 		f.failFor[id]--
 		return errors.New("boom")
@@ -260,6 +270,78 @@ func newHarness(t *testing.T) *harness {
 }
 
 func (h *harness) tick(advance time.Duration) { h.now = h.now.Add(advance); h.w.Tick() }
+
+func TestWorker_RetryDeliversOnlyToOwnedLaunch(t *testing.T) {
+	for _, owned := range []bool{true, false} {
+		t.Run(strconv.FormatBool(owned), func(t *testing.T) {
+			h := newHarness(t)
+			addTask(t, h.d, "p", "p", model.StatusInReview)
+			testutil.NoError(t, Save(h.d, Entry{TaskID: "p", Status: StatusPending, KilledAt: h.now, BounceID: "b", State: transcriptstate.Unknown}))
+			h.r.failFor["p"] = 1
+			h.w.Tick()
+			h.r.alive["p"] = true
+			h.r.owned = map[string]bool{"p": owned}
+			testutil.NoError(t, h.d.SetStatus("p", model.StatusInProgress))
+			h.tick(10 * time.Second)
+			entries, err := LoadAll(h.d)
+			testutil.NoError(t, err)
+			if owned {
+				testutil.Equal(t, entries["p"].Status, StatusResumed)
+				testutil.Contains(t, h.n.sent["p"], "[argus]")
+				h.w.Tick()
+				testutil.Equal(t, h.n.calls["p"], 1)
+			} else {
+				testutil.Equal(t, entries["p"].Status, StatusSuperseded)
+				testutil.Equal(t, h.n.calls["p"], 0)
+			}
+			testutil.Equal(t, len(h.r.started), 0)
+		})
+	}
+}
+
+func TestWorker_MissingConversationFailsWithoutRetry(t *testing.T) {
+	h := newHarness(t)
+	addTask(t, h.d, "p", "p", model.StatusInReview)
+	testutil.NoError(t, Save(h.d, Entry{TaskID: "p", Status: StatusPending, KilledAt: h.now, BounceID: "b", State: transcriptstate.Unknown}))
+	h.r.resumeErr = agent.ErrResumeUnavailable
+	h.w.Tick()
+	h.tick(time.Minute)
+	entries, err := LoadAll(h.d)
+	testutil.NoError(t, err)
+	testutil.Equal(t, entries["p"].Status, StatusFailed)
+	testutil.Equal(t, entries["p"].Reason, "no_transcript")
+	testutil.Equal(t, entries["p"].Attempts, 1)
+	testutil.Equal(t, h.n.calls["p"], 0)
+}
+
+func TestWorker_PendingRPCDoesNotSpendAttempts(t *testing.T) {
+	h := newHarness(t)
+	addTask(t, h.d, "p", "p", model.StatusInReview)
+	testutil.NoError(t, Save(h.d, Entry{TaskID: "p", Status: StatusPending, KilledAt: h.now, BounceID: "b"}))
+	h.r.failFor["p"] = 1
+	h.w.Tick()
+	h.r.pending = map[string]bool{"p": true}
+	h.r.alive["p"] = true // visible before the Start reply arrives
+	for range 4 {
+		h.tick(30 * time.Second)
+	}
+	entries, err := LoadAll(h.d)
+	testutil.NoError(t, err)
+	testutil.Equal(t, entries["p"].Attempts, 1)
+	testutil.Equal(t, entries["p"].Status, StatusPending)
+	testutil.Equal(t, len(h.r.started), 0)
+}
+
+func TestRecord_ClosingTeamMemberExcluded(t *testing.T) {
+	d := testDB(t)
+	team(t, d)
+	testutil.NoError(t, d.SetMeta("w1", db.HeraMetaNamespace, db.HeraMetaKeyReadyToClose, "true"))
+	record(d, []string{"c", "w1"}, nil, time.Unix(5, 0), stateOf(nil))
+	entries, err := LoadAll(d)
+	testutil.NoError(t, err)
+	testutil.Nil(t, entries["w1"])
+	testutil.NotNil(t, entries["w2"])
+}
 
 func TestWorker_CoordinatorsFirstThenThrottle(t *testing.T) {
 	h := newHarness(t)
@@ -319,9 +401,10 @@ func TestWorker_SupersededWhenAliveOrInProgress(t *testing.T) {
 	h := newHarness(t)
 	addTask(t, h.d, "alive", "a", model.StatusInReview)
 	addTask(t, h.d, "human", "h", model.StatusInProgress)
-	addTask(t, h.d, "done", "d", model.StatusComplete)
+	addTask(t, h.d, "done", "d", model.StatusInReview)
 	mid := transcriptstate.State{Kind: transcriptstate.MidTurn}
 	record(h.d, []string{"alive", "human", "done"}, nil, h.now, stateOf(map[string]transcriptstate.State{"alive": mid, "human": mid, "done": mid}))
+	testutil.NoError(t, h.d.SetStatus("done", model.StatusComplete))
 	h.r.alive["alive"] = true
 	for i := 0; i < 3; i++ {
 		h.tick(5 * time.Second)

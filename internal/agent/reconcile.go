@@ -5,6 +5,7 @@ import (
 
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // ReconcileStaleSessions flips DB tasks stuck at InProgress to InReview.
@@ -38,13 +39,56 @@ func ReconcileStaleSessions(database *db.DB) (int, error) {
 // for an orphan: an inferred absence has no observed exit, so the #707 rule
 // "Complete only on an observed clean exit" holds.
 func ReconcileStaleSessionsExcept(database *db.DB, alive map[string]bool) ([]string, error) {
+	return reconcileSessions(database, alive, nil, false)
+}
+
+// ReconcileInterruptedSessions is supervisor-mode reconciliation. Prior liveness
+// and live Hera bindings survive stale task statuses; plain stopped tasks do not
+// qualify without evidence. The legacy in-process entry point stays status-only.
+func ReconcileInterruptedSessions(database *db.DB, alive, previous map[string]bool) ([]string, error) {
+	return reconcileSessions(database, alive, previous, true)
+}
+
+func reconcileSessions(database *db.DB, alive, previous map[string]bool, liveness bool) ([]string, error) {
 	tasks, err := database.Tasks()
 	if err != nil {
 		return nil, err
 	}
 	var flipped []string
 	for _, t := range tasks {
-		if t.Status != model.StatusInProgress || t.IsResident() {
+		if t.IsResident() {
+			continue
+		}
+		candidate := t.Status == model.StatusInProgress
+		if liveness {
+			if t.Archived || t.Status == model.StatusComplete {
+				continue
+			}
+			meta, err := database.ListMeta(t.ID, db.HeraMetaNamespace)
+			if err != nil {
+				return flipped, err
+			}
+			closing := false
+			for _, kv := range meta {
+				if kv.Key == db.HeraMetaKeyReadyToClose && kv.Value == "true" {
+					closing = true
+				}
+			}
+			if closing {
+				uxlog.Log("[bounce-recovery] skip closing task=%s", t.ID)
+				slog.Info("[bounce-recovery] skip closing task", "task", t.ID)
+				continue
+			}
+			candidate = candidate || previous[t.ID]
+			if !candidate && (t.Status == model.StatusPending || t.Status == model.StatusInReview) {
+				bindings, err := database.ListHeraLiveBindingsByTask(t.ID)
+				if err != nil {
+					return flipped, err
+				}
+				candidate = len(bindings) > 0
+			}
+		}
+		if !candidate {
 			continue
 		}
 		if alive[t.ID] {
@@ -55,7 +99,7 @@ func ReconcileStaleSessionsExcept(database *db.DB, alive map[string]bool) ([]str
 			slog.Warn("reconcile: update failed", "task", t.ID, "name", t.Name, "err", uerr)
 			continue
 		}
-		slog.Info("reconcile: stale in_progress → in_review", "task", t.ID, "name", t.Name)
+		slog.Info("[bounce-recovery] reconciled interrupted session", "task", t.ID, "name", t.Name)
 		flipped = append(flipped, t.ID)
 	}
 	return flipped, nil

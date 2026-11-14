@@ -151,7 +151,8 @@ type BootInfoResp struct {
 // StartResp.SessionID is additive and zero-value-safe: newer clients preserve
 // their existing ID when an older server omits it. Supervisor surface v19
 // identifies the launch recovery behavior that makes this field necessary.
-const ProtocolVersion = 13
+// v14 carries StartReq.ResumeOnly: automatic recovery must never launch fresh.
+const ProtocolVersion = 14
 
 // SupervisorProtocolMatch reports whether a supervisor's handshake version
 // equals the daemon's. A mismatch is NOT fatal and NEVER triggers an auto-
@@ -238,6 +239,7 @@ type StartReq struct {
 	Rows            uint16
 	Cols            uint16
 	Resume          bool
+	ResumeOnly      bool
 }
 
 // StartResp is the RPC response from starting a session.
@@ -255,7 +257,8 @@ type StartResp struct {
 	// hops' independent deadlines. Zero-value-safe: an old client talking to
 	// a new daemon (or vice versa) just sees false/absent, the same as any
 	// other additive jsonrpc field (see unify-writeinput-origin).
-	Ambiguous bool
+	Ambiguous         bool
+	ResumeUnavailable bool
 }
 
 // TaskIDReq is an RPC request that identifies a single task.

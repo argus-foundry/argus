@@ -48,6 +48,7 @@ func bmFixture(t *testing.T) *moveFixture {
 
 func TestMoveTaskBackend_LiveSessionRecycledOnCodexWithHandoff(t *testing.T) {
 	f := bmFixture(t)
+	testutil.NoError(t, f.d.SetStatus("mv", model.StatusInReview))
 	r := &bmRunner{moveRunner: moveRunner{sess: &moveSession{idle: true, alive: true}}}
 
 	task, res, err := MoveTaskAccount(f.d, r, AccountMoveInput{TaskID: "mv", Backend: "codex"})
@@ -62,6 +63,7 @@ func TestMoveTaskBackend_LiveSessionRecycledOnCodexWithHandoff(t *testing.T) {
 
 	got, _ := f.d.Get("mv")
 	testutil.Equal(t, got.Backend, "codex")
+	testutil.Equal(t, got.Status, model.StatusInProgress)
 	testutil.Equal(t, got.SessionID, "") // Codex captures after launch
 	testutil.Equal(t, got.Model, "")
 	testutil.Equal(t, got.Account, "")

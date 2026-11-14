@@ -92,11 +92,17 @@ func claudeTranscriptPath(task *model.Task, cfg config.Config) (string, error) {
 // never when reattaching a live session. A missing conversation selects the
 // normal fresh-launch command path, including the task's original prompt.
 func prepareResume(task *model.Task, cfg config.Config, resume bool) (bool, error) {
+	if task.ResumeOnly && (!resume || task.SessionID == "") {
+		return false, ErrResumeUnavailable
+	}
 	if !resume {
 		return false, nil
 	}
 	available, err := ResumableSessionAvailable(task, cfg)
 	if err != nil {
+		if task.ResumeOnly {
+			return false, fmt.Errorf("%w: %w", ErrResumeUnavailable, err)
+		}
 		uxlog.Log("[resume] transcript inspection failed task=%s session=%s: %v", task.ID, task.SessionID, err)
 		slog.Warn("[resume] transcript inspection failed", "task", task.ID, "session", task.SessionID, "error", err)
 		// Uncertainty is not proof of absence. Keep the conversation identity
@@ -105,6 +111,9 @@ func prepareResume(task *model.Task, cfg config.Config, resume bool) (bool, erro
 	}
 	if available {
 		return true, nil
+	}
+	if task.ResumeOnly {
+		return false, ErrResumeUnavailable
 	}
 	old := task.SessionID
 	task.SessionID = model.GenerateSessionID()

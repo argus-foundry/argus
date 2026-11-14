@@ -238,6 +238,8 @@ func TestDefaultBuildKeepsVCSStamp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs go build")
 	}
+	// Fixture commits must not use the operator's signing agent or Git hooks.
+	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
 	sh := func(name string, args ...string) {
 		c := exec.Command(name, args...)

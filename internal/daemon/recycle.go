@@ -10,6 +10,7 @@ import (
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/hera"
 	"github.com/argus-foundry/argus/internal/model"
+	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 // HeraRecycleRunner implements hera.RecycleRunner against the daemon's real
@@ -191,8 +192,18 @@ func restartSessionWithSeedPrompt(database *db.DB, runner agent.SessionRunner, c
 		// stuck retrying forever. Start a fresh session directly instead;
 		// 80x24 mirrors Start's own new-session default.
 		_, startErr := runner.Start(task, cfgFn(), rows, cols, false)
-		return startErr
+		if startErr != nil {
+			return startErr
+		}
+	} else if err := runner.Recycle(task, cfgFn(), rows, cols); err != nil {
+		return err
 	}
-
-	return runner.Recycle(task, cfgFn(), rows, cols)
+	// The resident's lifecycle belongs to its shared manager; ordinary workflow
+	// status writes are deliberately refused by the DB for resident tasks.
+	if task.IsResident() {
+		return nil
+	}
+	uxlog.Log("[recycle] restarted task=%s; restoring in_progress", task.ID)
+	slog.Info("[recycle] restarted; restoring in_progress", "task", task.ID)
+	return database.SetStatus(task.ID, model.StatusInProgress)
 }

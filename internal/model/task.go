@@ -37,6 +37,12 @@ type Task struct {
 	Worktree  string `json:"worktree,omitempty"`
 	AgentPID  int    `json:"agent_pid,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	// ResumeOnly is a transient launch constraint for automatic recovery.
+	// It is neither persisted nor exposed in the REST task projection.
+	ResumeOnly bool `json:"-"`
+	// StartSequence is the local receipt assigned by the client to this exact
+	// launch, including when its RPC times out. Never persisted or sent over REST.
+	StartSequence uint64 `json:"-"`
 	// SandboxOverride is an optional per-task tri-state override of the
 	// resolved sandbox setting (add-task-sandbox-override): "" (inherit the
 	// project/global setting, unchanged behavior), "enabled" (force sandboxed

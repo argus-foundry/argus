@@ -88,6 +88,11 @@ func TestResizeKeepPlace_Gates(t *testing.T) {
 			testutil.Equal(t, kicked, tc.wantKick)
 			testutil.Equal(t, deferred, tc.wantDeferred)
 			testutil.Equal(t, r.kicks, map[bool]int{true: 1, false: 0}[tc.wantKick])
+			if tc.wantKick {
+				got, err := srv.db.Get(task.ID)
+				testutil.NoError(t, err)
+				testutil.Equal(t, got.Status, model.StatusInProgress)
+			}
 			if tc.wantDeferred != "" && srv.isRedundantResize(task.ID, 120) {
 				t.Fatal("a deferral must invalidate the cols cache so a same-size resize re-evaluates")
 			}

@@ -162,6 +162,7 @@ func TestHeraRecycleRunner_Restart_EndToEnd(t *testing.T) {
 
 	task, role := seedHeraRecycleCoordinator(t, database, t.TempDir(), "You are the coordinator.")
 	task.SessionID = "stale-sid-1"
+	task.SetStatus(model.StatusInReview)
 	testutil.NoError(t, database.Update(task))
 
 	runner := agent.NewRunner(nil)
@@ -182,6 +183,7 @@ func TestHeraRecycleRunner_Restart_EndToEnd(t *testing.T) {
 	// ID leaves the live session un-resumable (ctrl+n re-render refuses).
 	testutil.Equal(t, updated.SessionID != "" && updated.SessionID != "stale-sid-1", true)
 	testutil.Contains(t, updated.Prompt, "You are the coordinator.")
+	testutil.Equal(t, updated.Status, model.StatusInProgress)
 
 	// Wait for the old session to die and the fresh one to land.
 	deadline := time.Now().Add(5 * time.Second)
