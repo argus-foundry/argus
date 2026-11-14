@@ -20,6 +20,21 @@ func TestStatusBarUsageWindowSuffix(t *testing.T) {
 	}
 }
 
+func TestStatusBar_ClaudeAccountUsage(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetUsage(100, true, 53, true, "seven_day")
+	testutil.Equal(t, sb.UsageSummary(), "cla 100%w · cdx 53%")
+
+	sb.SetClaudeAccountUsage([]ClaudeAccountUsage{
+		{Name: "personal", Pct: 40, Window: "five_hour", Known: true},
+		{Name: "work", Pct: 77, Known: false},
+	})
+	testutil.Equal(t, sb.UsageSummary(), "cla 100%w · personal 40%s · work — · cdx 53%")
+
+	sb.SetClaudeAccountUsage(nil)
+	testutil.Equal(t, sb.UsageSummary(), "cla 100%w · cdx 53%")
+}
+
 func TestStatusBar_CountsEveryTaskStatus(t *testing.T) {
 	sb := NewStatusBar()
 	sb.SetTasks([]*model.Task{
