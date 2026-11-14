@@ -154,7 +154,12 @@ func MoveTaskAccount(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 
 // ResidentMoveOpts configures a resident account move. By is db.OverrideByManual
 // or db.OverrideByAuto and is recorded in the override.
-type ResidentMoveOpts struct{ By string }
+type ResidentMoveOpts struct {
+	By string
+	// Cfg, when set, is the config the move validates against (the daemon
+	// passes the same config its decision used); nil reads database.Config().
+	Cfg *config.Config
+}
 
 // MoveResidentAccount moves the resident agent to another Claude account with
 // the same copy-transcript-then-kick-resume flow as MoveTaskAccount. It is the
@@ -196,6 +201,9 @@ func moveAccount(database *db.DB, runner accountMoveRunner, in AccountMoveInput,
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: %w", ErrAccount, db.ErrResidentProtected)
 	}
 	cfg := database.Config()
+	if resident != nil && resident.Cfg != nil {
+		cfg = *resident.Cfg
+	}
 	backend, err := ResolveBackend(task, cfg)
 	if err != nil {
 		return nil, AccountMoveResult{}, fmt.Errorf("%w: %w", ErrAccount, err)

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -366,6 +367,23 @@ func (s *RPCService) ResidentState(_ *Empty, resp *ResidentStateResp) error {
 func (s *RPCService) ResidentMarkViewed(_ *Empty, resp *StatusResp) error {
 	if err := s.daemon.residentMgr().MarkViewed(); err != nil {
 		resp.Error = logRPCErr("rpc.ResidentMarkViewed", err)
+		return nil
+	}
+	resp.OK = true
+	return nil
+}
+
+// ResidentMoveAccount moves the resident to another Claude account, carrying
+// its conversation over (the `>` picker on the resident row).
+func (s *RPCService) ResidentMoveAccount(req *ResidentMoveAccountReq, resp *ResidentMoveAccountResp) error {
+	res, err := s.daemon.residentMgr().MoveAccount(req.Account, req.Force)
+	resp.From, resp.To, resp.Resumed, resp.Started = res.From, res.To, res.Resumed, res.Started
+	if err != nil {
+		if errors.Is(err, agent.ErrAccountMoveRestartUnknown) {
+			resp.OK, resp.Unknown = true, true
+			return nil
+		}
+		resp.Error = logRPCErr("rpc.ResidentMoveAccount", err)
 		return nil
 	}
 	resp.OK = true

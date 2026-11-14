@@ -88,6 +88,14 @@ type residentManager struct {
 	// doorbell for the committed message (nil = store only: tests, no notifier).
 	commitNotice func(noticeID, from, to int64, body, tldr string) (*db.HeraMessage, error)
 	ringNotice   func(msg *db.HeraMessage)
+	// mover restarts the resident in place for an account move (nil = moves
+	// and the automatic switch are unavailable: tests, no runner).
+	mover residentMover
+
+	// switchTicks and noneEligible are tick-loop state for the automatic
+	// account switch (see maybeAutoSwitch); only tick and MoveAccount touch them.
+	switchTicks  int
+	noneEligible bool
 
 	mu           sync.Mutex
 	failures     int
@@ -255,6 +263,7 @@ func (m *residentManager) tick() {
 		m.startFailure = ""
 		m.mu.Unlock()
 		m.reason("")
+		m.maybeAutoSwitch(task, cfg, sess)
 		return
 	}
 	if m.runner.HasPendingRestart(task.ID) || m.recycling(task.ID) {
@@ -283,7 +292,7 @@ func (m *residentManager) tick() {
 func (m *residentManager) start(task *model.Task, cfg config.Config, backend string, attempt int) {
 	task.Backend = backend
 	task.Model = cfg.Resident.Model
-	task.Account = cfg.Resident.Account
+	task.Account = m.effectiveResidentAccount(task, cfg, backend)
 	task.Sandboxed = agent.IsTaskSandboxed(task, cfg)
 
 	m.seedResidentMemory(cfg)
@@ -524,6 +533,9 @@ func (d *Daemon) residentMgr() *residentManager {
 			srv := d.apiServer
 			d.mu.Unlock()
 			return srv != nil && srv.ResidentWaiting()
+		}
+		if mv, ok := d.runner.(residentMover); ok {
+			m.mover = mv
 		}
 		d.resident = m
 	})

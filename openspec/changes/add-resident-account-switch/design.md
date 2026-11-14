@@ -57,7 +57,7 @@ Every automatic switch:
 
 - `residentLog` (uxlog) and `slog.Info` with from, to, readings, resumed (the daemon never calls `uxlog.Init`, so both are required).
 - A reliable `ResidentSend` system turn beginning `[argus] ` (so last-exchange extraction skips it): "You were switched from <from> to <to> because <from> hit its usage limit. Your conversation carried over. Continue whatever you were doing."
-- A board item on the resident coordinator's human board (kind `info`, subject "Solo switched accounts: <from> to <to>", body with usage numbers and time). The board already auto-shows unread items in the resident tab. A refusal for lack of an eligible account posts a board item of kind `blocked`.
+- A board item on the resident coordinator's human board (kind `fyi`, subject "Solo switched accounts: <from> to <to>", body with usage numbers and time). The board already auto-shows unread items in the resident tab. A refusal for lack of an eligible account posts a board item of kind `decision`.
 
 Manual moves log the same way and show a status-bar notice in the TUI; no board item (the human just did it).
 

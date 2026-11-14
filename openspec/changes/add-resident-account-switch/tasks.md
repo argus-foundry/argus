@@ -12,7 +12,7 @@
 
 - [ ] 3.1 Tests then effective-account helper used by `residentManager.start` (override wins; dropped on base change / invalid account; logs).
 - [ ] 3.2 Tests then `maybeAutoSwitch` in `tick` (depleted+idle+2 ticks, mid-turn skip, needs-input does NOT block, in-flight skip, unknown/stale reading, depleted-target filter, none-eligible log/board dedup, persisted cooldown across a manager restart, setting off).
-- [ ] 3.3 Notices: `[argus]` `ResidentSend` turn, board item (info / blocked), uxlog + slog on every decision.
+- [ ] 3.3 Notices: `[argus]` `ResidentSend` turn, board item (fyi / decision), uxlog + slog on every decision.
 
 ## 4. TUI
 
