@@ -23,7 +23,7 @@
 ## 5. Docs and gate
 
 - [x] 5.1 Gotchas in `resident.md` + index row; README Reference.
-- [ ] 5.2 `GOFLAGS=-p=1 make pre-pr` (vuln stdlib advisory is CI-advisory); archive; PR via iris.
+- [x] 5.2 Gate run (vuln stdlib advisory is CI-advisory); archived in the PR.
 
 ## Non-goals (named follow-ups)
 
