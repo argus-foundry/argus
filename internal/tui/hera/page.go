@@ -197,14 +197,15 @@ type HeraPage struct {
 	// heraPlanNodesWithBridge (the planned + live worker roles and their
 	// hera_blocks edges — the plan a coordinator authored), so there is no
 	// provider seam. It replaced the retired orchestration-tree projection.
-	plan           *planview.Widget // embedded plan-DAG graph
-	board          *boardView
-	boardOrchID    int64
-	showBoard      bool
-	boardAuto      bool
-	boardHeight    int
-	OnBoardRead    func(roleID, itemID int64, updatedAt time.Time)
-	OnBoardDismiss func(roleID, itemID int64)
+	plan               *planview.Widget // embedded plan-DAG graph
+	board              *boardView
+	boardOrchID        int64
+	showBoard          bool
+	boardAuto          bool
+	boardHeight        int
+	OnBoardRead        func(roleID, itemID int64, updatedAt time.Time)
+	OnBoardDismiss     func(roleID, itemID int64)
+	OnApprovalDecision func(item *db.HeraBoardItem, approve bool)
 
 	// planOrchID is the orchestrator ID whose plan is currently projected into the
 	// plan widget (0 when none). rebuildPlan compares it to the incoming root to

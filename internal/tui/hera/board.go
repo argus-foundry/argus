@@ -287,6 +287,35 @@ func (l boardLine) draw(screen tcell.Screen, x, y, width int, focused bool) {
 	}
 }
 
+// Approval input is literal data: Markdown markers and repeated spaces are
+// meaningful tool arguments, so the ordinary board Markdown wrapper is unsafe.
+func approvalBodyLines(body string, width int) []boardLine {
+	var safe strings.Builder
+	for _, r := range body {
+		if unicode.Is(unicode.Cf, r) || (unicode.IsControl(r) && r != '\n') {
+			fmt.Fprintf(&safe, "\\u%04x", r)
+		} else {
+			safe.WriteRune(r)
+		}
+	}
+	var lines []boardLine
+	for _, paragraph := range strings.Split(safe.String(), "\n") {
+		line, col := "", 0
+		g := uniseg.NewGraphemes(paragraph)
+		for g.Next() {
+			w := runewidth.StringWidth(g.Str())
+			if col+w > max(1, width-2) && line != "" {
+				lines = append(lines, boardLine{text: "  " + line})
+				line, col = "", 0
+			}
+			line += g.Str()
+			col += w
+		}
+		lines = append(lines, boardLine{text: "  " + line})
+	}
+	return lines
+}
+
 func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focused bool, keys *keymap.Keymap) {
 	b.rect = widget.InnerRect{X: x, Y: y, W: w, H: h}
 	border := theme.StyleBorder
@@ -299,7 +328,13 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 		return
 	}
 	// Reserve the footer before layout and scrolling, including empty boards.
-	hint := runewidth.Truncate(boardHint(keys, focused), inner.W, "")
+	hintText := boardHint(keys, focused)
+	if item := b.selected(); focused && item != nil && item.ResidentApproval {
+		reply, _ := keys.BindingFor(keymap.CtxHeraBoard, keymap.ActBoardReply)
+		dismiss, _ := keys.BindingFor(keymap.CtxHeraBoard, keymap.ActBoardDismiss)
+		hintText = fmt.Sprintf("%s approve once · %s deny · ⏎ expand · PgUp/PgDn scroll", reply.String(), dismiss.String())
+	}
+	hint := runewidth.Truncate(hintText, inner.W, "")
 	tview.Print(screen, tview.Escape(hint), inner.X, inner.Y+inner.H-1, inner.W, tview.AlignLeft, theme.ColorDimmed)
 	inner.H--
 	if inner.H == 0 {
@@ -343,7 +378,11 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 				}
 				lines = append(lines, boardLine{text: header, bold: true, selected: selected && n == 0 && !markerOnly})
 			}
-			lines = append(lines, boardBodyLines(i.Body, inner.W)...)
+			if i.ResidentApproval {
+				lines = append(lines, approvalBodyLines(i.Body, inner.W)...)
+			} else {
+				lines = append(lines, boardBodyLines(i.Body, inner.W)...)
+			}
 		} else {
 			header := runewidth.Truncate(prefix+subject, max(0, inner.W-runewidth.StringWidth(unread)), "…") + unread
 			if inner.W <= runewidth.StringWidth(unread) {
@@ -422,12 +461,34 @@ func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Pri
 			}
 			uxlog.Log("[board] expansion orch=%d item=%d expanded=%v", p.boardOrchID, i.ID, p.board.expandedID == i.ID)
 		case act == keymap.ActBoardReply:
-			p.replyToBoard(i)
+			if i.ResidentApproval {
+				p.decideBoardApproval(i, true)
+			} else {
+				p.replyToBoard(i)
+			}
 		case act == keymap.ActBoardDismiss:
-			if p.OnBoardDismiss != nil {
+			if i.ResidentApproval {
+				p.decideBoardApproval(i, false)
+			} else if p.OnBoardDismiss != nil {
 				p.OnBoardDismiss(i.RoleID, i.ID)
 			}
 		}
+	}
+}
+
+func (p *HeraPage) decideBoardApproval(i *db.HeraBoardItem, approve bool) {
+	if p.board.expandedID != i.ID {
+		p.board.expandedID = i.ID
+		if p.OnBoardRead != nil {
+			p.OnBoardRead(i.RoleID, i.ID, i.UpdatedAt)
+		}
+		if p.OnInfo != nil {
+			p.OnInfo("Review the exact call, then reply to approve once or dismiss to deny")
+		}
+		return
+	}
+	if p.OnApprovalDecision != nil {
+		p.OnApprovalDecision(i, approve)
 	}
 }
 

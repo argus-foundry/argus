@@ -540,8 +540,8 @@ func TestBuildCmd_ResidentIsSelfContainedUnderUserAllowAll(t *testing.T) {
 		t.Fatalf("network.allowedDomains must not be carried: %s", line)
 	}
 	testutil.Contains(t, line, "blocked.test")
-	// User hooks are never carried: only the inline Stop coord-hook exists.
-	testutil.Equal(t, len(hooks), 1)
+	// User hooks are never carried: only Argus Stop and permission hooks exist.
+	testutil.Equal(t, len(hooks), 2)
 	if strings.Contains(line, "auto-approve.sh") {
 		t.Fatalf("user hook leaked into the resident: %s", line)
 	}

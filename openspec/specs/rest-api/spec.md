@@ -1198,6 +1198,12 @@ The daemon SHALL emit `task.runtime_changed` with payload `{"apply","changed_fie
 
 Client runtime controls remain named follow-ups for web (ENG-1076), TUI (ENG-1091), and macOS runtime controls: named follow-up, ticket to be filed.
 
+#### Scenario: Persisted runtime patch settles
+
+- **WHEN** a runtime PATCH persists and settles
+- **THEN** the daemon emits one `task.runtime_changed` event with `apply`, `changed_fields` and `started`
+- **AND** rejected or rolled-back restarts emit no such event
+
 ### Requirement: Account management endpoints
 
 The server SHALL let the master token create, edit and delete database-owned accounts, and SHALL report each account's field source and editability.

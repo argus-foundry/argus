@@ -22,20 +22,21 @@ var (
 
 // HeraBoardItem is a curated human attention item, owned by a durable role.
 type HeraBoardItem struct {
-	ID             int64     `json:"id"`
-	RoleID         int64     `json:"role_id"`
-	Kind           string    `json:"kind"`
-	Subject        string    `json:"subject"`
-	Body           string    `json:"body"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	Read           bool      `json:"read"`
-	Resolved       bool      `json:"resolved"`
-	ResolvedBy     string    `json:"resolved_by"`
-	ResolutionNote string    `json:"resolution_note"`
+	ID               int64     `json:"id"`
+	RoleID           int64     `json:"role_id"`
+	Kind             string    `json:"kind"`
+	Subject          string    `json:"subject"`
+	Body             string    `json:"body"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	Read             bool      `json:"read"`
+	Resolved         bool      `json:"resolved"`
+	ResolvedBy       string    `json:"resolved_by"`
+	ResolutionNote   string    `json:"resolution_note"`
+	ResidentApproval bool      `json:"resident_approval,omitempty"`
 }
 
-const boardColumns = `id, role_id, kind, subject, body, created_at, updated_at, is_read, resolved, resolved_by, resolution_note`
+const boardColumns = `id, role_id, kind, subject, body, created_at, updated_at, is_read, resolved, resolved_by, resolution_note, EXISTS(SELECT 1 FROM resident_approvals a WHERE a.board_id=hera_board_items.id)`
 
 func validBoardContent(kind, subject, body string) bool {
 	return (kind == "decision" || kind == "fyi") && strings.TrimSpace(subject) != "" && len(subject) <= 240 && !strings.ContainsFunc(subject, unicode.IsControl) && len(body) <= 64*1024
@@ -44,7 +45,7 @@ func validBoardContent(kind, subject, body string) bool {
 func scanBoard(s rowScanner) (*HeraBoardItem, error) {
 	var i HeraBoardItem
 	var created, updated string
-	err := s.Scan(&i.ID, &i.RoleID, &i.Kind, &i.Subject, &i.Body, &created, &updated, &i.Read, &i.Resolved, &i.ResolvedBy, &i.ResolutionNote)
+	err := s.Scan(&i.ID, &i.RoleID, &i.Kind, &i.Subject, &i.Body, &created, &updated, &i.Read, &i.Resolved, &i.ResolvedBy, &i.ResolutionNote, &i.ResidentApproval)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrHeraBoardNotFound
 	}
@@ -110,6 +111,9 @@ func (d *DB) updateHeraBoardItem(roleID, id int64, kind, subject, body string) (
 		return nil, false, err
 	}
 	changed := before.Kind != kind || before.Subject != subject || before.Body != body
+	if before.ResidentApproval {
+		return nil, false, ErrResidentApproval
+	}
 	res, err := d.conn.Exec(`UPDATE hera_board_items SET
  is_read=CASE WHEN kind<>? OR subject<>? OR body<>? THEN 0 ELSE is_read END,
  updated_at=CASE WHEN kind<>? OR subject<>? OR body<>? THEN ? ELSE updated_at END,
@@ -327,6 +331,9 @@ func (d *DB) resolveHeraBoardItem(roleID, id int64, by, note, expected string) (
 			return false, nil
 		}
 		return false, ErrHeraBoardResolved
+	}
+	if i.ResidentApproval {
+		return false, ErrResidentApproval
 	}
 	if expected != "" && formatTime(i.UpdatedAt) != expected {
 		uxlog.Log("[board] dismiss conflict role=%d item=%d", roleID, id)

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/notify"
@@ -116,6 +117,9 @@ func (s *Service) Deliver(msg *db.HeraMessage) {
 	// body instead of acting on the tldr alone; the "[hera from " prefix must stay
 	// (internal/notify matches on it).
 	doorbellLine := fmt.Sprintf("[hera from %s] msg #%d — %s · read: hera_inbox", msg.SenderName(fromRoleName), msg.ID, msg.Tldr)
+	if fromRoleID == toRoleID && strings.HasPrefix(msg.Body, "[argus] ") {
+		doorbellLine = fmt.Sprintf("[argus] %s · read: hera_inbox", msg.Tldr)
+	}
 	deliveryID := heraDeliveryID(msg.ID)
 	s.notifier.ReliableNotify(binding.ArgusTaskID, doorbellLine, deliveryID, notify.NotifyOpts{})
 

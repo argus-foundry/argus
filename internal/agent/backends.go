@@ -300,7 +300,8 @@ type ResidentPolicy struct {
 	Allow, Ask, Deny []string
 	// HookCommand is the inline Stop hook (`<argus> coord-hook`) that replaces
 	// the user-level hook the restricted setting sources drop. Empty omits it.
-	HookCommand string
+	HookCommand         string
+	ApprovalHookCommand string
 	// Model and Effort carry the account settings' model / effortLevel so the
 	// resident does not silently change model when user settings are dropped.
 	Model, Effort string
@@ -334,6 +335,16 @@ func claudePermissionRulesFlag(p ResidentPolicy) string {
 		settings["hooks"] = map[string]any{"Stop": []any{
 			map[string]any{"hooks": []any{map[string]any{"type": "command", "command": p.HookCommand}}},
 		}}
+	}
+	if p.ApprovalHookCommand != "" {
+		hooks, ok := settings["hooks"].(map[string]any)
+		if !ok {
+			hooks = map[string]any{}
+			settings["hooks"] = hooks
+		}
+		hooks["PermissionRequest"] = []any{map[string]any{"hooks": []any{map[string]any{
+			"type": "command", "command": p.ApprovalHookCommand, "timeout": 10, "onFailure": "block",
+		}}}}
 	}
 	if p.Model != "" {
 		settings["model"] = p.Model

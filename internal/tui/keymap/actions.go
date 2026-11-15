@@ -267,8 +267,8 @@ var actionLabels = map[Action]string{
 	ActHeraInbox:       "view role's message inbox (read-only)",
 	ActHeraMoveAccount: "move to another account (resumes there)",
 	ActBoardToggle:     "toggle plan / human board",
-	ActBoardReply:      "compose reply to coordinator (never submits)",
-	ActBoardDismiss:    "dismiss board item",
+	ActBoardReply:      "compose reply / approve exact resident call",
+	ActBoardDismiss:    "dismiss item / deny resident call",
 	ActBoardDown:       "next board item",
 	ActBoardUp:         "previous board item",
 }

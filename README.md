@@ -294,8 +294,8 @@ When a **worker** is selected the details region shows its live agent terminal. 
 | `↑` / `↓` / `j` / `k` | Select previous / next item |
 | `Enter` | Expand / collapse; expanding marks the item read |
 | `PgUp` / `PgDn` | Scroll expanded text |
-| `r` | Focus coordinator and paste `Re: <subject> (#<id>)` plus two newlines; never submits |
-| `x` | Dismiss item as human; decisions also leave a durable coordinator inbox notice |
+| `r` | Compose a coordinator reply without submitting; on a resident approval item, review the expanded exact call and confirm **Approve once** (10-minute grant) |
+| `x` | Dismiss item as human; on a resident approval item, confirm **Deny**. Decisions leave a durable coordinator inbox notice |
 
 The plan DAG shows the coordinator-authored worker dependency graph; a coordinator without an authored plan shows the empty-plan hint.
 
@@ -817,8 +817,8 @@ If the recipient has a live agent session the daemon also writes a single notifi
 | `hera_inbox`            | Fetch unread role messages immediately, or block up to 120s with `timeout_seconds`; returned messages are marked read and pane deliveries cancelled. Managed Claude/Codex/OpenCode MCP clients use a 150s deadline so long waits can finish. |
 | `hera_mark_read`        | Mark a specific list of message IDs read and cancel their pending deliveries.                                                                     |
 | `hera_board_post` | Coordinator-only: post a human `decision` or `fyi` with one-line `subject` and `body`; returns stable numeric id. |
-| `hera_board_update` | Replace own open item's `kind`, `subject`, `body` by `id`; material changes mark unread. |
-| `hera_board_resolve` | Resolve own item by `id`, with optional `note`; records agent as resolver. |
+| `hera_board_update` | Replace own open item's `kind`, `subject`, `body` by `id`; material changes mark unread. Resident approval items are immutable. |
+| `hera_board_resolve` | Resolve own item by `id`, with optional `note`; records agent as resolver. Resident approval items require the human TUI approve/deny actions. |
 | `hera_board_list` | List own open items, or history with `include_resolved=true`. Join/status/recycle also surface open ids and subjects. |
 | `hera_status`           | Set the caller role's status (`idle`/`working`/`blocked`/`done`/`failed`), mirrored to `task_meta`; `done` rolls the worker's task to in-review + `ready_to_close`; `failed` rolls to in-review without `ready_to_close`. Optional `handoff_note` (string) and `request_recycle` (bool) are accepted from **any hera-bound role kind** (coordinator, worker, or freelance): `handoff_note` is stamped to `task_meta` for the next recycle's seed prompt, `request_recycle=true` flags a pending [self-service recycle](#context-budget-stop-hook) that the daemon acts on once the session goes idle — for a coordinator this is driven by the `coord-hook` budget nudge, for a worker/freelance role only by a human-initiated rail `B` bounce. |
 | `hera_revive`           | Coordinator-only PULL-revive of one role the caller coordinates, by `role_name`. A dead session (no live process) restarts in place; a live session that is idle and not blocked on a prompt is **kicked** (stopped and resumed in place, recovering fresh with its original prompt when its transcript is missing). A kick restarts the agent and kills any background jobs it started in-session, so it is a last resort for a truly wedged session, not a progress check. Anything else (busy, blocked on a question, a live coordinator, a kick already in flight) is left untouched and reported as such. `hera_send`'s auto-revive only ever restarts a *dead* recipient; it never kicks a live one. |
