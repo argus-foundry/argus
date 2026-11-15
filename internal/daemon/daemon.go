@@ -1026,15 +1026,9 @@ func (d *Daemon) notifyCoordinatorOfMergedPR(t *model.Task, prURL string) {
 // itself complete via its own existing task_complete tool. No new
 // completion primitive is introduced; the daemon only delivers information.
 //
-// Deliberately NOT scoped to worker-kind or gated on task status: a
-// coordinator's or freelance role's own merged PR is an equally valid prompt
-// for the same self-assessment, and a role still actively in_progress simply
-// answers "yes, more to do" and continues – the agent's own judgment is the
-// gate, not a role-kind or status precondition here. Fires independently of
-// (and in addition to) notifyCoordinatorOfMergedPR above; the two target
-// different recipients for different purposes (this one is actionable
-// instruction to the role itself, the other is passive visibility for the
-// coordinator) and neither is skipped because the other fired.
+// Applies to any role kind, while its task is neither complete nor archived.
+// The store re-reads task state in the send transaction so stale poll snapshots
+// cannot send obsolete prompts. Coordinator visibility remains independent.
 //
 // Silent no-op when the task never held a Hera role, no coordinator role
 // resolves (needed to identify the sender), or the resolved role IS ITSELF
@@ -1054,8 +1048,11 @@ func (d *Daemon) notifyRoleOfMergedPR(t *model.Task, prURL string) {
 		"Your PR merged: %s\n\nIf you have no further tasks on %s, please inform your coordinator and mark yourself complete (task_complete). If you still have work to do here, no action is needed — just continue.",
 		prURL, t.Name)
 	tldr := fmt.Sprintf("PR merged: %s — check for further tasks", t.Name)
-	if _, sErr := d.heraNotifyService().Send(coord.ID, role.ID, body, tldr, nil); sErr != nil {
+	msg, sErr := d.db.SendHeraMergeNotice(t.ID, coord.ID, role.ID, body, tldr)
+	if sErr != nil {
 		uxlog.Log("[pr] poll: role merge notice failed for %s: %v", t.ID, sErr)
+	} else if msg != nil {
+		d.heraNotifyService().Deliver(msg)
 	}
 }
 

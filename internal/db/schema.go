@@ -785,6 +785,9 @@ func (d *DB) createHeraTables() error {
 			delivery_mode  TEXT NOT NULL DEFAULT 'pending',
 			delivered_at   TEXT
 		);
+		CREATE TABLE IF NOT EXISTS hera_merge_notices (
+			message_id INTEGER PRIMARY KEY REFERENCES hera_messages(id) ON DELETE CASCADE
+		);
 		-- Partial inbox index: only indexes unread rows, so cost scales with the
 		-- unread count not the full message history. Covers the HeraInbox + unread-
 		-- cap queries. sent_at + id provide a stable oldest-first ordering within

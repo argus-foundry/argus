@@ -221,7 +221,8 @@ func discardStaleLiveTasksFile(dataDir string) {
 //     invariant. Scoped to the live set; the true orphans flip the other way.
 //
 //  4. Reconciles true orphans using the pre-shutdown supervisor snapshot and
-//     live Hera bindings as well as InProgress rows when recovery is enabled.
+//     InProgress rows when recovery is enabled. A persistent Hera binding is
+//     role ownership, not evidence that this restart lost a live session.
 //     Reattached sessions and closed-out tasks remain untouched.
 //
 //  5. Posts ARGUS_BOUNCED to those true orphans only (they actually lost their

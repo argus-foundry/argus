@@ -122,7 +122,7 @@ func TestArchiveHeraUnit_CommitsEverythingTogether(t *testing.T) {
 // rollback is what undid them), and that the failure is the injected one, not
 // a refusal before any write.
 func TestArchiveHeraUnit_AnyStepFailureRollsBackEverything(t *testing.T) {
-	order := []string{"fyi", "end_hat", "child_orch", "task", "role"}
+	order := []string{"merge_notices", "fyi", "end_hat", "child_orch", "task", "role"}
 	for i, step := range order {
 		t.Run(step, func(t *testing.T) {
 			f := newUnitFixture(t)
@@ -164,7 +164,7 @@ func TestArchiveHeraUnit_PreCommitRunsLastAndRefusalRollsBack(t *testing.T) {
 	}})
 	var refused *ArchiveRefusedError
 	testutil.Equal(t, errors.As(err, &refused), true)
-	testutil.DeepEqual(t, seen, []string{"fyi", "end_hat", "child_orch", "task", "role", "precommit"})
+	testutil.DeepEqual(t, seen, []string{"merge_notices", "fyi", "end_hat", "child_orch", "task", "role", "precommit"})
 	f.assertUntouched(t)
 }
 

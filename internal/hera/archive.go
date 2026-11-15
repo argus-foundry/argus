@@ -17,7 +17,7 @@ type ArchiveStore interface {
 	HeraRole(id int64) (*db.HeraRole, error)
 	HeraLiveBindingByRole(roleID int64) (*db.HeraBinding, error)
 	HeraRoleStatusFor(roleID int64) (*db.HeraRoleStatus, error)
-	HeraInbox(roleID int64) ([]*db.HeraMessage, error)
+	HeraArchiveUnread(roleID int64) (int, error)
 	HeraUnreadFromRole(roleID int64) (int, error)
 	ListHeraLiveBindingsByTask(taskID string) ([]*db.HeraBinding, error)
 	ListHeraBlocks(orchID int64) ([]db.HeraBlock, error)
@@ -116,10 +116,10 @@ func ArchivableVerdict(store ArchiveStore, git GitCheck, role *db.HeraRole) Arch
 		}
 		return refuse("task is also bound to another live role (%d)", b.RoleID)
 	}
-	if msgs, err := store.HeraInbox(role.ID); err != nil {
+	if n, err := store.HeraArchiveUnread(role.ID); err != nil {
 		return refuse("inbox unreadable (%v)", err)
-	} else if len(msgs) > 0 {
-		return refuse("%d unread hera message(s) to this role", len(msgs))
+	} else if n > 0 {
+		return refuse("%d unread hera message(s) to this role", n)
 	}
 	if n, err := store.HeraUnreadFromRole(role.ID); err != nil {
 		return refuse("outbox unreadable (%v)", err)

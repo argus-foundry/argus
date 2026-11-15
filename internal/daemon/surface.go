@@ -595,9 +595,9 @@ var SupervisorStreamPaths = []string{
 // message prints the computed digest to paste back here.
 const (
 	SpawnSurfaceDigest = "302b69980400f29dd517b5fd4168682b27a0f6b683771ffb14d8e4570e198869"
-	// ResidentStateResp gained daemon-only timer summary fields; the supervisor
-	// neither serves nor consumes this RPC, so its stream behavior is unchanged.
-	StreamSurfaceDigest = "b49dcd1fb84b589a9abcd27601a5557ac8a084615c5bcf2c599a7aeabf7c4180"
+	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
+	// changed daemon-side comments; neither changes supervisor stream behavior.
+	StreamSurfaceDigest = "33d10d23ea7a45aa26fdcfa12080751d2580e41d6696d2bd5a835c1999960c5e"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,
