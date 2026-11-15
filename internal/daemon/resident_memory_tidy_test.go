@@ -32,7 +32,7 @@ func TestResidentMemoryTidyDelivery(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(inbox), 1)
 	testutil.Equal(t, len(n.calls), 1)
-	for _, s := range []string{"solo/memory/", "Merge duplicate", "newest dated evidence", "resident_timer_cancel", "Keep files lean", "Fix broken links", "only inside the memory folder", "NEVER delete Aaron's explicit instructions or preferences", "superseded by", "short dated change log", "Stay quiet", "dream: skip"} {
+	for _, s := range []string{"solo/memory/", "Merge duplicate", "newest dated evidence", "resident_timer_cancel", "Keep files lean", "Fix broken links", "only inside the memory folder", "NEVER delete Aaron's explicit instructions or preferences", "keep the older one with a dated \"superseded by", "short dated change log", "Stay quiet", "dream: skip"} {
 		testutil.Contains(t, inbox[0].Body, s)
 	}
 	e.cfg.Resident.MemoryTidy = "off"

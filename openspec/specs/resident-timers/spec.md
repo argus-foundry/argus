@@ -3,9 +3,7 @@
 ## Purpose
 
 Give the resident durable, purposeful follow-up and recurring wake-ups through its own inbox without creating tasks or polling external sources.
-
 ## Requirements
-
 ### Requirement: Resident timer management
 
 The system SHALL expose resident-only MCP tools to set a one-shot timer by absolute RFC3339 time or positive duration, schedule recurrence using cron or a simple expression with an explicit IANA local timezone, list active timers, and cancel personal timers by id. The implicit `Local` timezone MUST be rejected case-insensitively. Config-owned built-in timers SHALL be identified by a `builtin` field in tool and REST listings and SHALL refuse agent cancellation. The authenticated resident identity guard MUST refuse other callers. The store SHALL cap active personal timers at 64 (excluding built-ins) and personal notes at 4096 bytes, reject blank notes and past one-shots, and require recurring intervals of at least 15 minutes.
@@ -80,7 +78,7 @@ The REST API SHALL list active resident timers, including notes, creation time, 
 
 ### Requirement: Timer failure isolation and retention
 
-A timer whose next recurrence cannot be calculated SHALL be deactivated and logged without blocking healthy timers or delivery retries. The daemon SHALL process pending deliveries and cancellations even if firing reports an error. Terminal timer rows older than 30 days SHALL be pruned once their delivery receipts are settled; undelivered events MUST survive extended downtime. Timer state-read errors SHALL be logged.
+A timer whose next recurrence cannot be calculated SHALL be deactivated and logged without blocking healthy timers or delivery retries. The daemon SHALL process pending deliveries and cancellations even if firing reports an error. Terminal personal timer rows older than 30 days SHALL be pruned once their delivery receipts are settled; undelivered events MUST survive extended downtime. Config-owned built-in identities MUST be excluded from pruning, including when disabled by invalid-recurrence recovery. Timer state-read errors SHALL be logged.
 
 #### Scenario: Broken recurrence alongside healthy work
 
@@ -89,5 +87,5 @@ A timer whose next recurrence cannot be calculated SHALL be deactivated and logg
 
 #### Scenario: Old terminal history
 
-- **WHEN** a completed or cancelled timer has been terminal for more than 30 days and has no unsettled receipt
-- **THEN** its timer row is deleted while active and unsettled timers are preserved
+- **WHEN** a completed or cancelled personal timer has been terminal for more than 30 days and has no unsettled receipt
+- **THEN** its timer row is deleted while active, unsettled and config-owned built-in timers are preserved
