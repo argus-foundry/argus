@@ -8,6 +8,7 @@ import (
 )
 
 func TestResidentMemoryTidyZone(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, tz, link, want string
 		bad                  bool

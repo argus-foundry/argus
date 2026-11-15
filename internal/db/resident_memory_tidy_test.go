@@ -118,7 +118,7 @@ func TestResidentBuiltinTimerNoteRefresh(t *testing.T) {
 	testutil.True(t, pending[0].Message.ReadAt.IsZero())
 	testutil.Equal(t, pending[0].Message.Body, msgs[0].Body)
 	testutil.NoError(t, d.CompleteResidentTimerDelivery(msgs[0].ID))
-	msgs, err = d.FireResidentTimers("solo", after[0].DueAt)
+	msgs, err = d.FireResidentTimers("solo", now.Add(48*time.Hour))
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(msgs), 1)
 	testutil.Contains(t, msgs[0].Body, "latest folder")
@@ -127,6 +127,29 @@ func TestResidentBuiltinTimerNoteRefresh(t *testing.T) {
 func TestResidentBuiltinTimerRejectsLocal(t *testing.T) {
 	d := testDB(t)
 	testutil.NotNil(t, d.EnsureResidentMemoryTidy("tidy", "30 2 * * *", "Local", time.Now()))
+}
+
+func TestResidentBuiltinTimerSurvivesPruning(t *testing.T) {
+	d := testDB(t)
+	now := time.Now()
+	testutil.NoError(t, d.EnsureResidentMemoryTidy("tidy", "30 2 * * *", "UTC", now))
+	list, err := d.ResidentTimers()
+	testutil.NoError(t, err)
+	id := list[0].ID
+	personal, err := d.SetResidentTimer("personal", now.Add(time.Hour), "", "", now)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.CancelResidentTimer(personal.ID))
+	// Model a built-in disabled by the invalid-recurrence recovery path.
+	_, err = d.conn.Exec(`UPDATE resident_timers SET active=0,finished_at=?`, now.Add(-31*24*time.Hour).UnixNano())
+	testutil.NoError(t, err)
+	count, err := d.PruneResidentTimers(now)
+	testutil.NoError(t, err)
+	testutil.Equal(t, count, int64(1))
+	testutil.NoError(t, d.EnsureResidentMemoryTidy("tidy", "30 2 * * *", "UTC", now))
+	list, err = d.ResidentTimers()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(list), 1)
+	testutil.Equal(t, list[0].ID, id)
 }
 
 func TestResidentBuiltinTimerAllowance(t *testing.T) {

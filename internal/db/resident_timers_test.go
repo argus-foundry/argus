@@ -60,11 +60,13 @@ func TestResidentTimerClosedStore(t *testing.T) {
 			_, err := d.SetResidentTimer("check", time.Now().Add(time.Hour), "", "", time.Now())
 			return err
 		},
-		"list":     func() error { _, err := d.ResidentTimers(); return err },
-		"fire":     func() error { _, err := d.FireResidentTimers("solo", time.Now()); return err },
-		"pending":  func() error { _, err := d.PendingResidentTimerDeliveries(); return err },
-		"cancel":   func() error { return d.CancelResidentTimer(1) },
-		"complete": func() error { return d.CompleteResidentTimerDelivery("one") },
+		"list":      func() error { _, err := d.ResidentTimers(); return err },
+		"fire":      func() error { _, err := d.FireResidentTimers("solo", time.Now()); return err },
+		"pending":   func() error { _, err := d.PendingResidentTimerDeliveries(); return err },
+		"cancel":    func() error { return d.CancelResidentTimer(1) },
+		"complete":  func() error { return d.CompleteResidentTimerDelivery("one") },
+		"submitted": func() error { return d.MarkResidentTimerDelivered("one") },
+		"prune":     func() error { _, err := d.PruneResidentTimers(time.Now()); return err },
 	} {
 		t.Run(name, func(t *testing.T) { testutil.NotNil(t, call()) })
 	}
@@ -102,6 +104,14 @@ func TestResidentTimerDurableAndConcurrentFire(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(pending), 1)
 	testutil.Equal(t, pending[0].Message.ID, msgs[0].ID)
+	testutil.NoError(t, d.MarkResidentTimerDelivered(msgs[0].ID))
+	testutil.NoError(t, d.Close())
+	d, err = Open(path)
+	testutil.NoError(t, err)
+	pending, err = d.PendingResidentTimerDeliveries()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(pending), 1)
+	testutil.True(t, pending[0].Submitted)
 }
 
 func TestResidentTimerFireRollback(t *testing.T) {

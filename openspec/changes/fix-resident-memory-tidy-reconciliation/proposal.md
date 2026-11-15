@@ -18,6 +18,7 @@ None.
 ### Modified capabilities
 
 - `resident-memory-tidy`: Concrete host timezone, isolated reconciliation failures and non-destructive note refreshes.
+- `resident-timers`: Exempt config-owned identities from terminal personal timer pruning.
 
 ## Impact
 

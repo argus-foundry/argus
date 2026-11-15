@@ -139,3 +139,32 @@ func TestResidentMemoryTidyReconcileFailure(t *testing.T) {
 		testutil.Contains(t, body, "personal")
 	}
 }
+
+func TestResidentMemoryTidyMemoryDirRefresh(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	e := newResEnv(t)
+	e.cfg.Resident.MemoryTidy = "02:30"
+	e.cfg.Resident.MemoryDir = "old-memory"
+	e.m.tick()
+	e.m.deliverTimers()
+	list, err := e.db.ResidentTimers()
+	testutil.NoError(t, err)
+	e.now = list[0].DueAt.Add(time.Minute)
+	n := &timerNotifier{calls: map[string]string{}, submitted: map[string]bool{}}
+	e.m.notifier = func() residentNotifier { return n }
+	e.m.deliverTimers()
+	list, err = e.db.ResidentTimers()
+	testutil.NoError(t, err)
+	nextDue := list[0].DueAt
+	e.cfg.Resident.MemoryDir = "new-memory"
+	e.m.deliverTimers()
+	list, err = e.db.ResidentTimers()
+	testutil.NoError(t, err)
+	testutil.Equal(t, list[0].DueAt, nextDue)
+	testutil.Contains(t, list[0].Note, "new-memory/")
+	testutil.Equal(t, len(n.cancelled), 0)
+	testutil.Equal(t, len(n.calls), 1)
+	for _, body := range n.calls {
+		testutil.Contains(t, body, "old-memory/")
+	}
+}

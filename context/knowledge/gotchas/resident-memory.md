@@ -6,6 +6,8 @@
 
 - **Instruction-only changes preserve due time and queued fires.** Update the stored note for future fires without touching existing inbox text or delivery receipts; only schedule/zone changes and disable retract them. Disable writes `due_at=0`.
 
+- **Terminal-timer pruning must exclude built-in identities**, including a built-in disabled by invalid-recurrence recovery. Its identity mapping remains config-owned and must survive re-enabling, rather than blocking the pruning transaction through its foreign key.
+
 - **`resident.memory_tidy` is config-file only (strict local HH:MM, default 02:30, or off).** Disabling or changing it marks queued fires read; the existing notifier receipt retracts unsubmitted wake-ups on the same poll, while an already submitted wake-up cannot be recalled. `dream: skip` fences shared KB maintenance, not Solo's own explicitly delivered tidy procedure.
 
 - **Follow-up timer ids belong beside their open loops.** Fresh orientation tells Solo to list/reconcile timers after reading open-loops, set purposeful wake-ups for promises and waiting-on-someone loops, and cancel closed loops; never turn these into generic connector polling. Timer tools reuse the current launch token's verified resident identity and never accept a target task.

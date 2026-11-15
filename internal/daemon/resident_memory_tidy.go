@@ -16,7 +16,7 @@ func residentMemoryTidyZone() (string, error) {
 
 func resolveResidentMemoryTidyZone(tz string, readlink func(string) (string, error)) (string, error) {
 	valid := func(name string) bool {
-		if name == "" || name == "Local" {
+		if name == "" || strings.EqualFold(name, "Local") {
 			return false
 		}
 		_, err := time.LoadLocation(name)
