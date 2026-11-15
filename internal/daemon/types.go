@@ -508,6 +508,8 @@ type SetFocusedReq struct {
 // the unmet prerequisite (name, KB, vault, backend) when enabled but unable to
 // run, so frontends can show why.
 type ResidentStateResp struct {
+	TimerCount     int
+	NextTimerAt    string
 	RunningWorkers int
 	Enabled        bool
 	Name           string

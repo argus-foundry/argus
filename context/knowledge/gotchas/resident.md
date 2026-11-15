@@ -1,5 +1,11 @@
 # Resident agent (add-resident-agent)
 
+- **Timer DDL initializes once per DB handle, on first timer-store use; only success is cached.** Keep it out of generic `OpenInMemory` setup: API/TUI suites open many fixtures, and resident-only schema work compounds across every fixture. Reopening the store preserves timers and queued fires.
+
+- **Timer fires commit the inbox event, timer advance and delivery receipt in one SQLite transaction.** Never use `schedule_create` (new tasks) or `ResidentSend` alone (no durable inbox receipt); the daemon retries the stable message-id notifier registration until submitted or acknowledged, including after notifier deadline expiry. Use the same message id as ordinary task messages so `task_message_ack` cancels a pending wake-up immediately. Inbox creation is exactly once; terminal delivery inherits the notifier's acknowledgment/crash window between the PTY write and durable receipt completion.
+- **Recurring timers advance from now and coalesce while a prior delivery is pending.** Never iterate through missed occurrences after downtime; cancellation also acknowledges the pending event, and the daemon cancels its notifier registration before clearing the receipt. Recurrence uses an explicit IANA timezone and conservatively enforces the 15-minute floor on permitted clock minutes even for sparse calendar schedules.
+- **Timer wake-ups quote the inbox body onto one logical terminal line.** Keep the original note in the inbox; raw CR/newline/ESC from note text must never reach notifier input as terminal controls.
+
 - **The resident rail name is a draw-only override on the shared Hera rail, cleared on mode exit.** Feed it through `SetResidentTitle` from both label refresh paths so Settings/config renames apply without reattaching; never rename the orchestrator or role model, which remain `resident` for routing.
 
 Memory, orientation and tool permissions are in [resident-memory.md](resident-memory.md). Other resident invariants sit with their areas: ensure-loop and RPCs in `daemon-rpc.md`, Stop hook and recycle seed in `orchestration.md`, `ctrl+\` and return snapshots in `keybindings.md`, rail box and tab marker in `tasklist-ui.md`, Settings category in `misc.md`.

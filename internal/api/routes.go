@@ -63,6 +63,7 @@ func (s *Server) routes() *http.ServeMux {
 		mux.HandleFunc(base+"unpin", s.heraKindHandler(k.orch, s.handleHeraPin(false)))
 		mux.HandleFunc(base+"rename", s.heraKindHandler(k.orch, s.handleHeraRename))
 	}
+	mux.HandleFunc("GET /api/resident/timers", s.handleResidentTimers)
 	mux.HandleFunc("GET /api/tasks/{id}", s.residentGate(s.handleGetTask, ""))
 	mux.HandleFunc("POST /api/tasks/{id}/stop", s.handleStopTask)
 	mux.HandleFunc("POST /api/tasks/{id}/restart", s.handleRestartTask)

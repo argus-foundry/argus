@@ -194,6 +194,10 @@ See `internal/daemon/client/client_test.go` for the canonical fixture. Tests tha
 
 ## Discovering Coverage Gaps
 
+For timeout diagnostics, `node script/test-batches.mjs run ./internal/api /tmp/api.cover 40` runs every discovered top-level test exactly once with `-race -count=1 -timeout=300s`, recording run events and per-batch logs in a manifest beside the combined profile. The same command works for `./internal/tui`; it does not replace the normal pre-PR policy.
+
+Merge completed package runs into an existing full-suite profile with `node script/test-batches.mjs merge /tmp/complete.cover coverage.out github.com/argus-foundry/argus/internal/api=/tmp/api.cover`. This replaces only that exact package, preserving child-package coverage, and sums matching atomic counters instead of concatenating duplicate blocks.
+
 ```bash
 make test-cover                          # writes coverage.out + filtered total
 go tool cover -html=coverage.out         # visual heatmap

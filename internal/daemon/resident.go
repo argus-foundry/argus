@@ -409,6 +409,7 @@ func (m *residentManager) run(done <-chan struct{}) {
 	defer t.Stop()
 	m.tick()
 	m.deliverNotices()
+	m.deliverTimers()
 	for {
 		select {
 		case <-done:
@@ -416,6 +417,7 @@ func (m *residentManager) run(done <-chan struct{}) {
 		case <-t.C:
 			m.tick()
 			m.deliverNotices()
+			m.deliverTimers()
 		}
 	}
 }
@@ -442,6 +444,12 @@ func (m *residentManager) metaValues(taskID string) map[string]string {
 func (m *residentManager) State() ResidentStateResp {
 	cfg := m.cfgFn()
 	resp := ResidentStateResp{Enabled: cfg.Resident.Enabled, Name: cfg.Resident.Name}
+	if timers, err := m.db.ResidentTimers(); err == nil {
+		resp.TimerCount = len(timers)
+		if len(timers) > 0 {
+			resp.NextTimerAt = timers[0].DueAt.Format(time.RFC3339)
+		}
+	}
 	resp.RunningWorkers = m.runningWorkers()
 	if !resp.Enabled {
 		return resp

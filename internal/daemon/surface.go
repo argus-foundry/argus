@@ -594,8 +594,10 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "302b69980400f29dd517b5fd4168682b27a0f6b683771ffb14d8e4570e198869"
-	StreamSurfaceDigest = "16e3d2f24fcd6f29c628f2a26b3dda36c2dfe96ad65f4f90ae19583eb1ca66fd"
+	SpawnSurfaceDigest = "302b69980400f29dd517b5fd4168682b27a0f6b683771ffb14d8e4570e198869"
+	// ResidentStateResp gained daemon-only timer summary fields; the supervisor
+	// neither serves nor consumes this RPC, so its stream behavior is unchanged.
+	StreamSurfaceDigest = "b49dcd1fb84b589a9abcd27601a5557ac8a084615c5bcf2c599a7aeabf7c4180"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

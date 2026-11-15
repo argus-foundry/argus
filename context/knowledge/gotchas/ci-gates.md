@@ -1,5 +1,7 @@
 ## CI Gate Troubleshooting (`make pre-pr`)
 
+- **Batched race runs must verify the test inventory and sum coverage counters.** `script/test-batches.mjs` asserts each discovered top-level test emits exactly one run event; its merge mode replaces only the direct package, preserving child packages. Concatenating profiles double-counts blocks, and a hand-picked test subset cannot establish whole-package coverage.
+
 `make pre-pr` mirrors `.github/workflows/ci.yml` step-for-step (build → vet → fmt-check → lint-pr → vuln → test-cover-gate → workspace-test). Steps run in sequence and the first failure short-circuits the rest, so a formatting miss hides downstream test/lint/coverage failures until fixed — always run the **full** `pre-pr` locally to surface everything in one pass. Per-gate failure recipes:
 
 - **Git fixture commits must isolate `HOME`, including host-side Iris runs.** Use `t.Setenv("HOME", t.TempDir())` so operator Git signing and hooks cannot invoke the real 1Password agent; the self-update and install-signed fixtures otherwise fail with `agent returned an error`. `script/iris-check` defaults package concurrency to `-p=3` on the shared host and preserves explicit `GOFLAGS`.

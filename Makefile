@@ -98,6 +98,7 @@ test:
 
 workspace-test:
 	npm test --prefix web-workspace
+	node --test script/test-batches.test.mjs
 
 test-watch:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "Install gotestsum: go install gotest.tools/gotestsum@latest"; exit 1; }

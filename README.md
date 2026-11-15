@@ -846,6 +846,17 @@ If the recipient has a live agent session the daemon also writes a single notifi
 
 **Schedule Management:**
 
+Resident follow-ups wake Solo's existing session; the schedule tools below create new tasks. Only the authenticated resident connection sees and can call these timer tools. Solo's pane title shows active count and next due time.
+
+| Tool | Description |
+| --- | --- |
+| `resident_timer_set` | Set a one-shot with `note` and exactly one of `at` (RFC3339 with offset) or `after` (duration, e.g. `2h30m`). |
+| `resident_timer_schedule` | Set recurrence with `note`, `expression` (five-field cron, `@daily`, `@weekly`, `@every 30m`) and `timezone` (IANA name). Minimum 15 minutes, 64 active timers, notes up to 4096 bytes. |
+| `resident_timer_list` | List active timers with ids, notes, creation and next due times. |
+| `resident_timer_cancel` | Cancel by numeric `id`; retract an unsubmitted queued fire. |
+
+Timers survive daemon/session restarts and Solo recycles. Fires arrive in Solo's task inbox as `[argus]` notes and wake it when idle; missed recurrences coalesce into one late fire. Solo keeps timer ids in open-loops memory and cancels closed loops. Web/macOS timer views are follow-ups `add-web-resident-timers` / `add-mac-resident-timers`; full TUI management is `add-tui-resident-timer-management`.
+
 | Tool               | Description                                                                                                                                                                                               |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `schedule_list`    | List all schedules with name, project, cron expression, enabled state, next/last fire timestamps                                                                                                          |
@@ -1046,6 +1057,7 @@ Tokens are stored as SHA-256 hashes; plaintext is never persisted on the server.
 | Method   | Endpoint                  | Description                                                                                                                                           |
 | -------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET`    | `/api/schedules`          | List schedules with `next_run_at`, `last_run_at`, `last_task_id`, `last_error`. |
+| `GET`    | `/api/resident/timers`    | List active Solo timers (`timers`: id, note, created_at, due_at, expression, timezone). Read-only; resident tools manage timers. |
 | `POST`   | `/api/schedules`          | Create. Body: `{"name","project","prompt","schedule","backend?","model?","enabled"}`. `model` is an optional per-schedule `--model` override (empty = backend default). Invalid explicit models return the task creation 422 body before saving. Returns the created row. |
 | `PUT`    | `/api/schedules/{id}`     | Partial update. Every field is optional. The effective model is validated before saving, with the same 422 response as creation. |
 | `DELETE` | `/api/schedules/{id}`     | Remove. Tasks already created by the schedule are not affected. |
