@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -9,6 +10,50 @@ import (
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
+
+type residentTimerCancelNudger struct {
+	err   error
+	calls []struct{ task, id string }
+}
+
+func (n *residentTimerCancelNudger) Nudge(string, string, string) error { return nil }
+func (n *residentTimerCancelNudger) Cancel(task, id string) error {
+	n.calls = append(n.calls, struct{ task, id string }{task, id})
+	return n.err
+}
+
+func TestResidentTimerCancelQueuedWakeup(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			s, d, res, _ := residentHeraFixture(t)
+			n := &residentTimerCancelNudger{}
+			if fail {
+				n.err = errors.New("nudger unavailable")
+			}
+			s.nudger = n
+			now := time.Now()
+			timer, err := d.SetResidentTimer("closed loop", now.Add(time.Minute), "", "", now)
+			testutil.NoError(t, err)
+			_, err = d.SetResidentTimer("still open", now.Add(time.Minute), "", "", now)
+			testutil.NoError(t, err)
+			msgs, err := d.FireResidentTimers(res.ID, now.Add(2*time.Minute))
+			testutil.NoError(t, err)
+			testutil.Equal(t, len(msgs), 2)
+			_, bad := postTool(t, s, "/mcp?caller="+res.ID, "resident_timer_cancel", fmt.Sprintf(`{"id":%d}`, timer.ID))
+			testutil.False(t, bad)
+			testutil.Equal(t, len(n.calls), 1)
+			testutil.Equal(t, n.calls[0].task, res.ID)
+			testutil.Equal(t, n.calls[0].id, msgs[0].ID)
+			pending, err := d.PendingResidentTimerDeliveries()
+			testutil.NoError(t, err)
+			testutil.Equal(t, len(pending), 2)
+			testutil.True(t, pending[0].Cancelled)
+			testutil.False(t, pending[0].Message.ReadAt.IsZero())
+			testutil.False(t, pending[1].Cancelled)
+			testutil.True(t, pending[1].Message.ReadAt.IsZero())
+		})
+	}
+}
 
 func TestResidentTimerTools(t *testing.T) {
 	s, d, res, _ := residentHeraFixture(t)

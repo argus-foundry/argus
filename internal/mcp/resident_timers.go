@@ -42,6 +42,9 @@ func (s *Server) toolResidentTimer(id interface{}, name string, args json.RawMes
 		result, err = d.ResidentTimers()
 	case "resident_timer_cancel":
 		err = d.CancelResidentTimer(p.ID)
+		if err == nil {
+			s.cancelResidentTimerWakeups(d, caller)
+		}
 		result = fmt.Sprintf("Cancelled timer #%d", p.ID)
 	case "resident_timer_set":
 		if (p.At == "") == (p.After == "") {
@@ -78,4 +81,27 @@ func (s *Server) toolResidentTimer(id interface{}, name string, args json.RawMes
 		return toolError(id, err.Error())
 	}
 	return toolResult(id, string(data))
+}
+
+// Cancel the live registration immediately, as task_message_ack does. Keep
+// durable receipts until the daemon's pass so an unavailable nudger retries.
+func (s *Server) cancelResidentTimerWakeups(d *db.DB, caller string) {
+	if s.nudger == nil {
+		return
+	}
+	pending, err := d.PendingResidentTimerDeliveries()
+	if err != nil {
+		residentMCPLog("[resident-timer] cancel wakeup lookup deferred: %v", err)
+		return
+	}
+	for _, p := range pending {
+		if !p.Cancelled || p.Message.To != caller {
+			continue
+		}
+		if err := s.nudger.Cancel(caller, p.Message.ID); err != nil {
+			residentMCPLog("[resident-timer] cancel wakeup deferred message=%s: %v", p.Message.ID, err)
+		} else {
+			residentMCPLog("[resident-timer] cancel wakeup message=%s", p.Message.ID)
+		}
+	}
 }

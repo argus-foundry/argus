@@ -1,5 +1,7 @@
 # Resident agent (add-resident-agent)
 
+- **Timer cancellation must cancel the notifier registration immediately, using the inbox message id.** Keep canceled delivery receipts for the daemon to retry; relying only on its next tick leaves a queued wake-up able to fire after the cancel tool returns.
+
 - **Timer DDL initializes once per DB handle, on first timer-store use; only success is cached.** Keep it out of generic `OpenInMemory` setup: API/TUI suites open many fixtures, and resident-only schema work compounds across every fixture. Reopening the store preserves timers and queued fires.
 
 - **Timer fires commit the inbox event, timer advance and delivery receipt in one SQLite transaction.** Never use `schedule_create` (new tasks) or `ResidentSend` alone (no durable inbox receipt); the daemon retries the stable message-id notifier registration until submitted or acknowledged, including after notifier deadline expiry. Use the same message id as ordinary task messages so `task_message_ack` cancels a pending wake-up immediately. Inbox creation is exactly once; terminal delivery inherits the notifier's acknowledgment/crash window between the PTY write and durable receipt completion.
