@@ -14,3 +14,11 @@
 - [x] 3.1 Update gotchas, evaluate frontend parity and record supervisor surfaces/digests.
 - [x] 3.2 Run targeted tests, full gate, approved exhaustive package batches and coverage floor; review code and test strength.
 - [x] 3.3 Archive the change on the implementation branch; record required restarts and the outward-action recommendation in PR materials. Publication and authoritative CI are tracked by the Hera worker role.
+
+## 4. Review corrections
+
+- [x] 4.1 Log through the production supervisor sink and test without uxlog initialization.
+- [x] 4.2 Strengthen resume flag assertions against duplicate and equals-form bypass modes.
+- [x] 4.3 Make startup notice matching best-effort and tolerant of cursor positioning.
+- [x] 4.4 Bound observation by time/bytes and preserve UTF-8/escape boundaries.
+- [x] 4.5 Specify and test non-resident missing-verdict waiting; rerun targeted checks; authoritative CI is tracked by the Hera worker role.

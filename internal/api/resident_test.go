@@ -269,6 +269,18 @@ func TestAutoStopScanRejectsConcurrentRestart(t *testing.T) {
 	testutil.Equal(t, srv.autoStoppedGeneration(task.ID, tailOf, &agent.ScreenRenderer{}), "")
 }
 
+func TestNonResidentAutoModeWaiting(t *testing.T) {
+	srv, runner, task := bridgeAuthorityServer(t)
+	testutil.False(t, task.IsResident())
+	runner.session.tail = []byte("Auto mode is unavailable — the server returned no safety verdict for the last 10 responses, so Claude stopped. Send a message to try again, or switch out of auto mode.\n❯\u00a0")
+	srv.bridgeHub.Ingest(task.ID, []bridge.Event{{Type: bridge.TypeTurnComplete, Generation: "launch", SessionID: "session", Boot: "b", Seq: 1}}, time.Now())
+	state := newIdleWatcherState()
+	srv.detectNeedsInputTick(state, []string{task.ID}, []string{task.ID}, func(string) []byte { return runner.session.tail })
+	testutil.True(t, runner.SessionRunner.(*agent.Runner).NeedsInput(task.ID))
+	testutil.False(t, srv.ResidentWaiting())
+	testutil.True(t, srv.BridgeStates()[task.ID].NeedsInput)
+}
+
 func TestResident_BulkDeleteRefusesBatchWithResident(t *testing.T) {
 	mux, resID := residentFixture(t)
 	w := serve(mux, "POST", "/api/tasks/bulk-delete", `{"task_ids":["plain","`+resID+`"]}`)
