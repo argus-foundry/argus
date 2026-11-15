@@ -758,6 +758,16 @@ func (d *DB) createHeraTables() error {
 			resolution_note TEXT NOT NULL DEFAULT ''
 		);
 		CREATE INDEX IF NOT EXISTS idx_hera_board_open ON hera_board_items(role_id, resolved, is_read);
+		CREATE TABLE IF NOT EXISTS resident_approvals (
+			board_id INTEGER PRIMARY KEY REFERENCES hera_board_items(id) ON DELETE CASCADE,
+			role_id INTEGER NOT NULL REFERENCES hera_roles(id) ON DELETE CASCADE,
+			identity TEXT NOT NULL,
+			launch TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			state TEXT NOT NULL,
+			expires_at TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_resident_approval_identity ON resident_approvals(identity,board_id);
 		-- Human-action outbox for the standing resident (add-resident-coordinator
 		-- 6.4). The nuke/hide/rename choke points in db write a row when someone
 		-- other than the resident acts on one of its workers — possibly from the

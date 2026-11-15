@@ -764,6 +764,7 @@ func (s *Server) detectNeedsInputTick(state *idleWatcherState, running, idle []s
 			needsSet[id] = resolveBridgeInput(st, state.scraperNeeds[id], state.autoStopped[id]).NeedsInput && !archived[id]
 		}
 	}
+	s.filterResidentApprovalWaiting(state, needsSet, tailOf)
 	needs = needs[:0]
 	for id, value := range needsSet {
 		if value {

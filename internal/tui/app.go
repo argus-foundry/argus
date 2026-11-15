@@ -1136,6 +1136,7 @@ func (a *App) buildUI() {
 			go a.mutateHeraBoard(d, roleID, itemID, updatedAt, false)
 		}
 		a.heraPage.OnBoardDismiss = func(roleID, itemID int64) { go a.mutateHeraBoard(d, roleID, itemID, time.Time{}, true) }
+		a.heraPage.OnApprovalDecision = func(item *db.HeraBoardItem, approve bool) { a.confirmResidentApproval(d, item, approve) }
 		// Persist + restore the rail's fold/selection state across restarts
 		// (BUG-002). Local-only: remote mode (apistore) has no config table seam,
 		// so persistence stays off. Mirrors the heraReader / heraOps type-assert.

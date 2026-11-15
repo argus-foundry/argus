@@ -48,7 +48,8 @@ type Server struct {
 	beforeProjectSave func()
 	// residentWaiting mirrors whether the resident is flagged needs-input
 	// (set by the needs-input tick, read by ResidentWaiting).
-	residentWaiting atomic.Bool
+	residentWaiting  atomic.Bool
+	residentApproval residentApprovalSignals
 
 	deleteOps          deleteOps
 	deleteJobMu        sync.Mutex

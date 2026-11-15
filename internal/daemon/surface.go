@@ -279,7 +279,9 @@ const (
 	// 50: automatic recovery carries a resume-only launch constraint.
 	// 51: resident launches force auto permission mode with native Manual
 	// fallback; the shipped allow tier no longer blanket-approves Bash.
-	SupervisorSpawnSurface = 51
+	// 52: resident launches install an authenticated PermissionRequest hook
+	// that defers exact calls to the human board without blocking the session.
+	SupervisorSpawnSurface = 52
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -531,6 +533,7 @@ var SupervisorSpawnPaths = []string{
 	"internal/inject/atomicfile/atomicfile.go",    // atomic writer the global-config injectors use
 	"internal/inject/opencode/opencode.go",        // opencode global config BuildCmd refreshes before launch
 	"internal/agent/claudeaccount.go",             // per-task account dir bootstrap, env hygiene, sandbox grant
+	"internal/agent/resident_approval.go",         // private per-launch approval hook material and command
 	"internal/claudeenv/claudeenv.go",             // parent-session marker denylist + persistence flag BuildCmd applies
 	"internal/agent/codexaccount.go",              // per-task Codex home, env hygiene, sandbox grant
 	"internal/config/accounts.go",                 // account → config dir resolution BuildCmd reads
@@ -601,7 +604,7 @@ var SupervisorStreamPaths = []string{
 const (
 	// resident.memory_tidy is read only by the daemon timer poll; adding its
 	// schema/default does not change BuildCmd or supervisor spawn behavior.
-	SpawnSurfaceDigest = "ea88ea32fc9ac09fb5d0c8f72e386a1e4cc94f87ab58ea73ae5f3229b4d92168"
+	SpawnSurfaceDigest = "e1a58ae62071e1e01321bafbcd7ad3ef64fd4151cc6aeba3b70470bf462265bc"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
 	StreamSurfaceDigest = "3017380d1473fd065b095a82aa41f2c3ff769fab6ebe7cd2574fb8c0fa46ed12"

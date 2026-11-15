@@ -1783,6 +1783,10 @@ func (d *Daemon) Serve(sockPath string) error {
 			}, pushMgr)
 			apiSrv.SetScheduler(sch)
 			apiSrv.SetClipboard(d.clipboard)
+			apiSrv.SetResidentPermissionHook(func(id string) bool {
+				launch, err := agent.ReadResidentApprovalLaunch()
+				return err == nil && launch.TaskID == id
+			})
 			apiSrv.SetMCPRegistry(pluginRegistry)
 			apiSrv.SetArtifactPublisher(artifactPublisher)
 			apiSrv.SetNotifier(d.notifier)

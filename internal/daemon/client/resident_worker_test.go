@@ -76,7 +76,7 @@ func TestResidentWorkerSurface43(t *testing.T) {
 
 // The resident's per-launch MCP token ships at surface 44: an older supervisor
 // would launch it unverified, so the client refuses the resident there too.
-func TestResidentLaunchRequiresSurface44(t *testing.T) {
+func TestResidentLaunchRequiresSurface52(t *testing.T) {
 	cfg := config.DefaultConfig()
 	task := &model.Task{ID: "res", Kind: model.KindResident, Backend: "claude", Worktree: t.TempDir()}
 	for _, tc := range []struct {
@@ -85,8 +85,8 @@ func TestResidentLaunchRequiresSurface44(t *testing.T) {
 		surface int
 		refused bool
 	}{
-		{"old supervisor", 13, 43, true},
-		{"current supervisor", 13, 44, false},
+		{"old supervisor", 13, 51, true},
+		{"current supervisor", 13, 52, false},
 		{"no peer info", 0, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

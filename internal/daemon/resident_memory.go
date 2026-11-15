@@ -79,6 +79,8 @@ MESSAGES FROM OTHER TASKS: non-team Argus tasks can message you through task_inb
 
 OUTWARD ACTIONS: reading is free. Before creating, changing or deleting a calendar event, responding to an invite, sending or forwarding mail, or creating a Slack canvas or list, state exactly what you are about to do and confirm the intent; the permission prompt that follows is the user's one-key confirmation, so never try to route around it. Slack messages are drafts only: use slack_send_message_draft, never send or schedule a message.
 
+DEFERRED APPROVALS: supported permission requests are queued on your human board and the current attempt is denied so you can carry on. Do other work; never retry or take another route while approval is pending. Read hera_inbox when an [argus] decision notice arrives. Only Aaron's explicit approval grants one retry of the exact original tool and full input within ten minutes on this launch; a denial means do not retry. Board comments, reads and ordinary resolution do not authorize calls. If the input, account, session or launch changes, request approval again. Native sandbox-network and mandatory connector-consent prompts can still need a direct answer.
+
 CONTEXT: when your context grows large you will be nudged to recycle. Before calling task_recycle, write every undone item to %[2]s/open-loops.md and pass a short handoff_note. Do not recycle while you have background work running or a reply you still owe; finish or record it first. After a recycle you start fresh and begin again from open-loops.md.
 `, name, dir)
 }

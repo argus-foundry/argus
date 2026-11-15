@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -622,47 +623,24 @@ func TestRunner_KickRerender_NilTask(t *testing.T) {
 }
 
 func TestRunner_KickRerender_DoublePending(t *testing.T) {
-	// A second KickRerender for the same task while one is in flight must
-	// fail rather than queue another stop on top. We use a `sh -c 'while ...'`
-	// loop instead of `sleep 60` so the appended `--resume sid-1` lands as
-	// positional args inside the inline script and the resumed session stays
-	// alive long enough for the assertions to land — same trick as the
-	// AutoRestartsAtNewDimensions test below.
-	r := NewRunner(nil)
-	cfg := config.Config{
-		Defaults: config.Defaults{Backend: "test"},
-		Backends: map[string]config.Backend{
-			"test": {Command: "sh -c 'while :; do sleep 1; done'", PromptFlag: ""},
-		},
-		Projects: make(map[string]config.Project),
+	// Pin the in-flight state instead of racing a real process exit: an exit
+	// goroutine can finish the first restart before the second call executes.
+	// The neighboring integration test covers actual stop/restart behavior.
+	for _, consumed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("consumed=%t", consumed), func(t *testing.T) {
+			r := NewRunner(nil)
+			cfg := runnerTestConfig()
+			task := &model.Task{ID: "kick-double", SessionID: "sid-1", Worktree: t.TempDir()}
+			r.sessions[task.ID] = &Session{}
+			pending := &pendingRestart{task: task, cfg: cfg, rows: 24, cols: 100, consumed: consumed}
+			r.pendingRestart[task.ID] = pending
+			err := r.KickRerender(task, cfg, 24, 120)
+			testutil.Error(t, err)
+			testutil.Contains(t, err.Error(), "already pending")
+			testutil.True(t, r.pendingRestart[task.ID] == pending)
+			testutil.Equal(t, pending.cols, uint16(100))
+		})
 	}
-	task := &model.Task{ID: "kick-double", Name: "test", SessionID: "sid-1", Worktree: t.TempDir()}
-	_, err := r.Start(task, cfg, 24, 80, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// First kick succeeds. The session is sleeping so it stays alive long
-	// enough for the second kick to race in.
-	if err := r.KickRerender(task, cfg, 24, 100); err != nil {
-		t.Fatalf("first kick: %v", err)
-	}
-	// Second kick must reject — pending entry is still set (consumed=false
-	// until the exit goroutine claims it) so KickRerender's "already pending"
-	// guard fires.
-	if err := r.KickRerender(task, cfg, 24, 120); err == nil {
-		t.Error("expected error for double-pending kick")
-	}
-
-	// Wait for the pending restart to complete (exit + restart loop).
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if !r.HasPendingRestart("kick-double") {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	r.StopAll()
 }
 
 func TestRunner_KickRerender_AutoRestartsAtNewDimensions(t *testing.T) {

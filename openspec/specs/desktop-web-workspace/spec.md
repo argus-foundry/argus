@@ -140,7 +140,7 @@ Task drafts SHALL remain in browser memory, scoped to their task. Browser select
 
 ### Requirement: Add read-only Agent messages and a separate coordinator human Inbox.
 
-Agent messages use only GET hera-messages, oldest first, source plus ID identity, bounded older paging and retained scroll. Inbox is available only for coordinator task bindings. Unread mail shows one rail glyph without a count and opens Inbox. Expand/read, mark unread and dismiss send viewed expected_updated_at and apply authoritative responses. Revision conflicts refetch without acknowledging a newer revision. Reply appends item identity and subject to the captured composer draft without sending. Board events and reconnect reconcile board and roster. Task switches cancel and fence old responses.
+Agent messages SHALL use only GET hera-messages, oldest first, source plus ID identity, bounded older paging and retained scroll. Inbox is available only for coordinator task bindings. Unread mail shows one rail glyph without a count and opens Inbox. Expand/read, mark unread and dismiss send viewed expected_updated_at and apply authoritative responses. Revision conflicts refetch without acknowledging a newer revision. Reply appends item identity and subject to the captured composer draft without sending. Board events and reconnect reconcile board and roster. Task switches cancel and fence old responses.
 
 #### Scenario: Obsolete responses
 
@@ -390,7 +390,7 @@ The context control SHALL open an accessible dismissible popover, show only sour
 
 ### Requirement: Show measured current session totals and paginated turns alongside measured Codex context.
 
-The context ring uses GET /context measurements for Codex, including recorded and unavailable states. Session usage reads GET /usage with limit=50, pins older pages to returned session_id, preserves nullable counters and labels cached input as included in input. task.usage_changed refreshes measurements. Session changes and task changes cancel and fence old reads.
+The context ring SHALL use GET /context measurements for Codex, including recorded and unavailable states. Session usage reads GET /usage with limit=50, pins older pages to returned session_id, preserves nullable counters and labels cached input as included in input. task.usage_changed refreshes measurements. Session changes and task changes cancel and fence old reads.
 
 #### Scenario: Obsolete responses
 

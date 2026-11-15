@@ -360,9 +360,6 @@ The daemon SHALL restore one worktree path to HEAD, undoing staged and unstaged 
 - **WHEN** a staged new file's parent is replaced by an outside symlink while Git removes the index entry
 - **THEN** deletion through the opened worktree root refuses the escape and the outside file survives
 
-## Related API contracts
-
-See `rest-api` for the task reveal contract, including master authorization, contained paths, Finder launch and error responses.
 ### Requirement: Per-file line counts
 
 The git status snapshot SHALL include one entry per changed path with `status`, `kind` (`text`, `binary`, `directory`, `unavailable`) and nonnegative `additions`/`deletions` for text only (null otherwise), computed with a bounded number of git commands independent of file count. Counts SHALL use the same local-first, merge-base-fallback scope as the single-file diff and the snapshot's comparison base. A count that cannot reliably match the single-file diff SHALL be `unavailable`, never zero. Unmerged paths and paths requiring text conversion SHALL have null counts. Untracked reads SHALL be confined to the worktree, nonblocking, and bounded to 8 MiB of text; forced binary attributes SHALL produce `binary`, while unsupported conversions SHALL produce `unavailable`.
@@ -374,3 +371,7 @@ The git status snapshot SHALL include one entry per changed path with `status`, 
 #### Scenario: Binary and rename
 - **WHEN** a binary file changes and a file is renamed
 - **THEN** the binary has null counts and the rename carries `original_path`, with counts matching the destination-only single-file diff rather than rename similarity
+
+## Related API contracts
+
+See `rest-api` for the task reveal contract, including master authorization, contained paths, Finder launch and error responses.

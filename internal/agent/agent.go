@@ -1098,6 +1098,10 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 		if resolvedModel == "" && !hasModelFlag(backend.Command) {
 			policy.Model = us.Model
 		}
+		policy.ApprovalHookCommand, err = writeResidentApprovalHook(task)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resident approval hook: %w", err)
+		}
 		if flag := fam.PermissionRulesFlag(policy); flag != "" {
 			cmdStr += flag
 			uxlog.Log("[resident] permission policy delivered mode=auto fallback=default allow=%d ask=%d (user %d) deny=%d (user %d) model=%q", len(policy.Allow), len(policy.Ask), len(us.Ask), len(policy.Deny), len(us.Deny), policy.Model)
