@@ -2,6 +2,8 @@ package db
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -51,17 +53,20 @@ func TestResidentApprovalExactGrant(t *testing.T) {
 }
 
 func TestResidentApprovalMismatchAndExpiry(t *testing.T) {
-	for _, name := range []string{"tool", "input", "cwd", "session", "launch", "expiry", "denied"} {
+	for _, name := range []string{"tool", "input", "server", "cwd", "session", "launch", "expiry", "denied"} {
 		t.Run(name, func(t *testing.T) {
 			d, call, now := approvalFixture(t)
 			a, _, err := d.RequestResidentApproval(call, now)
 			testutil.NoError(t, err)
 			testutil.NoError(t, d.DecideResidentApproval(a.BoardID, a.CreatedAt, call.Launch, name != "denied", now))
+			original := call
 			switch name {
 			case "tool":
 				call.Tool = "mcp__connector__write"
 			case "input":
 				call.Input = json.RawMessage(`{"command":"echo other"}`)
+			case "server":
+				call.Server = json.RawMessage(`{"name":"other connector"}`)
 			case "cwd":
 				call.Cwd += "/other"
 			case "session":
@@ -74,6 +79,11 @@ func TestResidentApprovalMismatchAndExpiry(t *testing.T) {
 			_, allow, err := d.RequestResidentApproval(call, now)
 			testutil.NoError(t, err)
 			testutil.False(t, allow)
+			if name != "expiry" && name != "denied" {
+				_, allow, err = d.RequestResidentApproval(original, now)
+				testutil.NoError(t, err)
+				testutil.True(t, allow)
+			}
 		})
 	}
 }
@@ -124,4 +134,80 @@ func TestResidentApprovalRejectsMalformedAndStale(t *testing.T) {
 	call.TaskID = "ordinary"
 	_, _, err = d.RequestResidentApproval(call, now)
 	testutil.Error(t, err)
+}
+
+func TestResidentApprovalDecisionRollback(t *testing.T) {
+	d, call, now := approvalFixture(t)
+	a, _, err := d.RequestResidentApproval(call, now)
+	testutil.NoError(t, err)
+	_, err = d.conn.Exec(`CREATE TRIGGER fail_approval_notice BEFORE INSERT ON hera_messages BEGIN SELECT RAISE(ABORT,'notice failed'); END`)
+	testutil.NoError(t, err)
+	testutil.Error(t, d.DecideResidentApproval(a.BoardID, a.CreatedAt, call.Launch, true, now))
+	_, allow, err := d.RequestResidentApproval(call, now)
+	testutil.NoError(t, err)
+	testutil.False(t, allow)
+	items, err := d.ListHeraBoardItems(a.RoleID, false)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(items), 1)
+	_, err = d.conn.Exec(`DROP TRIGGER fail_approval_notice`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.DecideResidentApproval(a.BoardID, a.CreatedAt, call.Launch, false, now))
+}
+
+func TestResidentApprovalCanonicalNestedData(t *testing.T) {
+	canonical, err := canonicalApprovalJSON([]byte(`{"items":[null,true,{"b":2,"a":"x"}],"id":9007199254740993}`))
+	testutil.NoError(t, err)
+	testutil.Equal(t, string(canonical), `{"id":9007199254740993,"items":[null,true,{"a":"x","b":2}]}`)
+	for _, raw := range []string{`{"nested":{"x":1,"x":2}}`, `{"x":[1,]}`, `{"x":[`, strings.Repeat("{\"x\":", 66) + `{}` + strings.Repeat("}", 66), strings.Repeat(" ", 49*1024)} {
+		_, err := canonicalApprovalJSON([]byte(raw))
+		testutil.Error(t, err)
+	}
+	_, err = canonicalApprovalJSON([]byte(`{"html":"` + strings.Repeat("<", 9000) + `"}`))
+	testutil.Error(t, err)
+	_, err = canonicalApprovalJSON([]byte{'{', '"', 'x', '"', ':', '"', 0xff, '"', '}'})
+	testutil.Error(t, err)
+}
+
+func TestResidentApprovalDurableAcrossHandles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "approval.sqlite")
+	d, err := Open(path)
+	testutil.NoError(t, err)
+	r, _, err := d.EnsureResidentTask(t.TempDir())
+	testutil.NoError(t, err)
+	_, err = d.EnsureResidentOrchestrator(r.ID)
+	testutil.NoError(t, err)
+	call := ApprovalCall{TaskID: r.ID, Launch: "launch", Session: "s", Cwd: r.Worktree, Tool: "Bash", Input: json.RawMessage(`{"command":"echo probe"}`)}
+	now := time.Now()
+	a, _, err := d.RequestResidentApproval(call, now)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.Close())
+	d, err = Open(path)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	testutil.NoError(t, d.DecideResidentApproval(a.BoardID, a.CreatedAt, call.Launch, true, now))
+	other, err := Open(path)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = other.Close() })
+	results := make(chan bool, 2)
+	var wg sync.WaitGroup
+	for _, handle := range []*DB{d, other} {
+		wg.Go(func() {
+			_, allow, err := handle.RequestResidentApproval(call, now)
+			testutil.NoError(t, err)
+			results <- allow
+		})
+	}
+	wg.Wait()
+	close(results)
+	n := 0
+	for allow := range results {
+		if allow {
+			n++
+		}
+	}
+	testutil.Equal(t, n, 1)
+	notices, err := other.PendingHeraBoardNotices()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(notices), 1)
 }

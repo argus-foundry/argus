@@ -3,6 +3,12 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"net/rpc"
+	"net/rpc/jsonrpc"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -45,6 +51,62 @@ func TestResidentPermissionHookDecisions(t *testing.T) {
 			}
 		})
 	}
+}
+
+type PermissionHookFake struct{ Reject bool }
+
+func (f *PermissionHookFake) ResidentPermission(_ *daemon.ResidentPermissionReq, out *daemon.ResidentPermissionResp) error {
+	if f.Reject {
+		out.Error = "denied by fake"
+	} else {
+		out.Allow = true
+		out.BoardID = 12
+	}
+	return nil
+}
+
+func TestPermRPC(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(daemon.DefaultSocketPath()), 0o700))
+	listener, err := net.Listen("unix", daemon.DefaultSocketPath())
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	for _, reject := range []bool{false, true} {
+		t.Run(map[bool]string{true: "error", false: "allow"}[reject], func(t *testing.T) {
+			server := rpc.NewServer()
+			testutil.NoError(t, server.RegisterName("Daemon", &PermissionHookFake{Reject: reject}))
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				conn, err := listener.Accept()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer conn.Close() //nolint:errcheck
+				var prefix [1]byte
+				_, err = io.ReadFull(conn, prefix[:])
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				testutil.Equal(t, prefix[0], byte('R'))
+				server.ServeCodec(jsonrpc.NewServerCodec(conn))
+			}()
+			out, err := callResidentPermission(&daemon.ResidentPermissionReq{})
+			if reject {
+				testutil.Error(t, err)
+			} else {
+				testutil.NoError(t, err)
+				testutil.True(t, out.Allow)
+				testutil.Equal(t, out.BoardID, int64(12))
+			}
+			<-done
+		})
+	}
+	testutil.NoError(t, listener.Close())
+	_, err = callResidentPermission(&daemon.ResidentPermissionReq{})
+	testutil.Error(t, err)
 }
 
 func TestResidentPermissionHookFailsClosed(t *testing.T) {

@@ -21,7 +21,7 @@ On 2026-11-14 the coordinator ran `context/spikes/resident-defer-proof.py` with 
 
 ## Decisions
 
-- Install a resident-only PermissionRequest command hook in the isolated inline settings. A private launch file authenticates its daemon RPC, with bounded JSON and fail-closed errors. Keep the native allow/ask/deny arrays and return neither updatedPermissions nor updatedInput.
+- Install a resident-only PermissionRequest command hook in the isolated inline settings. A private launch file authenticates its daemon RPC, with a 64 KiB event limit, a 48 KiB canonical input/server limit and fail-closed errors. Keep the native allow/ask/deny arrays and return neither updatedPermissions nor updatedInput.
 - At the hook boundary, store canonical JSON (preserve numeric precision, reject malformed/duplicate keys), tool name, cwd, session and launch identity. Hash the full input. Deduplicate identical pending attempts. A native deny prevents reaching PermissionRequest at all.
 - A new approval row links an immutable decision on the standing-team board. TUI renders stored tool/input and explicit Approve once / Deny controls. Generic board edits/resolution never create grants; approval items cannot be rewritten into a different request.
 - The human action uses revision/state checks. Approval has a ten-minute expiry and consumes atomically at the next matching PermissionRequest; denial never executes. Both write a reliable `[argus] ` notice in the same database transaction. A grant is authorization to attempt execution once, not evidence the tool completed.

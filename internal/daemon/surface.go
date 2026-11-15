@@ -279,7 +279,9 @@ const (
 	// 50: automatic recovery carries a resume-only launch constraint.
 	// 51: resident launches force auto permission mode with native Manual
 	// fallback; the shipped allow tier no longer blanket-approves Bash.
-	SupervisorSpawnSurface = 51
+	// 52: resident launches install an authenticated PermissionRequest hook
+	// that defers exact calls to the human board without blocking the session.
+	SupervisorSpawnSurface = 52
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -531,6 +533,7 @@ var SupervisorSpawnPaths = []string{
 	"internal/inject/atomicfile/atomicfile.go",    // atomic writer the global-config injectors use
 	"internal/inject/opencode/opencode.go",        // opencode global config BuildCmd refreshes before launch
 	"internal/agent/claudeaccount.go",             // per-task account dir bootstrap, env hygiene, sandbox grant
+	"internal/agent/resident_approval.go",         // private per-launch approval hook material and command
 	"internal/claudeenv/claudeenv.go",             // parent-session marker denylist + persistence flag BuildCmd applies
 	"internal/agent/codexaccount.go",              // per-task Codex home, env hygiene, sandbox grant
 	"internal/config/accounts.go",                 // account → config dir resolution BuildCmd reads
@@ -599,7 +602,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "ecb0878ad1d675aa820c41d62d7714173941a150f26759e0b056e6de2e0ef41e"
+	SpawnSurfaceDigest  = "7bd6cab1deeeddd0223ff2dc2737e679151f5f6d5350ec1e2cde20c2e49f6c80"
 	StreamSurfaceDigest = "c9189174f3b1fe422866f474cb32ce4b4352b40417ccc904810f00da00ec6d45"
 )
 

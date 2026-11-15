@@ -2,6 +2,7 @@ package api
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,4 +36,21 @@ func TestResidentApprovalSuppressionBoundedAndLaunchScoped(t *testing.T) {
 	// A restart cannot inherit the old answered grace period.
 	testutil.True(t, srv.suppressResidentPermission("r", "new", true, now.Add(13*time.Second)))
 	testutil.False(t, srv.suppressResidentPermission("r", "new", true, now.Add(24*time.Second)))
+}
+
+func TestResidentApprovalHookConcurrentConfiguration(t *testing.T) {
+	srv, _ := testServer(t)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 100 {
+			srv.SetResidentPermissionHook(func(string) bool { return true })
+		}
+	})
+	wg.Go(func() {
+		state := newIdleWatcherState()
+		for range 100 {
+			srv.filterResidentApprovalWaiting(state, map[string]bool{}, func(string) []byte { return nil })
+		}
+	})
+	wg.Wait()
 }

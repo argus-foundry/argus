@@ -11,6 +11,7 @@ import (
 	"io"
 	"regexp"
 	"time"
+	"unicode/utf8"
 
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/uxlog"
@@ -37,7 +38,7 @@ var approvalToolName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,240}$`)
 // UseNumber keeps connector IDs above 2^53 exact. Lexically different numbers
 // remain different, a conservative mismatch rather than a widened grant.
 func canonicalApprovalJSON(raw []byte) ([]byte, error) {
-	if len(raw) == 0 || len(raw) > 48*1024 {
+	if len(raw) == 0 || len(raw) > 48*1024 || !utf8.Valid(raw) {
 		return nil, ErrResidentApproval
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
@@ -52,7 +53,11 @@ func canonicalApprovalJSON(raw []byte) ([]byte, error) {
 	if _, err := d.Token(); err != io.EOF {
 		return nil, ErrResidentApproval
 	}
-	return json.Marshal(value)
+	canonical, err := json.Marshal(value)
+	if err != nil || len(canonical) > 48*1024 {
+		return nil, ErrResidentApproval
+	}
+	return canonical, nil
 }
 
 func approvalJSONValue(d *json.Decoder, depth int) (any, error) {
@@ -121,6 +126,9 @@ func (d *DB) RequestResidentApproval(call ApprovalCall, now time.Time) (*Residen
 			return nil, false, err
 		}
 	}
+	if len(call.Input)+len(call.Server) > 48*1024 {
+		return nil, false, ErrResidentApproval
+	}
 	identity, err := json.Marshal(call)
 	if err != nil {
 		return nil, false, err
@@ -158,7 +166,10 @@ func (d *DB) RequestResidentApproval(call ApprovalCall, now time.Time) (*Residen
 		}
 		created = formatTime(now)
 		body := fmt.Sprintf("Tool: %s\n\nWorking directory: %s\n\nExact input:\n%s\n\nServer:\n%s\n\nReply opens Approve once; dismiss opens Deny. Approval expires after ten minutes and applies only to this launch.", call.Tool, call.Cwd, input, call.Server)
-		res, err := tx.Exec(`INSERT INTO hera_board_items(role_id,kind,subject,body,created_at,updated_at) VALUES (?,'decision',?,?,?,?)`, roleID, "Approve Solo call: "+call.Tool, body, created, created)
+		if !validBoardContent("decision", "Approve call: "+call.Tool, body) {
+			return ErrResidentApproval
+		}
+		res, err := tx.Exec(`INSERT INTO hera_board_items(role_id,kind,subject,body,created_at,updated_at) VALUES (?,'decision',?,?,?,?)`, roleID, "Approve call: "+call.Tool, body, created, created)
 		if err != nil {
 			return err
 		}

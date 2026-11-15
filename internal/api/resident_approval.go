@@ -1,19 +1,17 @@
 package api
 
 import (
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/bridge"
-	"github.com/argus-foundry/argus/internal/sanitize"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
 type residentApprovalSignals struct {
 	mu                            sync.Mutex
-	enabled                       func(string) bool // installed before the watcher starts
+	enabled                       func(string) bool
 	task, generation              string
 	answeredUntil, candidateSince time.Time
 }
@@ -21,6 +19,8 @@ type residentApprovalSignals struct {
 // SetResidentPermissionHook configures detection only for launches carrying the
 // new hook. Existing/old supervisor sessions keep native waiting behavior.
 func (s *Server) SetResidentPermissionHook(enabled func(string) bool) {
+	s.residentApproval.mu.Lock()
+	defer s.residentApproval.mu.Unlock()
 	s.residentApproval.enabled = enabled
 }
 
@@ -53,21 +53,29 @@ func (s *Server) suppressResidentPermission(id, generation string, permission bo
 }
 
 func (s *Server) filterResidentApprovalWaiting(state *idleWatcherState, needs map[string]bool, tailOf func(string) []byte) {
-	if s.residentApproval.enabled == nil || s.db == nil {
+	s.residentApproval.mu.Lock()
+	enabled := s.residentApproval.enabled
+	s.residentApproval.mu.Unlock()
+	if enabled == nil || s.db == nil {
 		return
 	}
 	r, err := s.db.ResidentTask()
-	if err != nil || r == nil || !s.residentApproval.enabled(r.ID) {
+	if err != nil || r == nil || !enabled(r.ID) {
+		return
+	}
+	generation := agent.SessionBridgeGeneration(s.runner.Get(r.ID))
+	if !needs[r.ID] {
+		s.suppressResidentPermission(r.ID, generation, false, time.Now())
 		return
 	}
 	permission := false
 	if st, live := s.bridgeState(r.ID, time.Now()); live {
 		permission = st.NeedsInputKind == bridge.KindPermission
 	} else {
-		text := sanitize.StripANSI(string(tailOf(r.ID)))
-		permission = strings.Contains(text, "Bash command") || strings.Contains(text, "Permission rule") || strings.Contains(text, "requires permission") || strings.Contains(text, "Do you want to proceed?")
+		cols, rows := sessionScreenSize(r.ID)
+		permission = agent.NewTailView(state.screen, tailOf(r.ID), cols, rows).PermissionPrompt()
 	}
-	if s.suppressResidentPermission(r.ID, agent.SessionBridgeGeneration(s.runner.Get(r.ID)), permission, time.Now()) {
+	if s.suppressResidentPermission(r.ID, generation, permission, time.Now()) {
 		delete(needs, r.ID)
 		// The generic detector is sticky. Never retain the flashed prompt as an
 		// outstanding question after the hook's answer dismissed it.
