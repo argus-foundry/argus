@@ -41,4 +41,3 @@ Every fire SHALL instruct Solo to curate only `resident.memory_dir` through KB t
 - **WHEN** the built-in timer is due
 - **THEN** one durable inbox message carries the configured folder and full curation procedure
 - **AND** missed fires coalesce through the existing resident timer delivery path
-
