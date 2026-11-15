@@ -515,3 +515,12 @@ Every automatic switch SHALL be logged under the `[resident]` uxlog prefix and t
 - **WHEN** the resident is automatically switched from `work` to `personal`
 - **THEN** the resident board shows an item "Solo switched accounts: work to personal" and the resident receives an `[argus]` system turn saying so
 
+### Requirement: Follow-up timer discipline
+
+Resident orientation SHALL tell Solo to set a purposeful follow-up when promising to check back or waiting on someone, record timer ids with its open loops, reconcile active timers on startup, and cancel timers when their loop closes. It SHALL distinguish resident wake-ups from task-creating Argus schedules.
+
+#### Scenario: Promise to check back
+
+- **WHEN** Solo promises a later follow-up
+- **THEN** its orientation directs it to create a timer and keep open-loops memory consistent
+

@@ -375,6 +375,7 @@ func (a *App) pollResidentUnread() {
 // While the resident tab is focused an unread reply is acked immediately so a
 // reply arriving mid-watch never leaves a stale marker.
 func (a *App) applyResidentState(resp daemon.ResidentStateResp) {
+	a.heraPage.SetResidentTimers(resp.TimerCount, resp.NextTimerAt)
 	viewing := a.header.ActiveTab() == widget.TabResident
 	unread := resp.Unread
 	if viewing && unread {

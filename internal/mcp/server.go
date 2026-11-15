@@ -1165,6 +1165,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			tools = append(tools, residentDeleteTool, residentGraduateTool)
 		}
 	}
+	if s.boundResident(req.caller) {
+		tools = append(tools, residentTimerToolDefs...)
+	}
 	if s.profileResolveEnabled() {
 		tools = append(tools, profileToolDefs...)
 	}
@@ -1238,6 +1241,8 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	}
 
 	switch params.Name {
+	case "resident_timer_set", "resident_timer_schedule", "resident_timer_list", "resident_timer_cancel":
+		return s.toolResidentTimer(req.ID, params.Name, params.Arguments, req.caller)
 	case "kb_search":
 		return s.toolKBSearch(req.ID, params.Arguments)
 	case "kb_read":
@@ -1454,7 +1459,7 @@ func builtinToolDefs() []Tool {
 	var out []Tool
 	for _, defs := range [][]Tool{toolDefs, taskToolDefs, taskRecycleToolDefs, todoToolDefs, clipboardToolDefs,
 		sandboxProposalToolDefs, scheduleToolDefs, messagingToolDefs, artifactToolDefs, artifactOpenToolDefs,
-		artifactPublishToolDefs, heraToolDefs, profileToolDefs, apiGetToolDefs, accountMoveToolDefs} {
+		artifactPublishToolDefs, heraToolDefs, profileToolDefs, apiGetToolDefs, accountMoveToolDefs, residentTimerToolDefs} {
 		out = append(out, defs...)
 	}
 	return append(out, residentDeleteTool, residentGraduateTool)

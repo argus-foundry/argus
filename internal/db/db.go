@@ -22,6 +22,9 @@ type DB struct {
 	mu   sync.Mutex
 	// resultMu orders result commits through publication without holding mu in the sink.
 	resultMu sync.Mutex
+	// Timer DDL is deferred so ordinary task/test DBs pay no setup cost.
+	// Guarded by mu; only successful initialization is cached.
+	residentTimersReady bool
 
 	// cfgLoader overlays ~/.argus/config.toml (next to the DB file) onto the
 	// assembled Config in Config(). Nil for in-memory/test DBs so they never

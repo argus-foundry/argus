@@ -84,14 +84,15 @@ type HeraPage struct {
 	// swaps p.reader between them on the UI goroutine.
 	residentMode bool
 	// Projects-rail state parked while the resident view owns the shared rail.
-	projectsPrior     *railSnapshot
-	projectsExcursion *railSnapshot
-	projectsArmed     map[int64]bool
-	residentTitle     string // resident pane's base border title (SetResidentTitle)
-	residentUnread    int    // the resident's own unread count, shown in the title
-	coordTitle        string // the coordinator pane's title as last set (resident mode)
-	genericReader     heramodel.HeraReader
-	residentReader    heramodel.HeraReader
+	projectsPrior        *railSnapshot
+	projectsExcursion    *railSnapshot
+	projectsArmed        map[int64]bool
+	residentTitle        string // resident pane's base border title (SetResidentTitle)
+	residentUnread       int    // the resident's own unread count, shown in the title
+	residentTimerSummary string
+	coordTitle           string // the coordinator pane's title as last set (resident mode)
+	genericReader        heramodel.HeraReader
+	residentReader       heramodel.HeraReader
 
 	// 6b pane feeds.
 	coordPane *terminal.TerminalPane // middle: orchestrator coordinator session
@@ -550,6 +551,9 @@ func (p *HeraPage) applyResidentTitle() {
 		return
 	}
 	title := p.residentTitle
+	if p.residentTimerSummary != "" {
+		title += " · " + p.residentTimerSummary
+	}
 	if p.residentUnread > 0 {
 		title = fmt.Sprintf("%s · ✉%d", title, p.residentUnread)
 	}

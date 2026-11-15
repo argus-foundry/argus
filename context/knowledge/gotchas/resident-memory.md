@@ -1,5 +1,7 @@
 # Resident memory, orientation and permissions
 
+- **Follow-up timer ids belong beside their open loops.** Fresh orientation tells Solo to list/reconcile timers after reading open-loops, set purposeful wake-ups for promises and waiting-on-someone loops, and cancel closed loops; never turn these into generic connector polling. Timer tools reuse the current launch token's verified resident identity and never accept a target task.
+
 - **`kb_ingest` write-back used to drop every frontmatter key but `title`/`tags`**, which would silently strip `dream: skip` from resident working files. `kb.Document.Extra` now preserves other top-level frontmatter lines verbatim through `ParseDocument` and `RenderMarkdown`; it is not stored in the index.
 - **Seeding goes through `kb.SeedVaultFile` (O_EXCL create, then `KBUpsert`), never an overwrite.** It runs on every resident start so a deleted working file reappears, but an agent-edited one is never touched. A seed failure is logged and non-fatal; the orientation prompt tells the agent to create a missing file.
 - **The memory folder comes only from `resident.memory_dir`** (`residentMemoryDir`), never from `resident.name`, so a rename cannot move memory. A `..` dir is rejected by `SeedVaultFile`.

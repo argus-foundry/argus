@@ -503,24 +503,6 @@ type SetFocusedReq struct {
 	Focused bool
 }
 
-// ResidentStateResp is the resident agent's daemon-held state (add-resident-agent
-// D7). Name is empty and Enabled false when the resident is off. Reason carries
-// the unmet prerequisite (name, KB, vault, backend) when enabled but unable to
-// run, so frontends can show why.
-type ResidentStateResp struct {
-	RunningWorkers int
-	Enabled        bool
-	Name           string
-	TaskID         string
-	Running        bool
-	Unread         bool
-	Waiting        bool
-	LastReply      string
-	LastReplyAt    string // RFC3339Nano UTC, empty when none
-	ViewedAt       string // RFC3339Nano UTC, empty when never viewed
-	Reason         string
-}
-
 // ResidentMoveAccountReq moves the resident to another Claude account: a
 // configured name, "default", or "auto".
 type ResidentMoveAccountReq struct {
