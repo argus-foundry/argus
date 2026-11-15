@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/browserproc"
 	"github.com/argus-foundry/argus/internal/buildid"
 	"github.com/argus-foundry/argus/internal/claudeaccount"
 	"github.com/argus-foundry/argus/internal/config"
@@ -44,6 +45,7 @@ func runDoctor() {
 	fmt.Print(doctor.RenderProfileLibrary(gatherProfileLibraryStatus()))
 	fmt.Print(doctor.RenderSecretsBootstrap(gatherSecretsBootstrapStatus()))
 	fmt.Print(doctor.RenderDevStackOrphans(gatherDevStackOrphans()))
+	fmt.Print(doctor.RenderBrowserOrphans(browserproc.Scan(filepath.Join(db.DataDir(), "worktrees"))))
 	fmt.Print(doctor.RenderFinishedStacks(gatherFinishedStacks()))
 	fmt.Print(doctor.RenderHostSleep(gatherHostSleep()))
 	if doctor.Diagnose(actors).Verdict != doctor.Healthy {

@@ -589,6 +589,8 @@ It is strictly **read-only** (never touches a symlink, binary, `PATH`, or proces
 
 `doctor` also lists dev stacks (see `[devstack]` below) still running in the worktree of a finished task — **FOUND**, **NONE FOUND**, or **UNKNOWN** (process scan or task lookup unavailable). Advisory only: it never affects the exit code and never stops anything.
 
+`doctor` also lists orphaned Argus Playwright Chrome/Chromium browsers (parent PID 1), with their PIDs and worktrees. The daemon cleans up verified task browsers after full session stops or worktree removal, and sweeps browsers of finished or missing tasks after roughly a minute without a live session. Personal Chrome and shared crashpad processes are excluded; an unavailable process inspection is reported as **UNKNOWN**. Doctor never stops browsers.
+
 ### Typing latency diagnostics
 
 Launch the TUI with `ARGUS_TYPING_LOG=1 argus` to write keystroke timing and slow tick lines to `~/.argus/ux.log`. Input content and length are never logged. Normal launches leave this diagnostic off.

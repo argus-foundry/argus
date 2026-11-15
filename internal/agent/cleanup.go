@@ -196,6 +196,7 @@ func RemoveWorktree(worktreePath, repoDir string) {
 	// pointed at a directory that no longer exists. See
 	// gotchas/worktree.md and fix-devstack-orphaning.
 	stopDevStackFor(worktreePath)
+	stopBrowsersFor(worktreePath)
 	cleaned := filepath.Clean(worktreePath)
 	cmd := exec.Command("git", "worktree", "remove", "--force", cleaned)
 	if repoDir != "" {

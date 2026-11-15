@@ -122,6 +122,7 @@ func CleanupTaskGitContext(ctx context.Context, worktree, branch, repoDir string
 				fail(err.Error())
 			} else {
 				stopDevStackFor(path)
+				stopBrowsersFor(path)
 				if _, _, err := RunTaskGit(ctx, repoDir, "worktree", "remove", "--force", path); err != nil {
 					res.Worktree = CleanupFailed
 					fail("worktree removal failed: " + err.Error())
