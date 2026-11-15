@@ -16,6 +16,23 @@ type residentTimerCancelNudger struct {
 	calls []struct{ task, id string }
 }
 
+func TestResidentTimerBuiltinCannotCancel(t *testing.T) {
+	s, d, res, _ := residentHeraFixture(t)
+	testutil.NoError(t, d.EnsureResidentMemoryTidy("tidy", "30 2 * * *", "UTC", time.Now()))
+	body, bad := postTool(t, s, "/mcp?caller="+res.ID, "resident_timer_list", `{}`)
+	testutil.False(t, bad)
+	var timers []db.ResidentTimer
+	testutil.NoError(t, json.Unmarshal([]byte(body), &timers))
+	testutil.Equal(t, len(timers), 1)
+	testutil.Equal(t, timers[0].Builtin, "memory_tidy")
+	body, bad = postTool(t, s, "/mcp?caller="+res.ID, "resident_timer_cancel", fmt.Sprintf(`{"id":%d}`, timers[0].ID))
+	testutil.True(t, bad)
+	testutil.Contains(t, body, "config")
+	list, err := d.ResidentTimers()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(list), 1)
+}
+
 func (n *residentTimerCancelNudger) Nudge(string, string, string) error { return nil }
 func (n *residentTimerCancelNudger) Cancel(task, id string) error {
 	n.calls = append(n.calls, struct{ task, id string }{task, id})

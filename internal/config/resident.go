@@ -31,6 +31,8 @@ type ResidentConfig struct {
 	ContextBudget int `toml:"context_budget"`
 	// MemoryDir is the vault-relative working-memory folder. Independent of Name.
 	MemoryDir string `toml:"memory_dir"`
+	// MemoryTidy is a local HH:MM daily wake-up, or off. Empty uses 02:30.
+	MemoryTidy string `toml:"memory_tidy"`
 	// Model optionally overrides the resolved model.
 	Model string `toml:"model"`
 	// Accounts is the ordered preference list of Claude accounts (default
@@ -106,6 +108,7 @@ func DefaultResidentConfig(budget int) ResidentConfig {
 		AutoSwitchAccount: true,
 		ContextBudget:     budget,
 		MemoryDir:         "resident",
+		MemoryTidy:        "02:30",
 		AllowTools: []string{
 			// Explicit built-ins: global allow wildcards are not supported by Claude.
 			"Bash",

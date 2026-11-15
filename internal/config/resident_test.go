@@ -137,6 +137,7 @@ enabled = true
 name = "Dot"
 context_budget = 123000
 memory_dir = "assistant"
+memory_tidy = "04:15"
 model = "opus"
 accounts = ["work", "auto"]
 allow_tools = ["c"]
@@ -151,6 +152,7 @@ deny_tools = ["b"]
 	testutil.Equal(t, r.Name, "Dot")
 	testutil.Equal(t, r.ContextBudget, 123000)
 	testutil.Equal(t, r.MemoryDir, "assistant")
+	testutil.Equal(t, r.MemoryTidy, "04:15")
 	testutil.Equal(t, r.Model, "opus")
 	testutil.DeepEqual(t, r.Accounts, []string{"work", "auto"})
 	testutil.DeepEqual(t, r.AllowTools, []string{"c"})

@@ -17,7 +17,19 @@ type residentTimerNotifier interface {
 // once; the durable receipt keeps retrying notifier registration after bounces
 // and five-minute deadlines, with the same delivery id on every attempt.
 func (m *residentManager) deliverTimers() {
-	if !m.cfgFn().Resident.Enabled {
+	cfg := m.cfgFn()
+	if !cfg.Resident.Enabled {
+		return
+	}
+	expression, err := cfg.Resident.MemoryTidySchedule()
+	if err != nil {
+		residentLog("[resident-memory-tidy] invalid config: %v", err)
+		// Fail closed for this built-in, retracting an old queued fire, while
+		// ordinary follow-ups continue to work.
+		expression = ""
+	}
+	if err = m.db.EnsureResidentMemoryTidy(residentMemoryTidyNote(cfg), expression, "Local", m.now()); err != nil {
+		residentLog("[resident-memory-tidy] reconcile failed: %v", err)
 		return
 	}
 	task, err := m.db.ResidentTask()
