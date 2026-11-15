@@ -452,58 +452,72 @@ func (d *DB) ResultTimes() (map[string]time.Time, error) {
 // Unarchiving (archived=false) leaves pinned alone — pinning state survives
 // a round trip through the archive section.
 func (d *DB) SetArchived(id string, archived bool) error {
+	return d.setArchived(id, archived)
+}
+
+func (d *DB) setArchived(id string, archived bool) error {
 	// Both statements (tasks UPDATE + on-archive task_messages DELETE) run in
 	// one SQLite transaction so a crash between them can't leave an archived
 	// row with a queued inbox forever counting against the unread cap.
 	var oldArchived, oldPinned int
 	err := d.WithTx(func(tx *sql.Tx) error {
-		var (
-			res sql.Result
-			err error
-		)
-		if gerr := residentGuard(tx, id); gerr != nil {
-			return gerr
-		}
-		if archived {
-			if gerr := graduationPendingGuard(tx, id); gerr != nil {
-				return gerr
-			}
-		}
-		if qerr := tx.QueryRow(`SELECT archived, pinned FROM tasks WHERE id=?`, id).Scan(&oldArchived, &oldPinned); qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
-			return qerr
-		}
-		if archived {
-			res, err = tx.Exec(`UPDATE tasks SET archived=1, pinned=0 WHERE id=?`, id)
-		} else {
-			res, err = tx.Exec(`UPDATE tasks SET archived=0 WHERE id=?`, id)
-		}
-		if err != nil {
-			return err
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
-		}
-		// On archive, drop queued messages so a stale recipient doesn't sit on
-		// the unread cap blocking other senders. Unarchive leaves messages
-		// alone (there are none — the cleanup ran when the task was archived).
-		if archived {
-			if _, err := tx.Exec(`DELETE FROM task_messages WHERE from_task_id=? OR to_task_id=?`, id, id); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(`DELETE FROM task_meta WHERE task_id=?`, id); err != nil {
-				return err
-			}
-		}
-		return nil
+		var err error
+		oldArchived, oldPinned, err = setArchivedTx(tx, id, archived)
+		return err
 	})
-	if err == nil && archived {
-		events.Emit(model.EventTypeTaskArchived, id, nil)
-	}
 	if err == nil {
-		emitSectionChange(id, oldArchived != 0, oldPinned != 0, archived, pinnedAfterArchive(archived, oldPinned != 0))
+		emitArchivedEvents(id, archived, oldArchived, oldPinned)
 	}
 	return err
+}
+
+// setArchivedTx is the archive write body, usable inside a caller's
+// transaction (ArchiveHeraUnit). It returns the prior archived/pinned flags
+// for emitArchivedEvents, which the caller runs AFTER commit.
+func setArchivedTx(tx *sql.Tx, id string, archived bool) (oldArchived, oldPinned int, err error) {
+	if gerr := residentGuard(tx, id); gerr != nil {
+		return 0, 0, gerr
+	}
+	if archived {
+		if gerr := graduationPendingGuard(tx, id); gerr != nil {
+			return 0, 0, gerr
+		}
+	}
+	if qerr := tx.QueryRow(`SELECT archived, pinned FROM tasks WHERE id=?`, id).Scan(&oldArchived, &oldPinned); qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
+		return 0, 0, qerr
+	}
+	var res sql.Result
+	if archived {
+		res, err = tx.Exec(`UPDATE tasks SET archived=1, pinned=0 WHERE id=?`, id)
+	} else {
+		res, err = tx.Exec(`UPDATE tasks SET archived=0 WHERE id=?`, id)
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return 0, 0, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	}
+	// On archive, drop queued messages so a stale recipient doesn't sit on
+	// the unread cap blocking other senders. Unarchive leaves messages
+	// alone (there are none — the cleanup ran when the task was archived).
+	if archived {
+		if _, err := tx.Exec(`DELETE FROM task_messages WHERE from_task_id=? OR to_task_id=?`, id, id); err != nil {
+			return 0, 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM task_meta WHERE task_id=?`, id); err != nil {
+			return 0, 0, err
+		}
+	}
+	return oldArchived, oldPinned, nil
+}
+
+func emitArchivedEvents(id string, archived bool, oldArchived, oldPinned int) {
+	if archived {
+		events.Emit(model.EventTypeTaskArchived, id, nil)
+	}
+	emitSectionChange(id, oldArchived != 0, oldPinned != 0, archived, pinnedAfterArchive(archived, oldPinned != 0))
 }
 
 func pinnedAfterArchive(archived, oldPinned bool) bool {

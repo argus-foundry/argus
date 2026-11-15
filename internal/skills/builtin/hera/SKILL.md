@@ -191,6 +191,16 @@ Live Claude bridges with `bridge.delivery` enabled deliver doorbells as plugin-f
   auto-revive only ever restarts a *dead* recipient. The TUI's Enter-key path applies the same gate.
   It targets a DIFFERENT role than your own (self-targeting errors).
 
+- **`hera_archive(cwd, [role_name], [orchestrator], [dry_run])`** — coordinator-only: archive roles that are
+  *done-done* so they leave the live views. Archivable only when the task is `complete`, the role isn't
+  blocked, has no unread hera mail, no not-yet-done plan node depends on it, a sub-coordinator has all
+  child roles archived and no open `decision` board items (open `fyi` items are pushed to your board),
+  and its git work is confirmed landed (merged PR) with a clean worktree. Anything unconfirmed is
+  refused with a reason. Stops an idle session (a busy one is refused); never deletes the worktree or
+  branch. Omit `role_name` to sweep every role you coordinate; `dry_run` only reports. Call it after
+  `hera_accept` + the role's winding-down confirmation + a merged PR, and as a sweep before reporting
+  the orchestration finished. Top-level coordinators are human-archived — not archivable here.
+
 - **`hera_accept(cwd, role_name, [orchestrator], [message])`** — coordinator-only: mark a role's bound
   task complete and send it a check-in asking whether it's winding down, has more work to do, or is
   unsure. The reply is informational only — never auto-reopens the task; a premature accept is undone

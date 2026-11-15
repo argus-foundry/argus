@@ -594,7 +594,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest = "9b3cf2bd62045837ea6179a991671c3e4f5ac44c48ca706bcd1d6fdbe9685b08"
+	SpawnSurfaceDigest = "302b69980400f29dd517b5fd4168682b27a0f6b683771ffb14d8e4570e198869"
 	// bounce.go changed only daemon-side comments; supervisor snapshot behavior is unchanged.
 	StreamSurfaceDigest = "c9678bf3ca045213da34207120db8326aa15b9d6f9c96de9efc64ad477be5b53"
 )
