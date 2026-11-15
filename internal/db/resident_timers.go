@@ -46,6 +46,10 @@ func (d *DB) ensureResidentTimerSchema() error {
 			submitted INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE INDEX IF NOT EXISTS idx_resident_timers_due ON resident_timers(due_at,id) WHERE active=1;
+		CREATE TABLE IF NOT EXISTS resident_builtin_timers (
+			name TEXT PRIMARY KEY,
+			timer_id INTEGER NOT NULL UNIQUE REFERENCES resident_timers(id)
+		);
 	`)
 	if err == nil {
 		d.residentTimersReady = true
@@ -55,6 +59,7 @@ func (d *DB) ensureResidentTimerSchema() error {
 
 // ResidentTimer belongs to the singleton resident, independently of its session.
 type ResidentTimer struct {
+	Builtin    string    `json:"builtin,omitempty"`
 	ID         int64     `json:"id"`
 	Note       string    `json:"note"`
 	CreatedAt  time.Time `json:"created_at"`
@@ -135,7 +140,7 @@ func (d *DB) SetResidentTimer(note string, due time.Time, expression, zone strin
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var count int
-	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM resident_timers WHERE active=1`).Scan(&count); err != nil {
+	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM resident_timers WHERE active=1 AND id NOT IN (SELECT timer_id FROM resident_builtin_timers)`).Scan(&count); err != nil {
 		return nil, err
 	}
 	if count >= ResidentTimerLimit {
@@ -159,7 +164,7 @@ func (d *DB) ResidentTimers() ([]ResidentTimer, error) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, err := d.conn.Query(`SELECT id,note,created_at,due_at,expression,timezone FROM resident_timers WHERE active=1 ORDER BY due_at,id`)
+	rows, err := d.conn.Query(`SELECT id,note,created_at,due_at,expression,timezone,COALESCE(b.name,'') FROM resident_timers t LEFT JOIN resident_builtin_timers b ON b.timer_id=t.id WHERE active=1 ORDER BY due_at,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +173,7 @@ func (d *DB) ResidentTimers() ([]ResidentTimer, error) {
 	for rows.Next() {
 		var t ResidentTimer
 		var created, due int64
-		if err := rows.Scan(&t.ID, &t.Note, &created, &due, &t.Expression, &t.Timezone); err != nil {
+		if err := rows.Scan(&t.ID, &t.Note, &created, &due, &t.Expression, &t.Timezone, &t.Builtin); err != nil {
 			return nil, err
 		}
 		t.CreatedAt = time.Unix(0, created).UTC()
@@ -185,6 +190,13 @@ func (d *DB) CancelResidentTimer(id int64) error {
 		return err
 	}
 	err := d.WithTx(func(tx *sql.Tx) error {
+		var builtin int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM resident_builtin_timers WHERE timer_id=?`, id).Scan(&builtin); err != nil {
+			return err
+		}
+		if builtin != 0 {
+			return errors.New("built-in timer is controlled by resident.memory_tidy config")
+		}
 		res, err := tx.Exec(`UPDATE resident_timers SET active=0,cancelled=1,finished_at=? WHERE id=?`, time.Now().UnixNano(), id)
 		if err != nil {
 			return err
@@ -325,7 +337,7 @@ func (d *DB) PruneResidentTimers(now time.Time) (int64, error) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	res, err := d.conn.Exec(`DELETE FROM resident_timers WHERE active=0 AND finished_at>0 AND finished_at<? AND NOT EXISTS (SELECT 1 FROM resident_timer_deliveries WHERE timer_id=resident_timers.id)`, now.Add(-30*24*time.Hour).UnixNano())
+	res, err := d.conn.Exec(`DELETE FROM resident_timers WHERE active=0 AND finished_at>0 AND finished_at<? AND id NOT IN (SELECT timer_id FROM resident_builtin_timers) AND NOT EXISTS (SELECT 1 FROM resident_timer_deliveries WHERE timer_id=resident_timers.id)`, now.Add(-30*24*time.Hour).UnixNano())
 	if err != nil {
 		return 0, err
 	}

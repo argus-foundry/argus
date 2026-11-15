@@ -599,7 +599,11 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "ecb0878ad1d675aa820c41d62d7714173941a150f26759e0b056e6de2e0ef41e"
+	// resident.memory_tidy is read only by the daemon timer poll; adding its
+	// schema/default does not change BuildCmd or supervisor spawn behavior.
+	SpawnSurfaceDigest = "ea88ea32fc9ac09fb5d0c8f72e386a1e4cc94f87ab58ea73ae5f3229b4d92168"
+	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
+	// changed daemon-side comments; neither changes supervisor stream behavior.
 	StreamSurfaceDigest = "3017380d1473fd065b095a82aa41f2c3ff769fab6ebe7cd2574fb8c0fa46ed12"
 )
 

@@ -97,6 +97,8 @@ func newResEnv(t *testing.T) *resEnv {
 	vault := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.Resident.Enabled = true
+	// Enable maintenance explicitly in tests that exercise its independent timer.
+	cfg.Resident.MemoryTidy = "off"
 	cfg.API.Enabled = true
 	cfg.Resident.Name = "Solo"
 	cfg.KB.Enabled = true

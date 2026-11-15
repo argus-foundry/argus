@@ -84,6 +84,8 @@ type residentManager struct {
 	mcpReady   func() bool
 	now        func() time.Time
 	fireTimers func(string, time.Time) ([]*model.TaskMessage, error)
+	// memoryTidyZone resolves a concrete host timezone (nil = system resolver).
+	memoryTidyZone func() (string, error)
 	// commitNotice atomically moves one queued human-action notice into a Hera
 	// message (nil = db.DeliverResidentNotice); ringNotice then rings the
 	// doorbell for the committed message (nil = store only: tests, no notifier).
