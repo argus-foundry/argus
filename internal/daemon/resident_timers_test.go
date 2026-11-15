@@ -13,6 +13,7 @@ import (
 
 type timerNotifier struct {
 	calls     map[string]string
+	callCount int
 	submitted map[string]bool
 	cancelled []string
 	onNotify  func()
@@ -20,6 +21,7 @@ type timerNotifier struct {
 
 func (n *timerNotifier) ReliableNotify(task, text, id string, _ notify.NotifyOpts) func() {
 	n.calls[id] = text
+	n.callCount++
 	if n.onNotify != nil {
 		n.onNotify()
 	}
@@ -38,7 +40,15 @@ func TestResidentTimerRunLoopWiring(t *testing.T) {
 	e.m.run(done)
 	testutil.Equal(t, len(n.calls), 1)
 }
-func (n *timerNotifier) Submitted(task, id string) bool { return n.submitted[id] }
+func (n *timerNotifier) DeliveryState(task, id string) notify.DeliveryState {
+	if n.submitted[id] {
+		return notify.StateSubmitted
+	}
+	if _, ok := n.calls[id]; ok {
+		return notify.StatePending
+	}
+	return ""
+}
 func (n *timerNotifier) Cancel(task, id string) {
 	n.cancelled = append(n.cancelled, id)
 	delete(n.calls, id)
@@ -68,6 +78,7 @@ func TestResidentTimerDelivery(t *testing.T) {
 	e.m.deliverTimers()
 	e.m.deliverTimers()
 	testutil.Equal(t, len(n.calls), 1)
+	testutil.Equal(t, n.callCount, 1)
 	id := msgs[0].ID
 	testutil.Contains(t, n.calls[id], "[argus] Timer")
 	testutil.Contains(t, n.calls[id], "check reply")
@@ -76,7 +87,8 @@ func TestResidentTimerDelivery(t *testing.T) {
 	e.m.deliverTimers()
 	pending, err := e.db.PendingResidentTimerDeliveries()
 	testutil.NoError(t, err)
-	testutil.Equal(t, len(pending), 0)
+	testutil.Equal(t, len(pending), 1)
+	testutil.True(t, pending[0].Submitted)
 	msgs, err = e.db.Inbox(res.ID, db.InboxFilter{})
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(msgs), 1)

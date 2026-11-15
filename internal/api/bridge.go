@@ -187,9 +187,20 @@ func (s *Server) bridgeLive(id string, now time.Time) bool {
 func (s *Server) bridgeVerdict(id string, now time.Time) (bridge.State, bool) {
 	st, live := s.bridgeState(id, now)
 	s.bridgeScraperMu.RLock()
-	st = bridge.Resolve(st, s.bridgeScraperNeeds[id])
+	st = resolveBridgeInput(st, s.bridgeScraperNeeds[id], s.bridgeAutoStopped[id])
 	s.bridgeScraperMu.RUnlock()
 	return st, live
+}
+
+// Auto's terminal missing-verdict stop emits no dialog event. Preserve this
+// specific corroborated scraper failure even when the bridge reports no dialog;
+// ordinary blocks and questions still follow normal bridge authority.
+func resolveBridgeInput(st bridge.State, scraperNeeds bool, autoStoppedGeneration string) bridge.State {
+	st = bridge.Resolve(st, scraperNeeds)
+	if scraperNeeds && autoStoppedGeneration != "" && autoStoppedGeneration == st.Generation {
+		st.NeedsInput = true
+	}
+	return st
 }
 
 // BridgeStates is a batched authoritative snapshot for daemon-connected TUI

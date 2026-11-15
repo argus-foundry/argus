@@ -9,7 +9,11 @@ import (
 func (p *HeraPage) SetResidentTimers(count int, next string) {
 	p.residentTimerSummary = ""
 	if count > 0 {
-		p.residentTimerSummary = fmt.Sprintf("%d timers", count)
+		noun := "timers"
+		if count == 1 {
+			noun = "timer"
+		}
+		p.residentTimerSummary = fmt.Sprintf("%d %s", count, noun)
 		if due, err := time.Parse(time.RFC3339, next); err == nil {
 			p.residentTimerSummary += " · next " + due.Local().Format("Jan 2 15:04 MST")
 		}

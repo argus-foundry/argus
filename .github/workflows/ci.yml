@@ -112,7 +112,7 @@ jobs:
           node-version: '20'
 
       - name: Workspace Unit Tests
-        run: make workspace-test
+        run: npm test --prefix web-workspace
 
       - name: Upload Coverage Artifact
         uses: actions/upload-artifact@v7

@@ -48,8 +48,8 @@ type ResidentConfig struct {
 	// decides the account at start.
 	AutoSwitchAccount bool `toml:"auto_switch_account"`
 	// AllowTools run ordinary built-ins, Argus tools and reviewed connector
-	// reads/drafts without a prompt. The non-bypass default mode still asks
-	// for unmatched tools; user ask/deny rules and structural Hera tiers win.
+	// reads/drafts without a prompt. Auto reviews unmatched tools; Manual
+	// fallback asks. User ask/deny rules and structural Hera tiers win.
 	AllowTools []string `toml:"allow_tools"`
 	// AskTools require a confirmation: every write/send/delete/modify tool of the
 	// outward connectors except draft creation/update. DenyTools are refused
@@ -108,7 +108,23 @@ func DefaultResidentConfig(budget int) ResidentConfig {
 		MemoryDir:         "resident",
 		AllowTools: []string{
 			// Explicit built-ins: global allow wildcards are not supported by Claude.
-			"Bash",
+			// No blanket Bash allow: auto reviews shell actions, and safe
+			// fallback to Manual must not silently approve outward commands.
+			"Bash(ls:*)",
+			"Bash(cat:*)",
+			"Bash(head:*)",
+			"Bash(tail:*)",
+			"Bash(grep:*)",
+			"Bash(wc:*)",
+			"Bash(git status:*)",
+			// Exact forms: extra options can execute programs or mutate state
+			// (--pre, -exec/-delete, --output/--ext-diff, branch -D, ...).
+			"Bash(rg --files)",
+			"Bash(find . -type f)",
+			"Bash(git log)",
+			"Bash(git diff)",
+			"Bash(git show)",
+			"Bash(git branch)",
 			"Read",
 			"Write",
 			"Edit",

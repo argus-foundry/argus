@@ -126,6 +126,7 @@ type idleWatcherState struct {
 	residentPromptEpisodes map[string]bool
 	bridgeSource           map[string]bool
 	scraperNeeds           map[string]bool
+	autoStopped            map[string]string
 	idleNow                map[string]bool       // taskID -> last seen idle?
 	seenBefore             map[string]bool       // taskID -> have we observed this session on a prior tick?
 	pushedAt               map[string]time.Time  // taskID -> wall-clock time we last fired an idle push
@@ -591,7 +592,7 @@ func (s *Server) idleWatcherTick(state *idleWatcherState) {
 		}
 		state.bridgeSource[id] = live
 		if live {
-			idleSet[id] = bridge.Quiescent(bridge.Resolve(st, state.scraperNeeds[id]))
+			idleSet[id] = bridge.Quiescent(resolveBridgeInput(st, state.scraperNeeds[id], state.autoStopped[id]))
 		}
 	}
 
@@ -747,15 +748,20 @@ func (s *Server) detectNeedsInputTick(state *idleWatcherState, running, idle []s
 		needsSet[id] = true
 	}
 	state.scraperNeeds = make(map[string]bool, len(needsSet))
+	state.autoStopped = make(map[string]string)
 	for id, value := range needsSet {
 		state.scraperNeeds[id] = value
+		if generation := s.autoStoppedGeneration(id, tailOf, state.screen); value && generation != "" {
+			state.autoStopped[id] = generation
+		}
 	}
 	s.bridgeScraperMu.Lock()
 	s.bridgeScraperNeeds = state.scraperNeeds
+	s.bridgeAutoStopped = state.autoStopped
 	s.bridgeScraperMu.Unlock()
 	for _, id := range running {
 		if st, live := s.bridgeState(id, time.Now()); live {
-			needsSet[id] = bridge.Resolve(st, state.scraperNeeds[id]).NeedsInput && !archived[id]
+			needsSet[id] = resolveBridgeInput(st, state.scraperNeeds[id], state.autoStopped[id]).NeedsInput && !archived[id]
 		}
 	}
 	needs = needs[:0]
@@ -789,6 +795,21 @@ func (s *Server) detectNeedsInputTick(state *idleWatcherState, running, idle []s
 		slog.Info("[resident] waiting changed", "waiting", waiting)
 	}
 	s.runner.SetNeedsInputIDs(s.withoutResident(needs))
+}
+
+// Pin before reading the tail, then verify after rendering: a concurrent
+// restart must not bind the previous process's output to the replacement.
+func (s *Server) autoStoppedGeneration(id string, tailOf func(string) []byte, screen *agent.ScreenRenderer) string {
+	generation := agent.SessionBridgeGeneration(s.runner.Get(id))
+	if generation == "" {
+		return ""
+	}
+	cols, rows := sessionScreenSize(id)
+	if !agent.NewTailView(screen, tailOf(id), cols, rows).AutoModeStopped() ||
+		generation != agent.SessionBridgeGeneration(s.runner.Get(id)) {
+		return ""
+	}
+	return generation
 }
 
 // ResidentWaiting reports whether the resident agent is currently flagged

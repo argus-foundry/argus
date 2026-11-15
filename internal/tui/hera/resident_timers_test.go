@@ -17,5 +17,5 @@ func TestResidentTimerTitle(t *testing.T) {
 	f.p.SetResidentTimers(0, "")
 	testutil.Equal(t, f.p.coordTitle, "Solo")
 	f.p.SetResidentTimers(1, "bad")
-	testutil.Contains(t, f.p.coordTitle, "1 timers")
+	testutil.Equal(t, f.p.coordTitle, "Solo · 1 timer")
 }

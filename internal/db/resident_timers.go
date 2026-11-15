@@ -4,11 +4,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
 
+	"github.com/argus-foundry/argus/internal/events"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
@@ -35,11 +37,13 @@ func (d *DB) ensureResidentTimerSchema() error {
 			expression TEXT NOT NULL DEFAULT '',
 			timezone TEXT NOT NULL DEFAULT '',
 			active INTEGER NOT NULL DEFAULT 1,
-			cancelled INTEGER NOT NULL DEFAULT 0
+			cancelled INTEGER NOT NULL DEFAULT 0,
+			finished_at INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE IF NOT EXISTS resident_timer_deliveries (
 			timer_id INTEGER PRIMARY KEY REFERENCES resident_timers(id),
-			message_id TEXT NOT NULL UNIQUE
+			message_id TEXT NOT NULL UNIQUE,
+			submitted INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE INDEX IF NOT EXISTS idx_resident_timers_due ON resident_timers(due_at,id) WHERE active=1;
 	`)
@@ -61,7 +65,7 @@ type ResidentTimer struct {
 
 // ResidentTimerNext validates a bounded local schedule and returns its next fire.
 func ResidentTimerNext(expression, zone string, after time.Time) (time.Time, error) {
-	if zone == "" || strings.Contains(expression, "TZ=") {
+	if zone == "" || strings.EqualFold(zone, "Local") || strings.Contains(expression, "TZ=") {
 		return time.Time{}, errors.New("provide an IANA timezone separately from the expression")
 	}
 	loc, err := time.LoadLocation(zone)
@@ -181,7 +185,7 @@ func (d *DB) CancelResidentTimer(id int64) error {
 		return err
 	}
 	err := d.WithTx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`UPDATE resident_timers SET active=0,cancelled=1 WHERE id=?`, id)
+		res, err := tx.Exec(`UPDATE resident_timers SET active=0,cancelled=1,finished_at=? WHERE id=?`, time.Now().UnixNano(), id)
 		if err != nil {
 			return err
 		}
@@ -206,6 +210,7 @@ func (d *DB) FireResidentTimers(taskID string, now time.Time) ([]*model.TaskMess
 		return nil, err
 	}
 	var out []*model.TaskMessage
+	var failures []error
 	for _, t := range timers {
 		if t.DueAt.After(now) {
 			break
@@ -214,6 +219,9 @@ func (d *DB) FireResidentTimers(taskID string, now time.Time) ([]*model.TaskMess
 		err = d.WithTx(func(tx *sql.Tx) error {
 			var active, pending int
 			var due int64
+			if _, e := tx.Exec(`DELETE FROM resident_timer_deliveries WHERE timer_id=? AND NOT EXISTS (SELECT 1 FROM task_messages WHERE id=message_id AND read_at='')`, t.ID); e != nil {
+				return e
+			}
 			if e := tx.QueryRow(`SELECT active,due_at,(SELECT COUNT(*) FROM resident_timer_deliveries WHERE timer_id=resident_timers.id) FROM resident_timers WHERE id=?`, t.ID).Scan(&active, &due, &pending); e != nil {
 				return e
 			}
@@ -227,6 +235,9 @@ func (d *DB) FireResidentTimers(taskID string, now time.Time) ([]*model.TaskMess
 				var e error
 				next, e = ResidentTimerNext(t.Expression, t.Timezone, now)
 				if e != nil {
+					uxlog.Log("[resident-timer] skip id=%d disabled invalid recurrence: %v", t.ID, e)
+					slog.Warn("[resident-timer] skip disabled invalid recurrence", "id", t.ID, "error", e)
+					_, e = tx.Exec(`UPDATE resident_timers SET active=0,finished_at=? WHERE id=?`, now.UnixNano(), t.ID)
 					return e
 				}
 				enabled = 1
@@ -243,23 +254,31 @@ func (d *DB) FireResidentTimers(taskID string, now time.Time) ([]*model.TaskMess
 			if _, e := tx.Exec(`INSERT INTO resident_timer_deliveries(timer_id,message_id) VALUES(?,?)`, t.ID, msg.ID); e != nil {
 				return e
 			}
-			_, e := tx.Exec(`UPDATE resident_timers SET active=?,due_at=? WHERE id=?`, enabled, next.UnixNano(), t.ID)
+			finished := int64(0)
+			if enabled == 0 {
+				finished = now.UnixNano()
+			}
+			_, e := tx.Exec(`UPDATE resident_timers SET active=?,due_at=?,finished_at=? WHERE id=?`, enabled, next.UnixNano(), finished, t.ID)
 			return e
 		})
 		if err != nil {
-			return out, err
+			failures = append(failures, fmt.Errorf("timer %d: %w", t.ID, err))
+			continue
 		}
 		if msg != nil {
 			out = append(out, msg)
 			uxlog.Log("[resident-timer] fire id=%d message=%s", t.ID, msg.ID)
+			events.Emit(model.EventTypeMessageSent, msg.To, map[string]any{"id": msg.ID, "from": msg.From, "to": msg.To, "kind": msg.Kind})
 		}
 	}
-	return out, nil
+	return out, errors.Join(failures...)
 }
 
 type ResidentTimerDelivery struct {
 	Message   model.TaskMessage
 	Cancelled bool
+	Submitted bool
+	Orphan    bool
 }
 
 func (d *DB) PendingResidentTimerDeliveries() ([]ResidentTimerDelivery, error) {
@@ -268,7 +287,7 @@ func (d *DB) PendingResidentTimerDeliveries() ([]ResidentTimerDelivery, error) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, err := d.conn.Query(`SELECT m.id,m.to_task_id,m.body,m.read_at,t.cancelled FROM resident_timer_deliveries p JOIN resident_timers t ON t.id=p.timer_id JOIN task_messages m ON m.id=p.message_id ORDER BY t.due_at,t.id`)
+	rows, err := d.conn.Query(`SELECT p.message_id,COALESCE(m.to_task_id,''),COALESCE(m.body,''),COALESCE(m.read_at,''),t.cancelled,p.submitted,m.id IS NULL FROM resident_timer_deliveries p JOIN resident_timers t ON t.id=p.timer_id LEFT JOIN task_messages m ON m.id=p.message_id ORDER BY t.due_at,t.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +296,7 @@ func (d *DB) PendingResidentTimerDeliveries() ([]ResidentTimerDelivery, error) {
 	for rows.Next() {
 		var p ResidentTimerDelivery
 		var read string
-		if e := rows.Scan(&p.Message.ID, &p.Message.To, &p.Message.Body, &read, &p.Cancelled); e != nil {
+		if e := rows.Scan(&p.Message.ID, &p.Message.To, &p.Message.Body, &read, &p.Cancelled, &p.Submitted, &p.Orphan); e != nil {
 			return nil, e
 		}
 		if read != "" {
@@ -286,6 +305,31 @@ func (d *DB) PendingResidentTimerDeliveries() ([]ResidentTimerDelivery, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// MarkResidentTimerDelivered retains the unread coalescing boundary across bounces.
+func (d *DB) MarkResidentTimerDelivered(messageID string) error {
+	if err := d.ensureResidentTimerSchema(); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.conn.Exec(`UPDATE resident_timer_deliveries SET submitted=1 WHERE message_id=?`, messageID)
+	return err
+}
+
+// PruneResidentTimers preserves unsettled events, even after long downtime.
+func (d *DB) PruneResidentTimers(now time.Time) (int64, error) {
+	if err := d.ensureResidentTimerSchema(); err != nil {
+		return 0, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	res, err := d.conn.Exec(`DELETE FROM resident_timers WHERE active=0 AND finished_at>0 AND finished_at<? AND NOT EXISTS (SELECT 1 FROM resident_timer_deliveries WHERE timer_id=resident_timers.id)`, now.Add(-30*24*time.Hour).UnixNano())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (d *DB) CompleteResidentTimerDelivery(messageID string) error {
