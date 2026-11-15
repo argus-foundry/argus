@@ -277,7 +277,9 @@ const (
 	// 49: resident connector permission rules expand historical and lowercase
 	//     server aliases for both the resident and unattended-worker denials.
 	// 50: automatic recovery carries a resume-only launch constraint.
-	SupervisorSpawnSurface = 50
+	// 51: resident launches force auto permission mode with native Manual
+	// fallback; the shipped allow tier no longer blanket-approves Bash.
+	SupervisorSpawnSurface = 51
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -345,7 +347,9 @@ const (
 	// v17: restart/kick preflight consults authoritative resident-worker identity.
 	// v18: supervisor shutdown records live tasks; resume-only launches refuse
 	// missing conversations instead of replaying the original prompt.
-	SupervisorStreamSurface = 18
+	// v19: resident PTY output logs native auto-to-Manual fallback notices once
+	// per session, including before any frontend attaches and across full reads.
+	SupervisorStreamSurface = 19
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -569,6 +573,7 @@ var SupervisorStreamPaths = []string{
 	"internal/claudeagents/claudeagents.go",   // `claude agents`/`claude stop` under the session's config dir
 	"internal/agent/runner.go",                // live session map, pendingRestart, Stop/StopAll, KickRerender
 	"internal/agent/session.go",               // the single readLoop: PTY read → ring + writers, session log
+	"internal/agent/resident_auto.go",         // resident native permission fallback diagnostics
 	"internal/agent/terminal_color.go",        // PTY startup OSC color-query replies and duplicate filtering
 	"internal/agent/sessionsize.go",           // the PTY-size sidecar session.go writes on resize
 	"internal/daemon/sessioncore.go",          // the R/S handlers both daemon and supervisor mount
@@ -594,8 +599,8 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "302b69980400f29dd517b5fd4168682b27a0f6b683771ffb14d8e4570e198869"
-	StreamSurfaceDigest = "16e3d2f24fcd6f29c628f2a26b3dda36c2dfe96ad65f4f90ae19583eb1ca66fd"
+	SpawnSurfaceDigest  = "ecb0878ad1d675aa820c41d62d7714173941a150f26759e0b056e6de2e0ef41e"
+	StreamSurfaceDigest = "57bd2a04183f4db7172552559a71d6e4430877bbeea552c4e8fad99a7667e950"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

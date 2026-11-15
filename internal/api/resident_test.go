@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/bridge"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
@@ -181,6 +183,90 @@ func TestResident_PendingConfirmationRaisesWaiting(t *testing.T) {
 	testutil.DeepEqual(t, needs, []string{r.ID})
 	testutil.Equal(t, srv.containsResident(needs), true)
 	testutil.Equal(t, len(srv.withoutResident(needs)), 0)
+}
+
+func TestResident_AutoModeWaiting(t *testing.T) {
+	// Synthetic visible text from the documented auto-mode dialogs. The real
+	// numbered chooser capture is exercised by the preceding integration test.
+	for _, tc := range []struct {
+		name, tail string
+		waiting    bool
+	}{
+		{"ask or escalation", "Do you want to proceed?\n❯ 1. Yes\n  2. No", true},
+		{"missing verdict stop", "Auto mode is unavailable — the server returned no safety verdict for the last 10 responses, so Claude stopped. Send a message to try again, or switch out of auto mode.\n❯\u00a0", true},
+		{"transient classifier failure", "Auto mode check unavailable\nNot run · auto mode's check had no usable answer\n❯\u00a0", false},
+		{"classifier block", "Auto mode blocked this action. Trying another approach.\n❯\u00a0", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, d := testServer(t)
+			r, _, err := d.EnsureResidentTask(filepath.Join(t.TempDir(), "resident"))
+			testutil.NoError(t, err)
+			state := newIdleWatcherState()
+			tailOf := func(string) []byte { return []byte(tc.tail) }
+			srv.detectNeedsInputTick(state, []string{r.ID}, []string{r.ID}, tailOf)
+			testutil.Equal(t, srv.ResidentWaiting(), tc.waiting)
+		})
+	}
+}
+
+func TestResident_AutoModeWaitingWithLiveBridge(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
+			srv, runner, _ := bridgeAuthorityServer(t)
+			r, _, err := srv.db.EnsureResidentTask(filepath.Join(t.TempDir(), "resident"))
+			testutil.NoError(t, err)
+			runner.id = r.ID
+			runner.session.tail = []byte("Auto mode is unavailable — the server returned no safety verdict for the last 10 responses, so Claude stopped. Send a message to try again, or switch out of auto mode.\n❯\u00a0")
+			srv.bridgeHub.Ingest(r.ID, []bridge.Event{{Type: bridge.TypeHeartbeat, Generation: "launch", SessionID: "session", Boot: "b", Seq: 1, Busy: &busy}}, time.Now())
+			testutil.True(t, srv.bridgeLive(r.ID, time.Now()))
+			state := newIdleWatcherState()
+			tailOf := func(string) []byte { return runner.session.tail }
+			// Both idle scanning and busy-frame stability must preserve the
+			// stop despite a live bridge reporting no dialog event.
+			var idle []string
+			if !busy {
+				idle = []string{r.ID}
+			}
+			srv.detectNeedsInputTick(state, []string{r.ID}, idle, tailOf)
+			srv.detectNeedsInputTick(state, []string{r.ID}, idle, tailOf)
+			testutil.True(t, srv.ResidentWaiting())
+			testutil.True(t, srv.BridgeStates()[r.ID].NeedsInput)
+			// A restart can keep the same transcript but must not inherit this
+			// terminal error before the next scraper tick.
+			runner.session.generation = "replacement"
+			srv.bridgeHub.Ingest(r.ID, []bridge.Event{{Type: bridge.TypeTurnStart, Generation: "replacement", SessionID: "session", Boot: "replacement", Seq: 1}}, time.Now())
+			testutil.False(t, srv.BridgeStates()[r.ID].NeedsInput)
+		})
+	}
+}
+
+func TestResolveBridgeInputAutoStop(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		scraper bool
+		stopped string
+		want    bool
+	}{
+		{"corroborated stop", true, "launch", true},
+		{"unconfirmed stop", false, "launch", false},
+		{"previous launch", true, "old", false},
+		{"ordinary scraper signal", true, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := resolveBridgeInput(bridge.State{Generation: "launch", Busy: true}, tc.scraper, tc.stopped)
+			testutil.Equal(t, st.NeedsInput, tc.want)
+			testutil.True(t, st.Busy)
+		})
+	}
+}
+
+func TestAutoStopScanRejectsConcurrentRestart(t *testing.T) {
+	srv, runner, task := bridgeAuthorityServer(t)
+	tailOf := func(string) []byte {
+		runner.session.generation = "replacement"
+		return []byte("Auto mode is unavailable — the server returned no safety verdict for the last 10 responses, so Claude stopped. Send a message to try again, or switch out of auto mode.\n❯\u00a0")
+	}
+	testutil.Equal(t, srv.autoStoppedGeneration(task.ID, tailOf, &agent.ScreenRenderer{}), "")
 }
 
 func TestResident_BulkDeleteRefusesBatchWithResident(t *testing.T) {

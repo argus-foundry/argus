@@ -156,6 +156,7 @@ func TestPermissionModeFlags(t *testing.T) {
 		want string
 	}{
 		{PermissionModeDefault, "--permission-mode default"},
+		{PermissionModeAuto, "--permission-mode auto"},
 		{PermissionModeAcceptEdits, "--permission-mode acceptEdits"},
 		{PermissionModePlan, "--permission-mode plan"},
 		{PermissionModeBypassAllow, "--allow-dangerously-skip-permissions --permission-mode plan"},

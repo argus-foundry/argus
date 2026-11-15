@@ -82,7 +82,7 @@ var needsInputSelectionRe = regexp.MustCompile(`❯[ \t]*\d+\.`)
 const needsInputTailWindow = 16 * 1024
 
 // DetectNeedsInput returns true if the tail of `buf` indicates the agent is
-// blocked waiting for the user. Three signals fire:
+// blocked waiting for the user. Four signals fire:
 //
 //  1. Claude's numbered-selection prompt UI (`❯ 1.`) — permission prompts and
 //     plan-mode confirms render through this widget.
@@ -92,6 +92,8 @@ const needsInputTailWindow = 16 * 1024
 //  3. The assistant's most recent text response ends with `?` — captures
 //     plain-text questions where Claude stops generating without invoking a
 //     selection widget (e.g. "Want me to ship it?").
+//  4. Auto mode stopped after repeated missing safety verdicts and instructs
+//     the user to send a message or switch modes at the idle prompt.
 //
 // Pair with an "is idle" check at the call site — a prompt the agent is still
 // streaming past is not blocking.
@@ -108,7 +110,7 @@ func DetectNeedsInput(buf []byte) bool {
 
 // detectNeedsInputText is the body of DetectNeedsInput operating on already
 // plain (ANSI-stripped or vt-rendered) text. Shared with DetectNeedsInputScreen
-// so the alt-screen fallback matches the identical three signals against the
+// so the alt-screen fallback matches the identical signals against the
 // reconstructed screen text.
 func detectNeedsInputText(text string) bool {
 	if needsInputSelectionRe.MatchString(text) {
@@ -117,7 +119,7 @@ func detectNeedsInputText(text string) bool {
 	if needsInputChooserFooterRe.MatchString(text) {
 		return true
 	}
-	return endsInQuestion(text)
+	return endsInQuestion(text) || autoModeStopped(text)
 }
 
 // DetectSelectionPrompt reports whether the tail shows one of Claude's
@@ -159,7 +161,7 @@ func detectSelectionPromptText(text string) bool {
 // it ALSO flags a free-text trailing question, but only when the agent is
 // genuinely waiting rather than working.
 //
-// Two awaiting-input shapes qualify:
+// Three awaiting-input shapes qualify:
 //
 //  1. The UNAMBIGUOUS selection widget (❯ N. / chooser footer) — safe without
 //     further gating; a streaming agent that flashes it is caught by the
@@ -171,11 +173,13 @@ func detectSelectionPromptText(text string) bool {
 //     tick is content-stable AND ends in `?`, but it still renders the interrupt
 //     hint while working, so it never qualifies. Content stability ALONE is NOT
 //     a sufficient guard for endsInQuestion — this gate is required.
+//  3. Auto mode's terminal missing-verdict stop above an idle prompt, while
+//     the working affordance is absent; transient classifier failures do not qualify.
 func awaitingInputText(text string) bool {
 	if detectSelectionPromptText(text) {
 		return true
 	}
-	return endsInQuestion(text) && !needsInputWorkingRe.MatchString(text)
+	return (endsInQuestion(text) || autoModeStopped(text)) && !needsInputWorkingRe.MatchString(text)
 }
 
 // BlockedOnPrompt reports whether the session's recent output shows the agent
@@ -227,12 +231,46 @@ const promptNBSP = "❯\u00a0"
 // transcript line and the prompt, so the question we're after is one line
 // further up. See decorationLine.
 func endsInQuestion(stripped string) bool {
+	line := lastPromptContentLine(stripped)
+	r, _ := utf8.DecodeLastRuneInString(line)
+	return r == '?' || r == '？'
+}
+
+// autoModeStopped catches Claude's terminal missing-verdict failure, not the
+// transient "check unavailable" notices it emits while continuing to work.
+// Requiring the final content line above an idle prompt avoids retaining a
+// stale error after a subsequent response. Explicit asks still use the chooser.
+func autoModeStopped(text string) bool {
+	idx := lastPromptIndex(text)
+	if idx < 0 || needsInputWorkingRe.MatchString(text) {
+		return false
+	}
+	// The stop text wraps across terminal rows. Normalize a bounded block,
+	// skipping prompt decorations, rather than matching only its final row.
+	above := text[max(0, idx-1024):idx]
+	var content []string
+	for _, line := range strings.FieldsFunc(above, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		if !decorationLine(line) {
+			content = append(content, line)
+		}
+	}
+	normalized := strings.Join(strings.Fields(strings.Join(content, " ")), " ")
+	return strings.HasSuffix(normalized, "or switch out of auto mode.") &&
+		strings.Contains(normalized, "server returned no safety verdict")
+}
+
+func lastPromptIndex(stripped string) int {
 	idx := strings.LastIndex(stripped, "╭")
 	if j := strings.LastIndex(stripped, promptNBSP); j > idx {
 		idx = j
 	}
+	return idx
+}
+
+func lastPromptContentLine(stripped string) string {
+	idx := lastPromptIndex(stripped)
 	if idx < 0 {
-		return false
+		return ""
 	}
 	above := stripped[:idx]
 	// Walk backward through whatever sits above the prompt, skipping blank
@@ -244,11 +282,10 @@ func endsInQuestion(stripped string) bool {
 		line := above[cut+1:]
 		trimmed := strings.TrimRightFunc(line, unicode.IsSpace)
 		if trimmed != "" && !decorationLine(trimmed) {
-			r, _ := utf8.DecodeLastRuneInString(trimmed)
-			return r == '?' || r == '？'
+			return trimmed
 		}
 		if cut < 0 {
-			return false
+			return ""
 		}
 		above = above[:cut]
 	}
@@ -1436,7 +1473,7 @@ func SubstantiveTail(readN func(n int) []byte, wantBytes, maxBytes int) []byte {
 // first matches the raw byte stream (fast path — linear / main-screen agents
 // behave EXACTLY as DetectNeedsInput, and the emulator is never touched), and
 // only on a raw miss does it reconstruct the visible screen via r and re-match
-// the same three signals against the rendered text. A nil renderer disables the
+// the same signals against the rendered text. A nil renderer disables the
 // fallback, making it identical to DetectNeedsInput.
 func DetectNeedsInputScreen(r *ScreenRenderer, buf []byte, cols, rows int) bool {
 	return NewTailView(r, buf, cols, rows).DetectNeedsInputScreen()

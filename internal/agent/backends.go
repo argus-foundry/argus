@@ -317,7 +317,7 @@ type ResidentPolicy struct {
 // allow, deny removes the tool, and bypass mode is disabled outright.
 func claudePermissionRulesFlag(p ResidentPolicy) string {
 	perms := map[string]any{
-		"defaultMode":                  "default",
+		"defaultMode":                  config.PermissionModeAuto,
 		"disableBypassPermissionsMode": "disable",
 	}
 	if len(p.Allow) > 0 {

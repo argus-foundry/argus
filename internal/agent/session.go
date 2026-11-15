@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -70,7 +71,8 @@ type Session struct {
 	markRows      uint16
 	colorQueries  terminalColorQueries
 	colorReplies  chan []byte
-	colorAnswered [2]bool // OSC 10/11; guarded by mu
+	colorAnswered [2]bool              // OSC 10/11; guarded by mu
+	autoFallback  residentAutoFallback // sole owner: readLoop
 }
 
 // SessionsDir returns the directory where session logs are stored.
@@ -141,6 +143,7 @@ func StartSession(taskID string, cmd *exec.Cmd, rows, cols uint16) (*Session, er
 		initialRows:   rows,
 		logFile:       logFile,
 		colorReplies:  make(chan []byte, 8),
+		autoFallback:  residentAutoFallback{enabled: slices.Contains(cmd.Env, ResidentEnvMarker+"=1")},
 	}
 	go s.forwardColorReplies()
 
@@ -174,6 +177,7 @@ func (s *Session) readLoop() {
 			// fully consume data synchronously before returning. The next
 			// ptmx.Read(tmp) doesn't execute until this iteration completes.
 			data := tmp[:n]
+			s.autoFallback.observe(s.TaskID, data)
 			// Codex asks for the terminal's colors at startup, before any UI
 			// pane can attach. Answer from the PTY owner so its composer chooses
 			// the highlighted background on its first render.
