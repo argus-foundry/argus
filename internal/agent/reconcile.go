@@ -43,8 +43,8 @@ func ReconcileStaleSessionsExcept(database *db.DB, alive map[string]bool) ([]str
 }
 
 // ReconcileInterruptedSessions is supervisor-mode reconciliation. Prior liveness
-// and live Hera bindings survive stale task statuses; plain stopped tasks do not
-// qualify without evidence. The legacy in-process entry point stays status-only.
+// survives stale task statuses; durable Hera bindings alone do not prove that
+// this bounce lost a session. The legacy in-process entry point stays status-only.
 func ReconcileInterruptedSessions(database *db.DB, alive, previous map[string]bool) ([]string, error) {
 	return reconcileSessions(database, alive, previous, true)
 }
@@ -81,11 +81,8 @@ func reconcileSessions(database *db.DB, alive, previous map[string]bool, livenes
 			}
 			candidate = candidate || previous[t.ID]
 			if !candidate && (t.Status == model.StatusPending || t.Status == model.StatusInReview) {
-				bindings, err := database.ListHeraLiveBindingsByTask(t.ID)
-				if err != nil {
-					return flipped, err
-				}
-				candidate = len(bindings) > 0
+				uxlog.Log("[bounce-recovery] skip task without session-loss evidence task=%s", t.ID)
+				slog.Info("[bounce-recovery] skip task without session-loss evidence", "task", t.ID, "status", t.Status)
 			}
 		}
 		if !candidate {

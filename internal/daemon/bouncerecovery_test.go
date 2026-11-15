@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/bouncerecovery"
@@ -13,6 +14,86 @@ import (
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
+
+func TestReattach_DeadWorkerLedgerSurvivesRepeatedStartup(t *testing.T) {
+	for _, status := range []model.Status{model.StatusPending, model.StatusInReview} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			d, _ := testDaemon(t)
+			task := &model.Task{Name: "dead-worker", Status: status}
+			testutil.NoError(t, d.db.Add(task))
+			bindWorker(t, d, task.ID)
+			old := bouncerecovery.Entry{TaskID: task.ID, KilledAt: time.Unix(100, 0), BounceID: "100", Status: bouncerecovery.StatusFailed, Attempts: 2, NextAt: time.Unix(200, 0), NoteState: bouncerecovery.NoteSent}
+			testutil.NoError(t, bouncerecovery.Save(d.db, old))
+			before, err := d.db.ListMeta(task.ID, bouncerecovery.Namespace)
+			testutil.NoError(t, err)
+			d.UseSupervisorRunner(&fakeSupClient{running: []string{"unrelated-live"}})
+			for range 2 {
+				d.ReconcileOnStartup()
+			}
+			after, err := d.db.ListMeta(task.ID, bouncerecovery.Namespace)
+			testutil.NoError(t, err)
+			testutil.DeepEqual(t, after, before)
+			testutil.False(t, hasBounceSignal(t, d, task.ID))
+			got, err := d.db.Get(task.ID)
+			testutil.NoError(t, err)
+			testutil.Equal(t, got.Status, status)
+		})
+	}
+}
+
+func TestReattach_NewLossRecordedOnceAndLaterLossReplacesLedger(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d, _ := testDaemon(t)
+	task := &model.Task{Name: "worker", Status: model.StatusInProgress}
+	testutil.NoError(t, d.db.Add(task))
+	bindWorker(t, d, task.ID)
+	d.UseSupervisorRunner(&fakeSupClient{running: []string{}})
+	d.ReconcileOnStartup()
+	entries, err := bouncerecovery.LoadAll(d.db)
+	testutil.NoError(t, err)
+	testutil.NotNil(t, entries[task.ID])
+	entries[task.ID].Attempts = 2
+	testutil.NoError(t, bouncerecovery.SetStatus(d.db, entries[task.ID], bouncerecovery.StatusFailed))
+	before, err := d.db.ListMeta(task.ID, bouncerecovery.Namespace)
+	testutil.NoError(t, err)
+	msgs, err := d.db.Inbox(task.ID, db.InboxFilter{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 1)
+	_, err = d.db.AckMessages(task.ID, []string{msgs[0].ID})
+	testutil.NoError(t, err) // unread-note coalescing must not mask duplicate sends
+	d.ReconcileOnStartup()   // same event, seconds later: preserve progress and signal count
+	after, err := d.db.ListMeta(task.ID, bouncerecovery.Namespace)
+	testutil.NoError(t, err)
+	testutil.DeepEqual(t, after, before)
+	msgs, err = d.db.Inbox(task.ID, db.InboxFilter{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 1)
+
+	// A later resumed session with stale in_review status is proven live by the
+	// supervisor's shutdown snapshot. Its older recovery must not block this loss.
+	entries[task.ID].KilledAt, entries[task.ID].BounceID = time.Unix(100, 0), "100"
+	testutil.NoError(t, bouncerecovery.Save(d.db, *entries[task.ID]))
+	testutil.NoError(t, os.MkdirAll(db.DataDir(), 0o700))
+	data, err := json.Marshal([]string{task.ID})
+	testutil.NoError(t, err)
+	testutil.NoError(t, os.WriteFile(filepath.Join(db.DataDir(), supervisorLiveTasksFilename), data, 0o600))
+	d.ReconcileOnStartup()
+	entries, err = bouncerecovery.LoadAll(d.db)
+	testutil.NoError(t, err)
+	testutil.Equal(t, entries[task.ID].Attempts, 0)
+	testutil.True(t, entries[task.ID].BounceID != "100")
+	testutil.True(t, entries[task.ID].KilledAt.After(time.Unix(100, 0)))
+	msgs, err = d.db.Inbox(task.ID, db.InboxFilter{UnreadOnly: true})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 1)
+	_, err = d.db.AckMessages(task.ID, []string{msgs[0].ID})
+	testutil.NoError(t, err)
+	d.ReconcileOnStartup() // consumed snapshot cannot replay on the next boot
+	msgs, err = d.db.Inbox(task.ID, db.InboxFilter{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 2)
+}
 
 func TestReattach_ConsumesSupervisorLivenessSnapshot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

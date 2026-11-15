@@ -336,7 +336,7 @@ func TestRecord_ClosingTeamMemberExcluded(t *testing.T) {
 	d := testDB(t)
 	team(t, d)
 	testutil.NoError(t, d.SetMeta("w1", db.HeraMetaNamespace, db.HeraMetaKeyReadyToClose, "true"))
-	record(d, []string{"c", "w1"}, nil, time.Unix(5, 0), stateOf(nil))
+	record(d, []string{"c", "w1", "w2"}, nil, time.Unix(5, 0), stateOf(nil))
 	entries, err := LoadAll(d)
 	testutil.NoError(t, err)
 	testutil.Nil(t, entries["w1"])
@@ -518,19 +518,19 @@ func TestRecord_IdleInReviewTeamMembersAreListedNotResumed(t *testing.T) {
 	addTask(t, d, "w3", "task-w3", model.StatusInReview)
 	o, _ := d.HeraOrchestratorByName("o")
 	bind(t, d, mkRole(t, d, o.ID, "worker3", db.HeraKindWorker).ID, "w3")
-	// c and w1 were running (in_progress orphans); w2 and w3 were idle, rolled to in_review.
+	// The shutdown snapshot proves c, w1 and idle w2 were live; w3 survives.
 	for _, id := range []string{"c", "w1"} {
 		tk, _ := d.Get(id)
 		tk.Status = model.StatusInProgress
 		testutil.NoError(t, d.Update(tk))
 	}
-	n := record(d, []string{"c", "w1"}, func(id string) bool { return id == "w3" }, time.Unix(5, 0), stateOf(map[string]transcriptstate.State{
+	n := record(d, []string{"c", "w1", "w2", "w3"}, func(id string) bool { return id == "w3" }, time.Unix(5, 0), stateOf(map[string]transcriptstate.State{
 		"c": midState(), "w1": midState(), "w2": {Kind: transcriptstate.Idle},
 	}))
 	testutil.Equal(t, n, 3) // c, w1 and the idle in_review w2; w3 is alive so it is not recorded
 	got, _ := LoadAll(d)
 	testutil.Equal(t, got["w2"].Status, StatusDormant)
-	testutil.Equal(t, got["w2"].Reason, "in_review")
+	testutil.Equal(t, got["w2"].State, transcriptstate.Idle)
 	testutil.Equal(t, got["w2"].CoordTask, "c")
 	_, w3 := got["w3"]
 	testutil.Equal(t, w3, false)
@@ -547,7 +547,7 @@ func TestRecord_IdleInReviewTeamMembersAreListedNotResumed(t *testing.T) {
 	h.w.Tick()
 	note := h.n.sent["c"]
 	testutil.Contains(t, note, "worker2")
-	testutil.Contains(t, note, "idle in review, not restarted")
+	testutil.Contains(t, note, "idle")
 	testutil.True(t, !strings.Contains(note, "None of your"))
 	testutil.DeepEqual(t, h.r.started, []string{"c"}) // the idle member is never auto-resumed
 }

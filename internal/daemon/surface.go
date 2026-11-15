@@ -594,8 +594,9 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "302b69980400f29dd517b5fd4168682b27a0f6b683771ffb14d8e4570e198869"
-	StreamSurfaceDigest = "16e3d2f24fcd6f29c628f2a26b3dda36c2dfe96ad65f4f90ae19583eb1ca66fd"
+	SpawnSurfaceDigest = "302b69980400f29dd517b5fd4168682b27a0f6b683771ffb14d8e4570e198869"
+	// bounce.go changed only daemon-side comments; supervisor snapshot behavior is unchanged.
+	StreamSurfaceDigest = "c9678bf3ca045213da34207120db8326aa15b9d6f9c96de9efc64ad477be5b53"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

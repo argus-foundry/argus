@@ -16,8 +16,9 @@ func TestReconcileInterruptedSessions(t *testing.T) {
 		want                                   bool
 	}{
 		{name: "pending plain recorded live", status: model.StatusPending, prior: true, want: true},
-		{name: "review coordinator binding", status: model.StatusInReview, bound: true, want: true},
-		{name: "pending binding", status: model.StatusPending, bound: true, want: true},
+		{name: "dead review binding", status: model.StatusInReview, bound: true},
+		{name: "dead pending binding", status: model.StatusPending, bound: true},
+		{name: "review binding recorded live", status: model.StatusInReview, bound: true, prior: true, want: true},
 		{name: "progress fallback", status: model.StatusInProgress, want: true},
 		{name: "plain stopped", status: model.StatusInReview},
 		{name: "still alive", status: model.StatusInReview, prior: true, alive: true},
