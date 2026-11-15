@@ -32,3 +32,5 @@ Validation: GitHub CI run 43669640320 passed all gates for implementation commit
 - [x] 5.3 Exclude only Bash description from identity, include canonical input in notices, and test execution-field mismatch.
 - [x] 5.4 Prove hook exit/nonzero and timeout with onFailure:block on Claude 2.1.325 in default/auto print/PTy; record eight zero-execution continuations in design.
 - [x] 5.5 Check consumption rows affected and test current-session mismatch independently of the launch file.
+
+Final integration: merged master normally after #1228 and #1230, retaining timer/tidy behavior and the approval changes. Re-recorded spawn digest at surface 52 and verified both spawn/stream digests (stream 19). Focused race tests across nine affected packages and local build, vet, format, lint, vulnerability and workspace gates pass; all 90 specs/changes validate strictly. Exact-head full CI is the final handoff gate under the coordinator's shared-host timeout exception.

@@ -846,6 +846,17 @@ If the recipient has a live agent session the daemon also writes a single notifi
 
 **Schedule Management:**
 
+Resident follow-ups wake Solo's existing session; the schedule tools below create new tasks. Only the authenticated resident connection sees and can call these timer tools. Solo's pane title shows active count and next due time.
+
+| Tool | Description |
+| --- | --- |
+| `resident_timer_set` | Set a one-shot with `note` and exactly one of `at` (RFC3339 with offset) or `after` (duration, e.g. `2h30m`). |
+| `resident_timer_schedule` | Set recurrence with `note`, `expression` (five-field cron, `@daily`, `@weekly`, `@every 30m`) and `timezone` (IANA name). Minimum 15 minutes, 64 active timers, notes up to 4096 bytes. |
+| `resident_timer_list` | List active timers with ids, notes, creation and next due times. |
+| `resident_timer_cancel` | Cancel by numeric `id`; retract an unsubmitted queued fire. |
+
+Timers survive daemon/session restarts and Solo recycles. Fires arrive in Solo's task inbox as `[argus]` notes and wake it when idle; missed recurrences coalesce into one late fire. Solo keeps timer ids in open-loops memory and cancels closed loops. Web/macOS timer views are follow-ups `add-web-resident-timers` / `add-mac-resident-timers`; full TUI management is `add-tui-resident-timer-management`.
+
 | Tool               | Description                                                                                                                                                                                               |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `schedule_list`    | List all schedules with name, project, cron expression, enabled state, next/last fire timestamps                                                                                                          |
@@ -1046,6 +1057,7 @@ Tokens are stored as SHA-256 hashes; plaintext is never persisted on the server.
 | Method   | Endpoint                  | Description                                                                                                                                           |
 | -------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET`    | `/api/schedules`          | List schedules with `next_run_at`, `last_run_at`, `last_task_id`, `last_error`. |
+| `GET`    | `/api/resident/timers`    | List active Solo timers (`timers`: id, note, created_at, due_at, expression, timezone). Read-only; resident tools manage timers. |
 | `POST`   | `/api/schedules`          | Create. Body: `{"name","project","prompt","schedule","backend?","model?","enabled"}`. `model` is an optional per-schedule `--model` override (empty = backend default). Invalid explicit models return the task creation 422 body before saving. Returns the created row. |
 | `PUT`    | `/api/schedules/{id}`     | Partial update. Every field is optional. The effective model is validated before saving, with the same 422 response as creation. |
 | `DELETE` | `/api/schedules/{id}`     | Remove. Tasks already created by the schedule are not affected. |
@@ -1429,6 +1441,7 @@ The always-on [resident agent](#resident-hotkey-recipe): one persistent Claude s
 | `max_workers` | int | `8` | Maximum live worker bindings in the standing resident team; ended/deleted/graduated workers free a slot. Below 1 uses 8. Settings edits are local; config.toml overrides show a read-only marker. |
 | `context_budget` | int | coordinator budget | `context_size` at which the resident is nudged to recycle itself. The Stop hook never forces a recycle. |
 | `memory_dir` | string | `"resident"` | Vault-relative working-memory folder. Independent of `name`, so renaming never moves memory. |
+| `memory_tidy` | string | `"02:30"` | Daily memory curation at host-local `HH:MM`; `"off"` disables. Resolves a valid `TZ`, then `/etc/localtime`'s zoneinfo symlink; logs and disables tidy if neither resolves. One durable config-owned timer, excluded from Solo's 64 personal timers. Quiet unless attention is needed; preserves explicit instructions/preferences and records a short dated change log. Config-file only. |
 | `model` | string | `""` | Optional model override; empty uses the resolved default. |
 | `accounts` | list of strings | `["default"]` | Ordered preference of Claude [accounts](#accounts) (`default` included), optionally ending in `"auto"` (any Claude-capable account by most headroom). The resident runs on the first account with usage budget; with auto-switch on, it moves down the list when its account is depleted, and re-picks the best account whenever it restarts (cold start, crash restart, recycle), moving back up to a more preferred one only if that account shows a fresh reading with headroom; a running session never moves back up on its own (a manual `>` move is a one-time escape hatch for the current session; the next restart or recycle re-picks the best account per the list). Edited in Settings as an ordered multi-select; a `config.toml` value is read-only there. Replaces the old single `account` key (a leftover Settings or config.toml value is read as a one-element list). A restart onto another account goes through the daemon move, which carries the conversation. |
 | `auto_switch_account` | bool | `true` | Let the daemon move the resident along `accounts` when it should: off a depleted account (a live 5-hour or weekly window at 100%) to the next usable listed one, or onto the list when its account was removed from it. It never moves a healthy running session back to a recovered preferred account; that happens only at the next restart or recycle. It moves only once the session is parked (idle, or showing a stable limit-wait screen), after two consecutive ~5s ticks, and at most once per 10 minutes. With every listed account depleted it stays put and posts a board item. The conversation resumes on the new account, Solo is told to continue, and an `fyi` item lands on its board. With it off, `accounts` only decides the account at start. |

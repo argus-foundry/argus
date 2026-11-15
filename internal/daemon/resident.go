@@ -81,8 +81,11 @@ type residentManager struct {
 	// mcpReady reports whether the daemon's MCP server has bound. nil means
 	// ready. The resident's --mcp-config needs the port at spawn, and a session
 	// started before it binds never gets the config.
-	mcpReady func() bool
-	now      func() time.Time
+	mcpReady   func() bool
+	now        func() time.Time
+	fireTimers func(string, time.Time) ([]*model.TaskMessage, error)
+	// memoryTidyZone resolves a concrete host timezone (nil = system resolver).
+	memoryTidyZone func() (string, error)
 	// commitNotice atomically moves one queued human-action notice into a Hera
 	// message (nil = db.DeliverResidentNotice); ringNotice then rings the
 	// doorbell for the committed message (nil = store only: tests, no notifier).
@@ -409,6 +412,7 @@ func (m *residentManager) run(done <-chan struct{}) {
 	defer t.Stop()
 	m.tick()
 	m.deliverNotices()
+	m.deliverTimers()
 	for {
 		select {
 		case <-done:
@@ -416,6 +420,7 @@ func (m *residentManager) run(done <-chan struct{}) {
 		case <-t.C:
 			m.tick()
 			m.deliverNotices()
+			m.deliverTimers()
 		}
 	}
 }
@@ -442,6 +447,14 @@ func (m *residentManager) metaValues(taskID string) map[string]string {
 func (m *residentManager) State() ResidentStateResp {
 	cfg := m.cfgFn()
 	resp := ResidentStateResp{Enabled: cfg.Resident.Enabled, Name: cfg.Resident.Name}
+	if timers, err := m.db.ResidentTimers(); err == nil {
+		resp.TimerCount = len(timers)
+		if len(timers) > 0 {
+			resp.NextTimerAt = timers[0].DueAt.Format(time.RFC3339)
+		}
+	} else {
+		residentLog("[resident-timer] state read failed: %v", err)
+	}
 	resp.RunningWorkers = m.runningWorkers()
 	if !resp.Enabled {
 		return resp

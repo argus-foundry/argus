@@ -602,8 +602,12 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "90d04957862fca5f6886f03420c316465e27bc60e9340934bd1ebee2df5445f4"
-	StreamSurfaceDigest = "c9189174f3b1fe422866f474cb32ce4b4352b40417ccc904810f00da00ec6d45"
+	// resident.memory_tidy is read only by the daemon timer poll; adding its
+	// schema/default does not change BuildCmd or supervisor spawn behavior.
+	SpawnSurfaceDigest = "e1a58ae62071e1e01321bafbcd7ad3ef64fd4151cc6aeba3b70470bf462265bc"
+	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
+	// changed daemon-side comments; neither changes supervisor stream behavior.
+	StreamSurfaceDigest = "3017380d1473fd065b095a82aa41f2c3ff769fab6ebe7cd2574fb8c0fa46ed12"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

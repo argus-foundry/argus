@@ -1,5 +1,13 @@
 # Resident agent (add-resident-agent)
 
+- **Timer cancellation must cancel the notifier registration immediately, using the inbox message id.** Keep canceled delivery receipts for the daemon to retry; relying only on its next tick leaves a queued wake-up able to fire after the cancel tool returns.
+
+- **Timer DDL initializes once per DB handle, on first timer-store use; only success is cached.** Keep it out of generic `OpenInMemory` setup: API/TUI suites open many fixtures, and resident-only schema work compounds across every fixture. Reopening the store preserves timers and queued fires.
+
+- **Timer fires commit the inbox event, timer advance and delivery receipt in one SQLite transaction; emit message events only after commit and unlock.** Retry the stable message-id notifier registration until submitted or acknowledged, including after notifier deadline expiry. Persist submission without deleting the receipt until the inbox event is read; terminal delivery inherits the notifier's acknowledgment/crash window between the PTY write and durable submission marker.
+- **Recurring timers advance from now and coalesce while the prior inbox event is unread, even after submission.** Clear orphan receipts rather than silencing the recurrence; process acknowledgement/cancellation before firing so stale notifier registrations are cancelled first. Reject case-insensitive `Local` and deactivate invalid recurrences without blocking other timers; retain terminal timers for 30 days and preserve unsettled events beyond that cutoff.
+- **Timer wake-ups quote the inbox body onto one logical terminal line.** Keep the original note in the inbox; raw CR/newline/ESC from note text must never reach notifier input as terminal controls.
+
 - **The resident rail name is a draw-only override on the shared Hera rail, cleared on mode exit.** Feed it through `SetResidentTitle` from both label refresh paths so Settings/config renames apply without reattaching; never rename the orchestrator or role model, which remain `resident` for routing.
 
 Memory, orientation and tool permissions are in [resident-memory.md](resident-memory.md). Other resident invariants sit with their areas: ensure-loop and RPCs in `daemon-rpc.md`, Stop hook and recycle seed in `orchestration.md`, `ctrl+\` and return snapshots in `keybindings.md`, rail box and tab marker in `tasklist-ui.md`, Settings category in `misc.md`.
