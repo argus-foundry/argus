@@ -953,10 +953,10 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 		return nil, nil, fmt.Errorf("resident backend %q cannot enforce the resident permission policy", backend.Command)
 	}
 	// The resident's ask rules only prompt outside bypass modes: drop any
-	// bypass/permission-mode flag from its command and force default mode
+	// bypass/permission-mode flag from its command and force auto mode
 	// below, regardless of defaults.permission_mode.
-	forceDefaultPerm := task.IsResident() && fam.StripPermissionFlags != nil
-	if forceDefaultPerm {
+	forceResidentPerm := task.IsResident() && fam.StripPermissionFlags != nil
+	if forceResidentPerm {
 		stripped, err := fam.StripPermissionFlags(backend.Command)
 		if err != nil {
 			return nil, nil, fmt.Errorf("resident backend %q: %w", backend.Command, err)
@@ -1025,12 +1025,13 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 	// receive one. Skipped when the command already names a permission flag
 	// (command wins) so we never double-inject. Injected before
 	// resume/session-id/prompt suffixes so the flags precede the "--" separator.
-	// forceDefaultPerm already stripped every top-level permission flag; a
+	// forceResidentPerm already stripped every top-level permission flag; a
 	// substring match would also hit quoted arguments mentioning one.
-	if fam.PermissionFlags != nil && (forceDefaultPerm || !fam.HasPermissionFlag(backend.Command)) {
+	if fam.PermissionFlags != nil && (forceResidentPerm || !fam.HasPermissionFlag(backend.Command)) {
 		mode := cfg.Defaults.PermissionMode
-		if forceDefaultPerm {
-			mode = config.PermissionModeDefault
+		if forceResidentPerm {
+			// Claude itself safely falls back to default if auto is unavailable.
+			mode = config.PermissionModeAuto
 		}
 		if flags := fam.PermissionFlags(mode); flags != "" {
 			cmdStr += " " + flags
@@ -1099,9 +1100,9 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 		}
 		if flag := fam.PermissionRulesFlag(policy); flag != "" {
 			cmdStr += flag
-			uxlog.Log("[resident] permission policy delivered allow=%d ask=%d (user %d) deny=%d (user %d) model=%q", len(policy.Allow), len(policy.Ask), len(us.Ask), len(policy.Deny), len(us.Deny), policy.Model)
+			uxlog.Log("[resident] permission policy delivered mode=auto fallback=default allow=%d ask=%d (user %d) deny=%d (user %d) model=%q", len(policy.Allow), len(policy.Ask), len(us.Ask), len(policy.Deny), len(us.Deny), policy.Model)
 			// BuildCmd runs in the daemon/supervisor, which never calls uxlog.Init.
-			slog.Info("[resident] permission policy delivered", "allow", len(policy.Allow), "ask", len(policy.Ask), "user_ask", len(us.Ask), "deny", len(policy.Deny), "user_deny", len(us.Deny), "model", policy.Model)
+			slog.Info("[resident] permission policy delivered", "mode", "auto", "fallback", "default", "allow", len(policy.Allow), "ask", len(policy.Ask), "user_ask", len(us.Ask), "deny", len(policy.Deny), "user_deny", len(us.Deny), "model", policy.Model)
 		}
 	}
 

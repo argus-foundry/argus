@@ -314,7 +314,9 @@ type Defaults struct {
 // injected at command-build time (agent.BuildCmd) rather than stored in the
 // backend command, so the mode is a single configurable knob.
 const (
-	PermissionModeDefault     = "default"
+	PermissionModeDefault = "default"
+	// PermissionModeAuto is enforced for the resident, not a global picker option.
+	PermissionModeAuto        = "auto"
 	PermissionModeAcceptEdits = "acceptEdits"
 	PermissionModePlan        = "plan"
 	// PermissionModeBypassAllow starts in plan mode but adds bypassPermissions
@@ -342,6 +344,8 @@ func PermissionModeFlags(mode string) string {
 	switch mode {
 	case PermissionModeDefault:
 		return "--permission-mode default"
+	case PermissionModeAuto:
+		return "--permission-mode auto"
 	case PermissionModeAcceptEdits:
 		return "--permission-mode acceptEdits"
 	case PermissionModePlan:

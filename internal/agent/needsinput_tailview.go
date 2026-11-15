@@ -62,6 +62,16 @@ func (v *TailView) DetectNeedsInputScreen() bool {
 	return v.renderer != nil && detectNeedsInputText(v.rendered())
 }
 
+// AutoModeStopped distinguishes the terminal failure (which the bridge has no
+// dialog event for) from ordinary classifier blocks and permission choosers.
+func (v *TailView) AutoModeStopped() bool {
+	if len(v.buf) == 0 {
+		return false
+	}
+	return autoModeStopped(v.windowText()) ||
+		(v.renderer != nil && autoModeStopped(v.rendered()))
+}
+
 func (v *TailView) AwaitingInputFingerprint() (uint64, bool) {
 	if len(v.buf) == 0 {
 		return 0, false

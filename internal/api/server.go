@@ -204,6 +204,7 @@ type Server struct {
 	// bridge-owned exact dialog back into a later uncertain permission.
 	bridgeScraperMu    sync.RWMutex
 	bridgeScraperNeeds map[string]bool
+	bridgeAutoStopped  map[string]string // launch generation, never inherited by a restart
 
 	// heraBG tracks in-flight Hera nuke tails (session stops + reclaim sweep).
 	heraBG sync.WaitGroup
