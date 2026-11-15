@@ -3,7 +3,9 @@
 ## Purpose
 
 Give the resident a quiet, config-controlled nightly pass to curate its own working memory.
+
 ## Requirements
+
 ### Requirement: Config-owned nightly timer
 
 The daemon SHALL ensure exactly one durable built-in memory tidy timer when the resident is enabled. `resident.memory_tidy` SHALL default to `02:30` in host local time, accept strict HH:MM, and accept `off` to disable. The host zone SHALL be resolved from a valid TZ first, then the /etc/localtime symlink suffix after zoneinfo/. The stored timezone MUST be a concrete loadable name, never Local. If neither source resolves, the daemon SHALL log the error and disable only the built-in, without silently falling back to UTC. Reconciliation SHALL preserve unchanged overdue timers across restart. Changes to the expression, resolved timezone or enabled state SHALL recompute due time and retract unsubmitted pending fires. Disable SHALL store due_at=0. A note-only change SHALL preserve due time and pending deliveries, updating instructions for future fires only. Invalid settings SHALL log an error and disable the built-in until corrected, retracting its unsubmitted fires while personal timers continue. Any built-in reconciliation error SHALL be logged without aborting personal timer firing or delivery.

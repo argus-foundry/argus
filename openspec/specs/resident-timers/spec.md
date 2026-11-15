@@ -3,7 +3,9 @@
 ## Purpose
 
 Give the resident durable, purposeful follow-up and recurring wake-ups through its own inbox without creating tasks or polling external sources.
+
 ## Requirements
+
 ### Requirement: Resident timer management
 
 The system SHALL expose resident-only MCP tools to set a one-shot timer by absolute RFC3339 time or positive duration, schedule recurrence using cron or a simple expression with an explicit IANA local timezone, list active timers, and cancel personal timers by id. The implicit `Local` timezone MUST be rejected case-insensitively. Config-owned built-in timers SHALL be identified by a `builtin` field in tool and REST listings and SHALL refuse agent cancellation. The authenticated resident identity guard MUST refuse other callers. The store SHALL cap active personal timers at 64 (excluding built-ins) and personal notes at 4096 bytes, reject blank notes and past one-shots, and require recurring intervals of at least 15 minutes.
