@@ -19,6 +19,8 @@
 
 ## 4. Validation and handoff
 
-- [ ] 4.1 Run focused tests and full required pre-pr gates; review behavior and tests.
+- [x] 4.1 Run focused tests and full required pre-pr gates; review behavior and tests.
 - [x] 4.2 Archive the OpenSpec change on this branch and validate all specs strictly.
-- [ ] 4.3 Commit, push through iris, open an unmerged PR and report checks to coordinator.
+- [x] 4.3 Commit, push through iris, open an unmerged PR and report checks to coordinator.
+
+Validation: GitHub CI run 43669640320 passed all gates for implementation commit ee4c8e98. Focused race regressions and local build, vet, format, lint, govulncheck and all 790 workspace tests passed. The monolithic local pre-pr run exceeded the 300-second shared-host guard; race/coverage batches run with the same guard and no skipped tests. PR #1231 targets master and remains unmerged.
