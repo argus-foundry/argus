@@ -40,6 +40,13 @@ func TestResidentPermissionAuthenticatedQueueAndRetry(t *testing.T) {
 	testutil.True(t, resp.Allow)
 	testutil.NoError(t, svc.ResidentPermission(&req, &resp))
 	testutil.False(t, resp.Allow)
+	// The hook credential and request session still agree; only the task's
+	// current session differs, so the database identity check must reject it.
+	r.SessionID = "new-current-session"
+	testutil.NoError(t, d.Update(r))
+	testutil.Error(t, validateResidentPermission(d, launch, &req))
+	r.SessionID = "s"
+	testutil.NoError(t, d.Update(r))
 	for _, name := range []string{"token", "generation", "session", "cwd", "task", "account", "malformed input"} {
 		t.Run(name, func(t *testing.T) {
 			bad := req

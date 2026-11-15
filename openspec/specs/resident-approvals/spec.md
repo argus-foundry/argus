@@ -20,6 +20,11 @@ The system SHALL intercept supported resident PermissionRequest events, store th
 - **WHEN** the hook cannot authenticate, parse its bounded input or reach the daemon
 - **THEN** the call is denied and never silently approved
 
+#### Scenario: Other native dialogs
+
+- **WHEN** PermissionRequest concerns a tool other than Bash or an MCP tool
+- **THEN** both the hook matcher and binary leave the dialog to native behavior without queuing a decision
+
 ### Requirement: Human approval grants only an exact retry once
 
 The TUI SHALL show the stored tool and input with Approve once and Deny actions. Only an explicit human approval action SHALL create a grant; agent board edits, reads, comments and resolution SHALL NOT authorize execution. Approval SHALL expire after ten minutes and SHALL be consumed atomically by one matching retry for the same resident launch, session, cwd and tool/input. Changed launches SHALL invalidate outstanding grants. Deny rules SHALL never be weakened.
@@ -30,6 +35,15 @@ The TUI SHALL show the stored tool and input with Approve once and Deny actions.
 - **THEN** PermissionRequest returns allow once without rewriting input or permission rules
 
 #### Scenario: Mismatch or duplicate
+
+The system SHALL exclude only Bash's model-written description from canonical matching, retain every execution field, and include the stored canonical call in approval notices.
+
+#### Scenario: Bash description changes after compaction
+
+- **WHEN** a retry changes only the Bash description after human approval
+- **THEN** it consumes the original grant once; a changed command or execution option remains unauthorized
+
+#### Scenario: Execution identity mismatch
 
 - **WHEN** input, tool, session, cwd or launch differs, a grant expired, or a concurrent retry already consumed it
 - **THEN** no existing grant authorizes the call
@@ -52,4 +66,9 @@ Human decisions SHALL atomically queue a reliable system notice beginning `[argu
 
 - **WHEN** a resident permission dialog renders briefly before the hook returns its answer
 - **THEN** the hook-handled dialog does not leave Solo flagged as waiting for input
+
+#### Scenario: Unrelated hook traffic while a native prompt waits
+
+- **WHEN** a native prompt remains visible while unrelated hook requests are answered
+- **THEN** suppression is scoped to the observed chooser and matching call, cannot refresh its episode deadline, and the real prompt surfaces within fifteen seconds; plain-text questions are never classified by generic proceed prose
 

@@ -22,11 +22,16 @@ On 2026-11-14 the coordinator ran `context/spikes/resident-defer-proof.py` with 
 ## Decisions
 
 - Install a resident-only PermissionRequest command hook in the isolated inline settings. A private launch file authenticates its daemon RPC, with a 64 KiB event limit, a 48 KiB canonical input/server limit and fail-closed errors. Keep the native allow/ask/deny arrays and return neither updatedPermissions nor updatedInput.
-- At the hook boundary, store canonical JSON (preserve numeric precision, reject malformed/duplicate keys), tool name, cwd, session and launch identity. Hash the full input. Deduplicate identical pending attempts. A native deny prevents reaching PermissionRequest at all.
+- At the hook boundary, store canonical JSON (preserve numeric precision, reject malformed/duplicate keys), tool name, cwd, session and launch identity. Hash every execution field, excluding only Bash description. Deduplicate identical pending attempts. A native deny prevents reaching PermissionRequest at all.
 - A new approval row links an immutable decision on the standing-team board. TUI renders stored tool/input and explicit Approve once / Deny controls. Generic board edits/resolution never create grants; approval items cannot be rewritten into a different request.
 - The human action uses revision/state checks. Approval has a ten-minute expiry and consumes atomically at the next matching PermissionRequest; denial never executes. Both write a reliable `[argus] ` notice in the same database transaction. A grant is authorization to attempt execution once, not evidence the tool completed.
 - Launch rotation invalidates approved grants; pending decisions remain visible but need a new matching request on the new launch before approval. Account, session, cwd or effective-policy changes therefore cannot silently reuse a grant.
-- Keep approval attention separate from ResidentWaiting. Track hook handling and briefly suppress permission waiting for its launch while the hook-generated dialog clears, without hiding unrelated questions or stale launches.
+- Keep approval attention separate from ResidentWaiting. Debounce the specific rendered chooser for ten seconds; extend to fifteen from its original start only when its displayed command/tool matches the answered call. Unrelated RPCs cannot start or refresh this deadline; a changed chooser surfaces immediately, and generic proceed prose is never a permission marker.
+- Match only Bash and MCP PermissionRequest events in settings and the binary. Bash canonical identity excludes only description; all execution fields remain exact. Approval notices include the stored canonical call so compaction cannot lose retry arguments. Grant consumption requires exactly one affected row.
+
+## Hook failure proof
+
+Coordinator ran the harness against Claude Code 2.1.325 on 2026-11-14, using an authenticated personal account, with PROOF_FAILURES_ONLY=1 in default mode and again in auto mode. All eight crash/timeout cases passed: hook exit 1 and a 20s hang past timeout 2s, each in print and interactive PTY, produced exactly one PermissionRequest, zero executions, and a continued final response. With onFailure:block both failures block the call without human input. PTY dialogs flash then clear; no silent allow occurred. Interactive transcripts persist. PROOF_BASE must be inside an already trusted directory; the 2.1.325 trust screen does not accept this driver's scripted answer.
 
 ## Risks / Trade-offs
 

@@ -29,6 +29,8 @@ func TestResidentApprovalLaunchRotation(t *testing.T) {
 	testutil.Equal(t, st.Mode().Perm(), os.FileMode(0o600))
 	settings, ok := settingsArg(t, cmd.Args)
 	testutil.True(t, ok)
+	matcher := settings["hooks"].(map[string]any)["PermissionRequest"].([]any)[0].(map[string]any)["matcher"]
+	testutil.Equal(t, matcher, any("Bash|mcp__.*"))
 	h := settings["hooks"].(map[string]any)["PermissionRequest"].([]any)[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)
 	testutil.Equal(t, h["onFailure"], any("block"))
 	_ = buildResident(t, task, residentCfg())

@@ -55,6 +55,22 @@ func TestResidentPermissionHookDecisions(t *testing.T) {
 
 type PermissionHookFake struct{ Reject bool }
 
+func TestResidentPermissionHookLeavesOtherDialogsNative(t *testing.T) {
+	for _, tool := range []string{"AskUserQuestion", "ExitPlanMode", "Read", "Agent"} {
+		t.Run(tool, func(t *testing.T) {
+			event := `{"hook_event_name":"PermissionRequest","tool_name":"` + tool + `","tool_input":{}}`
+			out := residentPermissionHook(strings.NewReader(event), []string{"generation"}, func() (agent.ResidentApprovalLaunch, error) {
+				t.Fatal("unrelated tool must not read credential")
+				return agent.ResidentApprovalLaunch{}, nil
+			}, func(*daemon.ResidentPermissionReq) (daemon.ResidentPermissionResp, error) {
+				t.Fatal("unrelated tool must not queue")
+				return daemon.ResidentPermissionResp{}, nil
+			})
+			testutil.Equal(t, len(out), 0)
+		})
+	}
+}
+
 func (f *PermissionHookFake) ResidentPermission(_ *daemon.ResidentPermissionReq, out *daemon.ResidentPermissionResp) error {
 	if f.Reject {
 		out.Error = "denied by fake"
@@ -119,8 +135,8 @@ func TestResidentPermissionHookFailsClosed(t *testing.T) {
 		{"malformed", `x`, "", []string{"g"}, false},
 		{"oversized", strings.Repeat(" ", 65537), "", []string{"g"}, false},
 		{"wrong event", `{"hook_event_name":"PreToolUse"}`, "g", []string{"g"}, false},
-		{"stale launch", `{"hook_event_name":"PermissionRequest"}`, "stale", []string{"g"}, false},
-		{"missing private file", `{"hook_event_name":"PermissionRequest"}`, "g", []string{"g"}, true},
+		{"stale launch", `{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`, "stale", []string{"g"}, false},
+		{"missing private file", `{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`, "g", []string{"g"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := residentPermissionHook(strings.NewReader(tc.event), tc.args, func() (agent.ResidentApprovalLaunch, error) {

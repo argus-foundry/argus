@@ -120,6 +120,18 @@ func (d *DB) RequestResidentApproval(call ApprovalCall, now time.Time) (*Residen
 		return nil, false, err
 	}
 	call.Input = input
+	if call.Tool == "Bash" {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(input, &fields); err != nil {
+			return nil, false, err
+		}
+		delete(fields, "description")
+		call.Input, err = json.Marshal(fields)
+		if err != nil {
+			return nil, false, err
+		}
+		input = call.Input
+	}
 	if len(call.Server) > 0 {
 		call.Server, err = canonicalApprovalJSON(call.Server)
 		if err != nil {
@@ -157,8 +169,15 @@ func (d *DB) RequestResidentApproval(call ApprovalCall, now time.Time) (*Residen
 				return nil
 			case "approved":
 				if now.Before(parseTime(expires)) {
-					_, err = tx.Exec(`UPDATE resident_approvals SET state='consumed' WHERE board_id=? AND state='approved'`, a.BoardID)
-					allow = err == nil
+					result, err := tx.Exec(`UPDATE resident_approvals SET state='consumed' WHERE board_id=? AND state='approved'`, a.BoardID)
+					if err != nil {
+						return err
+					}
+					rows, err := result.RowsAffected()
+					if err != nil || rows != 1 {
+						return ErrResidentApproval
+					}
+					allow = true
 					a.State = "consumed"
 					return err
 				}
@@ -220,6 +239,11 @@ func (d *DB) DecideResidentApproval(id int64, expected time.Time, launch string,
 		body := fmt.Sprintf("[argus] Aaron %s deferred call #%d. ", state, id)
 		if approve {
 			body += "Retry the exact original tool and input once within ten minutes if it is still appropriate. A changed launch or policy requires a new approval."
+			var stored string
+			if err := tx.QueryRow(`SELECT body FROM hera_board_items WHERE id=?`, id).Scan(&stored); err != nil {
+				return err
+			}
+			body += "\n\nStored canonical call:\n" + stored
 		} else {
 			body += "Do not retry this call; continue other work."
 		}

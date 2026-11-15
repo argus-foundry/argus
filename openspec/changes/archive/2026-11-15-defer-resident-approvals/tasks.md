@@ -24,3 +24,11 @@
 - [x] 4.3 Commit, push through iris, open an unmerged PR and report checks to coordinator.
 
 Validation: GitHub CI run 43669640320 passed all gates for implementation commit ee4c8e98. Focused race regressions and local build, vet, format, lint, govulncheck and all 790 workspace tests passed. The monolithic local pre-pr run exceeded the 300-second shared-host guard; race/coverage batches run with the same guard and no skipped tests. PR #1231 targets master and remains unmerged.
+
+## 5. Independent review corrections
+
+- [x] 5.1 Restrict settings and hook binary to Bash/MCP tools; leave human questions and plan dialogs native.
+- [x] 5.2 Scope waiting debounce to the observed chooser and matching call, with an immutable fifteen-second maximum; test unrelated hook traffic and real Waiting publication.
+- [x] 5.3 Exclude only Bash description from identity, include canonical input in notices, and test execution-field mismatch.
+- [x] 5.4 Prove hook exit/nonzero and timeout with onFailure:block on Claude 2.1.325 in default/auto print/PTy; record eight zero-execution continuations in design.
+- [x] 5.5 Check consumption rows affected and test current-session mismatch independently of the launch file.

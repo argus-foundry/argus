@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/rpc/jsonrpc"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
@@ -44,6 +45,9 @@ func residentPermissionHook(input io.Reader, args []string, read func() (agent.R
 	var event permissionHookEvent
 	if json.Unmarshal(raw, &event) != nil || event.Event != "PermissionRequest" {
 		return deny(failed)
+	}
+	if event.Tool != "Bash" && !strings.HasPrefix(event.Tool, "mcp__") {
+		return map[string]any{}
 	}
 	launch, err := read()
 	if err != nil || launch.Generation != args[0] {

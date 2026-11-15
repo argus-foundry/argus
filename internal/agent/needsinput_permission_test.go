@@ -11,7 +11,7 @@ func TestPermissionPromptRendered(t *testing.T) {
 		name, tail string
 		permission bool
 	}{
-		{"plain", "Do you want to proceed?\n❯ 1. Yes\n2. No", true},
+		{"plain question", "Do you want to proceed?\n❯ 1. Yes\n2. No", false},
 		{"cursor addressed", "\x1b[2J\x1b[HBash\x1b[1;6Hcommand\x1b[2;1HDo\x1b[2;4Hyou\x1b[2;8Hwant\x1b[2;13Hto\x1b[2;16Hproceed?\x1b[3;1H❯ 1. Yes", true},
 		{"question", "Which option?\n❯ 1. React\n2. Vue", false},
 		{"no dialog", "Working...", false},

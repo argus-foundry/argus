@@ -36,7 +36,7 @@ func (s *RPCService) ResidentPermission(req *ResidentPermissionReq, resp *Reside
 	// The permission chooser can render before the command hook's RPC. The
 	// detector also debounces permissions, closing that pre-RPC window.
 	if srv := s.daemon.apiServer; srv != nil {
-		srv.ResidentPermissionAnswered(req.Call.TaskID)
+		srv.ResidentPermissionAnswered(req.Call.TaskID, req.Call.Tool, req.Call.Input)
 	}
 	a, allow, err := s.daemon.db.RequestResidentApproval(req.Call, time.Now())
 	if err != nil {

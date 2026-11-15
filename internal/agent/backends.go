@@ -342,7 +342,7 @@ func claudePermissionRulesFlag(p ResidentPolicy) string {
 			hooks = map[string]any{}
 			settings["hooks"] = hooks
 		}
-		hooks["PermissionRequest"] = []any{map[string]any{"hooks": []any{map[string]any{
+		hooks["PermissionRequest"] = []any{map[string]any{"matcher": "Bash|mcp__.*", "hooks": []any{map[string]any{
 			"type": "command", "command": p.ApprovalHookCommand, "timeout": 10, "onFailure": "block",
 		}}}}
 	}

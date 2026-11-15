@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,10 +12,10 @@ import (
 )
 
 type residentApprovalSignals struct {
-	mu                            sync.Mutex
-	enabled                       func(string) bool
-	task, generation              string
-	answeredUntil, candidateSince time.Time
+	mu                                     sync.Mutex
+	enabled                                func(string) bool
+	task, generation, dialog, answeredCall string
+	candidateSince                         time.Time
 }
 
 // SetResidentPermissionHook configures detection only for launches carrying the
@@ -24,32 +26,55 @@ func (s *Server) SetResidentPermissionHook(enabled func(string) bool) {
 	s.residentApproval.enabled = enabled
 }
 
-func (s *Server) ResidentPermissionAnswered(id string) {
+func (s *Server) ResidentPermissionAnswered(id, tool string, input json.RawMessage) {
 	a := &s.residentApproval
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.task, a.generation = id, agent.SessionBridgeGeneration(s.runner.Get(id))
-	a.answeredUntil = time.Now().Add(15 * time.Second)
+	if a.task != id || a.generation != agent.SessionBridgeGeneration(s.runner.Get(id)) {
+		return
+	}
+	label := tool
+	if tool == "Bash" {
+		var fields struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(input, &fields) != nil {
+			return
+		}
+		label = fields.Command
+	}
+	// Only the currently observed chooser can be marked answered. An unrelated
+	// subagent request never starts or extends a suppression interval.
+	if label != "" && a.dialog != "" && strings.Contains(a.dialog, label) {
+		a.answeredCall = a.dialog
+	}
 }
 
-func (s *Server) suppressResidentPermission(id, generation string, permission bool, now time.Time) bool {
+func (s *Server) suppressResidentPermission(id, generation, dialog string, now time.Time) bool {
 	a := &s.residentApproval
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.task != id || a.generation != generation {
-		a.task, a.generation, a.answeredUntil, a.candidateSince = id, generation, time.Time{}, time.Time{}
+		a.task, a.generation, a.dialog, a.answeredCall, a.candidateSince = id, generation, "", "", time.Time{}
 	}
-	if !permission {
+	if dialog == "" {
 		a.candidateSince = time.Time{}
+		a.dialog, a.answeredCall = "", ""
 		return false
-	}
-	if now.Before(a.answeredUntil) {
-		return true
 	}
 	if a.candidateSince.IsZero() {
 		a.candidateSince = now
+		a.dialog = dialog
 	}
-	return now.Sub(a.candidateSince) < 10*time.Second
+	// Changing chooser content does not reset the episode's hard deadline.
+	if dialog != a.dialog {
+		return false
+	}
+	limit := 10 * time.Second
+	if a.answeredCall == dialog {
+		limit = 15 * time.Second
+	}
+	return now.Sub(a.candidateSince) < limit
 }
 
 func (s *Server) filterResidentApprovalWaiting(state *idleWatcherState, needs map[string]bool, tailOf func(string) []byte) {
@@ -64,18 +89,17 @@ func (s *Server) filterResidentApprovalWaiting(state *idleWatcherState, needs ma
 		return
 	}
 	generation := agent.SessionBridgeGeneration(s.runner.Get(r.ID))
-	if !needs[r.ID] {
-		s.suppressResidentPermission(r.ID, generation, false, time.Now())
-		return
-	}
-	permission := false
+	dialog := ""
 	if st, live := s.bridgeState(r.ID, time.Now()); live {
-		permission = st.NeedsInputKind == bridge.KindPermission
+		if st.NeedsInputKind == bridge.KindPermission {
+			cols, rows := sessionScreenSize(r.ID)
+			dialog = agent.NewTailView(state.screen, tailOf(r.ID), cols, rows).PermissionPromptKey()
+		}
 	} else {
 		cols, rows := sessionScreenSize(r.ID)
-		permission = agent.NewTailView(state.screen, tailOf(r.ID), cols, rows).PermissionPrompt()
+		dialog = agent.NewTailView(state.screen, tailOf(r.ID), cols, rows).PermissionPromptKey()
 	}
-	if s.suppressResidentPermission(r.ID, generation, permission, time.Now()) {
+	if s.suppressResidentPermission(r.ID, generation, dialog, time.Now()) {
 		delete(needs, r.ID)
 		// The generic detector is sticky. Never retain the flashed prompt as an
 		// outstanding question after the hook's answer dismissed it.

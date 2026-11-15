@@ -113,6 +113,40 @@ func TestResidentApprovalConcurrentConsume(t *testing.T) {
 	testutil.Equal(t, n, 1)
 }
 
+func TestResidentApprovalBashDescriptionDoesNotChangeGrant(t *testing.T) {
+	d, call, now := approvalFixture(t)
+	call.Input = json.RawMessage(`{"command":"echo probe","description":"A","timeout":1000,"run_in_background":false}`)
+	a, _, err := d.RequestResidentApproval(call, now)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.DecideResidentApproval(a.BoardID, a.CreatedAt, call.Launch, true, now))
+	notices, err := d.PendingHeraBoardNotices()
+	testutil.NoError(t, err)
+	testutil.Contains(t, notices[0].Body, `"command":"echo probe"`)
+	testutil.Contains(t, notices[0].Body, `"run_in_background":false`)
+	for _, input := range []string{`{"command":"echo different","description":"B","timeout":1000,"run_in_background":false}`, `{"command":"echo probe","timeout":1001,"run_in_background":false}`, `{"command":"echo probe","timeout":1000,"run_in_background":true}`} {
+		call.Input = json.RawMessage(input)
+		_, allow, err := d.RequestResidentApproval(call, now)
+		testutil.NoError(t, err)
+		testutil.False(t, allow)
+	}
+	call.Input = json.RawMessage(`{"command":"echo probe","description":"B","timeout":1000,"run_in_background":false}`)
+	_, allow, err := d.RequestResidentApproval(call, now)
+	testutil.NoError(t, err)
+	testutil.True(t, allow)
+}
+
+func TestResidentApprovalConsumeRequiresAffectedRow(t *testing.T) {
+	d, call, now := approvalFixture(t)
+	a, _, err := d.RequestResidentApproval(call, now)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.DecideResidentApproval(a.BoardID, a.CreatedAt, call.Launch, true, now))
+	_, err = d.conn.Exec(`CREATE TRIGGER ignore_consume BEFORE UPDATE OF state ON resident_approvals WHEN NEW.state='consumed' BEGIN SELECT RAISE(IGNORE); END`)
+	testutil.NoError(t, err)
+	_, allow, err := d.RequestResidentApproval(call, now)
+	testutil.Error(t, err)
+	testutil.False(t, allow)
+}
+
 func TestResidentApprovalRejectsMalformedAndStale(t *testing.T) {
 	for _, input := range []string{`{"x":1,"x":2}`, `[]`, `{}`, `null`, `{"x":1} {}`, `{"x":`} {
 		t.Run(input, func(t *testing.T) {

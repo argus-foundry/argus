@@ -2,7 +2,9 @@
 """Harmless installed-Claude proof; inherits CLAUDE_CONFIG_DIR, never reads auth.
 
 Run: python3 context/spikes/resident-defer-proof.py
-Requires claude, expect, Python 3. Set PROOF_BASE to a trusted directory and
+Requires claude, expect, Python 3. PROOF_BASE must be inside a folder Claude
+already trusts: on 2.1.325 the expect trust answer does not dismiss startup trust.
+Set PROOF_FAILURES_ONLY=1 for crash/timeout cases only. Set PROOF_BASE to a trusted directory and
 PROOF_MODE=auto to repeat in auto mode. Hook/settings/output files are temporary;
 interactive transcripts are retained by Claude (the CLI's no-persistence flag
 is print-only). Never reads or prints credentials.
@@ -16,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def hook():
@@ -28,6 +31,11 @@ def hook():
     with (root / "events.jsonl").open("a") as stream:
         stream.write(json.dumps(record) + "\n")
     if event["hook_event_name"] == "PermissionRequest":
+        if decision == "crash":
+            sys.exit(1)
+        if decision == "timeout":
+            time.sleep(20)
+            return
         answer = {"behavior": decision}
         if decision == "deny":
             answer.update(message="Queued for Aaron as #1. Do not retry; continue with your final response.", interrupt=False)
@@ -80,7 +88,7 @@ def run_case(base, label, interactive, decision, permission_mode=os.environ.get(
     root = base / label
     root.mkdir()
     hook_command = shlex.join([sys.executable, str(Path(__file__).resolve()), "--hook", str(root), decision])
-    handler = {"type": "command", "command": hook_command, "onFailure": "block", "timeout": 10}
+    handler = {"type": "command", "command": hook_command, "onFailure": "block", "timeout": 2 if decision == "timeout" else 10}
     settings = {
         "permissions": {"ask": ["Bash"]},
         "hooks": {name: [{"matcher": "Bash", "hooks": [handler]}]
@@ -132,14 +140,16 @@ def run_case(base, label, interactive, decision, permission_mode=os.environ.get(
     correct_calls = all(expected_command(e) for e in asks + executed)
     import re as _re
     continued = bool(_re.search(r"5555ok", output))
-    ok = (result.returncode == 0 and len(asks) == 1 and correct_calls and continued
-          and len(executed) == (1 if decision == "allow" else 0))
+    failure_case = decision in ("crash", "timeout")
+    ok = (len(asks) == 1 and correct_calls and len(executed) == (1 if decision == "allow" else 0)
+          and (failure_case or (result.returncode == 0 and continued)))
     # --no-session-persistence is documented for -p only. Verify the interactive
     # launch didn't persist too; never remove or alter an existing transcript.
     persisted = [e["transcript_path"] for e in events if e.get("transcript_path")
                  and Path(e["transcript_path"]).exists()]
     dialog = Path(str(output_path)+".dialog").exists()
-    print(f"{'PASS' if ok else 'FAIL'} {label}: dialog_seen={dialog} exit={result.returncode} permission_requests={len(asks)} "
+    outcome = "allow" if executed else "native-dialog" if dialog and not continued else "blocked"
+    print(f"{'PASS' if ok else 'FAIL'} {label}: outcome={outcome} dialog_seen={dialog} exit={result.returncode} permission_requests={len(asks)} "
           f"executions={len(executed)} continued={continued} persisted={bool(persisted)}", flush=True)
     if persisted:
         print(f"NOTE {label}: interactive proof transcript retained by Claude (print-only no-persistence flag)", flush=True)
@@ -165,12 +175,15 @@ def main():
     for directory in [tempfile.mkdtemp(prefix="argus-defer-proof-", dir=os.environ.get("PROOF_BASE"))]:
         print("dir", directory, flush=True)
         base = Path(directory)
-        results = [
+        results = [] if os.environ.get("PROOF_FAILURES_ONLY") else [
             run_case(base, "print-ask-allow", False, "allow"),
             run_case(base, "pty-ask-allow", True, "allow"),
             run_case(base, "print-deny-continue", False, "deny"),
             run_case(base, "pty-deny-continue", True, "deny"),
         ]
+        results.extend(run_case(base, f"{transport}-{decision}", interactive, decision)
+                       for decision in ("crash", "timeout")
+                       for transport, interactive in (("print", False), ("pty", True)))
     print("PASS all cases" if all(results) else "FAIL one or more cases", flush=True)
     return 0 if all(results) else 1
 
