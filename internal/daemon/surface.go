@@ -277,7 +277,9 @@ const (
 	// 49: resident connector permission rules expand historical and lowercase
 	//     server aliases for both the resident and unattended-worker denials.
 	// 50: automatic recovery carries a resume-only launch constraint.
-	SupervisorSpawnSurface = 50
+	// 51: resident launches force auto permission mode with native Manual
+	// fallback; the shipped allow tier no longer blanket-approves Bash.
+	SupervisorSpawnSurface = 51
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -345,7 +347,9 @@ const (
 	// v17: restart/kick preflight consults authoritative resident-worker identity.
 	// v18: supervisor shutdown records live tasks; resume-only launches refuse
 	// missing conversations instead of replaying the original prompt.
-	SupervisorStreamSurface = 18
+	// v19: resident PTY startup output best-effort logs fallback notices once
+	// to the supervisor log within 64 KiB/60s, preserving ANSI/UTF-8 boundaries.
+	SupervisorStreamSurface = 19
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -569,6 +573,7 @@ var SupervisorStreamPaths = []string{
 	"internal/claudeagents/claudeagents.go",   // `claude agents`/`claude stop` under the session's config dir
 	"internal/agent/runner.go",                // live session map, pendingRestart, Stop/StopAll, KickRerender
 	"internal/agent/session.go",               // the single readLoop: PTY read → ring + writers, session log
+	"internal/agent/resident_auto.go",         // resident native permission fallback diagnostics
 	"internal/agent/terminal_color.go",        // PTY startup OSC color-query replies and duplicate filtering
 	"internal/agent/sessionsize.go",           // the PTY-size sidecar session.go writes on resize
 	"internal/daemon/sessioncore.go",          // the R/S handlers both daemon and supervisor mount
@@ -596,10 +601,10 @@ var SupervisorStreamPaths = []string{
 const (
 	// resident.memory_tidy is read only by the daemon timer poll; adding its
 	// schema/default does not change BuildCmd or supervisor spawn behavior.
-	SpawnSurfaceDigest = "2b0b52369bf773b4bf9e3dbbce279cef46c7fbd9009e59a67bf5af91ce1ef626"
+	SpawnSurfaceDigest = "ea88ea32fc9ac09fb5d0c8f72e386a1e4cc94f87ab58ea73ae5f3229b4d92168"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
-	StreamSurfaceDigest = "33d10d23ea7a45aa26fdcfa12080751d2580e41d6696d2bd5a835c1999960c5e"
+	StreamSurfaceDigest = "c13546c4713edbf4bd37be9887efd573b745b026c9ea02dbf28a4ffcb7cd3b16"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

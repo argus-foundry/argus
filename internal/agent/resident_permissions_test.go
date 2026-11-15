@@ -76,9 +76,9 @@ func TestBuildCmd_ResidentGetsAskAndDenyRules(t *testing.T) {
 	line := strings.Join(cmd.Args, " ")
 	pi := strings.Index(line, "'hi'")
 	si := strings.Index(line, "--settings")
-	mi := strings.Index(line, "--permission-mode default")
+	mi := strings.Index(line, "--permission-mode auto")
 	if pi < 0 || si < 0 || mi < 0 {
-		t.Fatalf("missing prompt/--settings/--permission-mode default in %s", line)
+		t.Fatalf("missing prompt/--settings/--permission-mode auto in %s", line)
 	}
 	if si > pi || mi > pi {
 		t.Fatalf("--settings (%d) and --permission-mode (%d) must precede the prompt (%d)", si, mi, pi)
@@ -161,7 +161,7 @@ func TestBuildCmd_ResidentForcesNonBypassPermissionMode(t *testing.T) {
 		t.Fatalf("bypass flag survived for resident: %s", line)
 	}
 	testutil.Equal(t, strings.Count(line, "--permission-mode"), 1)
-	testutil.Contains(t, line, "--permission-mode default")
+	testutil.Contains(t, line, "--permission-mode auto")
 	testutil.Contains(t, line, "--model x")
 }
 
@@ -270,7 +270,7 @@ func TestBuildCmd_ResidentContinuationKeepsForcedModeArgv(t *testing.T) {
 	if len(argv) < 3 {
 		t.Fatalf("argv too short: %q", argv)
 	}
-	testutil.DeepEqual(t, argv[:3], []string{"claude", "--permission-mode", "default"})
+	testutil.DeepEqual(t, argv[:3], []string{"claude", "--permission-mode", "auto"})
 }
 
 func TestStripClaudePermissionFlags_UnbalancedQuoteErrors(t *testing.T) {
@@ -296,7 +296,7 @@ func TestBuildCmd_ResidentUnbalancedBackendCommandErrors(t *testing.T) {
 }
 
 // A quoted argument that merely mentions --permission-mode must not suppress
-// the forced default mode (HasPermissionFlag is a substring search).
+// the forced auto mode (HasPermissionFlag is a substring search).
 func TestBuildCmd_ResidentRefusesQuotedArgumentCommand(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	testutil.NoError(t, os.MkdirAll(db.ResidentWorkDir(), 0o755))
@@ -436,8 +436,8 @@ func TestBuildCmd_ResidentConnectorAliases(t *testing.T) {
 		{"mcp__claude_ai_Keystone__circleci_rerun_workflow", "ask"},
 		{"mcp__claude_ai_keystone__circleci_rerun_workflow", "ask"},
 		{"mcp__claude_ai_slack__slack_send_message", "deny"},
-		{"mcp__claude_ai_keystone__unreviewed_tool", "ask"},
-		{"mcp__claude_ai_unknown__gong_list_calls", "ask"},
+		{"mcp__claude_ai_keystone__unreviewed_tool", "review"},
+		{"mcp__claude_ai_unknown__gong_list_calls", "review"},
 	} {
 		t.Run(tc.tool, func(t *testing.T) { testutil.Equal(t, residentRuleTier(t, perms, tc.tool), tc.tier) })
 	}
@@ -490,7 +490,7 @@ func TestBuildCmd_ResidentIsSelfContainedUnderUserAllowAll(t *testing.T) {
 		t.Fatalf("no inline settings: %s", line)
 	}
 	perms, _ := st["permissions"].(map[string]any)
-	testutil.Equal(t, perms["defaultMode"], any("default"))
+	testutil.Equal(t, perms["defaultMode"], any("auto"))
 	testutil.Equal(t, perms["disableBypassPermissionsMode"], any("disable"))
 	join := func(v any) string {
 		var out []string
@@ -1477,7 +1477,7 @@ func TestBuildCmd_ResidentContinuationFlagsReachClaudeUnderSh(t *testing.T) {
 			out, err := cmd.Output()
 			testutil.NoError(t, err)
 			got := string(out)
-			for _, want := range []string{"<--model>", "<x>", "<--permission-mode>", "<default>", "<--setting-sources>", "<project>", "<--settings>"} {
+			for _, want := range []string{"<--model>", "<x>", "<--permission-mode>", "<auto>", "<--setting-sources>", "<project>", "<--settings>"} {
 				testutil.Contains(t, got, want+"\n")
 			}
 			if strings.Contains(got, " --permission-mode") {
@@ -1502,7 +1502,7 @@ func residentRuleTier(t *testing.T, permissions map[string]any, tool string) str
 			}
 		}
 	}
-	return "ask" // BuildCmd pins default mode, never bypass.
+	return "review" // Unmatched actions go through auto review, or ask after Manual fallback.
 }
 
 func TestBuildCmd_ResidentOrdinaryWorkPolicy(t *testing.T) {
@@ -1517,10 +1517,10 @@ func TestBuildCmd_ResidentOrdinaryWorkPolicy(t *testing.T) {
 	settings, ok := settingsArg(t, cmd.Args)
 	testutil.True(t, ok)
 	perms := settings["permissions"].(map[string]any)
-	testutil.Equal(t, perms["defaultMode"], any("default"))
+	testutil.Equal(t, perms["defaultMode"], any("auto"))
 	testutil.Equal(t, perms["disableBypassPermissionsMode"], any("disable"))
 	cases := []struct{ tool, tier string }{
-		{"Bash", "allow"}, {"Read", "allow"}, {"Write", "allow"}, {"Edit", "allow"},
+		{"Bash", "review"}, {"Read", "allow"}, {"Write", "allow"}, {"Edit", "allow"},
 		{"Glob", "allow"}, {"Grep", "allow"}, {"WebFetch", "allow"}, {"WebSearch", "allow"},
 		{"Skill", "allow"}, {"ToolSearch", "allow"}, {"Agent", "allow"}, {"Task", "allow"},
 		{"TodoWrite", "allow"}, {"NotebookEdit", "allow"},
@@ -1549,9 +1549,9 @@ func TestBuildCmd_ResidentOrdinaryWorkPolicy(t *testing.T) {
 		{"mcp__claude_ai_Slack__slack_send_message_draft", "allow"},
 		{"mcp__claude_ai_Slack__slack_send_message", "deny"},
 		{"mcp__claude_ai_Slack__slack_schedule_message", "deny"},
-		{"mcp__claude_ai_Figma__unknown_write", "ask"},
-		{"mcp__claude_ai_Figma__get_new_mutating_tool", "ask"},
-		{"mcp__unlisted_connector__write", "ask"}, {"mcp__unlisted_connector__read", "ask"},
+		{"mcp__claude_ai_Figma__unknown_write", "review"},
+		{"mcp__claude_ai_Figma__get_new_mutating_tool", "review"},
+		{"mcp__unlisted_connector__write", "review"}, {"mcp__unlisted_connector__read", "review"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) { testutil.Equal(t, residentRuleTier(t, perms, tc.tool), tc.tier) })
