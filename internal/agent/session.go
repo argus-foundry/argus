@@ -143,7 +143,7 @@ func StartSession(taskID string, cmd *exec.Cmd, rows, cols uint16) (*Session, er
 		initialRows:   rows,
 		logFile:       logFile,
 		colorReplies:  make(chan []byte, 8),
-		autoFallback:  residentAutoFallback{enabled: slices.Contains(cmd.Env, ResidentEnvMarker+"=1")},
+		autoFallback:  residentAutoFallback{enabled: slices.Contains(cmd.Env, ResidentEnvMarker+"=1"), started: time.Now()},
 	}
 	go s.forwardColorReplies()
 

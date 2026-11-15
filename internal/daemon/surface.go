@@ -347,8 +347,8 @@ const (
 	// v17: restart/kick preflight consults authoritative resident-worker identity.
 	// v18: supervisor shutdown records live tasks; resume-only launches refuse
 	// missing conversations instead of replaying the original prompt.
-	// v19: resident PTY output logs native auto-to-Manual fallback notices once
-	// per session, including before any frontend attaches and across full reads.
+	// v19: resident PTY startup output best-effort logs fallback notices once
+	// to the supervisor log within 64 KiB/60s, preserving ANSI/UTF-8 boundaries.
 	SupervisorStreamSurface = 19
 )
 
@@ -600,7 +600,7 @@ var SupervisorStreamPaths = []string{
 // message prints the computed digest to paste back here.
 const (
 	SpawnSurfaceDigest  = "ecb0878ad1d675aa820c41d62d7714173941a150f26759e0b056e6de2e0ef41e"
-	StreamSurfaceDigest = "cedc1de9bf6a20185e1c0f36f05b7456aeb0605e368d692e0846a8368fbcf993"
+	StreamSurfaceDigest = "c9189174f3b1fe422866f474cb32ce4b4352b40417ccc904810f00da00ec6d45"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,
