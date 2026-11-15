@@ -5,7 +5,7 @@ TBD - created by archiving change add-hera-auto-archive. Update Purpose after ar
 ## Requirements
 ### Requirement: Done-done predicate
 
-The system SHALL define a role as archivable only when ALL of the following hold, and SHALL refuse with the first failing reason otherwise: its task status is `complete`; the role is not `blocked` (a live session parked at a prompt additionally refuses at archive time; the daemon's sticky needs-input set is not consulted); the role has no unread hera mail to it and no sent mail its recipient has not yet read; the task is bound to no other live role (a sub-coordinator's own coordinator hat in a bridged child orchestrator excepted); no plan-DAG node depends on it that is not itself done or archived; if it is a sub-coordinator (linked via `hera_orch_links` OR sharing its task with a child orchestrator's coordinator hat, the plan-DAG `kind=subcoord` shape), every child role is archived and it owns no open `decision` board item (open `fyi` items are re-posted to the parent coordinator's board and resolved, not blocking); its worktree has no dirty files and its branch is confirmed landed by the merge-safety classifier (or it has neither worktree nor branch); and it is not pinned, resident, or a standing-team member. Any unconfirmed or errored check SHALL refuse.
+The system SHALL define a role as archivable only when ALL of the following hold, and SHALL refuse with the first failing reason otherwise: its task status is `complete`; the role is not `blocked` (a live session parked at a prompt additionally refuses at archive time; the daemon's sticky needs-input set is not consulted); the role has no unread hera mail to it other than explicitly proven daemon-generated PR merge self-assessment notices and no sent mail its recipient has not yet read; the task is bound to no other live role (a sub-coordinator's own coordinator hat in a bridged child orchestrator excepted); no plan-DAG node depends on it that is not itself done or archived; if it is a sub-coordinator (linked via `hera_orch_links` OR sharing its task with a child orchestrator's coordinator hat, the plan-DAG `kind=subcoord` shape), every child role is archived and it owns no open `decision` board item (open `fyi` items are re-posted to the parent coordinator's board and resolved, not blocking); its worktree has no dirty files and its branch is confirmed landed by the merge-safety classifier (or it has neither worktree nor branch); and it is not pinned, resident, or a standing-team member. Any unconfirmed or errored check SHALL refuse.
 
 #### Scenario: Completed role with a merged PR is archivable
 
@@ -72,7 +72,7 @@ Archiving via `hera_archive` SHALL NOT remove the worktree or delete any local o
 
 ### Requirement: Archive is race-safe and atomic
 
-`hera_archive` SHALL perform every DB-side re-verification and every write in ONE database transaction: the task is still `complete`; the role and task are not pinned, resident or standing-team; the role is not `blocked`; no other live role is bound to the task (a sub-coordinator's own coordinator hat excepted); no unread hera mail to the role or sent by it to a live recipient; no live plan-DAG dependent; every child role archived; no open `decision` board item. In that same transaction it SHALL re-post the sub-coordinator's open `fyi` items to the parent coordinator's board, end the child coordinator binding(s), archive the child orchestrator(s) (both `hera_orch_links` children and plan-DAG `kind=subcoord` children), archive the task, and hide the role. Git safety SHALL be checked before the transaction and re-checked immediately before it opens (a git subprocess must not run under the database lock), and session idleness SHALL be re-checked as the last step before commit. If any check or write fails, the whole transaction SHALL roll back, nothing SHALL be written, and the tool SHALL report the role as refused with the reason. Events SHALL be emitted only after commit.
+`hera_archive` SHALL perform every DB-side re-verification and every write in ONE database transaction: the task is still `complete`; the role and task are not pinned, resident or standing-team; the role is not `blocked`; no other live role is bound to the task (a sub-coordinator's own coordinator hat excepted); no unread hera mail to the role other than explicitly proven daemon-generated PR merge self-assessment notices or sent by it to a live recipient; no live plan-DAG dependent; every child role archived; no open `decision` board item. In that same transaction it SHALL mark those stale notices read and re-post the sub-coordinator's open `fyi` items to the parent coordinator's board, end the child coordinator binding(s), archive the child orchestrator(s) (both `hera_orch_links` children and plan-DAG `kind=subcoord` children), archive the task, and hide the role. Git safety SHALL be checked before the transaction and re-checked immediately before it opens (a git subprocess must not run under the database lock), and session idleness SHALL be re-checked as the last step before commit. If any check or write fails, the whole transaction SHALL roll back, nothing SHALL be written, and the tool SHALL report the role as refused with the reason. Events SHALL be emitted only after commit.
 
 #### Scenario: State changing after the predicate stops the archive
 
@@ -88,3 +88,18 @@ Archiving via `hera_archive` SHALL NOT remove the worktree or delete any local o
 
 - **WHEN** a done-done sub-coordinator is archived
 - **THEN** its child orchestrator is archived, its child coordinator binding is ended, and its open fyi items are on the parent board, all in one commit
+
+#### Scenario: Stale merge prompts do not block archive
+
+- **WHEN** a complete role has only unread daemon merge prompts identified by durable provenance
+- **THEN** dry run reports archivable without writing and archive marks the prompts read atomically with hiding the role
+
+#### Scenario: Real coordinator mail remains a blocker
+
+- **WHEN** unmarked coordinator mail has the same text as a daemon merge prompt
+- **THEN** it still refuses archive, including when it arrives after preflight
+
+#### Scenario: Notice retirement rolls back
+
+- **WHEN** any later archive check or write fails after stale prompts were marked read
+- **THEN** the prompts remain unread and all archive writes roll back

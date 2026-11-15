@@ -326,11 +326,11 @@ func (f *failStore) HeraRoleStatusFor(id int64) (*db.HeraRoleStatus, error) {
 	}
 	return f.DB.HeraRoleStatusFor(id)
 }
-func (f *failStore) HeraInbox(id int64) ([]*db.HeraMessage, error) {
+func (f *failStore) HeraArchiveUnread(id int64) (int, error) {
 	if f.inboxErr {
-		return nil, errBoom
+		return 0, errBoom
 	}
-	return f.DB.HeraInbox(id)
+	return f.DB.HeraArchiveUnread(id)
 }
 func (f *failStore) HeraUnreadFromRole(id int64) (int, error) {
 	if f.outboxErr {
@@ -673,4 +673,26 @@ func TestArchiveRole_StopRunsAfterCommit(t *testing.T) {
 	testutil.Equal(t, res.Archived, true)
 	testutil.Equal(t, run.sawArchivedAtStop, true)
 	testutil.Equal(t, run.sawRoleHiddenAtStop, true)
+}
+
+func TestArchiveRoleStaleMergeNotice(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		t.Run(fmt.Sprint(dry), func(t *testing.T) {
+			d := archDB(t)
+			o, err := d.CreateHeraOrchestrator("o", "")
+			testutil.NoError(t, err)
+			_, r := archWorker(t, d, o.ID, "worker", model.StatusInReview)
+			_, c := archWorker(t, d, o.ID, "sender", model.StatusInProgress)
+			binding, err := d.HeraLiveBindingByRole(r.ID)
+			testutil.NoError(t, err)
+			msg, err := d.SendHeraMergeNotice(binding.ArgusTaskID, c.ID, r.ID, "merged", "notice")
+			testutil.NoError(t, err)
+			testutil.NoError(t, d.SetStatus(binding.ArgusTaskID, model.StatusComplete))
+			result := ArchiveRole(d, nil, gitOK, r, dry)
+			testutil.Equal(t, result.Archived, true)
+			msgs, err := d.HeraMessagesByIDs([]int64{msg.ID})
+			testutil.NoError(t, err)
+			testutil.Equal(t, msgs[0].ReadAt == nil, dry)
+		})
+	}
 }
