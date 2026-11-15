@@ -39,9 +39,11 @@ func classifyTask(task *model.Task, database *db.DB) (transcriptstate.State, boo
 
 // Record writes a ledger entry for each true orphan: the daemon's
 // supervisor-restart reconcile calls it after the resume-time session-ID
-// refresh. alive reports whether the supervisor still has a live session for a
-// task. It returns the number of entries written. Per-task failures are logged
-// and skipped; nothing here can block the reconcile.
+// refresh. orphanIDs must contain only sessions lost in the current bounce;
+// role bindings and absence alone are not evidence. alive reports whether the
+// supervisor still has a live session for a task. It returns the number of
+// entries written. Per-task failures are logged and skipped; nothing here can
+// block the reconcile.
 func Record(database *db.DB, orphanIDs []string, alive func(string) bool, now time.Time) int {
 	return record(database, orphanIDs, alive, now, classifyTask)
 }
@@ -50,14 +52,27 @@ func record(database *db.DB, orphanIDs []string, alive func(string) bool, now ti
 	if alive == nil {
 		alive = func(string) bool { return false }
 	}
+	existing, err := LoadAll(database)
+	if err != nil {
+		slog.Warn("[bounce-recovery] ledger lookup failed; skipping record", "err", err)
+		return 0
+	}
 	inSet := make(map[string]bool, len(orphanIDs))
 	for _, id := range orphanIDs {
 		inSet[id] = true
 	}
 	bounceID := strconv.FormatInt(now.Unix(), 10)
 	written := 0
-	recorded := map[string]*Entry{}
 	for _, id := range orphanIDs {
+		if alive(id) {
+			slog.Info("[bounce-recovery] skip live task in ledger", "task", id)
+			continue
+		}
+		if old := existing[id]; old != nil && old.BounceID == bounceID {
+			uxlog.Log("[bounce-recovery] skip already recorded bounce task=%s bounce_id=%s", id, bounceID)
+			slog.Info("[bounce-recovery] skip already recorded bounce", "task", id, "bounce_id", bounceID)
+			continue
+		}
 		t, err := database.Get(id)
 		if err != nil || !recordableTask(database, t) {
 			slog.Info("[bounce-recovery] skip task (missing or closed)", "task", id)
@@ -86,69 +101,8 @@ func record(database *db.DB, orphanIDs []string, alive func(string) bool, now ti
 			continue
 		}
 		written++
-		recorded[id] = &e
+		existing[id] = &e
 		slog.Info("[bounce-recovery] recorded", "task", id, "name", t.Name, "role", rd.role, "state", st.Kind, "status", e.Status, "reason", e.Reason, "depth", rd.depth)
-	}
-	written += recordIdleTeam(database, recorded, inSet, alive, now, bounceID, classify)
-	return written
-}
-
-// recordIdleTeam records, for every coordinator recorded this bounce, the
-// members of its team that the bounce also killed but that were NOT in_progress:
-// idle workers are routinely rolled to in_review, so the orphan sweep never sees
-// them. They are listed to their coordinator (so it never believes they are
-// alive) but never auto-resumed (status dormant).
-func recordIdleTeam(database *db.DB, recorded map[string]*Entry, inSet map[string]bool, alive func(string) bool, now time.Time, bounceID string, classify classifyFn) int {
-	var work []*Entry
-	seen := map[string]bool{}
-	for _, e := range recorded {
-		if e.Role == RoleCoordinator {
-			work = append(work, e)
-			seen[e.TaskID] = true
-		}
-	}
-	written := 0
-	for len(work) > 0 {
-		c := work[0]
-		work = work[1:]
-		roles, err := database.ListHeraRoles(c.OrchID, false)
-		if err != nil {
-			slog.Warn("[bounce-recovery] list team failed", "coord", c.TaskID, "orch", c.OrchID, "err", err)
-			continue
-		}
-		for _, r := range roles {
-			if r.Kind == db.HeraKindCoordinator {
-				continue
-			}
-			b, err := database.HeraLiveBindingByRole(r.ID)
-			if err != nil || b == nil || b.ArgusTaskID == c.TaskID || recorded[b.ArgusTaskID] != nil || inSet[b.ArgusTaskID] || alive(b.ArgusTaskID) {
-				continue
-			}
-			t, err := database.Get(b.ArgusTaskID)
-			if err != nil || !recordableTask(database, t) || t.Status != model.StatusInReview {
-				continue
-			}
-			rd := roleInfo(database, t.ID)
-			rd.depth = orchDepth(database, rd.orchID)
-			st, _ := classify(t, database)
-			e := Entry{
-				TaskID: t.ID, KilledAt: now, State: st.Kind, Question: st.Question, Options: st.Options,
-				Role: rd.role, RoleName: r.Name, TaskName: t.Name, OrchID: rd.orchID,
-				CoordTask: c.TaskID, Depth: rd.depth, BounceID: bounceID,
-				Status: StatusDormant, Reason: "in_review",
-			}
-			if err := Save(database, e); err != nil {
-				slog.Warn("[bounce-recovery] ledger write failed", "task", t.ID, "err", err)
-				continue
-			}
-			written++
-			recorded[t.ID] = &e
-			slog.Info("[bounce-recovery] recorded idle team member (in_review)", "task", t.ID, "name", t.Name, "coord", c.TaskID, "role", rd.role)
-			if e.Role == RoleCoordinator && !seen[e.TaskID] {
-				seen[e.TaskID] = true
-				work = append(work, &e)
-			}
-		}
 	}
 	return written
 }

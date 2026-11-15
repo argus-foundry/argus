@@ -623,12 +623,11 @@ func TestPollPR_MergedTransitionAsksRoleToSelfAssess(t *testing.T) {
 	testutil.Equal(t, len(coordMsgs), 1)
 }
 
-func TestPollPR_MergedAsksRoleToSelfAssessRegardlessOfTaskStatus(t *testing.T) {
+func TestPollPR_MergedAsksInProgressRoleToSelfAssess(t *testing.T) {
 	d, _ := testDaemon(t)
 	seedTask(t, d.db, "worker-task", "argus/worker", false)
-	// Still actively in progress — the role-notify has no status gate at all;
-	// the agent's own judgment (not a status precondition) decides whether
-	// there's more work.
+	// Still actively in progress: completion/archive suppression does not
+	// prevent the agent from assessing whether it has more work.
 	testutil.NoError(t, d.db.SetStatus("worker-task", model.StatusInProgress))
 	workerRole, _ := seedHeraWorkerWithCoordinator(t, d.db, "O", "worker-task")
 

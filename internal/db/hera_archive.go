@@ -113,6 +113,13 @@ func (d *DB) ArchiveHeraUnit(in ArchiveUnitInput) (string, error) {
 		}
 
 		// ---- writes ----
+		if _, err := tx.Exec(`UPDATE hera_messages SET read_at=? WHERE to_role_id=? AND read_at IS NULL
+		 AND EXISTS (SELECT 1 FROM hera_merge_notices n WHERE n.message_id=hera_messages.id)`, formatTime(time.Now()), role.ID); err != nil {
+			return fmt.Errorf("retire merge notices: %w", err)
+		}
+		if err := archiveStep("merge_notices"); err != nil {
+			return err
+		}
 		postedParent, resolved, err = archivePushFyiUp(tx, role, kids)
 		if err != nil {
 			return fmt.Errorf("push fyi to parent: %w", err)
@@ -213,7 +220,7 @@ func (d *DB) archiveUnitChecks(tx *sql.Tx, role *HeraRole, taskID string) error 
 	case st == string(HeraStatusBlocked):
 		return archiveRefuse("role is blocked (needs input)")
 	}
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM hera_messages WHERE to_role_id=? AND read_at IS NULL`, role.ID).Scan(&n); err != nil {
+	if err := tx.QueryRow(archiveUnreadSQL, role.ID).Scan(&n); err != nil {
 		return archiveRefuse("inbox unreadable (%v)", err)
 	}
 	if n > 0 {
