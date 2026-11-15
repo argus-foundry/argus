@@ -76,6 +76,9 @@ func TestResidentBuiltinTimer(t *testing.T) {
 	testutil.Equal(t, list[0].Timezone, "UTC")
 	testutil.Equal(t, list[0].DueAt, now.Add(27*time.Hour))
 	testutil.NoError(t, d.EnsureResidentMemoryTidy("", "", "", now))
+	var disabledDue int64
+	testutil.NoError(t, d.conn.QueryRow(`SELECT due_at FROM resident_timers WHERE id=?`, id).Scan(&disabledDue))
+	testutil.Equal(t, disabledDue, int64(0))
 	list, err = d.ResidentTimers()
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(list), 0)
@@ -86,6 +89,44 @@ func TestResidentBuiltinTimer(t *testing.T) {
 	list, err = d.ResidentTimers()
 	testutil.NoError(t, err)
 	testutil.Equal(t, list[0].ID, id)
+}
+
+func TestResidentBuiltinTimerNoteRefresh(t *testing.T) {
+	d := testDB(t)
+	now := time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC)
+	testutil.NoError(t, d.EnsureResidentMemoryTidy("old folder", "30 2 * * *", "UTC", now))
+	before, err := d.ResidentTimers()
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.EnsureResidentMemoryTidy("new folder", "30 2 * * *", "UTC", now.Add(time.Hour)))
+	after, err := d.ResidentTimers()
+	testutil.NoError(t, err)
+	testutil.Equal(t, after[0].DueAt, before[0].DueAt)
+	msgs, err := d.FireResidentTimers("solo", before[0].DueAt)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 1)
+	testutil.Contains(t, msgs[0].Body, "new folder")
+	before, err = d.ResidentTimers()
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.EnsureResidentMemoryTidy("latest folder", "30 2 * * *", "UTC", now.Add(48*time.Hour)))
+	after, err = d.ResidentTimers()
+	testutil.NoError(t, err)
+	testutil.Equal(t, after[0].DueAt, before[0].DueAt)
+	testutil.Equal(t, after[0].Note, "latest folder")
+	pending, err := d.PendingResidentTimerDeliveries()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(pending), 1)
+	testutil.True(t, pending[0].Message.ReadAt.IsZero())
+	testutil.Equal(t, pending[0].Message.Body, msgs[0].Body)
+	testutil.NoError(t, d.CompleteResidentTimerDelivery(msgs[0].ID))
+	msgs, err = d.FireResidentTimers("solo", after[0].DueAt)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(msgs), 1)
+	testutil.Contains(t, msgs[0].Body, "latest folder")
+}
+
+func TestResidentBuiltinTimerRejectsLocal(t *testing.T) {
+	d := testDB(t)
+	testutil.NotNil(t, d.EnsureResidentMemoryTidy("tidy", "30 2 * * *", "Local", time.Now()))
 }
 
 func TestResidentBuiltinTimerAllowance(t *testing.T) {

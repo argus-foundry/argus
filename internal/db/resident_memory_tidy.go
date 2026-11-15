@@ -52,7 +52,16 @@ func (d *DB) EnsureResidentMemoryTidy(note, expression, zone string, now time.Ti
 		if expression != "" {
 			enabled = 1
 		}
-		if active == enabled && (enabled == 0 || (oldNote == note && oldExpr == expression && oldZone == zone)) {
+		if active == enabled && (enabled == 0 || (oldExpr == expression && oldZone == zone)) {
+			if enabled == 1 && oldNote != note {
+				// Queued messages keep their original instructions; future fires
+				// use the new note without postponing an overdue occurrence.
+				_, err = tx.Exec(`UPDATE resident_timers SET note=? WHERE id=?`, note, id)
+				if err == nil {
+					uxlog.Log("[resident-memory-tidy] refreshed note timer=%d pending work preserved", id)
+				}
+				return err
+			}
 			return nil
 		}
 		// The existing notifier receipt sees read/cancelled and retracts any
@@ -60,7 +69,11 @@ func (d *DB) EnsureResidentMemoryTidy(note, expression, zone string, now time.Ti
 		if _, err = tx.Exec(`UPDATE task_messages SET read_at=? WHERE id IN (SELECT message_id FROM resident_timer_deliveries WHERE timer_id=?) AND read_at=''`, formatTime(now), id); err != nil {
 			return err
 		}
-		_, err = tx.Exec(`UPDATE resident_timers SET note=?,expression=?,timezone=?,due_at=?,active=?,cancelled=? WHERE id=?`, note, expression, zone, due.UnixNano(), enabled, 1-enabled, id)
+		var dueAt int64
+		if enabled == 1 {
+			dueAt = due.UnixNano()
+		}
+		_, err = tx.Exec(`UPDATE resident_timers SET note=?,expression=?,timezone=?,due_at=?,active=?,cancelled=? WHERE id=?`, note, expression, zone, dueAt, enabled, 1-enabled, id)
 		if err == nil {
 			uxlog.Log("[resident-memory-tidy] reconciled timer=%d enabled=%t due=%s", id, enabled == 1, due.Format(time.RFC3339))
 		}

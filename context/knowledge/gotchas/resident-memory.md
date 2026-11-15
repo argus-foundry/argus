@@ -2,6 +2,10 @@
 
 - **The nightly tidy timer is identified by `resident_builtin_timers`, never by note text.** Reconcile before firing, preserving unchanged `due_at` even when overdue; resetting it on daemon start would silently starve nightly curation. Solo cannot cancel built-ins, and they do not consume its personal timer cap.
 
+- **Persist the resolved host timezone name, never `Local`.** Resolve a valid TZ first, then /etc/localtime's zoneinfo suffix; an unresolved zone disables only tidy, and reconciliation errors must not abort personal timer delivery. A resolved zone change reschedules the built-in.
+
+- **Instruction-only changes preserve due time and queued fires.** Update the stored note for future fires without touching existing inbox text or delivery receipts; only schedule/zone changes and disable retract them. Disable writes `due_at=0`.
+
 - **`resident.memory_tidy` is config-file only (strict local HH:MM, default 02:30, or off).** Disabling or changing it marks queued fires read; the existing notifier receipt retracts unsubmitted wake-ups on the same poll, while an already submitted wake-up cannot be recalled. `dream: skip` fences shared KB maintenance, not Solo's own explicitly delivered tidy procedure.
 
 - **Follow-up timer ids belong beside their open loops.** Fresh orientation tells Solo to list/reconcile timers after reading open-loops, set purposeful wake-ups for promises and waiting-on-someone loops, and cancel closed loops; never turn these into generic connector polling. Timer tools reuse the current launch token's verified resident identity and never accept a target task.

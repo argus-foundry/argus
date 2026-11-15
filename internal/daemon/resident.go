@@ -83,6 +83,8 @@ type residentManager struct {
 	// started before it binds never gets the config.
 	mcpReady func() bool
 	now      func() time.Time
+	// memoryTidyZone resolves a concrete host timezone (nil = system resolver).
+	memoryTidyZone func() (string, error)
 	// commitNotice atomically moves one queued human-action notice into a Hera
 	// message (nil = db.DeliverResidentNotice); ringNotice then rings the
 	// doorbell for the committed message (nil = store only: tests, no notifier).

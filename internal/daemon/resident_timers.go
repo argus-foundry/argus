@@ -28,9 +28,20 @@ func (m *residentManager) deliverTimers() {
 		// ordinary follow-ups continue to work.
 		expression = ""
 	}
-	if err = m.db.EnsureResidentMemoryTidy(residentMemoryTidyNote(cfg), expression, "Local", m.now()); err != nil {
+	zone := ""
+	if expression != "" {
+		resolve := m.memoryTidyZone
+		if resolve == nil {
+			resolve = residentMemoryTidyZone
+		}
+		zone, err = resolve()
+		if err != nil {
+			residentLog("[resident-memory-tidy] disabled: timezone resolution failed: %v", err)
+			expression = ""
+		}
+	}
+	if err = m.db.EnsureResidentMemoryTidy(residentMemoryTidyNote(cfg), expression, zone, m.now()); err != nil {
 		residentLog("[resident-memory-tidy] reconcile failed: %v", err)
-		return
 	}
 	task, err := m.db.ResidentTask()
 	if err != nil || task == nil {
