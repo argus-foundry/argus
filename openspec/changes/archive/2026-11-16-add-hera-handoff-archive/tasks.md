@@ -38,5 +38,5 @@
 
 ## 7. Verify and archive
 
-- [ ] 7.1 Targeted package tests while iterating; `make pre-pr` once at the end
+- [x] 7.1 Targeted package tests while iterating; `make pre-pr` once at the end
 - [ ] 7.2 `/ralph-review add-hera-handoff-archive`, then `openspec archive add-hera-handoff-archive --yes` and `openspec validate --all --strict` in the PR
