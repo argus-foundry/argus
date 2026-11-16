@@ -31,6 +31,11 @@ func (d *Daemon) pollManualPRsOnce(ctx context.Context) {
 		uxlog.Log("[pr] manual poll: read cached pr states failed: %v", err)
 		prMeta = nil
 	}
+	handoffs, herr := d.db.OpenHandoffRecords()
+	if herr != nil {
+		uxlog.Log("[pr] manual poll: read open handoff records failed: %v", herr)
+		handoffs = nil
+	}
 	for id, url := range links {
 		if ctx.Err() != nil {
 			return
@@ -40,7 +45,8 @@ func (d *Daemon) pollManualPRsOnce(ctx context.Context) {
 			uxlog.Log("[pr] manual poll: skip missing/unreadable task %s: %v", id, gerr)
 			continue
 		}
-		if task.Archived {
+		_, handedOff := handoffs[id]
+		if task.Archived && !handedOff {
 			uxlog.Log("[pr] manual poll: skip archived task %s", id)
 			continue
 		}
@@ -72,6 +78,13 @@ func (d *Daemon) pollManualPRsOnce(ctx context.Context) {
 		})
 		if werr != nil {
 			uxlog.Log("[pr] manual poll: persist failed for %s: %v", id, werr)
+			continue
+		}
+		if handedOff && task.Archived {
+			// Settle regardless of whether the cache changed: the record, not the
+			// cached state, is what is being watched.
+			res.URL = url
+			d.settleHandoffFromPR(id, res)
 			continue
 		}
 		if !wrote {

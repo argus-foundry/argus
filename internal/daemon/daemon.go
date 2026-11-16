@@ -777,11 +777,19 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 	if merr != nil {
 		uxlog.Log("[pr] poll: read manual links failed: %v", merr)
 	}
+	// Archived tasks whose role was handed off (add-hera-handoff-archive) stay
+	// poll-eligible until the PR merges or closes. A read failure only means
+	// they are skipped this cycle (the safe direction: nothing is settled).
+	handoffs, herr := d.db.OpenHandoffRecords()
+	if herr != nil {
+		uxlog.Log("[pr] poll: read open handoff records failed: %v", herr)
+		handoffs = nil
+	}
 	eligible := make([]*model.Task, 0, len(tasks))
 	terminalAtStart := make(map[string]bool, len(tasks))
 	var skipped int
 	for _, t := range tasks {
-		if !prPollEligible(t) {
+		if !prPollEligible(t) && !handedOffEligible(t, handoffs) {
 			continue
 		}
 		if _, manual := manualPRs[t.ID]; manual {
@@ -932,7 +940,11 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 						})
 						uxlog.Log("[pr] poll: %s changed state=%s lifecycle=%s", t.ID, res.State, lifecycle)
 					}
-					if res.Merged && !terminalAtStart[t.ID] {
+					if _, handedOff := handoffs[t.ID]; handedOff && t.Archived {
+						// The board item from SettleHandoff replaces the merge notices:
+						// the role is archived and cannot receive mail.
+						d.settleHandoffFromPR(t.ID, res)
+					} else if res.Merged && !terminalAtStart[t.ID] {
 						d.notifyCoordinatorOfMergedPR(t, res.URL)
 						d.notifyRoleOfMergedPR(t, res.URL)
 					} else if res.Merged {
@@ -1053,6 +1065,40 @@ func (d *Daemon) notifyRoleOfMergedPR(t *model.Task, prURL string) {
 		uxlog.Log("[pr] poll: role merge notice failed for %s: %v", t.ID, sErr)
 	} else if msg != nil {
 		d.heraNotifyService().Deliver(msg)
+	}
+}
+
+// handedOffEligible reports whether an archived, branched task still has an
+// unsettled handed-off archive record the poller must watch.
+func handedOffEligible(t *model.Task, handoffs map[string]db.ArchiveRecord) bool {
+	if t == nil || !t.Archived || t.Branch == "" || t.IsResident() {
+		return false
+	}
+	_, ok := handoffs[t.ID]
+	return ok
+}
+
+// settleHandoffFromPR applies a polled PR result to a handed-off archive:
+// merged settles it (task completes, coordinator fyi); closed without merge
+// un-archives and revives the role and posts a coordinator decision item; any
+// other state changes nothing.
+func (d *Daemon) settleHandoffFromPR(taskID string, res gitutil.PRResult) {
+	var outcome db.HandoffOutcome
+	switch {
+	case res.Merged:
+		outcome = db.HandoffMerged
+	case res.State == model.PRMergedClosed:
+		outcome = db.HandoffClosed
+	default:
+		return
+	}
+	settled, err := d.db.SettleHandoff(taskID, outcome, res.URL)
+	if err != nil {
+		uxlog.Log("[pr] handoff settle failed task=%s outcome=%s: %v", taskID, outcome, err)
+		return
+	}
+	if settled {
+		uxlog.Log("[pr] handoff settled task=%s outcome=%s url=%s", taskID, outcome, res.URL)
 	}
 }
 
