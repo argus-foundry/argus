@@ -19,6 +19,7 @@ import (
 	"github.com/argus-foundry/argus/internal/clipboard"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hera"
 	"github.com/argus-foundry/argus/internal/hostsleep"
 	"github.com/argus-foundry/argus/internal/mcp"
 	"github.com/argus-foundry/argus/internal/mergesafety"
@@ -44,6 +45,11 @@ type TaskCreator func(name, prompt, project, backend, taskModel, sandboxOverride
 // Server is the HTTP REST API server.
 type Server struct {
 	db *db.DB
+
+	// Archive guard seams (SetArchiveGuard): the same verdict inputs hera_archive uses.
+	archiveRunner  hera.ArchiveRunner
+	archiveGit     hera.GitCheck
+	archiveHandoff hera.HandoffCheck
 
 	beforeProjectSave func()
 	// residentWaiting mirrors whether the resident is flagged needs-input
@@ -213,6 +219,13 @@ type Server struct {
 
 // SetNotifier wires the reliable pane-delivery service into the API server.
 // Must be called before ListenAndServe.
+// SetArchiveGuard wires the session runner and git/handoff checks the archive
+// endpoint's hera verdict uses (add-hera-handoff-archive). Any may be nil: a nil
+// check refuses what it would have confirmed (fail closed).
+func (s *Server) SetArchiveGuard(r hera.ArchiveRunner, g hera.GitCheck, h hera.HandoffCheck) {
+	s.archiveRunner, s.archiveGit, s.archiveHandoff = r, g, h
+}
+
 func (s *Server) SetNotifier(n *notify.Notifier) {
 	s.notifier = n
 	if n != nil {

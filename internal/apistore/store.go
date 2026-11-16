@@ -584,6 +584,12 @@ func (s *Store) SetArchived(id string, archived bool) error {
 	return s.c.UnarchiveTask(context.Background(), id)
 }
 
+// ForceArchive archives a task through the REST endpoint with the human
+// override (add-hera-handoff-archive); the TUI offers it after a refusal.
+func (s *Store) ForceArchive(id, reason string) error {
+	return s.c.ArchiveTaskForce(context.Background(), id, reason)
+}
+
 // SetPinned writes only the pinned column. There is no dedicated REST endpoint,
 // so we re-fetch the current row (authoritative, fresh name) and write it back
 // via the raw endpoint mutating only Pinned through the model setter. The

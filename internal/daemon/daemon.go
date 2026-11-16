@@ -1839,6 +1839,7 @@ func (d *Daemon) Serve(sockPath string) error {
 			apiSrv.SetMCPRegistry(pluginRegistry)
 			apiSrv.SetArtifactPublisher(artifactPublisher)
 			apiSrv.SetNotifier(d.notifier)
+			apiSrv.SetArchiveGuard(d.heraArchiver())
 			apiSrv.SetFocusTracker(d.focusTracker)
 			if d.runtimeSource != nil {
 				apiSrv.SetRuntimeSource(d.runtimeSource)

@@ -107,6 +107,27 @@ func (d *DB) ArchiveRecordsForRole(roleID int64) ([]ArchiveRecord, error) {
 	return out, rows.Err()
 }
 
+// ArchiveRecordsForTask returns the archive history of every role that was
+// bound to taskID, oldest first (the TUI inbox viewer's history source).
+func (d *DB) ArchiveRecordsForTask(taskID string) ([]ArchiveRecord, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rows, err := d.conn.Query(`SELECT `+archiveRecordColumns+` FROM hera_archive_records WHERE task_id=? ORDER BY id`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("archive records for task: %w", err)
+	}
+	defer rows.Close()
+	var out []ArchiveRecord
+	for rows.Next() {
+		r, err := scanArchiveRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
 // OpenHandoffRecords returns every unsettled handed_off record whose task is
 // still archived (the PR poller's extra eligibility set), keyed by task ID.
 func (d *DB) OpenHandoffRecords() (map[string]ArchiveRecord, error) {
