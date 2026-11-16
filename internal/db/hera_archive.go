@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -46,6 +47,20 @@ func TruncateUTF8(s string, max int) string {
 // ArchiveUnitInput names the role to archive and the last-step hook.
 type ArchiveUnitInput struct {
 	RoleID int64
+	// Kind selects which DB-side clauses apply (design D1): merged (default,
+	// zero value) needs a complete task; handed_off accepts in_review or
+	// complete; forced skips every soft clause and requires Reason.
+	Kind ArchiveKind
+	// Reason is the mandatory forced-archive justification (stored on the
+	// record and echoed in the mail digest).
+	Reason string
+	// PRURL and TipSHA are recorded for a handed_off archive.
+	PRURL, TipSHA string
+	// ActorRoleID is the coordinator performing the archive (0 = unknown).
+	ActorRoleID int64
+	// PostCommit runs after commit with the forwarded mail digest (nil when no
+	// mail was forwarded); the caller rings the coordinator doorbell.
+	PostCommit func(digest *HeraMessage)
 	// PreCommit runs as the very last step inside the transaction, after every
 	// write (cheap checks only: it executes under the database lock). A non-nil
 	// error rolls the whole unit back; return an *ArchiveRefusedError to surface
@@ -65,10 +80,17 @@ type ArchiveUnitInput struct {
 // rolls EVERYTHING back. Events are emitted only after commit. Returns the
 // archived task ID.
 func (d *DB) ArchiveHeraUnit(in ArchiveUnitInput) (string, error) {
+	if in.Kind == "" {
+		in.Kind = ArchiveKindMerged
+	}
+	if in.Kind == ArchiveKindForced && strings.TrimSpace(in.Reason) == "" {
+		return "", archiveRefuse("forced archive requires a non-empty reason")
+	}
 	var (
 		taskID                 string
 		oldArchived, oldPinned int
 		postedParent, resolved []boardTouch
+		digest                 *HeraMessage
 	)
 	err := d.WithTx(func(tx *sql.Tx) error {
 		// Take the write lock before reading (see heraRoleMutation).
@@ -94,14 +116,14 @@ func (d *DB) ArchiveHeraUnit(in ArchiveUnitInput) (string, error) {
 		if err := tx.QueryRow(`SELECT argus_task_id FROM hera_bindings WHERE role_id=? AND ended_at IS NULL`, in.RoleID).Scan(&taskID); err != nil {
 			return archiveRefuse("no live binding")
 		}
-		if err := d.archiveUnitChecks(tx, role, taskID); err != nil {
+		if err := d.archiveUnitChecks(tx, role, taskID, in.Kind); err != nil {
 			return err
 		}
 		kids, err := archiveChildOrchs(tx, role, taskID)
 		if err != nil {
 			return err
 		}
-		if err := archiveUnitKidChecks(tx, kids); err != nil {
+		if err := archiveUnitKidChecks(tx, kids, in.Kind == ArchiveKindForced); err != nil {
 			return err
 		}
 		allowed := map[int64]bool{}
@@ -113,6 +135,13 @@ func (d *DB) ArchiveHeraUnit(in ArchiveUnitInput) (string, error) {
 		}
 
 		// ---- writes ----
+		digest, err = archiveForwardMail(tx, role, in)
+		if err != nil {
+			return err
+		}
+		if err := archiveStep("mail"); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`UPDATE hera_messages SET read_at=? WHERE to_role_id=? AND read_at IS NULL
 		 AND EXISTS (SELECT 1 FROM hera_merge_notices n WHERE n.message_id=hera_messages.id)`, formatTime(time.Now()), role.ID); err != nil {
 			return fmt.Errorf("retire merge notices: %w", err)
@@ -165,6 +194,13 @@ func (d *DB) ArchiveHeraUnit(in ArchiveUnitInput) (string, error) {
 		if err := archiveStep("role"); err != nil {
 			return err
 		}
+		if err := insertArchiveRecord(tx, ArchiveRecord{RoleID: in.RoleID, TaskID: taskID, Kind: in.Kind,
+			Reason: strings.TrimSpace(in.Reason), PRURL: in.PRURL, TipSHA: in.TipSHA, ActorRoleID: in.ActorRoleID}); err != nil {
+			return err
+		}
+		if err := archiveStep("record"); err != nil {
+			return err
+		}
 		if in.PreCommit != nil {
 			return in.PreCommit(taskID)
 		}
@@ -180,7 +216,10 @@ func (d *DB) ArchiveHeraUnit(in ArchiveUnitInput) (string, error) {
 	for _, b := range resolved {
 		d.emitBoardChanged(b.roleID, b.itemID, "resolved")
 	}
-	uxlog.Log("[hera] archive unit committed role=%d task=%s", in.RoleID, taskID)
+	uxlog.Log("[hera] archive unit committed role=%d task=%s kind=%s", in.RoleID, taskID, in.Kind)
+	if in.PostCommit != nil {
+		in.PostCommit(digest)
+	}
 	return taskID, nil
 }
 
@@ -193,13 +232,20 @@ func archiveStep(step string) error {
 	return nil
 }
 
-func (d *DB) archiveUnitChecks(tx *sql.Tx, role *HeraRole, taskID string) error {
+func (d *DB) archiveUnitChecks(tx *sql.Tx, role *HeraRole, taskID string, mode ArchiveKind) error {
+	forced := mode == ArchiveKindForced
 	var status, kind string
 	var pinned int
 	if err := tx.QueryRow(`SELECT status, pinned, kind FROM tasks WHERE id=?`, taskID).Scan(&status, &pinned, &kind); err != nil {
 		return archiveRefuse("task not loadable (%v)", err)
 	}
-	if status != "complete" {
+	switch {
+	case forced:
+	case mode == ArchiveKindHandedOff:
+		if status != "complete" && status != "in_review" {
+			return archiveRefuse("task status is %s, not in_review or complete", status)
+		}
+	case status != "complete":
 		return archiveRefuse("task status is %s, not complete", status)
 	}
 	if pinned != 0 || kind == "resident" {
@@ -212,6 +258,9 @@ func (d *DB) archiveUnitChecks(tx *sql.Tx, role *HeraRole, taskID string) error 
 	if n > 0 {
 		return archiveRefuse("standing-team member")
 	}
+	if forced {
+		return nil // hard refusals above stay; every soft clause below is overridden
+	}
 	var st string
 	switch err := tx.QueryRow(`SELECT status FROM hera_role_status WHERE role_id=?`, role.ID).Scan(&st); {
 	case errors.Is(err, sql.ErrNoRows):
@@ -220,12 +269,8 @@ func (d *DB) archiveUnitChecks(tx *sql.Tx, role *HeraRole, taskID string) error 
 	case st == string(HeraStatusBlocked):
 		return archiveRefuse("role is blocked (needs input)")
 	}
-	if err := tx.QueryRow(archiveUnreadSQL, role.ID).Scan(&n); err != nil {
-		return archiveRefuse("inbox unreadable (%v)", err)
-	}
-	if n > 0 {
-		return archiveRefuse("%d unread hera message(s) to this role", n)
-	}
+	// Unread mail TO the role no longer blocks: archiveForwardMail digests it
+	// to the coordinator inside this transaction.
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM hera_messages m JOIN hera_roles r ON r.id=m.to_role_id
 		WHERE m.from_role_id=? AND m.read_at IS NULL AND r.archived_at IS NULL AND r.nuked_at IS NULL
 		  AND EXISTS (SELECT 1 FROM hera_bindings b WHERE b.role_id=r.id AND b.ended_at IS NULL)`, role.ID).Scan(&n); err != nil {
@@ -271,11 +316,14 @@ func archiveChildOrchs(tx *sql.Tx, role *HeraRole, taskID string) ([]int64, erro
 	return out, rows.Err()
 }
 
-func archiveUnitKidChecks(tx *sql.Tx, kids []int64) error {
+func archiveUnitKidChecks(tx *sql.Tx, kids []int64, forced bool) error {
 	for _, k := range kids {
 		var orchName string
 		if err := tx.QueryRow(`SELECT name FROM hera_orchestrators WHERE id=?`, k).Scan(&orchName); err == nil && orchName == ResidentOrchestratorName {
 			return archiveRefuse("child orchestrator is the standing team")
+		}
+		if forced {
+			continue // forced: live child roles / open decisions are overridden
 		}
 		var name string
 		err := tx.QueryRow(`SELECT name FROM hera_roles WHERE orchestrator_id=? AND kind<>'coordinator'
@@ -380,4 +428,64 @@ func archivePushFyiUp(tx *sql.Tx, role *HeraRole, kids []int64) (posted, resolve
 		}
 	}
 	return posted, resolved, nil
+}
+
+// maxDigestLine bounds one forwarded message's first line.
+const maxDigestLine = 200
+
+// archiveForwardMail marks the role's unread (non-merge-notice) hera mail read
+// and forwards ONE digest to the orchestrator's coordinator, all inside the
+// archive transaction (design D6). A digest that cannot be stored refuses the
+// archive, so mail is never marked read without its summary being delivered.
+func archiveForwardMail(tx *sql.Tx, role *HeraRole, in ArchiveUnitInput) (*HeraMessage, error) {
+	rows, err := tx.Query(`SELECT m.id, COALESCE(fr.name,''), m.body FROM hera_messages m
+		LEFT JOIN hera_roles fr ON fr.id=m.from_role_id
+		WHERE m.to_role_id=? AND m.read_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM hera_merge_notices n WHERE n.message_id=m.id) ORDER BY m.id`, role.ID)
+	if err != nil {
+		return nil, archiveRefuse("inbox unreadable (%v)", err)
+	}
+	var lines []string
+	for rows.Next() {
+		var id int64
+		var from, body string
+		if err := rows.Scan(&id, &from, &body); err != nil {
+			rows.Close()
+			return nil, archiveRefuse("inbox unreadable (%v)", err)
+		}
+		first := strings.TrimSpace(strings.SplitN(body, "\n", 2)[0])
+		lines = append(lines, fmt.Sprintf("- #%d from %s: %s", id, from, TruncateUTF8(first, maxDigestLine)))
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, archiveRefuse("inbox unreadable (%v)", err)
+	}
+	if len(lines) == 0 && in.Kind != ArchiveKindForced {
+		return nil, nil
+	}
+	if len(lines) == 0 && in.Kind == ArchiveKindForced {
+		return nil, nil // forced with no mail: the reason lives on the record
+	}
+	coord, err := coordinatorForOrch(tx, role.OrchestratorID)
+	if err != nil {
+		return nil, archiveRefuse("coordinator unreadable (%v)", err)
+	}
+	if coord == 0 {
+		return nil, archiveRefuse("%d unread message(s) cannot be forwarded: no live coordinator", len(lines))
+	}
+	body := fmt.Sprintf("Role %s was archived (%s) with %d unread message(s); marked read. Full bodies: hera_get_messages.\n", role.Name, in.Kind, len(lines))
+	if in.Kind == ArchiveKindForced {
+		body += "Forced archive reason: " + strings.TrimSpace(in.Reason) + "\n"
+	}
+	body += strings.Join(lines, "\n")
+	tldr := TruncateUTF8(fmt.Sprintf("archived %s: %d unread message(s) forwarded", role.Name, len(lines)), HeraMaxTldrLen)
+	msg, err := insertHeraMessage(tx, role.ID, coord, body, tldr, nil)
+	if err != nil {
+		return nil, archiveRefuse("cannot forward unread mail to the coordinator (%v)", err)
+	}
+	if _, err := tx.Exec(`UPDATE hera_messages SET read_at=? WHERE to_role_id=? AND read_at IS NULL AND id<>?
+		AND NOT EXISTS (SELECT 1 FROM hera_merge_notices n WHERE n.message_id=hera_messages.id)`, formatTime(time.Now()), role.ID, msg.ID); err != nil {
+		return nil, fmt.Errorf("mark mail read: %w", err)
+	}
+	return msg, nil
 }
