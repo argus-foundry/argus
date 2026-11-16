@@ -31,7 +31,7 @@ func TestResidentHeraInventory(t *testing.T) {
 	for _, name := range []string{"send", "inbox", "get_messages", "mark_read", "status", "tree_updates", "accept", "revive", "unblock", "board_list", "board_post", "board_update", "board_resolve", "spawn_worker", "delete_worker"} {
 		want["mcp__argus__hera_"+name] = "allow"
 	}
-	for _, name := range []string{"new_orchestrator", "join", "move", "rebind", "plan", "plan_node", "plan_node_update", "plan_node_cancel", "block", "archive"} {
+	for _, name := range []string{"new_orchestrator", "join", "move", "rebind", "plan", "plan_node", "plan_node_update", "plan_node_cancel", "block", "archive", "unarchive"} {
 		want["mcp__argus__hera_"+name] = "deny"
 	}
 	want["mcp__argus__hera_graduate_worker"] = "ask"

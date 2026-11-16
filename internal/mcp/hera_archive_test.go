@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/hera"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -32,6 +33,8 @@ func archWorkerRole(t *testing.T, d *db.DB, orchName, name string, status model.
 	orch, err := d.HeraOrchestratorByName(orchName)
 	testutil.NoError(t, err)
 	task := addHeraTestTask(t, d, "/wt/"+name)
+	task.Branch = "b-" + name
+	testutil.NoError(t, d.Update(task))
 	role, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
 		OrchestratorID: orch.ID, Name: name, Kind: db.HeraKindWorker, ArgusProject: "test-project",
 	}, task.ID, task.Worktree)
@@ -177,4 +180,166 @@ func TestHeraArchive_SweepArchivesAllArchivable(t *testing.T) {
 		g, _ := d.Get(id)
 		testutil.Equal(t, g.Archived, true)
 	}
+}
+
+func handoffOKCheck(*model.Task) (hera.HandoffInfo, bool, string) {
+	return hera.HandoffInfo{PRURL: "https://x/pr/1", TipSHA: "abc"}, true, ""
+}
+
+func TestHeraArchive_HandedOffAndForceParams(t *testing.T) {
+	s, d := testHeraServer(t)
+	s.SetHeraArchiver(&archRunner{}, func(*model.Task) (bool, string) { return false, "open PR" })
+	s.SetHeraHandoff(handoffOKCheck)
+	c := seedCoordinator(t, s, d, "O", "/wt/coord")
+	rvTask, _ := archWorkerRole(t, d, "O", "rv", model.StatusInReview)
+	wipTask, _ := archWorkerRole(t, d, "O", "wip", model.StatusInProgress)
+
+	out, isErr := archCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"rv"}`, c.Worktree))
+	testutil.Equal(t, isErr, false)
+	testutil.Contains(t, out, "rv [handed off]")
+	got, _ := d.Get(rvTask.ID)
+	testutil.Equal(t, got.Archived, true)
+
+	// in_progress is refused without force
+	out, _ = archCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"wip"}`, c.Worktree))
+	testutil.Contains(t, out, "wip:")
+	g, _ := d.Get(wipTask.ID)
+	testutil.Equal(t, g.Archived, false)
+
+	// force parameter validation
+	for name, tc := range map[string]struct{ args, want string }{
+		"force without reason":    {`"role_name":"wip","force":true`, "non-empty reason"},
+		"reason without force":    {`"role_name":"wip","reason":"x"`, "only valid with force"},
+		"force without a name":    {`"force":true,"reason":"x"`, "requires role_name"},
+		"blank reason":            {`"role_name":"wip","force":true,"reason":"   "`, "non-empty reason"},
+		"overlong reason":         {`"role_name":"wip","force":true,"reason":"` + strings.Repeat("x", 1025) + `"`, "at most 1024"},
+		"force override archives": {`"role_name":"wip","force":true,"reason":"batch owns it"`, "wip [forced]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, isErr := archCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O",%s}`, c.Worktree, tc.args))
+			testutil.Contains(t, out, tc.want)
+			if name != "force override archives" {
+				testutil.Equal(t, isErr, true)
+			}
+		})
+	}
+	g, _ = d.Get(wipTask.ID)
+	testutil.Equal(t, g.Archived, true)
+	all, _ := d.ListHeraRoles(mustOrch(t, d, "O"), true)
+	for _, r := range all {
+		if r.Name == "wip" {
+			recs, _ := d.ArchiveRecordsForRole(r.ID)
+			testutil.Equal(t, recs[0].Reason, "batch owns it")
+		}
+	}
+}
+
+func TestHeraArchive_DigestDelivered(t *testing.T) {
+	s, d := testHeraServer(t)
+	s.SetHeraArchiver(&archRunner{}, func(*model.Task) (bool, string) { return false, "x" })
+	s.SetHeraHandoff(handoffOKCheck)
+	c := seedCoordinator(t, s, d, "O", "/wt/coord")
+	_, w := archWorkerRole(t, d, "O", "w", model.StatusInReview)
+	cr, _ := d.HeraRoleByName(mustOrch(t, d, "O"), "coord")
+	_, err := d.SendHeraMessage(cr.ID, w.ID, "hello\nbody", "hello", nil)
+	testutil.NoError(t, err)
+	out, _ := archCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"w"}`, c.Worktree))
+	testutil.Contains(t, out, "w [handed off]")
+	in, _ := d.HeraInbox(cr.ID)
+	testutil.Equal(t, len(in), 1)
+	testutil.Contains(t, in[0].Body, "from coord: hello")
+}
+
+func unarchCall(t *testing.T, s *Server, args string) (string, bool) {
+	t.Helper()
+	resp := doRequest(t, s, "tools/call", ToolCallParams{Name: "hera_unarchive", Arguments: json.RawMessage(args)})
+	testutil.NoError(t, respErr(resp))
+	cr := callResult(t, resp)
+	return cr.Content[0].Text, cr.IsError
+}
+
+func TestHeraUnarchive(t *testing.T) {
+	s, d := testHeraServer(t)
+	s.SetHeraArchiver(&archRunner{}, func(*model.Task) (bool, string) { return false, "x" })
+	s.SetHeraHandoff(handoffOKCheck)
+	c := seedCoordinator(t, s, d, "O", "/wt/coord")
+	task, _ := archWorkerRole(t, d, "O", "w", model.StatusInReview)
+
+	out, isErr := unarchCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"w"}`, c.Worktree))
+	testutil.Equal(t, isErr, true)
+	testutil.Contains(t, out, "not archived")
+
+	_, _ = archCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"w"}`, c.Worktree))
+	out, isErr = unarchCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"w"}`, c.Worktree))
+	testutil.Equal(t, isErr, false)
+	testutil.Contains(t, out, "unarchived")
+	g, _ := d.Get(task.ID)
+	testutil.Equal(t, g.Archived, false)
+	testutil.Equal(t, g.Status, model.StatusInProgress)
+
+	out, isErr = unarchCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"nope"}`, c.Worktree))
+	testutil.Equal(t, isErr, true)
+	testutil.Contains(t, out, "not found")
+	out, isErr = unarchCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"coord"}`, c.Worktree))
+	testutil.Equal(t, isErr, true)
+}
+
+func TestHeraUnarchive_NonCoordinatorRejected(t *testing.T) {
+	s, d := testHeraServer(t)
+	_ = seedCoordinator(t, s, d, "O", "/wt/coord")
+	wt, _ := archWorkerRole(t, d, "O", "w", model.StatusInReview)
+	out, isErr := unarchCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"w"}`, wt.Worktree))
+	testutil.Equal(t, isErr, true)
+	testutil.Contains(t, out, "only coordinators")
+}
+
+func taskArchiveCall(t *testing.T, s *Server, args string) (string, bool) {
+	t.Helper()
+	resp := doRequest(t, s, "tools/call", ToolCallParams{Name: "task_archive", Arguments: json.RawMessage(args)})
+	testutil.NoError(t, respErr(resp))
+	cr := callResult(t, resp)
+	return cr.Content[0].Text, cr.IsError
+}
+
+func TestTaskArchive_RunsHeraVerdictForBoundTask(t *testing.T) {
+	s, d := testHeraServer(t)
+	s.SetHeraArchiver(&archRunner{}, func(*model.Task) (bool, string) { return false, "open PR" })
+	_ = seedCoordinator(t, s, d, "O", "/wt/coord")
+	task, r := archWorkerRole(t, d, "O", "w", model.StatusInReview)
+
+	// refused: no handoff check wired and the PR is not merged
+	out, isErr := taskArchiveCall(t, s, fmt.Sprintf(`{"id":%q}`, task.ID))
+	testutil.Equal(t, isErr, true)
+	testutil.Contains(t, out, "Cannot archive")
+	testutil.Contains(t, out, "force=true")
+	g, _ := d.Get(task.ID)
+	testutil.Equal(t, g.Archived, false)
+
+	// passes with a handoff check: task AND role archive together
+	s.SetHeraHandoff(handoffOKCheck)
+	out, isErr = taskArchiveCall(t, s, fmt.Sprintf(`{"id":%q}`, task.ID))
+	testutil.Equal(t, isErr, false)
+	testutil.Contains(t, out, "hera role")
+	g, _ = d.Get(task.ID)
+	testutil.Equal(t, g.Archived, true)
+	role, _ := d.HeraRole(r.ID)
+	testutil.Equal(t, role.ArchivedAt != nil, true)
+
+	// unarchive brings the role back with the task
+	out, isErr = taskArchiveCall(t, s, fmt.Sprintf(`{"id":%q,"archived":false}`, task.ID))
+	testutil.Equal(t, isErr, false)
+	g, _ = d.Get(task.ID)
+	testutil.Equal(t, g.Archived, false)
+	role, _ = d.HeraRole(r.ID)
+	testutil.Nil(t, role.ArchivedAt)
+}
+
+func TestTaskArchive_PlainTaskUnchanged(t *testing.T) {
+	s, d := testHeraServer(t)
+	plain := addHeraTestTask(t, d, "/wt/plain")
+	out, isErr := taskArchiveCall(t, s, fmt.Sprintf(`{"id":%q}`, plain.ID))
+	testutil.Equal(t, isErr, false)
+	testutil.Contains(t, out, "Archived task")
+	g, _ := d.Get(plain.ID)
+	testutil.Equal(t, g.Archived, true)
 }

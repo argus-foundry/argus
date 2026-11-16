@@ -268,7 +268,7 @@ var heraToolDefs = []Tool{
 	},
 	{
 		Name:        "hera_archive",
-		Description: "Archive roles whose work is done-done so they leave the live views (add-hera-auto-archive). A role is archivable only when its task is complete, it is not blocked, has no unread hera mail, no not-yet-done plan node depends on it, a sub-coordinator has all child roles archived and no open decision board items (open fyi items are pushed to your board), and its git work is confirmed landed (merged PR / ancestor) with a clean worktree. Anything unconfirmed is refused with a reason. Archiving marks the task archived, hides the role, and stops an IDLE session (a busy session is refused); it never deletes the worktree or branch. Omit role_name to sweep every role you coordinate; pass dry_run to only report. Top-level coordinators are not archivable here. Coordinator-only.",
+		Description: "Archive roles whose work is done so they leave the live views (add-hera-auto-archive, add-hera-handoff-archive). Two normal paths. MERGED: the task is complete, the role is not blocked, no not-yet-done plan node depends on it, a sub-coordinator has all child roles archived and no open decision board items (open fyi items are pushed to your board), the role has sent no mail its recipient has not read, and its git work is confirmed landed with a clean worktree. HANDED OFF (no merge needed): the PR is open (draft ok) and its CI is not failing, the branch is pushed with local tip == remote tip == PR head, the worktree is clean, and the task is in_review or complete; the PR and the batch own the work from then on, the daemon keeps watching the PR (merge settles it; a close WITHOUT merge un-archives the role and posts a decision item on your board), and hera_unarchive hands it back. Unread mail to the role no longer blocks: it is marked read and ONE digest (sender + first line each) is forwarded to your inbox. Anything unconfirmed is refused with a reason (fail closed). Archiving marks the task archived, hides the role, and stops an IDLE session (a busy session is refused); it never deletes the worktree or branch. Omit role_name to sweep every role you coordinate; pass dry_run to only report. ESCAPE HATCH: force=true with a non-empty reason (single named role only, never a sweep) overrides the done/handoff/mail/dependent checks and records the reason durably; coordinators, pinned roles, resident roles, standing-team members and tasks bound to another live role stay refused. Top-level coordinators are not archivable here. Coordinator-only.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -276,8 +276,23 @@ var heraToolDefs = []Tool{
 				"role_name":    map[string]interface{}{"type": "string", "description": "(optional) Role to archive. Omit to sweep every role you coordinate."},
 				"orchestrator": map[string]interface{}{"type": "string", "description": "(optional) Disambiguates when the calling task holds multiple live coordinator bindings"},
 				"dry_run":      map[string]interface{}{"type": "boolean", "description": "(optional) Report what would be archived without writing"},
+				"force":        map[string]interface{}{"type": "boolean", "description": "(optional) Archive even though the done-done/handed-off checks fail. Requires role_name and a non-empty reason. Hard refusals (coordinator, pinned, resident, standing-team, task bound to another live role) still apply"},
+				"reason":       map[string]interface{}{"type": "string", "description": "(required with force=true, rejected otherwise) Why the checks are being overridden; stored on the archive record and shown in role history"},
 			},
 			"required": []string{"cwd"},
+		},
+	},
+	{
+		Name:        "hera_unarchive",
+		Description: "Bring an archived worker/freelance role back (the batch handed the work back, or an archive was a mistake): un-archives the task, un-hides the role, rolls the task back to in_progress, and settles its handed-off archive record as handed back. Starts no session and checks no git state. Refuses a role that is not archived. Coordinator-only, in the caller's orchestrator.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"cwd":          map[string]interface{}{"type": "string", "description": "Caller's worktree path (use $PWD)"},
+				"role_name":    map[string]interface{}{"type": "string", "description": "Name of the archived role to bring back"},
+				"orchestrator": map[string]interface{}{"type": "string", "description": "(optional) Disambiguates when the calling task holds multiple live coordinator bindings"},
+			},
+			"required": []string{"cwd", "role_name"},
 		},
 	},
 	{
@@ -1886,10 +1901,23 @@ func (s *Server) toolHeraArchive(id interface{}, args json.RawMessage) *Response
 		RoleName     string `json:"role_name"`
 		Orchestrator string `json:"orchestrator"`
 		DryRun       bool   `json:"dry_run"`
+		Force        bool   `json:"force"`
+		Reason       string `json:"reason"`
 	}
 	json.Unmarshal(args, &p) //nolint:errcheck
 	if p.Cwd == "" {
 		return toolError(id, "cwd is required")
+	}
+	p.Reason = strings.TrimSpace(p.Reason)
+	switch {
+	case p.Force && p.Reason == "":
+		return toolError(id, "force=true requires a non-empty reason")
+	case !p.Force && p.Reason != "":
+		return toolError(id, "reason is only valid with force=true")
+	case p.Force && strings.TrimSpace(p.RoleName) == "":
+		return toolError(id, "force=true requires role_name; a forced archive is never a sweep")
+	case len(p.Reason) > 1024:
+		return toolError(id, "reason must be at most 1024 bytes")
 	}
 	store, ok := s.heraStore.(hera.ArchiveStore)
 	if !ok {
@@ -1942,14 +1970,76 @@ func (s *Server) toolHeraArchive(id interface{}, args json.RawMessage) *Response
 			remaining++
 			continue
 		}
-		results = append(results, hera.ArchiveRole(store, s.heraArchiveRunner, s.heraGitCheck, t, p.DryRun))
+		results = append(results, hera.ArchiveRoleWith(store, s.heraArchiveRunner, s.heraGitCheck, t, hera.ArchiveOptions{
+			DryRun: p.DryRun, Handoff: s.heraHandoffCheck, Force: p.Force, Reason: p.Reason, ActorRoleID: caller.role.ID,
+			OnDigest: func(m *db.HeraMessage) {
+				if s.heraSvc != nil {
+					s.heraSvc.Deliver(m)
+				}
+			},
+		}))
 	}
-	slog.Info("[hera] archive", "orch", caller.orch.Name, "targets", len(targets), "dry_run", p.DryRun)
+	slog.Info("[hera] archive", "orch", caller.orch.Name, "targets", len(targets), "dry_run", p.DryRun, "force", p.Force)
 	out := hera.FormatArchiveResults(results, p.DryRun)
 	if remaining > 0 {
 		out += fmt.Sprintf("- **not evaluated**: %d role(s) left after the time budget; call hera_archive again\n", remaining)
 	}
 	return toolResult(id, out)
+}
+
+// toolHeraUnarchive implements hera_unarchive (add-hera-handoff-archive):
+// coordinator-only; brings an archived worker/freelance role back.
+func (s *Server) toolHeraUnarchive(id interface{}, args json.RawMessage) *Response {
+	if !s.heraEnabled() {
+		return toolError(id, "hera not configured")
+	}
+	var p struct {
+		Cwd          string `json:"cwd"`
+		RoleName     string `json:"role_name"`
+		Orchestrator string `json:"orchestrator"`
+	}
+	json.Unmarshal(args, &p) //nolint:errcheck
+	name := strings.TrimSpace(p.RoleName)
+	if p.Cwd == "" || name == "" {
+		return toolError(id, "cwd and role_name are required")
+	}
+	store, ok := s.heraStore.(hera.ArchiveStore)
+	if !ok {
+		return toolError(id, "hera unarchive not supported by this store")
+	}
+	caller, err := s.resolveCallerRole(p.Cwd, p.Orchestrator)
+	if err != nil {
+		return toolError(id, err.Error())
+	}
+	if caller.role.Kind != db.HeraKindCoordinator {
+		return toolError(id, fmt.Sprintf("caller role %q has kind %q; only coordinators may unarchive roles", caller.role.Name, caller.role.Kind))
+	}
+	// Archived roles are not addressable through resolveOrchRole; look them up directly.
+	roles, err := store.ListHeraRoles(caller.orch.ID, true)
+	if err != nil {
+		return toolError(id, fmt.Sprintf("list roles: %v", err))
+	}
+	var target *db.HeraRole
+	for _, r := range roles {
+		if r.Name == name && r.NukedAt == nil {
+			target = r
+			if r.ArchivedAt != nil {
+				break // prefer the archived row when a live namesake exists
+			}
+		}
+	}
+	if target == nil {
+		return toolError(id, fmt.Sprintf("role %q not found in orchestrator %q", name, caller.orch.Name))
+	}
+	if target.ID == caller.role.ID {
+		return toolError(id, "role is your own role")
+	}
+	res := hera.UnarchiveRole(store, target)
+	slog.Info("[hera] unarchive", "orch", caller.orch.Name, "role", name, "ok", res.Archived)
+	if !res.Archived {
+		return toolError(id, fmt.Sprintf("cannot unarchive %s: %s", name, res.Reason))
+	}
+	return toolResult(id, fmt.Sprintf("- **unarchived**: %s (task back to in_progress; no session started)\n", name))
 }
 
 func (s *Server) toolHeraSpawnWorker(id interface{}, args json.RawMessage) *Response {

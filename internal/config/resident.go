@@ -854,7 +854,7 @@ func DefaultResidentConfig(budget int) ResidentConfig {
 			"mcp__claude_ai_Granola__update_private_notes",
 		},
 		DenyTools: []string{
-			"mcp__argus__hera_new_orchestrator", "mcp__argus__hera_join", "mcp__argus__hera_move", "mcp__argus__hera_rebind", "mcp__argus__hera_plan", "mcp__argus__hera_plan_node", "mcp__argus__hera_plan_node_update", "mcp__argus__hera_plan_node_cancel", "mcp__argus__hera_block", "mcp__argus__hera_archive",
+			"mcp__argus__hera_new_orchestrator", "mcp__argus__hera_join", "mcp__argus__hera_move", "mcp__argus__hera_rebind", "mcp__argus__hera_plan", "mcp__argus__hera_plan_node", "mcp__argus__hera_plan_node_update", "mcp__argus__hera_plan_node_cancel", "mcp__argus__hera_block", "mcp__argus__hera_archive", "mcp__argus__hera_unarchive",
 			"mcp__claude_ai_Slack__slack_send_message",
 			"mcp__claude_ai_Slack__slack_schedule_message",
 		},

@@ -474,6 +474,27 @@ const (
 	GuardRefused
 )
 
+// UnarchiveTaskGuard is the unarchive half of the argus/hera agreement: a task
+// whose live worker/freelance role is archived (hidden) brings the role back
+// with it (UnarchiveRole). handled=false means no such role; the caller
+// un-archives the plain task.
+func UnarchiveTaskGuard(store ArchiveStore, taskID string) (handled bool, res ArchiveRoleResult) {
+	bindings, err := store.ListHeraLiveBindingsByTask(taskID)
+	if err != nil {
+		return true, ArchiveRoleResult{Reason: fmt.Sprintf("hera bindings unreadable (%v)", err)}
+	}
+	for _, b := range bindings {
+		r, rerr := store.HeraRole(b.RoleID)
+		if rerr != nil {
+			return true, ArchiveRoleResult{Reason: fmt.Sprintf("hera role %d unreadable (%v)", b.RoleID, rerr)}
+		}
+		if r.Kind != db.HeraKindCoordinator && r.ArchivedAt != nil && r.NukedAt == nil && r.CancelledAt == nil {
+			return true, UnarchiveRole(store, r)
+		}
+	}
+	return false, ArchiveRoleResult{}
+}
+
 // ArchiveTaskGuard is the single entry for argus-side task archives (MCP
 // task_archive, REST, TUI): a task with a live visible worker/freelance role
 // runs the same hera verdict and archives the role in the same transaction, or
