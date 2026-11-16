@@ -460,11 +460,8 @@ func archiveForwardMail(tx *sql.Tx, role *HeraRole, in ArchiveUnitInput) (*HeraM
 	if err := rows.Err(); err != nil {
 		return nil, archiveRefuse("inbox unreadable (%v)", err)
 	}
-	if len(lines) == 0 && in.Kind != ArchiveKindForced {
-		return nil, nil
-	}
-	if len(lines) == 0 && in.Kind == ArchiveKindForced {
-		return nil, nil // forced with no mail: the reason lives on the record
+	if len(lines) == 0 {
+		return nil, nil // nothing to forward (a forced reason lives on the record)
 	}
 	coord, err := coordinatorForOrch(tx, role.OrchestratorID)
 	if err != nil {

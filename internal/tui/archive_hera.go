@@ -64,14 +64,14 @@ func (a *App) archiveTask(id, name string, archived bool) {
 		a.plainArchive(id, name, archived)
 		return
 	}
-	go a.guardedArchive(ldb, id, name, false, "")
+	// Snapshot the runner on the UI thread: restartDaemon swaps a.runner there.
+	go a.guardedArchive(ldb, a.runner, id, name, false, "")
 }
 
 // guardedArchive runs hera.ArchiveTaskGuard (git/gh capable, so never on the UI
 // thread) and delivers the outcome on the UI thread.
-func (a *App) guardedArchive(ldb *db.DB, id, name string, force bool, reason string) {
+func (a *App) guardedArchive(ldb *db.DB, runner agent.SessionProvider, id, name string, force bool, reason string) {
 	cfgFn := ldb.Config
-	runner := a.runner
 	git, handoff := archiveChecks(cfgFn)
 	out, res := hera.ArchiveTaskGuard(ldb, tuiArchiveRunner{runner}, git, handoff, id, force, reason)
 	a.tapp.QueueUpdateDraw(func() {
@@ -85,7 +85,7 @@ func (a *App) guardedArchive(ldb *db.DB, id, name string, force bool, reason str
 			uxlog.Log("[hera] tui archive refused task=%s: %s", id, res.Reason)
 			a.flashNotice("Archive refused: " + res.Reason)
 			a.refreshTasksAsync()
-			a.offerForceArchive(id, name, res.Reason, func() { go a.guardedArchive(ldb, id, name, true, "forced from TUI") })
+			a.offerForceArchive(id, name, res.Reason, func() { go a.guardedArchive(ldb, a.runner, id, name, true, "forced from TUI") })
 		}
 	})
 }
