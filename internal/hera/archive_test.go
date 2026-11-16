@@ -369,7 +369,6 @@ func TestArchivableVerdict_FailClosedOnLookupErrors(t *testing.T) {
 		want string
 	}{
 		"status":   {func(f *failStore) { f.statusErr = true }, "status unreadable"},
-		"inbox":    {func(f *failStore) { f.inboxErr = true }, "inbox unreadable"},
 		"outbox":   {func(f *failStore) { f.outboxErr = true }, "outbox unreadable"},
 		"blocks":   {func(f *failStore) { f.blocksErr = true }, "plan edges unreadable"},
 		"links":    {func(f *failStore) { f.linksErr = true }, "links unreadable"},
@@ -414,14 +413,14 @@ func TestArchivableVerdict_ProtectedAndMail(t *testing.T) {
 		testutil.NoError(t, d.SetMeta(task.ID, "hera", "resident_worker", "true"))
 		testutil.Contains(t, ArchivableVerdict(d, gitOK, r).Reason, "standing-team")
 	})
-	t.Run("unread inbound mail", func(t *testing.T) {
+	t.Run("unread inbound mail is forwarded, not blocking", func(t *testing.T) {
 		d := archDB(t)
 		orch, _ := d.CreateHeraOrchestrator("o", "master")
 		_, r := archWorker(t, d, orch.ID, "w", model.StatusComplete)
 		_, c := archWorker(t, d, orch.ID, "c", model.StatusInProgress)
 		_, err := d.SendHeraMessage(c.ID, r.ID, "ping", "tldr", nil)
 		testutil.NoError(t, err)
-		testutil.Contains(t, ArchivableVerdict(d, gitOK, r).Reason, "unread hera message")
+		testutil.Equal(t, ArchivableVerdict(d, gitOK, r).Archivable, true)
 	})
 	t.Run("no branch or worktree is archivable with nil git check", func(t *testing.T) {
 		d := archDB(t)
