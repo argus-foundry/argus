@@ -280,7 +280,7 @@ func TestHeraUnarchive(t *testing.T) {
 	out, isErr = unarchCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"nope"}`, c.Worktree))
 	testutil.Equal(t, isErr, true)
 	testutil.Contains(t, out, "not found")
-	out, isErr = unarchCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"coord"}`, c.Worktree))
+	_, isErr = unarchCall(t, s, fmt.Sprintf(`{"cwd":%q,"orchestrator":"O","role_name":"coord"}`, c.Worktree))
 	testutil.Equal(t, isErr, true)
 }
 
@@ -326,7 +326,7 @@ func TestTaskArchive_RunsHeraVerdictForBoundTask(t *testing.T) {
 	testutil.Equal(t, role.ArchivedAt != nil, true)
 
 	// unarchive brings the role back with the task
-	out, isErr = taskArchiveCall(t, s, fmt.Sprintf(`{"id":%q,"archived":false}`, task.ID))
+	_, isErr = taskArchiveCall(t, s, fmt.Sprintf(`{"id":%q,"archived":false}`, task.ID))
 	testutil.Equal(t, isErr, false)
 	g, _ = d.Get(task.ID)
 	testutil.Equal(t, g.Archived, false)

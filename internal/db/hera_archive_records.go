@@ -383,7 +383,7 @@ func (d *DB) SettleHandoff(taskID string, outcome HandoffOutcome, prURL string) 
 		}
 		return nil
 	})
-	if err != nil && unarchiveErr != nil && err == unarchiveErr {
+	if err != nil && unarchiveErr != nil && errors.Is(err, unarchiveErr) {
 		// Revive failed: a revive failure must NOT suppress the coordinator's
 		// board item. Settle the record and post the decision on its own.
 		uxlog.Log("[hera] handoff close: un-archive failed task=%s: %v (posting board item only)", taskID, unarchiveErr)

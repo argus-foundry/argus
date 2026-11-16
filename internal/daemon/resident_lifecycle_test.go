@@ -80,8 +80,8 @@ func TestResidentRunningWorkersUsesLiveMembership(t *testing.T) {
 	e.cfg.Resident.Enabled = false
 	testutil.Equal(t, e.m.State().RunningWorkers, 0) // a binding alone isn't running
 	e.run.sess[w.ID] = &liveHandle{alive: true}
-	testutil.NoError(t, e.db.SetArchived(w.ID, true)) // clears task_meta, not membership
 	testutil.NoError(t, e.db.ArchiveHeraRole(role.ID))
+	testutil.NoError(t, e.db.SetArchived(w.ID, true)) // clears task_meta, not membership
 	testutil.Equal(t, e.m.State().RunningWorkers, 1)
 	binding, err := e.db.HeraLiveBindingByRole(role.ID)
 	testutil.NoError(t, err)

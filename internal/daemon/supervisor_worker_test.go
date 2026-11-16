@@ -19,10 +19,12 @@ func TestSupervisorWorkerIdentity(t *testing.T) {
 	testutil.NoError(t, err)
 	w := &model.Task{ID: "worker", Name: "worker", Backend: "claude", Worktree: t.TempDir()}
 	testutil.NoError(t, d.Add(w))
-	_, binding, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Kind: db.HeraKindWorker, Name: "worker"}, w.ID, w.Worktree)
+	wrole, binding, err := d.CreateResidentWorkerRoleWithBinding(db.CreateHeraRoleInput{OrchestratorID: o.ID, Kind: db.HeraKindWorker, Name: "worker"}, w.ID, w.Worktree)
 	testutil.NoError(t, err)
+	testutil.NoError(t, d.ArchiveHeraRole(wrole.ID)) // role first: SetArchived refuses a visible live role
 	testutil.NoError(t, d.SetArchived(w.ID, true))
 	testutil.NoError(t, d.SetArchived(w.ID, false))
+	testutil.NoError(t, d.UnarchiveHeraRole(wrole.ID))
 	s := NewSupervisor(d.Config, d.IsResidentWorker)
 	var started StartResp
 	testutil.NoError(t, s.StartSession(&StartReq{TaskID: w.ID, Backend: w.Backend, Worktree: w.Worktree}, &started))
