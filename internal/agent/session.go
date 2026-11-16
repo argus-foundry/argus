@@ -604,6 +604,9 @@ func (s *Session) Stop() error { return s.StopScoped(StopTree) }
 // exited on its own between the liveness check and the signal call, that's a
 // successful stop, not an error.
 func (s *Session) StopScoped(scope StopScope) error {
+	if scope == StopTree && s.Cmd != nil {
+		cleanupSessionBrowsers(s.WorkDir())
+	}
 	if !s.Alive() || s.Cmd.Process == nil {
 		return nil
 	}

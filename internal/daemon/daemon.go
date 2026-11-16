@@ -1602,6 +1602,7 @@ func (d *Daemon) Serve(sockPath string) error {
 	// devbox dev stack left running in the managed worktree of a complete or
 	// archived task with no live session. Gated by devstack.stop_finished.
 	go d.runDevStackReaper()
+	go d.runBrowserReaper()
 
 	// Codex usage probe (add-tiered-backend-routing). Sibling of the
 	// usage-budget probe above, same cadence, refreshing internal/backendtier's

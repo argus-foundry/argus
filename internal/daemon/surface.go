@@ -351,7 +351,8 @@ const (
 	// missing conversations instead of replaying the original prompt.
 	// v19: resident PTY startup output best-effort logs fallback notices once
 	// to the supervisor log within 64 KiB/60s, preserving ANSI/UTF-8 boundaries.
-	SupervisorStreamSurface = 19
+	// v20: full session stops also snapshot and clean detached task browsers.
+	SupervisorStreamSurface = 20
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -564,6 +565,8 @@ var SupervisorSpawnPaths = []string{
 // to it is far more likely to reach a running agent than not. Classifying an
 // ambiguous file as STREAM is the safe direction.
 var SupervisorStreamPaths = []string{
+	"internal/agent/browsercleanup.go",        // detached browser cleanup on full stop
+	"internal/browserproc/browser.go",         // ownership inspection and verified browser signals
 	"internal/daemon/bounce.go",               // supervisor shutdown liveness snapshot writer
 	"internal/daemon/types.go",                // resume-only launch constraint and typed refusal
 	"internal/agent/bridge.go",                // per-launch bridge identity read through SessionStatus
@@ -607,7 +610,7 @@ const (
 	SpawnSurfaceDigest = "e1a58ae62071e1e01321bafbcd7ad3ef64fd4151cc6aeba3b70470bf462265bc"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
-	StreamSurfaceDigest = "3017380d1473fd065b095a82aa41f2c3ff769fab6ebe7cd2574fb8c0fa46ed12"
+	StreamSurfaceDigest = "8dfc2ef81b69ee65cdb672583c9c42a49e0d36b25705ff6526a405ee6f384a18"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,
