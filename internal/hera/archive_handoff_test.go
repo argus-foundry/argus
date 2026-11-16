@@ -291,15 +291,14 @@ func TestArchiveTaskGuard(t *testing.T) {
 		testutil.Equal(t, out, GuardArchived)
 		testutil.Equal(t, res.Kind, db.ArchiveKindForced)
 	})
-	t.Run("a live coordinator task is refused", func(t *testing.T) {
+	t.Run("a coordinator-only task is not covered by the guard", func(t *testing.T) {
 		d := archDB(t)
 		orch, _ := d.CreateHeraOrchestrator("o", "master")
 		c := archCoord(t, d, orch.ID)
 		b, err := d.HeraLiveBindingByRole(c.ID)
 		testutil.NoError(t, err)
-		out, res := ArchiveTaskGuard(d, nil, gitOK, handoffOK, b.ArgusTaskID, false, "")
-		testutil.Equal(t, out, GuardRefused)
-		testutil.Contains(t, res.Reason, "coordinator")
+		out, _ := ArchiveTaskGuard(d, nil, gitOK, handoffOK, b.ArgusTaskID, false, "")
+		testutil.Equal(t, out, GuardNotBound)
 	})
 	t.Run("hidden role does not block a plain archive", func(t *testing.T) {
 		d := archDB(t)

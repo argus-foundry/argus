@@ -191,15 +191,35 @@ Live Claude bridges with `bridge.delivery` enabled deliver doorbells as plugin-f
   auto-revive only ever restarts a *dead* recipient. The TUI's Enter-key path applies the same gate.
   It targets a DIFFERENT role than your own (self-targeting errors).
 
-- **`hera_archive(cwd, [role_name], [orchestrator], [dry_run])`** — coordinator-only: archive roles that are
-  *done-done* so they leave the live views. Archivable only when the task is `complete`, the role isn't
-  blocked, has no unread hera mail, no not-yet-done plan node depends on it, a sub-coordinator has all
-  child roles archived and no open `decision` board items (open `fyi` items are pushed to your board),
-  and its git work is confirmed landed (merged PR) with a clean worktree. Anything unconfirmed is
-  refused with a reason. Stops an idle session (a busy one is refused); never deletes the worktree or
-  branch. Omit `role_name` to sweep every role you coordinate; `dry_run` only reports. Call it after
-  `hera_accept` + the role's winding-down confirmation + a merged PR, and as a sweep before reporting
-  the orchestration finished. Top-level coordinators are human-archived — not archivable here.
+- **`hera_archive(cwd, [role_name], [orchestrator], [dry_run], [force], [reason])`** — coordinator-only: archive
+  roles so they leave the live views. Two normal paths, both fail-closed (anything unconfirmed is refused
+  with a reason):
+  - **merged (done-done):** task `complete`, role not blocked, no not-yet-done plan node depends on it,
+    a sub-coordinator has all child roles archived and no open `decision` board items (open `fyi` items
+    are pushed to your board), nothing the role sent is still unread, and its git work is confirmed
+    landed with a clean worktree.
+  - **handed off (no merge needed):** the role's PR is open (draft ok) and its CI is not failing, the
+    branch is pushed with local tip == remote tip == PR head, the worktree is clean, and the task is
+    `in_review` or `complete`. The PR and the batch own the work from then on, so don't leave finished
+    workers on the rail until the merge. The daemon keeps watching the PR: a merge settles it (task
+    completes, `fyi` on your board); a PR **closed without merging** un-archives the role, puts the task
+    back to `in_progress`, and posts a `decision` item on your board. `hera_archive` reports each result
+    as `[merged]`, `[handed off]` or `[forced]`.
+  Unread mail TO the role no longer blocks: it is marked read and ONE digest (sender + first line each)
+  lands in your inbox (full bodies via `hera_get_messages`). Stops an idle session (a busy one is
+  refused); never deletes the worktree or branch. Omit `role_name` to sweep every role you coordinate;
+  `dry_run` only reports. Call it after `hera_accept` + the winding-down confirmation, as soon as a
+  worker's PR is open and green (handoff), and as a sweep before reporting the orchestration finished.
+  **Escape hatch:** `force=true` with a non-empty `reason` (single named role only, never a sweep)
+  overrides the done/handoff/mail/dependent checks and records the reason durably (role history and the
+  inbox viewer). Coordinators, pinned roles, resident roles, standing-team members and tasks bound to
+  another live role stay refused even under force. Top-level coordinators are human-archived.
+  Archiving a hera-bound task from argus (`task_archive`, REST, TUI, web) runs this same verdict and
+  archives the role with it, or refuses with the same reason.
+
+- **`hera_unarchive(cwd, role_name, [orchestrator])`** — coordinator-only: bring an archived worker/
+  freelance role back (the batch handed the work back, or an archive was a mistake): task un-archived,
+  role visible again, task back to `in_progress`. Starts no session and checks no git state.
 
 - **`hera_accept(cwd, role_name, [orchestrator], [message])`** — coordinator-only: mark a role's bound
   task complete and send it a check-in asking whether it's winding down, has more work to do, or is

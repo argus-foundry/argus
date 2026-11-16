@@ -152,3 +152,15 @@ Fills the structural gap `RollHeraWorkerToReview`'s own doc comment names: nothi
 
 
 - **Merge-notice provenance must commit with the message, and archive must retire notices inside its own transaction (fix-archive-merge-notice-race).** Only IDs in `hera_merge_notices` bypass archive inbox checks; ordinary coordinator mail with identical text still blocks. Legacy messages have no trustworthy provenance: repair only operator-attested IDs with the explicit-recipient one-off script, never infer from the subject/body.
+
+## Handed-off and forced archive (add-hera-handoff-archive)
+
+- **The archive record lives in `hera_archive_records`, never `task_meta`:** `SetArchived(true)` runs `DELETE FROM task_meta WHERE task_id=?`, so a marker there dies at archive time. The table also carries the forced `reason` and the settle outcome.
+- **`ArchivableVerdict`/`HandoffVerdict`/`ForcedVerdict` share `commonChecks(mode)` and must stay in lockstep with `db.archiveUnitChecks(mode)`:** `TestVerdictAndTransactionAgree` pins it. Forced keeps ONLY the hard refusals (coordinator, pinned, resident, standing-team, another live role) in both layers.
+- **The PR poller skipped archived tasks:** a handed-off archive is poll-eligible only while its `handed_off` record is unsettled (`handedOffEligible`). Closed-vs-merged must read `PRResult.Merged`, because `PRMergedClosed` collapses both. The role-mail merge notices are skipped for archived roles (`SendHeraMergeNotice` skips archived tasks, `insertHeraMessage` refuses archived recipients): the board item replaces them.
+- **Closed-unmerged un-archives in one tx; if the un-archive fails, a second tx still settles the record and posts the board decision.** A revive failure must never swallow the coordinator's notice.
+- **Unread mail is forwarded as ONE digest, inside the archive tx:** N forwards would trip the 50/min sender cap and the coordinator's unread cap. A digest that cannot be stored refuses the archive (mail is never marked read without its summary delivered). The outbox check stays; only force overrides it.
+- **argus archive and hera archive agree through `hera.ArchiveTaskGuard`** (MCP `task_archive`, REST, local TUI) PLUS a DB backstop (`ErrHeraRoleLive` in `SetArchived(true)` and the `Update` 0-to-1 flip). The backstop counts only visible, un-nuked worker/freelance roles, so nuke (which ends the binding first), a rail-hidden role, and `ArchiveHeraUnit` (uses `setArchivedTx` directly) never trip it. A pending graduation keeps its own refusal ahead of the guard, and a coordinator-only task is NOT guarded (refusing it broke archiving a graduated coordinator).
+- **Local TUI runs the guard off the UI thread (it can run git/gh) and cannot see a session parked at a prompt:** `tuiArchiveRunner.BlockedOnPrompt` is conservative-false; a non-forced archive still requires an idle session.
+- **Named follow-ups (frontend parity):** web force-archive affordance, macOS handed-off/forced label and force affordance. Web and macOS already show the 409 reason.
+

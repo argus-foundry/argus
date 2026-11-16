@@ -938,7 +938,8 @@ func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived boo
 		writeErr(w, http.StatusBadRequest, "force requires a non-empty reason", nil)
 		return
 	}
-	if archived {
+	// A pending graduation keeps its own refusal (db.ErrGraduationPending below).
+	if pending, perr := s.db.GraduationPendingErr(id); archived && perr == nil && !pending {
 		switch out, res := hera.ArchiveTaskGuard(s.db, s.archiveRunner, s.archiveGit, s.archiveHandoff, id, body.Force, body.Reason); out {
 		case hera.GuardArchived:
 			writeJSON(w, http.StatusOK, map[string]any{"archived": true, "kind": string(res.Kind)})
@@ -949,13 +950,15 @@ func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived boo
 			writeErr(w, http.StatusConflict, res.Reason+"."+hera.ArchiveRefusedHint, nil)
 			return
 		}
-	} else if handled, res := hera.UnarchiveTaskGuard(s.db, id); handled {
-		if !res.Archived {
-			writeErr(w, http.StatusConflict, res.Reason, nil)
+	} else if !archived {
+		if handled, res := hera.UnarchiveTaskGuard(s.db, id); handled {
+			if !res.Archived {
+				writeErr(w, http.StatusConflict, res.Reason, nil)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"archived": false})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"archived": false})
-		return
 	}
 	task.SetArchived(archived)
 	if err := s.db.Update(task); err != nil {

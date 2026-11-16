@@ -498,8 +498,8 @@ func UnarchiveTaskGuard(store ArchiveStore, taskID string) (handled bool, res Ar
 // ArchiveTaskGuard is the single entry for argus-side task archives (MCP
 // task_archive, REST, TUI): a task with a live visible worker/freelance role
 // runs the same hera verdict and archives the role in the same transaction, or
-// is refused with the same reason. A task bound to a live coordinator is
-// refused (archive it from hera). Lookup errors fail closed.
+// is refused with the same reason. A task bound only to a coordinator archives
+// as a plain task. Lookup errors fail closed.
 func ArchiveTaskGuard(store ArchiveStore, runner ArchiveRunner, git GitCheck, handoff HandoffCheck, taskID string, force bool, reason string) (TaskGuardOutcome, ArchiveRoleResult) {
 	bindings, err := store.ListHeraLiveBindingsByTask(taskID)
 	if err != nil {
@@ -524,11 +524,8 @@ func ArchiveTaskGuard(store ArchiveStore, runner ArchiveRunner, git GitCheck, ha
 		}
 	}
 	if target == nil {
-		for _, b := range bindings {
-			if r, rerr := store.HeraRole(b.RoleID); rerr == nil && r.Kind == db.HeraKindCoordinator && r.ArchivedAt == nil && r.NukedAt == nil && r.CancelledAt == nil {
-				return GuardRefused, ArchiveRoleResult{Role: r.Name, Reason: "task belongs to a live coordinator role; coordinators are archived by the human or the parent coordinator from the Hera view"}
-			}
-		}
+		// No live worker/freelance role: a coordinator-only task archives as a
+		// plain task, exactly as before (coordinators are not part of this guard).
 		return GuardNotBound, ArchiveRoleResult{}
 	}
 	res := ArchiveRoleWith(store, runner, git, target, ArchiveOptions{Handoff: handoff, Force: force, Reason: reason})
