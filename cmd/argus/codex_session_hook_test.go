@@ -1,0 +1,35 @@
+package main
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/argus-foundry/argus/internal/testutil"
+)
+
+func TestRunCodexSessionHook(t *testing.T) {
+	payload := `{"session_id":"01a1ebbc","cwd":"/w","hook_event_name":"SessionStart","source":"startup"}`
+	t.Run("reports the session id for the task", func(t *testing.T) {
+		var gotTask, gotSID string
+		err := runCodexSessionHook(strings.NewReader(payload), "t1", func(task, sid string) error {
+			gotTask, gotSID = task, sid
+			return nil
+		})
+		testutil.NoError(t, err)
+		testutil.Equal(t, gotTask, "t1")
+		testutil.Equal(t, gotSID, "01a1ebbc")
+	})
+	t.Run("no task id means not an argus session", func(t *testing.T) {
+		called := false
+		err := runCodexSessionHook(strings.NewReader(payload), "", func(string, string) error { called = true; return nil })
+		testutil.NoError(t, err)
+		testutil.True(t, !called)
+	})
+	t.Run("bad payloads and report failures are returned not fatal", func(t *testing.T) {
+		report := func(string, string) error { return errors.New("down") }
+		testutil.Error(t, runCodexSessionHook(strings.NewReader("{"), "t", report))
+		testutil.Error(t, runCodexSessionHook(strings.NewReader(`{"cwd":"/w"}`), "t", report))
+		testutil.Error(t, runCodexSessionHook(strings.NewReader(payload), "t", report))
+	})
+}

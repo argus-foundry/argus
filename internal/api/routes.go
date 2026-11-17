@@ -222,6 +222,9 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/tasks/{id}/meta", s.handleGetMeta)
 	mux.HandleFunc("PUT /api/tasks/{id}/meta", s.handlePutMeta)
 
+	// Codex SessionStart hook callback: records the thread ID at launch.
+	mux.HandleFunc("POST /api/tasks/{id}/session-id", s.handleRecordSessionID)
+
 	// Hera token/cost accrual (add-coordinator-cost-estimate): hook-facing,
 	// not user-facing — distinct from the generic sidecar above because
 	// task_meta rows are deleted on task archive (DeleteMetaForTask), which

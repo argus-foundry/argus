@@ -7536,6 +7536,12 @@ func (a *App) startSession(task *model.Task) {
 	cfg := a.db.Config()
 	rows, cols := a.spawnPTYSize(task.ID)
 
+	// Resume-time recapture: Claude re-derives the newest transcript; capture-once
+	// backends (codex/pi/opencode) recover an ID a supervisor restart prevented
+	// capturing. Must precede the resume decision.
+	if d, ok := a.db.(*db.DB); ok {
+		agent.RefreshResumeSessionID(d, task)
+	}
 	resume := task.SessionID != ""
 
 	// For families that pin a session ID at start, generate one on first run
@@ -7557,11 +7563,6 @@ func (a *App) startSession(task *model.Task) {
 		}
 	}
 
-	// Resume-time recapture: for a Claude resume, re-derive the newest worktree
-	// transcript so we resume the MOST RECENT in-place session, not the stale
-	// create-time UUID (hera workers idle / lose their stream and never reach the
-	// post-exit recapture). No-op for a fresh start, non-Claude, no-change, or
-	// remote mode — see refreshResumeSessionID / agent.RefreshResumeSessionID.
 	a.refreshResumeSessionID(task, resume)
 
 	// Bump generation BEFORE the RPC so any tick that captured runningIDs

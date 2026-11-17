@@ -153,7 +153,15 @@ func prepareResume(task *model.Task, cfg config.Config, resume bool) (bool, erro
 // callers that do not re-issue an Update still land the fresh ID. Errors are
 // logged via uxlog and never fatal.
 func RefreshResumeSessionID(database *db.DB, task *model.Task) {
-	if database == nil || task == nil || task.Worktree == "" || task.SessionID == "" {
+	refreshSessionID(database, task, true)
+}
+
+// refreshSessionID is RefreshResumeSessionID with the empty-ID fill for
+// capture-once families switchable: account moves pass false because an empty
+// ID there is meaningful (it refuses a move it cannot transfer) and a refused
+// move must not persist anything.
+func refreshSessionID(database *db.DB, task *model.Task, fillMissing bool) {
+	if database == nil || task == nil || task.Worktree == "" {
 		return
 	}
 	cfg := database.Config()
@@ -162,11 +170,25 @@ func RefreshResumeSessionID(database *db.DB, task *model.Task) {
 		uxlog.Log("[resume] session recapture skipped: backend resolve failed task=%s: %v", task.ID, err)
 		return
 	}
-	// Only RecaptureEveryExit families (Claude, antigravity) can switch
-	// conversations in-session; codex/pi/opencode keep a stable captured ID
-	// across resumes (see NeedsSessionRecapture).
 	fam := FamilyOf(backend.Command)
-	if !fam.RecaptureEveryExit || fam.Capture == nil {
+	if fam.Capture == nil {
+		return
+	}
+	if task.SessionID == "" {
+		if !fillMissing {
+			return
+		}
+		// Capture-once families (codex/pi/opencode) mint their own ID and only
+		// get it recorded on a clean exit. A supervisor restart kills the
+		// session as StreamLost, which skips that capture, so the ID is still
+		// empty here and a resume would silently relaunch with the original
+		// prompt. Pinning and recapture-every-exit families never fabricate one.
+		if fam.RecaptureEveryExit || fam.PinsSessionID {
+			return
+		}
+	} else if !fam.RecaptureEveryExit {
+		// Only RecaptureEveryExit families (Claude, antigravity) can switch
+		// conversations in-session; capture-once families keep a stable ID.
 		return
 	}
 	sid, err := fam.Capture(task, cfg)

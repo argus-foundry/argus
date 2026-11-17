@@ -285,7 +285,10 @@ const (
 	// for the resident work dir and its --add-dir skills roots. A stale
 	// supervisor launches the resident without it and may stop at a trust
 	// dialog after an account switch.
-	SupervisorSpawnSurface = 53
+	// 54: fresh Codex launches register an inline SessionStart hook that
+	// reports the thread ID at launch. A stale supervisor launches without it,
+	// so a supervisor restart can still lose that session's ID.
+	SupervisorSpawnSurface = 54
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -614,10 +617,10 @@ var SupervisorStreamPaths = []string{
 const (
 	// resident.memory_tidy is read only by the daemon timer poll; adding its
 	// schema/default does not change BuildCmd or supervisor spawn behavior.
-	SpawnSurfaceDigest = "9552b53b8e1c4de0df52d84433006863dc14dd544541ff9fe6f2b3806221b57b"
+	SpawnSurfaceDigest = "117fa247fe50126b3d8203775137b44b3c79895af9e045d00221277392c09494"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
-	StreamSurfaceDigest = "8dfc2ef81b69ee65cdb672583c9c42a49e0d36b25705ff6526a405ee6f384a18"
+	StreamSurfaceDigest = "a9575e95dd0aa4c0fe2001483c7b89a5402fc787fb0b678eb328924e1074a7c7"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,
