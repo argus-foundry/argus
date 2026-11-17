@@ -85,7 +85,8 @@ func LoadOrCreateToken(path string) (string, error) {
 // this writing that denylist is: backends CRUD (command templates → arbitrary
 // command execution), account create/edit/delete (credential directory
 // references), self-update (source-path + rebuild/restart), daemon restart,
-// host reveal (Finder launch), and token
+// host reveal (Finder launch), recording a task's Codex session ID
+// (decides which conversation it later resumes), and token
 // list/mint/revoke (credential management). Everything else — tasks, projects,
 // schedules, settings, messages, push, raw endpoints, task_meta writes — is
 // open to any token.

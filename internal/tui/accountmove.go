@@ -398,7 +398,7 @@ func (a *App) runAccountMove(t *model.Task, target string, force bool) {
 					a.accountMoveFailed(t, fmt.Errorf("reload task: %w", gerr))
 					return
 				}
-				a.startSession(fresh)
+				a.startSessionFill(fresh, !handoff)
 			}
 			a.accountMoveDone(t, res)
 		})
