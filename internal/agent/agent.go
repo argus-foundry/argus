@@ -1119,6 +1119,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 	// Materialization failure is logged and skipped rather than blocking
 	// launch.
 	opencodeSkillsDir := ""
+	builtinSkillsRoot := ""
 	residentClaude := task.IsResident() && fam.Kind == backendkind.Claude
 	switch fam.SkillDelivery {
 	case SkillsAddDir, SkillsFlag, SkillsInlineConfig, SkillsConfigOverlay:
@@ -1128,6 +1129,7 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 			switch fam.SkillDelivery {
 			case SkillsAddDir:
 				cmdStr += " --add-dir " + shellQuote(root)
+				builtinSkillsRoot = root
 			case SkillsFlag:
 				cmdStr += " --skill " + shellQuote(skills.BuiltinSkillsDir(root))
 			case SkillsInlineConfig:
@@ -1146,9 +1148,11 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 	// skills; re-expose them through an --add-dir whose .claude/skills links to
 	// the account's skills dir (Claude only discovers <dir>/.claude/skills).
 	if residentClaude && fam.SkillDelivery == SkillsAddDir {
-		if root := ensureResidentUserSkillsDir(task, cfg); root != "" {
-			cmdStr += " --add-dir " + shellQuote(root)
+		userSkillsRoot := ensureResidentUserSkillsDir(task, cfg)
+		if userSkillsRoot != "" {
+			cmdStr += " --add-dir " + shellQuote(userSkillsRoot)
 		}
+		trustResidentClaudeDirs(task, cfg, task.Worktree, builtinSkillsRoot, userSkillsRoot)
 	}
 
 	// Make argus's own builtin routing content (hera coordination, argus-task

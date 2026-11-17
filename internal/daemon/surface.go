@@ -281,7 +281,11 @@ const (
 	// fallback; the shipped allow tier no longer blanket-approves Bash.
 	// 52: resident launches install an authenticated PermissionRequest hook
 	// that defers exact calls to the human board without blocking the session.
-	SupervisorSpawnSurface = 52
+	// 53: resident Claude launches seed folder trust in the launched account
+	// for the resident work dir and its --add-dir skills roots. A stale
+	// supervisor launches the resident without it and may stop at a trust
+	// dialog after an account switch.
+	SupervisorSpawnSurface = 53
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -532,7 +536,10 @@ var SupervisorSpawnPaths = []string{
 	"internal/backendkind/backendkind.go",         // command → family classification
 	"internal/inject/antigravity/antigravity.go",  // agy global config BuildCmd refreshes before launch
 	"internal/inject/atomicfile/atomicfile.go",    // atomic writer the global-config injectors use
+	"internal/inject/claudelock.go",               // Claude config lock held by resident trust seeding
+	"internal/inject/claudetrust.go",              // resident launch folder-trust writer
 	"internal/inject/opencode/opencode.go",        // opencode global config BuildCmd refreshes before launch
+	"internal/agent/claudetrust.go",               // resident launch folder trust (account config path)
 	"internal/agent/claudeaccount.go",             // per-task account dir bootstrap, env hygiene, sandbox grant
 	"internal/agent/resident_approval.go",         // private per-launch approval hook material and command
 	"internal/claudeenv/claudeenv.go",             // parent-session marker denylist + persistence flag BuildCmd applies
@@ -607,7 +614,7 @@ var SupervisorStreamPaths = []string{
 const (
 	// resident.memory_tidy is read only by the daemon timer poll; adding its
 	// schema/default does not change BuildCmd or supervisor spawn behavior.
-	SpawnSurfaceDigest = "7e41b617d5cd61c244b55b2835f70a8541700d37efecd4359e345af94feaf194"
+	SpawnSurfaceDigest = "9552b53b8e1c4de0df52d84433006863dc14dd544541ff9fe6f2b3806221b57b"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
 	StreamSurfaceDigest = "8dfc2ef81b69ee65cdb672583c9c42a49e0d36b25705ff6526a405ee6f384a18"
