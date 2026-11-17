@@ -2426,6 +2426,9 @@ func (r *Rail) drawOrchRow(screen tcell.Screen, x, y, w int, row railRow, select
 		label = "graduation pending restart · " + label
 	}
 	count := fmt.Sprintf(" %d", agents)
+	if o.Pending {
+		count = " launching…"
+	}
 	// Subtree cost figure (add-coordinator-cost-estimate, design.md Decision
 	// 5/7): appended alongside the existing agent-count badge, omitted
 	// entirely when nothing in the subtree has ever accrued anything — never

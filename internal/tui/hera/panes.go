@@ -136,6 +136,11 @@ func (p *HeraPage) applySelection() {
 		p.bindPane(p.agentPane, &p.agentBound, &p.agentKickedFor, &p.agentKickPending, p.sel.TaskID(), "agent")
 	}
 	p.syncLaunchStatus()
+	// A selected pending (optimistic) coordinator has no task or session yet:
+	// show the shared LAUNCH banner on the coordinator pane until the real
+	// orchestrator replaces it (SetSession on the real bind clears it). Driven
+	// from every applySelection so navigating away and back re-arms it.
+	p.coordPane.SetPending(detailsOrch != nil && detailsOrch.Pending)
 }
 
 // syncLaunchStatus pushes each bound task's workflow status to its pane so the

@@ -145,3 +145,11 @@ func drawLaunchSplash(screen tcell.Screen, x, y, width, height int, subtitle str
 	pad := max((width-len(subtitle))/2, 0)
 	widget.DrawText(screen, x+pad, y+height/2, width-pad, subtitle, tcell.StyleDefault.Foreground(theme.ColorDimmed))
 }
+
+// Pending reports whether the pane is in SetPending's launch-banner state
+// (read by tests and the Hera page's pending-coordinator overlay).
+func (tp *TerminalPane) Pending() bool {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	return tp.pending
+}

@@ -141,11 +141,15 @@ type App struct {
 	// are inert. heraInputModal/heraConfirmModal are created on demand; the
 	// pending closures capture the selected (role,orchestrator) target so the
 	// submit/confirm path acts on the right binding (multi-binding isolation).
-	heraOps          *hera.Ops
-	heraInputModal   *RenameTaskForm
-	heraConfirmModal *modal.ConfirmModal
-	heraInputSubmit  func(string) // called with the field value on input-modal submit
-	heraConfirmDo    func()       // called on confirm-modal accept
+	heraOps *hera.Ops
+	// spawnHeraCoordinatorFn is the root-coordinator create (nil →
+	// agent.SpawnHeraCoordinator). A test seam so smoke tests can hold the slow
+	// create open and observe the optimistic pending row.
+	spawnHeraCoordinatorFn func(*db.DB, agent.SessionProvider, agent.HeraCoordinatorSpawnInput) (*agent.HeraCoordinatorSpawnResult, error)
+	heraInputModal         *RenameTaskForm
+	heraConfirmModal       *modal.ConfirmModal
+	heraInputSubmit        func(string) // called with the field value on input-modal submit
+	heraConfirmDo          func()       // called on confirm-modal accept
 	// heraConfirmReturnTasks makes closeHeraConfirm return to the Tasks tab
 	// (graduation-pending abandon escape opened from Tasks-list delete/archive).
 	heraConfirmReturnTasks bool

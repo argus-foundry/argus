@@ -125,6 +125,11 @@ type RoleView struct {
 	// NOT planned. Stage 2/3 populates this in buildRoleView.
 	Planned bool
 
+	// Pending marks the TUI-only optimistic coordinator role of a pending
+	// orchestrator (instant-launch-new-coordinator): synthetic, never persisted,
+	// no task yet. See OrchView.Pending.
+	Pending bool
+
 	// Cancelled is true when the coordinator has explicitly cancelled this planned
 	// node (cancelled_at is set). A cancelled node is excluded from gater
 	// materialization but remains visible in the plan DAG, rendered as grey ✕
@@ -308,6 +313,22 @@ type OrchView struct {
 	// the bridge subtree, since a nuked role never appears in Roles to be
 	// summed there (design.md Decision 4).
 	NukedRolesCostUSD float64
+	// Pending marks a TUI-only optimistic orchestrator overlaid on the rail
+	// while a new root coordinator is still being created
+	// (instant-launch-new-coordinator). It is synthetic: never persisted, its
+	// IDs are >= PendingIDBase, and every rail mutation on it is inert.
+	Pending bool
+}
+
+// PendingIDBase is the floor of synthetic IDs for pending (optimistic) rail
+// rows. Rail.currentRef encodes an orchestrator row as -OrchID and a role row
+// as +RoleID, so a synthetic ID must be positive-and-huge (never negative, never
+// within reach of an autoincrement ID) to avoid cursor-identity collisions.
+const PendingIDBase int64 = 1 << 60
+
+// IsPending reports whether the selection is on a pending (optimistic) row.
+func (s Selection) IsPending() bool {
+	return (s.Orch != nil && s.Orch.Pending) || (s.Role != nil && s.Role.Pending)
 }
 
 // Model is the full read-only snapshot the rail renders. Orchestrators are

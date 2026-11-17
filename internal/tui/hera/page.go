@@ -147,6 +147,12 @@ type HeraPage struct {
 	tasks      []*model.Task
 	tasksKnown bool
 
+	// pendingCoords/pendingSeq are the in-flight root-coordinator creates
+	// overlaid on the rail as optimistic rows (instant-launch-new-coordinator;
+	// see pending.go). UI-goroutine-only.
+	pendingCoords []pendingCoord
+	pendingSeq    int64
+
 	// --- tick change-detection gate (fix-hera-tick-and-kick-perf) ---
 	//
 	// fpKnown/lastFingerprint/lastNeedsInput/lastSessionIdle/
@@ -1704,6 +1710,9 @@ func (p *HeraPage) handleRailMutation(event *tcell.EventKey) bool {
 			return true // bounce is a structure key: inert on the resident tab
 		}
 		switch {
+		case sel.IsPending():
+			p.pendingInert()
+			return true
 		case sel.IsCoordinator():
 			return p.fire(p.OnForceRecycle, sel)
 		case sel.IsWorkerOrFreelance():
@@ -1869,6 +1878,12 @@ func (p *HeraPage) fire(cb func(heramodel.Selection), sel heramodel.Selection) b
 	}
 	if sel.Role == nil && sel.Orch == nil {
 		return true // wired, but nothing selected — consume silently
+	}
+	if sel.IsPending() {
+		// Optimistic coordinator row (instant-launch-new-coordinator): no DB
+		// identity yet, so every selection-gated mutation is inert.
+		p.pendingInert()
+		return true
 	}
 	cb(sel)
 	return true
