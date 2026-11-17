@@ -256,6 +256,7 @@ type Server struct {
 	heraSpawn          HeraSpawner        // optional; set via SetHeraService (born-bound spawn)
 	heraArchiveRunner  hera.ArchiveRunner // optional; set via SetHeraArchiver (add-hera-auto-archive)
 	heraGitCheck       hera.GitCheck      // optional; nil refuses any role with git work
+	heraHandoffCheck   hera.HandoffCheck  // optional; nil disables handed-off archives (add-hera-handoff-archive)
 	heraRevive         HeraReviver        // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
 	// heraGraduationPreflight is set via SetHeraGraduationPreflight.
 	heraGraduationPreflight func(*model.Task) error
@@ -1347,6 +1348,8 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		return s.toolHeraAccept(req.ID, params.Arguments)
 	case "hera_archive":
 		return s.toolHeraArchive(req.ID, params.Arguments)
+	case "hera_unarchive":
+		return s.toolHeraUnarchive(req.ID, params.Arguments)
 	case "profile_resolve":
 		return s.toolProfileResolve(req.ID, params.Arguments)
 	case "argus_api_get":
@@ -2243,6 +2246,26 @@ func (s *Server) toolTaskArchive(id interface{}, args json.RawMessage) *Response
 			state = "archived"
 		}
 		return toolResult(id, fmt.Sprintf("Task %s (%s) already %s.", task.ID, task.Name, state))
+	}
+
+	// A hera-bound task runs the same verdict as hera_archive and archives (or
+	// un-archives) its role in the same step (add-hera-handoff-archive).
+	if store, ok := s.heraStore.(hera.ArchiveStore); ok && s.heraEnabled() {
+		if newArchived {
+			switch out, res := hera.ArchiveTaskGuard(store, s.heraArchiveRunner, s.heraGitCheck, s.heraHandoffCheck, task.ID, false, ""); out {
+			case hera.GuardArchived:
+				log.Printf("[mcp] task_archive ok via hera: id=%s kind=%s", task.ID, res.Kind)
+				return toolResult(id, fmt.Sprintf("Archived task %s (%s) and its hera role (%s).", task.ID, task.Name, strings.ReplaceAll(string(res.Kind), "_", " ")))
+			case hera.GuardRefused:
+				log.Printf("[mcp] task_archive refused by hera verdict: id=%s: %s", task.ID, res.Reason)
+				return toolError(id, "Cannot archive task "+task.ID+": "+res.Reason+"."+hera.ArchiveRefusedHint)
+			}
+		} else if handled, res := hera.UnarchiveTaskGuard(store, task.ID); handled {
+			if !res.Archived {
+				return toolError(id, "Cannot unarchive task "+task.ID+": "+res.Reason)
+			}
+			return toolResult(id, fmt.Sprintf("Unarchived task %s (%s) and its hera role.", task.ID, task.Name))
+		}
 	}
 
 	task.SetArchived(newArchived)
@@ -3188,3 +3211,7 @@ func (s *Server) SetHeraArchiver(r hera.ArchiveRunner, g hera.GitCheck) {
 	s.heraArchiveRunner = r
 	s.heraGitCheck = g
 }
+
+// SetHeraHandoff wires the handed-off archive check (add-hera-handoff-archive).
+// nil disables handed-off archives and the task_archive handoff path.
+func (s *Server) SetHeraHandoff(h hera.HandoffCheck) { s.heraHandoffCheck = h }

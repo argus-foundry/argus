@@ -16,6 +16,7 @@ func TestMergeNoticeFinishedSnapshot(t *testing.T) {
 			snapshot, err := d.db.Get("worker-task")
 			testutil.NoError(t, err)
 			if state == "archived" {
+				testutil.NoError(t, d.db.ArchiveHeraRole(worker.ID)) // role first: SetArchived refuses a visible live role
 				testutil.NoError(t, d.db.SetArchived(snapshot.ID, true))
 			} else {
 				testutil.NoError(t, d.db.SetStatus(snapshot.ID, model.StatusComplete))

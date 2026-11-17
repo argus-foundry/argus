@@ -4191,7 +4191,12 @@ async function setArchive(archived) {
   try {
     const path = archived ? 'archive' : 'unarchive';
     const r = await api(`/api/tasks/${currentTask.id}/${path}`, { method: 'POST' });
-    if (!r.ok) throw new Error('archive failed');
+    if (!r.ok) {
+      // A hera-bound task can be refused (409) with the hera verdict's reason.
+      let msg = 'archive failed';
+      try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (_) {}
+      throw new Error(msg);
+    }
     currentTask.archived = archived;
     closeDetail();
     refresh();

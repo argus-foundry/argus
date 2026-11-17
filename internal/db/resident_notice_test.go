@@ -96,8 +96,9 @@ func TestResidentNotice_HideSurvivesTaskMetaWipeAndUnhide(t *testing.T) {
 	testutil.NoError(t, f.d.SetMeta(f.task, "hera", HeraMetaKeyResidentWorker, "true"))
 	// SetArchived wipes task_meta (incl. the resident_worker marker); membership
 	// and the notice path must not depend on it.
-	testutil.NoError(t, f.d.SetArchived(f.task, true))
 	testutil.NoError(t, f.d.ArchiveHeraRole(f.worker.ID))
+	testutil.NoError(t, f.d.SetArchived(f.task, true))
+
 	testutil.Equal(t, len(f.pending(t)), 1)
 	testutil.NoError(t, f.d.SetArchived(f.task, false))
 	testutil.NoError(t, f.d.UnarchiveHeraRole(f.worker.ID))

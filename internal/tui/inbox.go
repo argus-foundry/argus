@@ -2,6 +2,7 @@ package tui
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -122,8 +123,33 @@ func loadInboxEntries(d *db.DB, taskID string) ([]modal.InboxEntry, error) {
 	for _, m := range heraMsgs {
 		out = append(out, heraInboxEntry(m, m.SenderName(roleName(m.FromRoleID)), roleName(m.ToRoleID)))
 	}
+	// Archive history (handed off / forced + reason) rides along as read-only
+	// entries, so the viewer explains why a role left the rail.
+	recs, err := d.ArchiveRecordsForTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range recs {
+		out = append(out, archiveRecordEntry(r, roleName(r.RoleID)))
+	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	return out, nil
+}
+
+// archiveRecordEntry renders one hera_archive_records row as a read-only entry.
+func archiveRecordEntry(r db.ArchiveRecord, role string) modal.InboxEntry {
+	summary := "archived (" + strings.ReplaceAll(string(r.Kind), "_", " ") + ")"
+	if r.Reason != "" {
+		summary += ": " + r.Reason
+	}
+	body := summary
+	if r.PRURL != "" {
+		body += "\nPR: " + r.PRURL
+	}
+	if !r.SettledAt.IsZero() {
+		body += "\nsettled " + r.SettledAt.Local().Format("2006-01-02 15:04:05") + ": " + r.SettleNote
+	}
+	return modal.InboxEntry{At: r.CreatedAt, Source: "archive", From: role, Summary: summary, Body: body}
 }
 
 func taskInboxEntry(m *model.TaskMessage, from string) modal.InboxEntry {

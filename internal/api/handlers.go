@@ -24,6 +24,7 @@ import (
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/events"
 	"github.com/argus-foundry/argus/internal/gitutil"
+	"github.com/argus-foundry/argus/internal/hera"
 	"github.com/argus-foundry/argus/internal/links"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/profiles"
@@ -922,9 +923,46 @@ func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived boo
 		writeErr(w, http.StatusNotFound, "task not found", nil)
 		return
 	}
+	// A hera-bound task runs the same verdict as hera_archive and archives (or
+	// un-archives) its role in the same step (add-hera-handoff-archive). The
+	// optional body {"force":true,"reason":"..."} is the human override.
+	var body struct {
+		Force  bool   `json:"force"`
+		Reason string `json:"reason"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body) // empty/absent body = no force
+	}
+	body.Reason = strings.TrimSpace(body.Reason)
+	if body.Force && body.Reason == "" {
+		writeErr(w, http.StatusBadRequest, "force requires a non-empty reason", nil)
+		return
+	}
+	// A pending graduation keeps its own refusal (db.ErrGraduationPending below).
+	if pending, perr := s.db.GraduationPendingErr(id); archived && perr == nil && !pending {
+		switch out, res := hera.ArchiveTaskGuard(s.db, s.archiveRunner, s.archiveGit, s.archiveHandoff, id, body.Force, body.Reason); out {
+		case hera.GuardArchived:
+			writeJSON(w, http.StatusOK, map[string]any{"archived": true, "kind": string(res.Kind)})
+			return
+		case hera.GuardRefused:
+			//nolint:gosec // G706: id is the validated path param.
+			log.Printf("api: archive refused by hera verdict: id=%s: %s", id, res.Reason)
+			writeErr(w, http.StatusConflict, res.Reason+"."+hera.ArchiveRefusedHint, nil)
+			return
+		}
+	} else if !archived {
+		if handled, res := hera.UnarchiveTaskGuard(s.db, id); handled {
+			if !res.Archived {
+				writeErr(w, http.StatusConflict, res.Reason, nil)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"archived": false})
+			return
+		}
+	}
 	task.SetArchived(archived)
 	if err := s.db.Update(task); err != nil {
-		if errors.Is(err, db.ErrGraduationPending) {
+		if errors.Is(err, db.ErrGraduationPending) || errors.Is(err, db.ErrHeraRoleLive) {
 			writeErr(w, http.StatusConflict, "", err)
 			return
 		}

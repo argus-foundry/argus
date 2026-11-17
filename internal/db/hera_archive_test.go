@@ -122,7 +122,7 @@ func TestArchiveHeraUnit_CommitsEverythingTogether(t *testing.T) {
 // rollback is what undid them), and that the failure is the injected one, not
 // a refusal before any write.
 func TestArchiveHeraUnit_AnyStepFailureRollsBackEverything(t *testing.T) {
-	order := []string{"merge_notices", "fyi", "end_hat", "child_orch", "task", "role"}
+	order := []string{"mail", "merge_notices", "fyi", "end_hat", "child_orch", "task", "role", "record"}
 	for i, step := range order {
 		t.Run(step, func(t *testing.T) {
 			f := newUnitFixture(t)
@@ -164,7 +164,7 @@ func TestArchiveHeraUnit_PreCommitRunsLastAndRefusalRollsBack(t *testing.T) {
 	}})
 	var refused *ArchiveRefusedError
 	testutil.Equal(t, errors.As(err, &refused), true)
-	testutil.DeepEqual(t, seen, []string{"merge_notices", "fyi", "end_hat", "child_orch", "task", "role", "precommit"})
+	testutil.DeepEqual(t, seen, []string{"mail", "merge_notices", "fyi", "end_hat", "child_orch", "task", "role", "record", "precommit"})
 	f.assertUntouched(t)
 }
 
@@ -184,10 +184,6 @@ func TestArchiveHeraUnit_ReverifiesEveryClauseInTx(t *testing.T) {
 		"resident marker": {func(t *testing.T, f *unitFixture) {
 			testutil.NoError(t, f.d.SetMeta(f.task.ID, "hera", "resident_worker", "true"))
 		}, "standing-team"},
-		"unread inbound": {func(t *testing.T, f *unitFixture) {
-			_, err := f.d.SendHeraMessage(f.pc.ID, f.sub.ID, "x", "t", nil)
-			testutil.NoError(t, err)
-		}, "unread hera message"},
 		"unread outbound": {func(t *testing.T, f *unitFixture) {
 			_, err := f.d.SendHeraMessage(f.sub.ID, f.pc.ID, "x", "t", nil)
 			testutil.NoError(t, err)

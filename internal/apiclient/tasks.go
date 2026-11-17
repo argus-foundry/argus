@@ -123,6 +123,13 @@ func (c *Client) ArchiveTask(ctx context.Context, id string) error {
 	return c.doJSON(ctx, "POST", "/api/tasks/"+id+"/archive", nil, nil)
 }
 
+// ArchiveTaskForce archives with the human override ({"force":true,"reason":...}):
+// a hera-bound task that fails the hera verdict is archived anyway, recorded
+// as a forced archive.
+func (c *Client) ArchiveTaskForce(ctx context.Context, id, reason string) error {
+	return c.doJSON(ctx, "POST", "/api/tasks/"+id+"/archive", map[string]any{"force": true, "reason": reason}, nil)
+}
+
 // UnarchiveTask flips task.archived=false.
 func (c *Client) UnarchiveTask(ctx context.Context, id string) error {
 	return c.doJSON(ctx, "POST", "/api/tasks/"+id+"/unarchive", nil, nil)

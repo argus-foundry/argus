@@ -243,6 +243,9 @@ func (d *DB) updateLocked(t *model.Task) (*model.Task, error) {
 		if err := graduationPendingGuard(d.conn, t.ID); err != nil {
 			return old, err
 		}
+		if err := heraRoleLiveGuard(d.conn, t.ID); err != nil {
+			return old, err
+		}
 	}
 
 	sandboxedInt := 0
@@ -462,6 +465,11 @@ func (d *DB) setArchived(id string, archived bool) error {
 	var oldArchived, oldPinned int
 	err := d.WithTx(func(tx *sql.Tx) error {
 		var err error
+		if archived {
+			if err = heraRoleLiveGuard(tx, id); err != nil {
+				return err
+			}
+		}
 		oldArchived, oldPinned, err = setArchivedTx(tx, id, archived)
 		return err
 	})

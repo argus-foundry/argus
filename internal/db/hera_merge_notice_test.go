@@ -49,11 +49,19 @@ func TestArchiveMergeNotice(t *testing.T) {
 				input.PreCommit = func(string) error { return errors.New("busy") }
 			}
 			_, err = f.d.ArchiveHeraUnit(input)
-			testutil.Equal(t, err == nil, mode == "commit")
+			// Real unread mail no longer blocks (it is forwarded as a digest), so "same text" commits too.
+			commits := mode == "commit" || mode == "same text"
+			testutil.Equal(t, err == nil, commits)
 			msgs, err := f.d.HeraMessagesByIDs([]int64{msg.ID})
 			testutil.NoError(t, err)
-			testutil.Equal(t, msgs[0].ReadAt != nil, mode == "commit")
-			if mode != "commit" {
+			testutil.Equal(t, msgs[0].ReadAt != nil, commits)
+			if mode == "same text" {
+				cin, cerr := f.d.HeraInbox(f.pc.ID)
+				testutil.NoError(t, cerr)
+				testutil.Equal(t, len(cin), 1)
+				testutil.Contains(t, cin[0].Body, "from coord: merged")
+			}
+			if !commits {
 				f.assertUntouched(t)
 			}
 		})
@@ -66,6 +74,7 @@ func TestMergeNoticeSkipsFinishedTask(t *testing.T) {
 			f := newUnitFixture(t)
 			if archived {
 				testutil.NoError(t, f.d.SetStatus(f.task.ID, model.StatusInReview))
+				testutil.NoError(t, f.d.ArchiveHeraRole(f.sub.ID)) // role first: SetArchived refuses a visible live role
 				testutil.NoError(t, f.d.SetArchived(f.task.ID, true))
 			}
 			msg, err := f.d.SendHeraMergeNotice(f.task.ID, f.pc.ID, f.sub.ID, "merged", "merge notice")

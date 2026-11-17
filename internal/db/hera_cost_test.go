@@ -63,6 +63,7 @@ func TestUpdateHeraBindingCostTotals_SurvivesTaskArchive(t *testing.T) {
 	want := HeraBindingCostTotals{TokensInput: 42, CostUSDAccrued: 0.5}
 	testutil.NoError(t, d.UpdateHeraBindingCostTotals(b.ID, want))
 
+	testutil.NoError(t, d.ArchiveHeraRole(r.ID)) // role first: SetArchived refuses a visible live role
 	testutil.NoError(t, d.SetArchived(task.ID, true))
 
 	got, err := d.GetHeraBindingCostTotals(b.ID)

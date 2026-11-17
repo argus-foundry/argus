@@ -798,6 +798,24 @@ func (d *DB) createHeraTables() error {
 		CREATE TABLE IF NOT EXISTS hera_merge_notices (
 			message_id INTEGER PRIMARY KEY REFERENCES hera_messages(id) ON DELETE CASCADE
 		);
+		-- Durable archive history (add-hera-handoff-archive). Lives in its own table
+		-- because SetArchived wipes task_meta; kind is merged | handed_off | forced.
+		-- settled_at stays NULL while a handed_off archive is still being watched.
+		CREATE TABLE IF NOT EXISTS hera_archive_records (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			role_id       INTEGER NOT NULL REFERENCES hera_roles(id) ON DELETE CASCADE,
+			task_id       TEXT NOT NULL,
+			kind          TEXT NOT NULL CHECK (kind IN ('merged','handed_off','forced')),
+			reason        TEXT NOT NULL DEFAULT '',
+			pr_url        TEXT NOT NULL DEFAULT '',
+			tip_sha       TEXT NOT NULL DEFAULT '',
+			actor_role_id INTEGER NOT NULL DEFAULT 0,
+			created_at    TEXT NOT NULL,
+			settled_at    TEXT,
+			settle_note   TEXT NOT NULL DEFAULT ''
+		);
+		CREATE INDEX IF NOT EXISTS idx_hera_archive_records_open ON hera_archive_records(task_id) WHERE settled_at IS NULL AND kind='handed_off';
+		CREATE INDEX IF NOT EXISTS idx_hera_archive_records_role ON hera_archive_records(role_id, id);
 		-- Partial inbox index: only indexes unread rows, so cost scales with the
 		-- unread count not the full message history. Covers the HeraInbox + unread-
 		-- cap queries. sent_at + id provide a stable oldest-first ordering within

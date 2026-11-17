@@ -977,31 +977,7 @@ func (a *App) buildUI() {
 	}
 	a.tasklist.OnArchive = func(t *model.Task) {
 		uxlog.Log("[tui] archive toggle: task %s (%s) archived=%v", t.ID, t.Name, t.Archived)
-		// Route through SetArchived (partial column update) so:
-		//  - local mode: *db.DB.SetArchived also runs DeleteMessagesForTask
-		//    in the same transaction.
-		//  - remote mode: apistore.SetArchived hits /api/tasks/{id}/archive
-		//    on the server, which triggers handleArchiveTask's setArchive →
-		//    DeleteMessagesForTask cleanup.
-		// Either path keeps the archived-rows / messages invariant honored.
-		// Going through Update + DeleteMessagesForTask here would silently
-		// orphan messages in remote mode because apistore can't expose the
-		// DeleteMessagesForTask endpoint and PUT /api/tasks/{id}/raw doesn't
-		// trigger server-side cleanup.
-		if err := a.db.SetArchived(t.ID, t.Archived); graduationPendingErr(err) {
-			uxlog.Log("[resident] tui archive refused task=%s: graduation pending", t.ID)
-			a.flashNotice(db.ErrGraduationPending.Error())
-			if t.Archived {
-				id := t.ID
-				a.graduationPendingEscape(id, "archive", true, func() {
-					if err := a.db.SetArchived(id, true); err != nil {
-						a.statusbar.SetError("Archive failed: " + err.Error())
-					}
-					a.refreshTasksAsync()
-				})
-			}
-		} // other errors: best-effort; display is source of truth
-		a.refreshTasksAsync()
+		a.archiveTask(t.ID, t.Name, t.Archived)
 	}
 	a.tasklist.OnPin = func(t *model.Task) {
 		uxlog.Log("[tui] pin toggle: task %s (%s) pinned=%v", t.ID, t.Name, t.Pinned)

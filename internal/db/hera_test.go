@@ -919,6 +919,9 @@ func TestHeraTaskDeleteCascadeHook(t *testing.T) {
 		testutil.NoError(t, err)
 
 		// Archive is non-destructive: binding stays live (resumable).
+		// The role must be hidden first: SetArchived refuses a task whose role is still visible (add-hera-handoff-archive backstop).
+		testutil.ErrorIs(t, d.SetArchived("task-9", true), ErrHeraRoleLive)
+		testutil.NoError(t, d.ArchiveHeraRole(r1.ID))
 		testutil.NoError(t, d.SetArchived("task-9", true))
 		stillLive, err := d.HeraLiveBindingByTask("task-9")
 		testutil.NoError(t, err)

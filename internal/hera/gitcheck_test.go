@@ -1,4 +1,4 @@
-package daemon
+package hera
 
 import (
 	"os"
@@ -13,8 +13,8 @@ import (
 )
 
 // An unresolvable project/branch must fail closed, never read as landed.
-func TestHeraArchiveGitCheck_FailsClosedWhenUnconfirmable(t *testing.T) {
-	check := heraArchiveGitCheck(func() config.Config { return config.Config{} })
+func TestNewGitCheck_FailsClosedWhenUnconfirmable(t *testing.T) {
+	check := NewGitCheck(func() config.Config { return config.Config{} })
 	ok, reason := check(&model.Task{ID: "t", Project: "missing", Branch: "b", Worktree: t.TempDir()})
 	testutil.Equal(t, ok, false)
 	if reason == "" {
@@ -44,9 +44,9 @@ func landedRepo(t *testing.T) (config.Config, *model.Task) {
 	return cfg, &model.Task{ID: "t1", Project: "proj", Branch: "b", Worktree: dir}
 }
 
-func TestHeraArchiveGitCheck_CleanLandedVsDirty(t *testing.T) {
+func TestNewGitCheck_CleanLandedVsDirty(t *testing.T) {
 	cfg, task := landedRepo(t)
-	check := heraArchiveGitCheck(func() config.Config { return cfg })
+	check := NewGitCheck(func() config.Config { return cfg })
 
 	ok, reason := check(task)
 	if !ok {
@@ -63,7 +63,7 @@ func TestHeraArchiveGitCheck_CleanLandedVsDirty(t *testing.T) {
 
 // An unlanded branch (not an ancestor of the default) with a CLEAN worktree
 // must refuse on the classifier, not on the dirty check ("Open PR refuses").
-func TestHeraArchiveGitCheck_UnlandedBranchCleanWorktreeRefuses(t *testing.T) {
+func TestNewGitCheck_UnlandedBranchCleanWorktreeRefuses(t *testing.T) {
 	cfg, task := landedRepo(t)
 	run := func(args ...string) {
 		t.Helper()
@@ -76,7 +76,7 @@ func TestHeraArchiveGitCheck_UnlandedBranchCleanWorktreeRefuses(t *testing.T) {
 	run("checkout", "-q", "b")
 	run("commit", "-q", "--allow-empty", "-m", "unmerged work") // b is now ahead of master
 	run("checkout", "-q", "master")
-	check := heraArchiveGitCheck(func() config.Config { return cfg })
+	check := NewGitCheck(func() config.Config { return cfg })
 	ok, reason := check(task)
 	testutil.Equal(t, ok, false)
 	if strings.Contains(reason, "uncommitted") {
