@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,6 +19,7 @@ func TestCreateAndStart_ClaudeTrust(t *testing.T) {
 		name, account, command, toml, initial string
 		trust                                 bool
 		locked                                bool
+		skillsErr                             bool
 	}{
 		{name: "plain", command: "claude", trust: true},
 		{name: "named account", account: "work", command: "claude", trust: true},
@@ -26,9 +28,19 @@ func TestCreateAndStart_ClaudeTrust(t *testing.T) {
 		{name: "other family", command: "codex"},
 		{name: "fail open", command: "claude", initial: "{bad json"},
 		{name: "lock busy fails open", command: "claude", locked: true},
+		{name: "skills unavailable", command: "claude", trust: true, skillsErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := initGitRepo(t) // redirects HOME before any creation
+			skillsRoot := filepath.Join(os.Getenv("HOME"), ".argus", "skills")
+			oldSkills := ensureSessionSkillsFn
+			ensureSessionSkillsFn = func() (string, error) {
+				if tc.skillsErr {
+					return "", errors.New("materialize failed")
+				}
+				return skillsRoot, os.MkdirAll(skillsRoot, 0o755)
+			}
+			t.Cleanup(func() { ensureSessionSkillsFn = oldSkills })
 			dir := t.TempDir()
 			accountDir := filepath.Join(os.Getenv("HOME"), "claude-work")
 			contents := tc.toml + "\n[accounts.work]\nclaude_config_dir = " + strconv.Quote(accountDir) + "\n"
@@ -66,6 +78,13 @@ func TestCreateAndStart_ClaudeTrust(t *testing.T) {
 						canonical, err := filepath.EvalSymlinks(wt)
 						testutil.NoError(t, err)
 						testutil.True(t, data.Projects[canonical].Trusted)
+						canonicalSkills, err := filepath.EvalSymlinks(skillsRoot)
+						if tc.skillsErr {
+							testutil.True(t, os.IsNotExist(err))
+						} else {
+							testutil.NoError(t, err)
+							testutil.True(t, data.Projects[canonicalSkills].Trusted)
+						}
 					} else if tc.initial != "" {
 						testutil.NoError(t, err)
 						testutil.Equal(t, string(raw), tc.initial)
@@ -101,4 +120,63 @@ func TestTrustClaudeWorktree_EnvMapping(t *testing.T) {
 	testutil.NoError(t, err)
 	_, err = os.Stat(filepath.Join(os.Getenv("HOME"), ".claude.json"))
 	testutil.True(t, os.IsNotExist(err))
+}
+
+func TestBuildCmd_ResidentTrustsLaunchDirs(t *testing.T) {
+	for _, tc := range []struct {
+		name, initial string
+		disabled      bool
+		wantTrust     bool
+	}{
+		{name: "named account", wantTrust: true},
+		{name: "disabled", disabled: true},
+		{name: "malformed config fails open", initial: "{bad json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task, _ := residentFixture(t)
+			home := os.Getenv("HOME")
+			acct := filepath.Join(home, "claude-work")
+			testutil.NoError(t, os.MkdirAll(filepath.Join(acct, "skills"), 0o755))
+			skillsRoot := filepath.Join(home, ".argus", "skills")
+			oldSkills := ensureSessionSkillsFn
+			ensureSessionSkillsFn = func() (string, error) { return skillsRoot, os.MkdirAll(skillsRoot, 0o755) }
+			t.Cleanup(func() { ensureSessionSkillsFn = oldSkills })
+			cfg := residentCfg()
+			cfg.Accounts = map[string]config.Account{"work": {ClaudeConfigDir: acct}}
+			cfg.Agents.TrustWorktrees = !tc.disabled
+			task.Account = "work"
+			path := filepath.Join(acct, ".claude.json")
+			if tc.initial != "" {
+				testutil.NoError(t, os.WriteFile(path, []byte(tc.initial), 0o600))
+			}
+
+			buildResident(t, task, cfg)
+
+			raw, err := os.ReadFile(path)
+			switch {
+			case tc.initial != "":
+				testutil.NoError(t, err)
+				testutil.Equal(t, string(raw), tc.initial)
+			case !tc.wantTrust:
+				testutil.True(t, os.IsNotExist(err))
+			default:
+				testutil.NoError(t, err)
+				var data struct {
+					Projects map[string]struct {
+						Trusted bool `json:"hasTrustDialogAccepted"`
+					} `json:"projects"`
+				}
+				testutil.NoError(t, json.Unmarshal(raw, &data))
+				userSkills := ensureResidentUserSkillsDir(task, cfg)
+				testutil.True(t, userSkills != "")
+				for _, dir := range []string{db.ResidentWorkDir(), skillsRoot, userSkills} {
+					canonical, err := filepath.EvalSymlinks(dir)
+					testutil.NoError(t, err)
+					testutil.True(t, data.Projects[canonical].Trusted)
+				}
+				_, err := os.Stat(filepath.Join(home, ".claude.json"))
+				testutil.True(t, os.IsNotExist(err))
+			}
+		})
+	}
 }

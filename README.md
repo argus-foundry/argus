@@ -1211,7 +1211,7 @@ Argus adds `--auto` when launching OpenCode, including resumed sessions and stor
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `trust_worktrees` | bool | `true` | Trust Argus worktrees in Claude and Codex. Claude seeds the task account's trust before first launch under its config lock (500ms acquisition limit); Codex uses a process-scoped inline-table override on fresh/resumed launches without persisting trust to account config. Failures log and launch continues. config.toml only; applies across TUI, web and macOS. |
+| `trust_worktrees` | bool | `true` | Trust Argus worktrees in Claude and Codex. Claude seeds the task account's trust for the worktree and the builtin skills directory (`~/.argus/skills`, passed with `--add-dir`) before first launch, and the resident seeds its work dir and skills directories in its current account on every launch under its config lock (500ms acquisition limit); Codex uses a process-scoped inline-table override on fresh/resumed launches without persisting trust to account config. Failures log and launch continues. config.toml only; applies across TUI, web and macOS. |
 
 #### `[bridge]`
 

@@ -46,3 +46,42 @@ Argus SHALL use the task's effective Claude config location, including backend e
 
 - **WHEN** the lock remains held beyond the acquisition deadline or Argus detects its lease was replaced
 - **THEN** Argus leaves the config and other writer's lock untouched, logs [trust], and continues creation
+
+### Requirement: Trust the builtin skills directory
+
+When Argus seeds Claude trust for a new task, it SHALL also seed hasTrustDialogAccepted as true for the canonical absolute path of the Argus-managed builtin skills workspace that Claude launches receive through `--add-dir`, in the same account config and under the same lock, opt-out and fail-open rules as worktree trust. A failure to trust one directory SHALL NOT prevent trusting the other.
+
+#### Scenario: New Claude task
+
+- **WHEN** a Claude-family task is created with trust_worktrees enabled
+- **THEN** both the worktree and the builtin skills workspace have trust entries in the task account's config before runner.Start
+
+#### Scenario: Disabled or unrelated backend
+
+- **WHEN** trust_worktrees is false or the task uses a non-Claude family
+- **THEN** no skills trust entry is written
+
+#### Scenario: Skills workspace unavailable
+
+- **WHEN** the skills workspace cannot be materialized or resolves to no path
+- **THEN** the worktree is still trusted and creation continues
+
+### Requirement: Trust resident launch directories
+
+On every Claude-family resident launch with trust_worktrees enabled, Argus SHALL seed hasTrustDialogAccepted as true, in the launched account's Claude config, for the canonical resident working directory, the builtin skills workspace and the resident user-skills `--add-dir` root when present, under the same lock and config-preservation rules as worktree trust. Failures SHALL be logged with a [trust] prefix and SHALL NOT block the launch.
+
+#### Scenario: Resident launch on an account
+
+- **WHEN** the resident launches on a Claude account
+- **THEN** that account's config trusts the resident working directory and every directory passed to it with `--add-dir`
+
+#### Scenario: Disabled
+
+- **WHEN** trust_worktrees is false
+- **THEN** the resident launch writes no trust entries
+
+#### Scenario: Trust write fails
+
+- **WHEN** the account config is malformed or locked
+- **THEN** the config is left untouched, Argus logs [trust] and the resident command is still built
+
