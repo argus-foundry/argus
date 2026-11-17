@@ -203,8 +203,18 @@ func (a *App) heraDoNewCoordinator(name string, task *model.Task) {
 	prompt := task.Prompt
 	base := heraSpawnName(name, prompt)
 	uxlog.Log("[hera-view] new coordinator: base=%s project=%s", base, task.Project)
+	// Show the pending row, select it and focus the coordinator pane (LAUNCH
+	// banner) BEFORE the slow create starts (instant-launch-new-coordinator).
+	pendingID := a.heraPage.AddPendingCoordinator(base, task.Project)
+	a.forceRedraw("hera new coordinator pending")
+	spawn := a.spawnHeraCoordinatorFn
+	if spawn == nil {
+		spawn = func(d *db.DB, r agent.SessionProvider, in agent.HeraCoordinatorSpawnInput) (*agent.HeraCoordinatorSpawnResult, error) {
+			return agent.SpawnHeraCoordinator(d, r, in)
+		}
+	}
 	go func() {
-		res, err := agent.SpawnHeraCoordinator(d, a.runner, agent.HeraCoordinatorSpawnInput{
+		res, err := spawn(d, a.runner, agent.HeraCoordinatorSpawnInput{
 			OrchestratorBaseName: base,
 			CoordRoleName:        "coord",
 			TaskPrompt:           agent.HeraCoordinatorOrientation(base) + "\n\n---\n\n" + prompt,
@@ -219,11 +229,16 @@ func (a *App) heraDoNewCoordinator(name string, task *model.Task) {
 			if err != nil {
 				uxlog.Log("[hera-view] new coordinator failed: %v", err)
 				a.statusbar.SetError("New coordinator failed: " + err.Error())
+				a.invalidateTasksChangeGate()
+				a.heraPage.ResolvePendingCoordinator(pendingID, 0)
+				a.forceRedraw("hera new coordinator failed")
 				return
 			}
 			a.recentStarts[res.Task.ID] = a.nowFn()
 			uxlog.Log("[hera-view] new coordinator ok: orch=%s role=%s task=%s", res.Orchestrator.Name, res.Role.Name, res.Task.ID)
-			a.heraRefresh()
+			a.invalidateTasksChangeGate()
+			a.heraPage.ResolvePendingCoordinator(pendingID, res.Orchestrator.ID)
+			a.forceRedraw("hera new coordinator done")
 		})
 	}()
 }

@@ -181,7 +181,7 @@ func (p *HeraPage) buildFromSnapshot(s *rebuildSnapshot) rebuildResult {
 // sticky reveal and the needs-input re-arm bookkeeping (BUG-069/070/071) are
 // untouched — only when the input arrives changed.
 func (p *HeraPage) applyResult(res rebuildResult) {
-	p.rail.SetModel(res.model)
+	p.rail.SetModel(p.withPending(res.model))
 	pristine := res.pristine
 	p.lastPristine = &pristine
 	if res.prOK {
