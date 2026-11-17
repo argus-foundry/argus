@@ -15,6 +15,11 @@ import (
 // exists. Fill-only and Codex-only (agent.RecordHookSessionID), so a repeated or
 // stray report never replaces a conversation.
 func (s *Server) handleRecordSessionID(w http.ResponseWriter, r *http.Request) {
+	// Master-only: this decides which conversation a task later resumes, and
+	// the hook authenticates with the master token (as coord-hook does).
+	if requireMaster(w, r) {
+		return
+	}
 	id := r.PathValue("id")
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req struct {

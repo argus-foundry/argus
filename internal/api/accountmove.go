@@ -128,7 +128,7 @@ func (s *Server) moveTaskAccountLocked(in agent.AccountMoveInput) (agent.Account
 			return res, http.StatusInternalServerError, moveOutcome{persisted: true, unknown: probeErr != nil || pending}, fmt.Errorf("account moved to %q but restart unconfirmed: %w", res.To, cause)
 		}
 	} else {
-		if _, err := s.startTaskSession(task, res.Resumed || in.Backend != ""); err != nil {
+		if _, err := s.startTaskSessionFill(task, res.Resumed || in.Backend != "", in.Backend == ""); err != nil {
 			uxlog.Log("[account] move task=%s: restart on %s failed: %v", task.ID, res.To, err)
 			s.emitAccountChanged(task.ID, in, res)
 			return res, http.StatusInternalServerError, moveOutcome{persisted: true}, fmt.Errorf("account moved to %q but restart failed: %w", res.To, err)

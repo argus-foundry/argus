@@ -2,7 +2,7 @@
 
 ### Requirement: Record the Codex session ID at launch
 
-A fresh Codex launch without a stored session ID SHALL register an inline `SessionStart` hook through `-c`, together with `--dangerously-bypass-hook-trust`, that reports the hook payload's `session_id` for `$ARGUS_TASK_ID` to the daemon. The daemon SHALL store it only when the task is a Codex task, the ID is a UUID, and the task's session ID is empty. Resumed launches SHALL NOT register the hook. A hook or daemon failure SHALL NOT prevent the agent from starting.
+A fresh Codex launch without a stored session ID SHALL register an inline `SessionStart` hook through `-c`, together with `--dangerously-bypass-hook-trust`, that reports the hook payload's `session_id` for `$ARGUS_TASK_ID` to the daemon, only for a startup SessionStart (a resume or clear start SHALL NOT be reported). The daemon SHALL accept the report only from the master token and store it only when the task is a Codex task, the ID is a UUID, and the task's session ID is empty. Resumed launches SHALL NOT register the hook. A hook or daemon failure SHALL NOT prevent the agent from starting.
 
 #### Scenario: Fresh launch
 
@@ -17,7 +17,7 @@ A fresh Codex launch without a stored session ID SHALL register an inline `Sessi
 
 ### Requirement: Recover a missing session ID before resuming
 
-Before a resume decision, Argus SHALL fill an empty session ID for capture-once backends (Codex, Pi, opencode) from the backend's own state when a conversation exists for the task's worktree, and SHALL leave it empty when none exists. It SHALL NOT replace an existing ID for these backends and SHALL NOT do so during an account move.
+Before a resume decision, Argus SHALL fill an empty session ID for capture-once backends (Codex, Pi, opencode) from the backend's own state when a conversation exists for the task's worktree, and SHALL leave it empty when none exists. It SHALL NOT replace an existing ID for these backends, SHALL adopt an ID recorded concurrently by the launch hook instead of overwriting it, and SHALL NOT fill during an account or backend move (a backend move clears the ID on purpose).
 
 #### Scenario: Session killed by a supervisor restart
 

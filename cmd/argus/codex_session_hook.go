@@ -30,9 +30,15 @@ func runCodexSessionHook(stdin io.Reader, taskID string, report func(taskID, ses
 	}
 	var payload struct {
 		SessionID string `json:"session_id"`
+		Source    string `json:"source"`
 	}
 	if err := json.NewDecoder(io.LimitReader(stdin, 1<<20)).Decode(&payload); err != nil {
 		return fmt.Errorf("decode hook payload: %w", err)
+	}
+	// Only the launch's own SessionStart names the task's conversation; a
+	// resume/clear start (or any later one) must never be recorded as it.
+	if payload.Source != "" && payload.Source != "startup" {
+		return nil
 	}
 	if strings.TrimSpace(payload.SessionID) == "" {
 		return fmt.Errorf("hook payload has no session_id")

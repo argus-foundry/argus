@@ -20,6 +20,17 @@ func TestRunCodexSessionHook(t *testing.T) {
 		testutil.Equal(t, gotTask, "t1")
 		testutil.Equal(t, gotSID, "01a1ebbc")
 	})
+	t.Run("only the startup session start is recorded", func(t *testing.T) {
+		for source, want := range map[string]bool{"startup": true, "": true, "resume": false, "clear": false} {
+			called := false
+			body := `{"session_id":"01a1ebbc","source":"` + source + `"}`
+			if source == "" {
+				body = `{"session_id":"01a1ebbc"}`
+			}
+			testutil.NoError(t, runCodexSessionHook(strings.NewReader(body), "t1", func(string, string) error { called = true; return nil }))
+			testutil.Equal(t, called, want)
+		}
+	})
 	t.Run("no task id means not an argus session", func(t *testing.T) {
 		called := false
 		err := runCodexSessionHook(strings.NewReader(payload), "", func(string, string) error { called = true; return nil })

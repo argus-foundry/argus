@@ -16,9 +16,19 @@ func TestAPI_RecordSessionID(t *testing.T) {
 	const sid = "01a1ebbc-ca71-7c31-b311-b3aa50da12d9"
 	post := func(path, body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
-		srv.routes().ServeHTTP(w, authedReq("POST", path, body))
+		req := authedReq("POST", path, body)
+		req.Header.Set("X-Argus-Auth", "master")
+		srv.routes().ServeHTTP(w, req)
 		return w
 	}
+
+	t.Run("non-master token is refused", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		srv.routes().ServeHTTP(w, authedReq("POST", "/api/tasks/"+task.ID+"/session-id", `{"session_id":"`+sid+`"}`))
+		testutil.Equal(t, w.Code, http.StatusForbidden)
+		got, _ := d.Get(task.ID)
+		testutil.Equal(t, got.SessionID, "")
+	})
 
 	w := post("/api/tasks/"+task.ID+"/session-id", `{"session_id":"`+sid+`"}`)
 	testutil.Equal(t, w.Code, http.StatusOK)

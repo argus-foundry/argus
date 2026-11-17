@@ -137,23 +137,30 @@ func prepareResume(task *model.Task, cfg config.Config, resume bool) (bool, erro
 // create-time UUID. Without a resume-time refresh, the next resume loads the
 // first/stale conversation and loses all context accrued since.
 //
-// Scoped to RecaptureEveryExit families — the same gate
-// captureSessionIDPostExit expresses via NeedsSessionRecapture (Claude
-// re-mints its UUID on every /clear / in-place reboot; agy starts a new
-// conversation on /new, so a stored ID goes stale). codex, pi, and opencode
-// resume with a stable ID they captured post-exit and MUST be byte-identical
-// to today — no capture runs for them.
+// Two cases. RecaptureEveryExit families (Claude re-mints its UUID on every
+// /clear / in-place reboot; agy starts a new conversation on /new) refresh a
+// stale non-empty ID. Capture-once families (codex, pi, opencode, cursor) only
+// FILL an empty ID, because a supervisor restart skips their post-exit capture
+// and an empty ID makes the resume decision relaunch with the original prompt;
+// an existing ID is never replaced. Pinning families never get an ID here.
 //
 // No-op — leaving the recorded SessionID intact and NEVER blanking it — when the
-// task is nil, has no worktree, has no prior SessionID (first start; never
-// fabricate one), the backend does not recapture every exit, the worktree holds no conversation,
-// or the newest transcript already equals the recorded ID. On a genuine change
+// task is nil, has no worktree, the backend has no capture, the worktree holds no
+// conversation, or the newest transcript already equals the recorded ID. On a genuine change
 // it mutates task.SessionID in place (so the caller's immediate resume uses it)
 // AND persists via a read-modify-write on the row (mirroring the exit hook), so
 // callers that do not re-issue an Update still land the fresh ID. Errors are
 // logged via uxlog and never fatal.
 func RefreshResumeSessionID(database *db.DB, task *model.Task) {
 	refreshSessionID(database, task, true)
+}
+
+// RefreshExistingSessionID is RefreshResumeSessionID without the empty-ID fill.
+// Use it where an empty ID is deliberate (a backend move clears it so the new
+// backend starts from a handoff seed), so a stale thread left in the worktree
+// is never adopted.
+func RefreshExistingSessionID(database *db.DB, task *model.Task) {
+	refreshSessionID(database, task, false)
 }
 
 // refreshSessionID is RefreshResumeSessionID with the empty-ID fill for
@@ -202,6 +209,25 @@ func refreshSessionID(database *db.DB, task *model.Task, fillMissing bool) {
 		return
 	}
 	old := task.SessionID
+	if old == "" {
+		// Atomic fill-only: a SessionStart hook may have recorded the ID since
+		// the caller loaded this row; adopt that one instead of overwriting it.
+		wrote, err := database.SetSessionIDIfEmpty(task.ID, sid)
+		if err != nil {
+			uxlog.Log("[resume] session persist failed task=%s err=%v", task.ID, err)
+			return
+		}
+		if !wrote {
+			if t2, gerr := database.Get(task.ID); gerr == nil && t2 != nil {
+				task.SessionID = t2.SessionID
+			}
+			uxlog.Log("[resume] session already recorded task=%s sid=%s", task.ID, task.SessionID)
+			return
+		}
+		task.SessionID = sid
+		uxlog.Log("[resume] session filled task=%s sid=%s", task.ID, sid)
+		return
+	}
 	task.SessionID = sid
 	// Re-read the row before writing so we don't clobber concurrent field
 	// updates, mirroring captureSessionIDPostExit's read-modify-write.
