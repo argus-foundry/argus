@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -37,5 +39,24 @@ func trustClaudeWorktree(task *model.Task, cfg config.Config) error {
 		}
 		path = filepath.Join(home, ".claude.json")
 	}
-	return inject.TrustClaudeWorktree(path, task.Worktree)
+	worktreeErr := inject.TrustClaudeWorktree(path, task.Worktree)
+	return errors.Join(worktreeErr, trustClaudeSkillsDir(path))
+}
+
+// trustClaudeSkillsDir trusts the builtin skills workspace BuildCmd passes to
+// Claude with --add-dir. Claude 2.1.326+ shows a trust dialog for an
+// untrusted --add-dir directory on every launch. The workspace is
+// materialized first because trust canonicalizes the path via EvalSymlinks.
+func trustClaudeSkillsDir(path string) error {
+	root, err := ensureSessionSkillsFn()
+	if err != nil {
+		return fmt.Errorf("skills dir: %w", err)
+	}
+	if root == "" {
+		return nil
+	}
+	if err := inject.TrustClaudeWorktree(path, root); err != nil {
+		return fmt.Errorf("skills dir: %w", err)
+	}
+	return nil
 }
