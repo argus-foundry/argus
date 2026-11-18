@@ -66,7 +66,28 @@ func residentPermissionHook(input io.Reader, args []string, read func() (agent.R
 	if resp.State == "denied" {
 		return deny(fmt.Sprintf("Aaron denied deferred call #%d. Do not retry it. Continue other work.", resp.BoardID))
 	}
-	return deny(fmt.Sprintf("Queued for Aaron's approval as #%d. Carry on with other work; do not retry or find another route around this approval. You will receive an [argus] message when he answers.", resp.BoardID))
+	return deny(queuedApprovalMessage(resp))
+}
+
+// queuedApprovalMessage is the model-visible reply for a call waiting on
+// Aaron. It says whether the item is new, already queued or replacing older
+// items, how to wait, and how to withdraw it.
+func queuedApprovalMessage(resp daemon.ResidentPermissionResp) string {
+	var b strings.Builder
+	if resp.Reused {
+		fmt.Fprintf(&b, "Already queued for Aaron's approval as #%d and still waiting; nothing ran.", resp.BoardID)
+	} else {
+		fmt.Fprintf(&b, "Queued for Aaron's approval as #%d; nothing ran.", resp.BoardID)
+	}
+	if len(resp.Superseded) > 0 {
+		ids := make([]string, len(resp.Superseded))
+		for i, id := range resp.Superseded {
+			ids[i] = fmt.Sprintf("#%d", id)
+		}
+		fmt.Fprintf(&b, " It replaces %s, now closed.", strings.Join(ids, ", "))
+	}
+	fmt.Fprintf(&b, " Do not retry or find another route around this approval. An [argus] message arrives when he decides; if he is talking with you now, wait for it with hera_inbox and timeout_seconds 120. After approval you have %d minutes to send this exact call once. If you no longer need it, withdraw it with hera_board_resolve on #%d.", int(db.ResidentApprovalWindow/time.Minute), resp.BoardID)
+	return b.String()
 }
 
 func callResidentPermission(req *daemon.ResidentPermissionReq) (daemon.ResidentPermissionResp, error) {

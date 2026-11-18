@@ -54,3 +54,36 @@ func TestSmoke_ResidentApprovalDecision(t *testing.T) {
 		})
 	}
 }
+
+// A second approve on an already-approved item (a stale board snapshot) says
+// what already happened instead of a generic failure, and sends nothing new.
+func TestSmoke_ResidentApprovalReclickExplainsState(t *testing.T) {
+	a, d := residentTestApp(t)
+	r, err := d.ResidentTask()
+	testutil.NoError(t, err)
+	launch := agent.ResidentApprovalLaunch{Token: "test-private", Generation: agent.HashResidentMCPToken("test-private")}
+	call := db.ApprovalCall{TaskID: r.ID, Session: "session", Cwd: r.Worktree, Tool: "Bash", Input: json.RawMessage(`{"command":"echo probe"}`), Launch: launch.Generation}
+	item, _, err := d.RequestResidentApproval(call, time.Now())
+	testutil.NoError(t, err)
+	raw, _ := json.Marshal(launch)
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(agent.ResidentApprovalLaunchPath()), 0o700))
+	testutil.NoError(t, os.WriteFile(agent.ResidentApprovalLaunchPath(), raw, 0o600))
+	testutil.NoError(t, d.DecideResidentApproval(item.BoardID, item.CreatedAt, launch.Generation, true, time.Now()))
+	sim, stop := wireApp(t, a)
+	defer stop()
+	sim.SetSize(180, 45)
+	readUI(t, a.tapp, func() {
+		a.switchTab(widget.TabResident)
+		a.confirmResidentApproval(d, &db.HeraBoardItem{ID: item.BoardID, UpdatedAt: item.CreatedAt, ResidentApproval: true, ApprovalState: db.ApprovalPending}, true)
+	})
+	sim.InjectKey(tcell.KeyRune, 'y', 0)
+	waitForCond(t, a.tapp, "state error shown", func() bool { return a.statusbar.Error() != "" })
+	readUI(t, a.tapp, func() {
+		testutil.Contains(t, a.statusbar.Error(), "Not applied: deferred call #")
+		testutil.Contains(t, a.statusbar.Error(), "already approved at")
+		testutil.Contains(t, a.statusbar.Error(), "waiting for the agent to run it")
+	})
+	notices, err := d.PendingHeraBoardNotices()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(notices), 1)
+}

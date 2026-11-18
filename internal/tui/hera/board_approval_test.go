@@ -1,6 +1,7 @@
 package hera
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/db"
@@ -35,4 +36,26 @@ func TestBoardApprovalRequiresReviewAndExplicitAction(t *testing.T) {
 	testutil.Contains(t, simScreenText(sim), "exact input echo probe")
 	testutil.Contains(t, simScreenText(sim), "**bold**  two spaces")
 	testutil.Contains(t, simScreenText(sim), `\u202e`)
+}
+
+func TestBoardApprovalDecidedItemExplainsInsteadOfDeciding(t *testing.T) {
+	p := NewHeraPage(nil)
+	p.board.items = []*db.HeraBoardItem{{ID: 574, ResidentApproval: true, ApprovalState: db.ApprovalApproved, ResolutionNote: "approved 17:07; good until 18:07", Body: "Tool: Bash"}}
+	p.board.expandedID = 574
+	p.OnApprovalDecision = func(*db.HeraBoardItem, bool) { t.Fatal("decided item reopened the approve/deny dialog") }
+	var info []string
+	p.OnInfo = func(s string) { info = append(info, s) }
+	for _, r := range []rune{'r', 'x'} {
+		p.handleBoardKey(tcell.NewEventKey(tcell.KeyRune, r, 0), nil)
+	}
+	testutil.Equal(t, len(info), 2)
+	testutil.Equal(t, info[0], "#574 approved: approved 17:07; good until 18:07")
+	sim := tcell.NewSimulationScreen("UTF-8")
+	testutil.NoError(t, sim.Init())
+	t.Cleanup(sim.Fini)
+	sim.SetSize(100, 16)
+	p.board.draw(sim, 0, 0, 100, 16, " Board ", true, keymap.DefaultKeymap())
+	sim.Show()
+	testutil.Contains(t, simScreenText(sim), "#574 approved: approved 17:07")
+	testutil.False(t, strings.Contains(simScreenText(sim), "approve once"))
 }

@@ -860,5 +860,17 @@ func (d *DB) createHeraTables() error {
 	if _, err := d.conn.Exec(ddl); err != nil {
 		return fmt.Errorf("creating hera tables: %w", err)
 	}
+	// fix-resident-approval-flow: call_key matches identical call content
+	// across launches/sessions (supersede); decided_at/closed_at/superseded_by
+	// let a decide attempt name the item's real state. Idempotent.
+	for _, def := range []string{
+		"call_key      TEXT NOT NULL DEFAULT ''",
+		"decided_at    TEXT NOT NULL DEFAULT ''",
+		"closed_at     TEXT NOT NULL DEFAULT ''",
+		"superseded_by INTEGER NOT NULL DEFAULT 0",
+	} {
+		d.conn.Exec(`ALTER TABLE resident_approvals ADD COLUMN ` + def) //nolint:errcheck
+	}
+	d.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_resident_approval_open ON resident_approvals(state,call_key)`) //nolint:errcheck
 	return nil
 }
