@@ -250,7 +250,7 @@ func moveAccount(database *db.DB, runner accountMoveRunner, in AccountMoveInput,
 		return nil, AccountMoveResult{}, ErrAccountMoveBusy
 	}
 
-	RefreshResumeSessionID(database, task)
+	RefreshSessionIDWith(database, task, RefreshKeepEmpty)
 	moved := *task
 	moved.Account = storedAccount(to)
 	// An auto move leaves the task routable like one created unpinned; a move

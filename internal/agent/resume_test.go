@@ -263,3 +263,83 @@ func TestRestoreAcceptedCoordinatorHat(t *testing.T) {
 	testutil.NoError(t, d.Close())
 	testutil.Error(t, RestoreAcceptedCoordinatorHat(d, "t1")) // closed DB: surfaced, not swallowed
 }
+
+// TestRefreshResumeSessionID_CodexCapturesMissingID: a supervisor restart ends a
+// Codex session as StreamLost, skipping the post-exit capture, so SessionID is
+// empty and a resume would relaunch with the original prompt. The refresh must
+// recover the ID from Codex's thread index and persist it.
+func TestRefreshResumeSessionID_CodexCapturesMissingID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	sqliteHome := filepath.Join(home, "codex-state")
+	t.Setenv("CODEX_SQLITE_HOME", sqliteHome)
+	d := newResumeTestDB(t)
+
+	wt := filepath.Join(home, "wt")
+	testutil.NoError(t, os.MkdirAll(wt, 0o755))
+	const id = "11111111-2222-4333-8444-555555555555"
+	seedCodexStateDB(t, sqliteHome, wt, id)
+
+	t.Run("empty id is captured and persisted", func(t *testing.T) {
+		task := &model.Task{Name: "t", Project: "p", Worktree: wt, Backend: "codex"}
+		testutil.NoError(t, d.Add(task))
+		RefreshResumeSessionID(d, task)
+		testutil.Equal(t, task.SessionID, id)
+		got, err := d.Get(task.ID)
+		testutil.NoError(t, err)
+		testutil.Equal(t, got.SessionID, id)
+	})
+	t.Run("existing id is never replaced", func(t *testing.T) {
+		const kept = "99999999-2222-4333-8444-555555555555"
+		task := &model.Task{Name: "t2", Project: "p", Worktree: wt, Backend: "codex", SessionID: kept}
+		testutil.NoError(t, d.Add(task))
+		RefreshResumeSessionID(d, task)
+		testutil.Equal(t, task.SessionID, kept)
+	})
+	t.Run("no thread yet stays empty", func(t *testing.T) {
+		other := filepath.Join(home, "wt-other")
+		testutil.NoError(t, os.MkdirAll(other, 0o755))
+		task := &model.Task{Name: "t3", Project: "p", Worktree: other, Backend: "codex"}
+		testutil.NoError(t, d.Add(task))
+		RefreshResumeSessionID(d, task)
+		testutil.Equal(t, task.SessionID, "")
+	})
+}
+
+// TestRefreshSessionID_CodexFillGuards: the empty-ID fill must be switchable off
+// (account/backend moves), and must never replace an ID that a SessionStart
+// hook recorded after the caller loaded its copy of the row.
+func TestRefreshSessionID_CodexFillGuards(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	sqliteHome := filepath.Join(home, "codex-state")
+	t.Setenv("CODEX_SQLITE_HOME", sqliteHome)
+	d := newResumeTestDB(t)
+	wt := filepath.Join(home, "wt")
+	testutil.NoError(t, os.MkdirAll(wt, 0o755))
+	const threadID = "11111111-2222-4333-8444-555555555555"
+	const hookID = "99999999-2222-4333-8444-555555555555"
+	seedCodexStateDB(t, sqliteHome, wt, threadID)
+
+	t.Run("no-fill variants leave an empty id empty", func(t *testing.T) {
+		task := &model.Task{Name: "a", Project: "p", Worktree: wt, Backend: "codex"}
+		testutil.NoError(t, d.Add(task))
+		RefreshSessionIDWith(d, task, RefreshKeepEmpty)
+		testutil.Equal(t, task.SessionID, "")
+		got, _ := d.Get(task.ID)
+		testutil.Equal(t, got.SessionID, "")
+	})
+	t.Run("a hook-recorded id wins over the thread index", func(t *testing.T) {
+		stale := &model.Task{Name: "b", Project: "p", Worktree: wt, Backend: "codex"}
+		testutil.NoError(t, d.Add(stale))
+		wrote, err := d.SetSessionIDIfEmpty(stale.ID, hookID)
+		testutil.NoError(t, err)
+		testutil.True(t, wrote)
+		RefreshResumeSessionID(d, stale) // stale copy still has an empty ID
+		testutil.Equal(t, stale.SessionID, hookID)
+		got, _ := d.Get(stale.ID)
+		testutil.Equal(t, got.SessionID, hookID)
+	})
+}

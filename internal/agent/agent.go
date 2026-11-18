@@ -1277,6 +1277,12 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 			cmdStr += " " + fam.ResumeFlag + " " + shellQuote(task.SessionID)
 		}
 	} else {
+		// Record the minted ID at launch; a supervisor restart skips the post-exit capture.
+		if fam.SessionStartHookFlag != nil && task.SessionID == "" {
+			if flag := fam.SessionStartHookFlag(sessionHookCommandFn()); flag != "" {
+				cmdStr += flag
+			}
+		}
 		// New session — only pin the ID for families that accept a start-time
 		// --session-id; capture-style families recover theirs post-exit.
 		if fam.PinsSessionID && task.SessionID != "" {

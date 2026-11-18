@@ -88,6 +88,9 @@ func main() {
 		case "coord-hook":
 			runCoordHookCommand()
 			return
+		case agent.CodexSessionHookArg:
+			runCodexSessionHookCommand()
+			return
 		case "resident-permission-hook":
 			runResidentPermissionHook(os.Args[2:])
 			return

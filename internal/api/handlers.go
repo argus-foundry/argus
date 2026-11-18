@@ -775,14 +775,12 @@ func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 	// to in_progress so the PWA can attach the terminal stream and other
 	// observers see consistent state.
 	cfg := s.db.Config()
-	resume := task.SessionID != ""
 	prevStatus := task.Status
 
-	// Resume-time recapture (Claude-only): re-derive the newest worktree
-	// transcript so the resume picks the most recent in-place session, not the
-	// stale create-time UUID. No-op for non-Claude / no-change / no-transcript,
-	// and never populates an empty ID, so the resume decision above is unchanged.
+	// Resume-time recapture: Claude re-derives the newest transcript; capture-once
+	// backends (codex/pi/opencode) recover a missing ID. Must precede resume.
 	agent.RefreshResumeSessionID(s.db, task)
+	resume := task.SessionID != ""
 	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
 
 	sess, reattached, err := s.runner.StartOrReattach(task, cfg, 24, 80, resume)

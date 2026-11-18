@@ -105,6 +105,10 @@ type Family struct {
 	// WorktreeTrustFlag delivers trust to this process without editing the
 	// account's config. The flag is retained on both fresh and resumed launches.
 	WorktreeTrustFlag func(worktree string) (string, error)
+	// SessionStartHookFlag registers a launch-time hook reporting the
+	// backend-minted session ID to the daemon (capture-style families only).
+	// Applied to fresh launches; hookCmd is the full hook command line.
+	SessionStartHookFlag func(hookCmd string) string
 
 	// PinsSessionID: the CLI accepts a start-time `--session-id <id>`, so the
 	// task's ID is minted before launch. False means capture-style: the ID is
@@ -771,9 +775,10 @@ var families = []*Family{
 		},
 	},
 	{
-		Spec:              mustSpec(backendkind.Codex),
-		WorktreeTrustFlag: codexWorktreeTrustFlag,
-		Naming:            &llm.NamingBackend{Binary: "codex", Args: llm.CodexNameArgs, JSONEvents: true, Prepare: llm.PrepareCodexNaming},
+		Spec:                 mustSpec(backendkind.Codex),
+		WorktreeTrustFlag:    codexWorktreeTrustFlag,
+		SessionStartHookFlag: codexSessionStartHookFlag,
+		Naming:               &llm.NamingBackend{Binary: "codex", Args: llm.CodexNameArgs, JSONEvents: true, Prepare: llm.PrepareCodexNaming},
 		NamingAccount: func(t *model.Task, c config.Config) (string, []string, error) {
 			dir, err := resolveSpawnCodexHome(t, c, true)
 			if dir == "" {

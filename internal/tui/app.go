@@ -7532,10 +7532,23 @@ func (a *App) resolveSession(taskID string) agentview.TerminalAdapter {
 // auto-start path, hera's Enter-reattach, switchSession's dead-session
 // branch) that don't ALL separately force a refetch of their own afterward.
 func (a *App) startSession(task *model.Task) {
+	a.startSessionFill(task, agent.RefreshFillMissing)
+}
+
+// refreshSessionIDBeforeStart recaptures the session ID before the resume decision (local mode only).
+func (a *App) refreshSessionIDBeforeStart(task *model.Task, mode agent.SessionRefresh) {
+	if d, ok := a.db.(*db.DB); ok {
+		agent.RefreshSessionIDWith(d, task, mode)
+	}
+}
+
+// startSessionFill is startSession with an explicit empty-ID policy; a backend handoff keeps it empty.
+func (a *App) startSessionFill(task *model.Task, mode agent.SessionRefresh) {
 	defer a.setRerendering(task.ID, false)
 	cfg := a.db.Config()
 	rows, cols := a.spawnPTYSize(task.ID)
 
+	a.refreshSessionIDBeforeStart(task, mode) // must precede the resume decision
 	resume := task.SessionID != ""
 
 	// For families that pin a session ID at start, generate one on first run
@@ -7557,11 +7570,6 @@ func (a *App) startSession(task *model.Task) {
 		}
 	}
 
-	// Resume-time recapture: for a Claude resume, re-derive the newest worktree
-	// transcript so we resume the MOST RECENT in-place session, not the stale
-	// create-time UUID (hera workers idle / lose their stream and never reach the
-	// post-exit recapture). No-op for a fresh start, non-Claude, no-change, or
-	// remote mode — see refreshResumeSessionID / agent.RefreshResumeSessionID.
 	a.refreshResumeSessionID(task, resume)
 
 	// Bump generation BEFORE the RPC so any tick that captured runningIDs
