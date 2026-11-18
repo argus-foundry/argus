@@ -111,7 +111,6 @@ func approvalJSONValue(d *json.Decoder, depth int) (any, error) {
 	}
 }
 
-
 // ResidentApprovalWindow is how long an approved grant stays usable after the
 // human approves it. A pending request never times out; it lapses only when
 // the resident is relaunched (fix-resident-approval-flow).
