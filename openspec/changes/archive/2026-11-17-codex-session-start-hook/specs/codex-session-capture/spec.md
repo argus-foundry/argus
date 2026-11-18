@@ -2,7 +2,7 @@
 
 ### Requirement: Record the Codex session ID at launch
 
-A fresh Codex launch without a stored session ID SHALL register an inline `SessionStart` hook through `-c`, together with `--dangerously-bypass-hook-trust`, that reports the hook payload's `session_id` for `$ARGUS_TASK_ID` to the daemon, only for a startup SessionStart (a resume or clear start SHALL NOT be reported). The daemon SHALL accept the report only from the master token and store it only when the task is a Codex task, the ID is a UUID, and the task's session ID is empty. Resumed launches SHALL NOT register the hook. A hook or daemon failure SHALL NOT prevent the agent from starting.
+A fresh Codex launch without a stored session ID SHALL register an inline `SessionStart` hook through `-c`, together with `--dangerously-bypass-hook-trust`, that reports the hook payload's `session_id` for `$ARGUS_TASK_ID` to the daemon, for a startup or clear SessionStart (any other source, such as resume or compact, SHALL NOT be reported). The daemon SHALL accept the report only from the master token and require a Codex task and a UUID. A startup report SHALL be stored only while the task's session ID is empty; a clear report (a `/new` inside the session) SHALL replace the stored ID so the task follows the new conversation. Resumed launches SHALL NOT register the hook. A hook or daemon failure SHALL NOT prevent the agent from starting.
 
 #### Scenario: Fresh launch
 
@@ -12,8 +12,13 @@ A fresh Codex launch without a stored session ID SHALL register an inline `Sessi
 
 #### Scenario: Repeated or invalid report
 
-- **WHEN** a report arrives for a task that already has a session ID, is malformed, or targets a non-Codex task
+- **WHEN** a startup report arrives for a task that already has a session ID, or any report is malformed or targets a non-Codex task
 - **THEN** the stored session ID is unchanged
+
+#### Scenario: New conversation inside the session
+
+- **WHEN** the user runs `/new` in a hooked Codex session and the hook reports a clear start with the new thread's ID
+- **THEN** the task's stored session ID becomes the new thread's ID
 
 ### Requirement: Recover a missing session ID before resuming
 

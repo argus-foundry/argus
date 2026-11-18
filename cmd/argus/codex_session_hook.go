@@ -24,7 +24,7 @@ func runCodexSessionHookCommand() {
 
 // runCodexSessionHook decodes the hook payload and reports its session_id.
 // report is the daemon seam. Returns the error it swallowed, for tests.
-func runCodexSessionHook(stdin io.Reader, taskID string, report func(taskID, sessionID string) error) error {
+func runCodexSessionHook(stdin io.Reader, taskID string, report func(taskID, sessionID, source string) error) error {
 	if taskID == "" {
 		return nil // not an Argus-spawned session
 	}
@@ -35,23 +35,28 @@ func runCodexSessionHook(stdin io.Reader, taskID string, report func(taskID, ses
 	if err := json.NewDecoder(io.LimitReader(stdin, 1<<20)).Decode(&payload); err != nil {
 		return fmt.Errorf("decode hook payload: %w", err)
 	}
-	// Only the launch's own SessionStart names the task's conversation; a
-	// resume/clear start (or any later one) must never be recorded as it.
-	if payload.Source != "" && payload.Source != "startup" {
+	// "startup" names the task's conversation; "clear" is a /new inside it, which
+	// moves the conversation to the new thread (as Claude's /clear is honored).
+	// Any other source (resume, compact) must never be recorded.
+	source := payload.Source
+	if source == "" {
+		source = "startup"
+	}
+	if source != "startup" && source != "clear" {
 		return nil
 	}
 	if strings.TrimSpace(payload.SessionID) == "" {
 		return fmt.Errorf("hook payload has no session_id")
 	}
-	if err := report(taskID, payload.SessionID); err != nil {
+	if err := report(taskID, payload.SessionID, source); err != nil {
 		uxlog.Log("[codex-hook] report failed task=%s: %v", taskID, err)
 		return err
 	}
 	return nil
 }
 
-func reportSessionIDReal(taskID, sessionID string) error {
-	body, err := json.Marshal(map[string]string{"session_id": sessionID})
+func reportSessionIDReal(taskID, sessionID, source string) error {
+	body, err := json.Marshal(map[string]string{"session_id": sessionID, "source": source})
 	if err != nil {
 		return err
 	}

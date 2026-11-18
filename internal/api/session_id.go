@@ -12,8 +12,8 @@ import (
 
 // handleRecordSessionID backs the Codex SessionStart hook (`argus
 // codex-session-hook`): it records the backend-minted session ID the moment it
-// exists. Fill-only and Codex-only (agent.RecordHookSessionID), so a repeated or
-// stray report never replaces a conversation.
+// exists. Codex-only. A startup report is fill-only; a "clear" source (a /new inside
+// the session) replaces the ID so the task follows the new conversation.
 func (s *Server) handleRecordSessionID(w http.ResponseWriter, r *http.Request) {
 	// Master-only: this decides which conversation a task later resumes, and
 	// the hook authenticates with the master token (as coord-hook does).
@@ -24,12 +24,13 @@ func (s *Server) handleRecordSessionID(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req struct {
 		SessionID string `json:"session_id"`
+		Source    string `json:"source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON", err)
 		return
 	}
-	recorded, err := agent.RecordHookSessionID(s.db, id, req.SessionID)
+	recorded, err := agent.RecordHookSessionID(s.db, id, req.SessionID, req.Source == "clear")
 	if err != nil {
 		uxlog.Log("[api] session-id report rejected task=%s: %v", id, err)
 		if errors.Is(err, db.ErrTaskNotFound) {

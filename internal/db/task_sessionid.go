@@ -34,3 +34,31 @@ func (d *DB) SetSessionIDIfEmpty(id, sessionID string) (bool, error) {
 	}
 	return n > 0, nil
 }
+
+// ReplaceSessionID overwrites a task's session ID (a Codex /new moved the
+// conversation to a new thread). Reports whether the stored value changed.
+func (d *DB) ReplaceSessionID(id, sessionID string) (bool, error) {
+	if id == "" || sessionID == "" {
+		return false, errors.New("ReplaceSessionID: task id and session id are required")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	res, err := d.conn.Exec(`UPDATE tasks SET session_id=? WHERE id=? AND session_id<>?`, sessionID, id, sessionID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 0 {
+		var exists int
+		if qerr := d.conn.QueryRow(`SELECT COUNT(*) FROM tasks WHERE id=?`, id).Scan(&exists); qerr != nil {
+			return false, qerr
+		}
+		if exists == 0 {
+			return false, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+		}
+	}
+	return n > 0, nil
+}

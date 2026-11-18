@@ -42,9 +42,11 @@ func codexSessionStartHookFlag(hookCmd string) string {
 }
 
 // RecordHookSessionID stores the session ID a Codex SessionStart hook reported.
-// It only fills an empty ID of a Codex task and validates the format, so a
-// stray or repeated report can never replace a conversation.
-func RecordHookSessionID(database *db.DB, taskID, sessionID string) (bool, error) {
+// It validates the format and the Codex family. A startup report only FILLS an
+// empty ID, so a stray or repeated one never replaces a conversation; replace
+// is set for a "clear" start (a /new inside the session) and moves the task to
+// the new thread.
+func RecordHookSessionID(database *db.DB, taskID, sessionID string, replace bool) (bool, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if !codexSessionIDRe.MatchString(sessionID) {
 		return false, fmt.Errorf("unexpected session ID format: %q", sessionID)
@@ -60,12 +62,17 @@ func RecordHookSessionID(database *db.DB, taskID, sessionID string) (bool, error
 	if FamilyOf(backend.Command).Kind != backendkind.Codex {
 		return false, fmt.Errorf("task %s is not a Codex task", taskID)
 	}
-	wrote, err := database.SetSessionIDIfEmpty(taskID, sessionID)
+	var wrote bool
+	if replace {
+		wrote, err = database.ReplaceSessionID(taskID, sessionID)
+	} else {
+		wrote, err = database.SetSessionIDIfEmpty(taskID, sessionID)
+	}
 	if err != nil {
 		return false, err
 	}
 	if wrote {
-		uxlog.Log("[codex-hook] session id recorded at launch task=%s sid=%s", taskID, sessionID)
+		uxlog.Log("[codex-hook] session id recorded task=%s sid=%s replace=%t", taskID, sessionID, replace)
 	}
 	return wrote, nil
 }

@@ -40,6 +40,14 @@ func TestAPI_RecordSessionID(t *testing.T) {
 	testutil.Equal(t, w.Code, http.StatusOK)
 	testutil.Contains(t, w.Body.String(), `"recorded":false`)
 
+	// a "clear" start (a /new inside the session) moves the task to the new thread
+	const newThread = "33333333-3333-4333-8333-333333333333"
+	w = post("/api/tasks/"+task.ID+"/session-id", `{"session_id":"`+newThread+`","source":"clear"}`)
+	testutil.Equal(t, w.Code, http.StatusOK)
+	testutil.Contains(t, w.Body.String(), `"recorded":true`)
+	got, _ = d.Get(task.ID)
+	testutil.Equal(t, got.SessionID, newThread)
+
 	testutil.Equal(t, post("/api/tasks/"+task.ID+"/session-id", `{"session_id":"bad"}`).Code, http.StatusBadRequest)
 	testutil.Equal(t, post("/api/tasks/"+task.ID+"/session-id", `{`).Code, http.StatusBadRequest)
 	testutil.Equal(t, post("/api/tasks/missing/session-id", `{"session_id":"`+sid+`"}`).Code, http.StatusNotFound)

@@ -56,19 +56,36 @@ func TestRecordHookSessionID(t *testing.T) {
 	t.Run("fills an empty codex id once", func(t *testing.T) {
 		task := &model.Task{Name: "a", Project: "p", Worktree: wt, Backend: "codex"}
 		testutil.NoError(t, d.Add(task))
-		wrote, err := RecordHookSessionID(d, task.ID, hookTestSID)
+		wrote, err := RecordHookSessionID(d, task.ID, hookTestSID, false)
 		testutil.NoError(t, err)
 		testutil.True(t, wrote)
-		wrote, err = RecordHookSessionID(d, task.ID, "11111111-2222-4333-8444-555555555555")
+		wrote, err = RecordHookSessionID(d, task.ID, "11111111-2222-4333-8444-555555555555", false)
 		testutil.NoError(t, err)
 		testutil.True(t, !wrote)
 		got, _ := d.Get(task.ID)
 		testutil.Equal(t, got.SessionID, hookTestSID)
 	})
+	t.Run("a clear start replaces the id, a startup report does not", func(t *testing.T) {
+		task := &model.Task{Name: "r", Project: "p", Worktree: wt, Backend: "codex"}
+		testutil.NoError(t, d.Add(task))
+		_, err := RecordHookSessionID(d, task.ID, hookTestSID, false)
+		testutil.NoError(t, err)
+		const newThread = "22222222-2222-4222-8222-222222222222"
+		wrote, err := RecordHookSessionID(d, task.ID, newThread, false)
+		testutil.NoError(t, err)
+		testutil.True(t, !wrote)
+		wrote, err = RecordHookSessionID(d, task.ID, newThread, true)
+		testutil.NoError(t, err)
+		testutil.True(t, wrote)
+		got, _ := d.Get(task.ID)
+		testutil.Equal(t, got.SessionID, newThread)
+		_, err = RecordHookSessionID(d, task.ID, "bad", true)
+		testutil.Error(t, err)
+	})
 	t.Run("rejects a malformed id", func(t *testing.T) {
 		task := &model.Task{Name: "b", Project: "p", Worktree: wt, Backend: "codex"}
 		testutil.NoError(t, d.Add(task))
-		_, err := RecordHookSessionID(d, task.ID, "not-a-uuid")
+		_, err := RecordHookSessionID(d, task.ID, "not-a-uuid", false)
 		testutil.Error(t, err)
 		got, _ := d.Get(task.ID)
 		testutil.Equal(t, got.SessionID, "")
@@ -76,11 +93,11 @@ func TestRecordHookSessionID(t *testing.T) {
 	t.Run("rejects a non-codex task", func(t *testing.T) {
 		task := &model.Task{Name: "c", Project: "p", Worktree: wt, Backend: "claude"}
 		testutil.NoError(t, d.Add(task))
-		_, err := RecordHookSessionID(d, task.ID, hookTestSID)
+		_, err := RecordHookSessionID(d, task.ID, hookTestSID, false)
 		testutil.Error(t, err)
 	})
 	t.Run("unknown task", func(t *testing.T) {
-		_, err := RecordHookSessionID(d, "nope", hookTestSID)
+		_, err := RecordHookSessionID(d, "nope", hookTestSID, false)
 		testutil.Error(t, err)
 	})
 }
