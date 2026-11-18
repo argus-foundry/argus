@@ -617,10 +617,10 @@ var SupervisorStreamPaths = []string{
 const (
 	// resident.memory_tidy is read only by the daemon timer poll; adding its
 	// schema/default does not change BuildCmd or supervisor spawn behavior.
-	SpawnSurfaceDigest = "117fa247fe50126b3d8203775137b44b3c79895af9e045d00221277392c09494"
+	SpawnSurfaceDigest = "cc30f6376ecf0b4774e3a2db62052f813e5358b63f3aac1d5f278d3e858b7fa6"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
-	StreamSurfaceDigest = "a738da31076189f3be8edb292702e1b3050f3b1c543d94158255e179550abf17"
+	StreamSurfaceDigest = "6db616d49b2aae4049a1e16f5eeb7c4b16aa724b7451c2faab7c0302ef5fd83d"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

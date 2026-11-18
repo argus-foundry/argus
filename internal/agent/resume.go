@@ -137,12 +137,7 @@ func prepareResume(task *model.Task, cfg config.Config, resume bool) (bool, erro
 // create-time UUID. Without a resume-time refresh, the next resume loads the
 // first/stale conversation and loses all context accrued since.
 //
-// Two cases. RecaptureEveryExit families (Claude re-mints its UUID on every
-// /clear / in-place reboot; agy starts a new conversation on /new) refresh a
-// stale non-empty ID. Capture-once families (codex, pi, opencode, cursor) only
-// FILL an empty ID, because a supervisor restart skips their post-exit capture
-// and an empty ID makes the resume decision relaunch with the original prompt;
-// an existing ID is never replaced. Pinning families never get an ID here.
+// Claude/agy refresh a stale ID; capture-once backends (codex, pi, opencode, cursor) only FILL an empty one.
 //
 // No-op — leaving the recorded SessionID intact and NEVER blanking it — when the
 // task is nil, has no worktree, the backend has no capture, the worktree holds no
@@ -152,22 +147,21 @@ func prepareResume(task *model.Task, cfg config.Config, resume bool) (bool, erro
 // callers that do not re-issue an Update still land the fresh ID. Errors are
 // logged via uxlog and never fatal.
 func RefreshResumeSessionID(database *db.DB, task *model.Task) {
-	refreshSessionID(database, task, true)
+	RefreshSessionIDWith(database, task, RefreshFillMissing)
 }
 
-// RefreshExistingSessionID is RefreshResumeSessionID without the empty-ID fill.
-// Use it where an empty ID is deliberate (a backend move clears it so the new
-// backend starts from a handoff seed), so a stale thread left in the worktree
-// is never adopted.
-func RefreshExistingSessionID(database *db.DB, task *model.Task) {
-	refreshSessionID(database, task, false)
-}
+// SessionRefresh says whether a refresh may fill an EMPTY session ID.
+type SessionRefresh int
 
-// refreshSessionID is RefreshResumeSessionID with the empty-ID fill for
-// capture-once families switchable: account moves pass false because an empty
-// ID there is meaningful (it refuses a move it cannot transfer) and a refused
-// move must not persist anything.
-func refreshSessionID(database *db.DB, task *model.Task, fillMissing bool) {
+const (
+	// RefreshFillMissing recovers an ID a supervisor restart kept a capture-once backend from recording.
+	RefreshFillMissing SessionRefresh = iota
+	// RefreshKeepEmpty leaves an empty ID empty, for moves that clear it on purpose.
+	RefreshKeepEmpty
+)
+
+// RefreshSessionIDWith is RefreshResumeSessionID with an explicit empty-ID policy.
+func RefreshSessionIDWith(database *db.DB, task *model.Task, mode SessionRefresh) {
 	if database == nil || task == nil || task.Worktree == "" {
 		return
 	}
@@ -182,20 +176,15 @@ func refreshSessionID(database *db.DB, task *model.Task, fillMissing bool) {
 		return
 	}
 	if task.SessionID == "" {
-		if !fillMissing {
+		if mode == RefreshKeepEmpty {
 			return
 		}
-		// Capture-once families (codex/pi/opencode) mint their own ID and only
-		// get it recorded on a clean exit. A supervisor restart kills the
-		// session as StreamLost, which skips that capture, so the ID is still
-		// empty here and a resume would silently relaunch with the original
-		// prompt. Pinning and recapture-every-exit families never fabricate one.
+		// Pinning and recapture-every-exit families never get an ID invented for them.
 		if fam.RecaptureEveryExit || fam.PinsSessionID {
 			return
 		}
 	} else if !fam.RecaptureEveryExit {
-		// Only RecaptureEveryExit families (Claude, antigravity) can switch
-		// conversations in-session; capture-once families keep a stable ID.
+		// Only RecaptureEveryExit families can switch conversations in-session.
 		return
 	}
 	sid, err := fam.Capture(task, cfg)
@@ -210,8 +199,7 @@ func refreshSessionID(database *db.DB, task *model.Task, fillMissing bool) {
 	}
 	old := task.SessionID
 	if old == "" {
-		// Atomic fill-only: a SessionStart hook may have recorded the ID since
-		// the caller loaded this row; adopt that one instead of overwriting it.
+		// Fill-only: adopt an ID the launch hook recorded since this row was loaded.
 		wrote, err := database.SetSessionIDIfEmpty(task.ID, sid)
 		if err != nil {
 			uxlog.Log("[resume] session persist failed task=%s err=%v", task.ID, err)

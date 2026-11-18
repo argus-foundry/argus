@@ -6,23 +6,14 @@ import (
 )
 
 func (s *Server) startTaskSession(task *model.Task, resume bool) (reattached bool, err error) {
-	return s.startTaskSessionFill(task, resume, true)
+	return s.startTaskSessionFill(task, resume, agent.RefreshFillMissing)
 }
 
-// startTaskSessionFill is startTaskSession with the empty-ID fill switchable.
-// A backend move passes false: it clears the ID on purpose so the new backend
-// starts from a handoff seed, and a stale thread must not be adopted.
-func (s *Server) startTaskSessionFill(task *model.Task, resume, fillMissing bool) (reattached bool, err error) {
+// startTaskSessionFill is startTaskSession with an explicit empty-ID policy; a backend move keeps it empty.
+func (s *Server) startTaskSessionFill(task *model.Task, resume bool, mode agent.SessionRefresh) (reattached bool, err error) {
 	cfg := s.db.Config()
-	// Resume-time recapture (Claude-only): target the newest worktree transcript
-	// so the resume picks the most recent in-place session, not the stale
-	// create-time UUID. No-op for non-Claude / no-change / no-transcript.
 	if resume {
-		if fillMissing {
-			agent.RefreshResumeSessionID(s.db, task)
-		} else {
-			agent.RefreshExistingSessionID(s.db, task)
-		}
+		agent.RefreshSessionIDWith(s.db, task, mode)
 	}
 	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
 	sess, reattached, err := s.runner.StartOrReattach(task, cfg, 24, 80, resume)

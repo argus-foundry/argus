@@ -37,13 +37,13 @@ func TestRefreshSessionIDBeforeStart_FillSwitch(t *testing.T) {
 	t.Run("ordinary start fills", func(t *testing.T) {
 		task := &model.Task{Name: "a", Project: "p", Backend: "codex", Worktree: wt}
 		testutil.NoError(t, d.Add(task))
-		app.refreshSessionIDBeforeStart(task, true)
+		app.refreshSessionIDBeforeStart(task, agent.RefreshFillMissing)
 		testutil.Equal(t, task.SessionID, threadID)
 	})
 	t.Run("backend handoff does not fill", func(t *testing.T) {
 		task := &model.Task{Name: "b", Project: "p", Backend: "codex", Worktree: wt}
 		testutil.NoError(t, d.Add(task))
-		app.refreshSessionIDBeforeStart(task, false)
+		app.refreshSessionIDBeforeStart(task, agent.RefreshKeepEmpty)
 		testutil.Equal(t, task.SessionID, "")
 	})
 }

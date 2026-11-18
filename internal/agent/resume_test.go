@@ -326,8 +326,7 @@ func TestRefreshSessionID_CodexFillGuards(t *testing.T) {
 	t.Run("no-fill variants leave an empty id empty", func(t *testing.T) {
 		task := &model.Task{Name: "a", Project: "p", Worktree: wt, Backend: "codex"}
 		testutil.NoError(t, d.Add(task))
-		RefreshExistingSessionID(d, task)
-		refreshSessionID(d, task, false)
+		RefreshSessionIDWith(d, task, RefreshKeepEmpty)
 		testutil.Equal(t, task.SessionID, "")
 		got, _ := d.Get(task.ID)
 		testutil.Equal(t, got.SessionID, "")

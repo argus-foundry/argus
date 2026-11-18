@@ -58,13 +58,13 @@ func TestHandleResumeTask_FillsMissingCodexIDBeforeResume(t *testing.T) {
 func TestStartTaskSessionFill_Switch(t *testing.T) {
 	t.Run("fill enabled adopts the thread", func(t *testing.T) {
 		s, r, task := codexFillServer(t)
-		_, err := s.startTaskSessionFill(task, true, true)
+		_, err := s.startTaskSessionFill(task, true, agent.RefreshFillMissing)
 		testutil.NoError(t, err)
 		testutil.Equal(t, r.started.SessionID, fillThreadID)
 	})
 	t.Run("fill disabled keeps a deliberately empty id (backend move)", func(t *testing.T) {
 		s, r, task := codexFillServer(t)
-		_, err := s.startTaskSessionFill(task, true, false)
+		_, err := s.startTaskSessionFill(task, true, agent.RefreshKeepEmpty)
 		testutil.NoError(t, err)
 		testutil.Equal(t, r.started.SessionID, "")
 	})

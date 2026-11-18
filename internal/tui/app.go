@@ -7532,36 +7532,23 @@ func (a *App) resolveSession(taskID string) agentview.TerminalAdapter {
 // auto-start path, hera's Enter-reattach, switchSession's dead-session
 // branch) that don't ALL separately force a refetch of their own afterward.
 func (a *App) startSession(task *model.Task) {
-	a.startSessionFill(task, true)
+	a.startSessionFill(task, agent.RefreshFillMissing)
 }
 
-// refreshSessionIDBeforeStart is the resume-time session-ID recapture. With
-// fillMissing=false an empty ID stays empty (see agent.RefreshExistingSessionID).
-// Local mode only: a remote store has no worktree or backend state to read.
-func (a *App) refreshSessionIDBeforeStart(task *model.Task, fillMissing bool) {
-	d, ok := a.db.(*db.DB)
-	if !ok {
-		return
+// refreshSessionIDBeforeStart recaptures the session ID before the resume decision (local mode only).
+func (a *App) refreshSessionIDBeforeStart(task *model.Task, mode agent.SessionRefresh) {
+	if d, ok := a.db.(*db.DB); ok {
+		agent.RefreshSessionIDWith(d, task, mode)
 	}
-	if fillMissing {
-		agent.RefreshResumeSessionID(d, task)
-		return
-	}
-	agent.RefreshExistingSessionID(d, task)
 }
 
-// startSessionFill is startSession with the empty-ID fill switchable. A backend
-// handoff passes false: it clears the ID on purpose so the new backend starts
-// from a seed prompt, and a stale thread in the worktree must not be adopted.
-func (a *App) startSessionFill(task *model.Task, fillMissing bool) {
+// startSessionFill is startSession with an explicit empty-ID policy; a backend handoff keeps it empty.
+func (a *App) startSessionFill(task *model.Task, mode agent.SessionRefresh) {
 	defer a.setRerendering(task.ID, false)
 	cfg := a.db.Config()
 	rows, cols := a.spawnPTYSize(task.ID)
 
-	// Resume-time recapture: Claude re-derives the newest transcript; capture-once
-	// backends (codex/pi/opencode) recover an ID a supervisor restart prevented
-	// capturing. Must precede the resume decision.
-	a.refreshSessionIDBeforeStart(task, fillMissing)
+	a.refreshSessionIDBeforeStart(task, mode) // must precede the resume decision
 	resume := task.SessionID != ""
 
 	// For families that pin a session ID at start, generate one on first run

@@ -23,16 +23,7 @@ func (d *DB) SetSessionIDIfEmpty(id, sessionID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if n == 0 {
-		var exists int
-		if qerr := d.conn.QueryRow(`SELECT COUNT(*) FROM tasks WHERE id=?`, id).Scan(&exists); qerr != nil {
-			return false, qerr
-		}
-		if exists == 0 {
-			return false, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
-		}
-	}
-	return n > 0, nil
+	return n > 0, d.requireTaskLocked(id, n)
 }
 
 // ReplaceSessionID overwrites a task's session ID (a Codex /new moved the
@@ -51,14 +42,20 @@ func (d *DB) ReplaceSessionID(id, sessionID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if n == 0 {
-		var exists int
-		if qerr := d.conn.QueryRow(`SELECT COUNT(*) FROM tasks WHERE id=?`, id).Scan(&exists); qerr != nil {
-			return false, qerr
-		}
-		if exists == 0 {
-			return false, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
-		}
+	return n > 0, d.requireTaskLocked(id, n)
+}
+
+// requireTaskLocked maps a zero-row update to ErrTaskNotFound when the task is gone. Caller holds d.mu.
+func (d *DB) requireTaskLocked(id string, rowsAffected int64) error {
+	if rowsAffected > 0 {
+		return nil
 	}
-	return n > 0, nil
+	var exists int
+	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM tasks WHERE id=?`, id).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	}
+	return nil
 }

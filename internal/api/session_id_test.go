@@ -50,5 +50,8 @@ func TestAPI_RecordSessionID(t *testing.T) {
 
 	testutil.Equal(t, post("/api/tasks/"+task.ID+"/session-id", `{"session_id":"bad"}`).Code, http.StatusBadRequest)
 	testutil.Equal(t, post("/api/tasks/"+task.ID+"/session-id", `{`).Code, http.StatusBadRequest)
+	other := &model.Task{Name: "claude", Project: "p", Backend: "claude", Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(other))
+	testutil.Equal(t, post("/api/tasks/"+other.ID+"/session-id", `{"session_id":"`+sid+`"}`).Code, http.StatusBadRequest)
 	testutil.Equal(t, post("/api/tasks/missing/session-id", `{"session_id":"`+sid+`"}`).Code, http.StatusNotFound)
 }

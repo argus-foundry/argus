@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -14,8 +15,10 @@ import (
 // CodexSessionHookArg is the argus subcommand a Codex SessionStart hook runs.
 const CodexSessionHookArg = "codex-session-hook"
 
-// sessionHookCommandFn resolves the hook command line. A seam so BuildCmd tests
-// stay independent of the test binary's own path.
+// ErrInvalidSessionReport marks a hook report that is malformed or targets a non-Codex task.
+var ErrInvalidSessionReport = errors.New("invalid session report")
+
+// sessionHookCommandFn is a seam so BuildCmd tests don't depend on the test binary's path.
 var sessionHookCommandFn = func() string {
 	if isTestBinary() {
 		return ""
@@ -27,11 +30,7 @@ var sessionHookCommandFn = func() string {
 	return shellQuote(exe) + " " + CodexSessionHookArg
 }
 
-// codexSessionStartHookFlag registers an inline SessionStart hook that reports
-// the thread ID the moment Codex mints it, so a session killed before any clean
-// exit (a supervisor restart) still resumes. The trust bypass is required:
-// without it Codex silently skips a hook with no recorded trusted hash, and the
-// hash cannot be written without editing the user's symlinked config.toml.
+// codexSessionStartHookFlag needs the trust bypass: Codex skips a hook with no trusted hash, and config.toml is a symlink we must not edit.
 func codexSessionStartHookFlag(hookCmd string) string {
 	if hookCmd == "" {
 		return ""
@@ -41,15 +40,11 @@ func codexSessionStartHookFlag(hookCmd string) string {
 	return " --dangerously-bypass-hook-trust -c " + shellQuote(hooks)
 }
 
-// RecordHookSessionID stores the session ID a Codex SessionStart hook reported.
-// It validates the format and the Codex family. A startup report only FILLS an
-// empty ID, so a stray or repeated one never replaces a conversation; replace
-// is set for a "clear" start (a /new inside the session) and moves the task to
-// the new thread.
+// RecordHookSessionID stores a hook-reported Codex ID: fill-only, or a replace for a "clear" start (/new).
 func RecordHookSessionID(database *db.DB, taskID, sessionID string, replace bool) (bool, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if !codexSessionIDRe.MatchString(sessionID) {
-		return false, fmt.Errorf("unexpected session ID format: %q", sessionID)
+		return false, fmt.Errorf("%w: unexpected session ID format %q", ErrInvalidSessionReport, sessionID)
 	}
 	task, err := database.Get(taskID)
 	if err != nil {
@@ -60,7 +55,7 @@ func RecordHookSessionID(database *db.DB, taskID, sessionID string, replace bool
 		return false, err
 	}
 	if FamilyOf(backend.Command).Kind != backendkind.Codex {
-		return false, fmt.Errorf("task %s is not a Codex task", taskID)
+		return false, fmt.Errorf("%w: task %s is not a Codex task", ErrInvalidSessionReport, taskID)
 	}
 	var wrote bool
 	if replace {
@@ -70,6 +65,9 @@ func RecordHookSessionID(database *db.DB, taskID, sessionID string, replace bool
 	}
 	if err != nil {
 		return false, err
+	}
+	if !wrote && !replace {
+		uxlog.Log("[codex-hook] session id already recorded task=%s; startup report ignored", taskID)
 	}
 	if wrote {
 		uxlog.Log("[codex-hook] session id recorded task=%s sid=%s replace=%t", taskID, sessionID, replace)

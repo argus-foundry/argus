@@ -22,7 +22,7 @@ A fresh Codex launch without a stored session ID SHALL register an inline `Sessi
 
 ### Requirement: Recover a missing session ID before resuming
 
-Before a resume decision, Argus SHALL fill an empty session ID for capture-once backends (Codex, Pi, opencode) from the backend's own state when a conversation exists for the task's worktree, and SHALL leave it empty when none exists. It SHALL NOT replace an existing ID for these backends, SHALL adopt an ID recorded concurrently by the launch hook instead of overwriting it, and SHALL NOT fill during an account or backend move (a backend move clears the ID on purpose).
+Before a resume decision, Argus SHALL fill an empty session ID for capture-once backends (Codex, Pi, opencode, Cursor) from the backend's own state when a conversation exists for the task's worktree, and SHALL leave it empty when none exists. It SHALL NOT replace an existing ID for these backends, SHALL adopt an ID recorded concurrently by the launch hook instead of overwriting it, and SHALL NOT fill during an account or backend move (a backend move clears the ID on purpose).
 
 #### Scenario: Session killed by a supervisor restart
 

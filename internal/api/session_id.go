@@ -10,13 +10,9 @@ import (
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
-// handleRecordSessionID backs the Codex SessionStart hook (`argus
-// codex-session-hook`): it records the backend-minted session ID the moment it
-// exists. Codex-only. A startup report is fill-only; a "clear" source (a /new inside
-// the session) replaces the ID so the task follows the new conversation.
+// handleRecordSessionID backs `argus codex-session-hook`: a startup report fills an empty ID, a "clear" (/new) replaces it.
 func (s *Server) handleRecordSessionID(w http.ResponseWriter, r *http.Request) {
-	// Master-only: this decides which conversation a task later resumes, and
-	// the hook authenticates with the master token (as coord-hook does).
+	// Master-only: it decides which conversation a task later resumes.
 	if requireMaster(w, r) {
 		return
 	}
@@ -37,7 +33,11 @@ func (s *Server) handleRecordSessionID(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "", err)
 			return
 		}
-		writeErr(w, http.StatusBadRequest, "", err)
+		if errors.Is(err, agent.ErrInvalidSessionReport) {
+			writeErr(w, http.StatusBadRequest, "", err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "record session id failed", nil)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"recorded": recorded})
