@@ -79,6 +79,9 @@ func queuedApprovalMessage(resp daemon.ResidentPermissionResp) string {
 	} else {
 		fmt.Fprintf(&b, "Queued for Aaron's approval as #%d; nothing ran.", resp.BoardID)
 	}
+	if resp.Expired > 0 {
+		fmt.Fprintf(&b, " Your earlier approval #%d expired unused before this retry, so this is a new request.", resp.Expired)
+	}
 	if len(resp.Superseded) > 0 {
 		ids := make([]string, len(resp.Superseded))
 		for i, id := range resp.Superseded {

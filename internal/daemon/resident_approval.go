@@ -23,6 +23,7 @@ type ResidentPermissionResp struct {
 	// Superseded: older pending items this request replaced. Both additive.
 	Reused     bool
 	Superseded []int64
+	Expired    int64
 }
 
 // ResidentPermission is a private-file authenticated hook endpoint, never a
@@ -48,7 +49,7 @@ func (s *RPCService) ResidentPermission(req *ResidentPermissionReq, resp *Reside
 		residentLog("[resident-approval] hook failed: %v", err)
 		return nil
 	}
-	resp.Allow, resp.BoardID, resp.State, resp.Reused, resp.Superseded = allow, a.BoardID, a.State, a.Reused, a.Superseded
+	resp.Allow, resp.BoardID, resp.State, resp.Reused, resp.Superseded, resp.Expired = allow, a.BoardID, a.State, a.Reused, a.Superseded, a.Expired
 	residentLog("[resident-approval] hook answered item=%d allow=%t state=%s", a.BoardID, allow, a.State)
 	return nil
 }

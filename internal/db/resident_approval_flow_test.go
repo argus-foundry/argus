@@ -132,7 +132,7 @@ func TestResidentApprovalDecideLapsedAndChanged(t *testing.T) {
 	testutil.NoError(t, err)
 	err = d.DecideResidentApproval(a.BoardID, a.CreatedAt, "other-launch", true, now)
 	testutil.ErrorIs(t, err, ErrResidentApproval)
-	testutil.Contains(t, err.Error(), "relaunched after it was queued")
+	testutil.Contains(t, err.Error(), "queued by an earlier launch")
 	err = d.DecideResidentApproval(a.BoardID, now.Add(time.Second), call.Launch, true, now)
 	testutil.Contains(t, err.Error(), "changed since you opened it")
 	// Denial needs no launch match: the item can always be refused.
@@ -347,4 +347,50 @@ func TestPostOrRefreshHeraBoardItem(t *testing.T) {
 
 	_, err = d.PostOrRefreshHeraBoardItem(role, "bogus", "s", "b")
 	testutil.ErrorIs(t, err, ErrHeraBoardInvalid)
+}
+
+// Retrying after the window but before any sweep: the old grant expires in
+// the same request, a new pending item replaces it, nothing runs, and the
+// request reports the expired item instead of a separate notice.
+func TestResidentApprovalRetryAfterWindowBeforeSweep(t *testing.T) {
+	d, call, now := approvalFixture(t)
+	a, _, err := d.RequestResidentApproval(call, now)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.DecideResidentApproval(a.BoardID, a.CreatedAt, call.Launch, true, now))
+	base := len(approvalNotices(t, d))
+	b, allow, err := d.RequestResidentApproval(call, now.Add(ResidentApprovalWindow+time.Second))
+	testutil.NoError(t, err)
+	testutil.False(t, allow)
+	testutil.Equal(t, b.Expired, a.BoardID)
+	testutil.True(t, b.BoardID != a.BoardID)
+	testutil.Equal(t, b.State, ApprovalPending)
+	old := approvalItem(t, d, a.RoleID, a.BoardID)
+	testutil.Equal(t, old.ApprovalState, ApprovalExpired)
+	testutil.Contains(t, old.ResolutionNote, "expired unused")
+	testutil.Equal(t, len(approvalNotices(t, d)), base)
+}
+
+func TestResidentApprovalApproveWithUnknownLaunch(t *testing.T) {
+	d, call, now := approvalFixture(t)
+	a, _, err := d.RequestResidentApproval(call, now)
+	testutil.NoError(t, err)
+	err = d.DecideResidentApproval(a.BoardID, a.CreatedAt, "", true, now)
+	testutil.ErrorIs(t, err, ErrResidentApproval)
+	testutil.Contains(t, err.Error(), "current launch is unknown")
+	testutil.Equal(t, approvalItem(t, d, a.RoleID, a.BoardID).ApprovalState, ApprovalPending)
+}
+
+// Withdraw and approve race on one item: exactly one wins and the loser gets
+// the winner's state, never a silent double transition.
+func TestResidentApprovalWithdrawRacesDecision(t *testing.T) {
+	d, call, now := approvalFixture(t)
+	a, _, err := d.RequestResidentApproval(call, now)
+	testutil.NoError(t, err)
+	errs := make(chan error, 2)
+	go func() { errs <- d.DecideResidentApproval(a.BoardID, a.CreatedAt, call.Launch, true, now) }()
+	go func() { errs <- d.ResolveHeraBoardItem(a.RoleID, a.BoardID, "agent", "") }()
+	e1, e2 := <-errs, <-errs
+	testutil.True(t, (e1 == nil) != (e2 == nil))
+	state := approvalItem(t, d, a.RoleID, a.BoardID).ApprovalState
+	testutil.True(t, state == ApprovalApproved || state == ApprovalWithdrawn)
 }

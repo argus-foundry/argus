@@ -34,6 +34,9 @@ type ResidentApproval struct {
 	// request replaced.
 	Reused     bool
 	Superseded []int64
+	// Expired is a previously approved item for this exact call whose
+	// window passed unused; this request replaces it (0 = none).
+	Expired int64
 }
 
 var ErrResidentApproval = errors.New("resident approval: invalid, stale or already decided request")
@@ -281,6 +284,7 @@ func (d *DB) RequestResidentApproval(call ApprovalCall, now time.Time) (*Residen
 	var a ResidentApproval
 	allow := false
 	var changed []int64
+	var expiredID int64
 	err = d.WithTx(func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`UPDATE resident_approvals SET state=state WHERE identity=?`, key); err != nil {
 			return err
@@ -320,8 +324,9 @@ func (d *DB) RequestResidentApproval(call ApprovalCall, now time.Time) (*Residen
 					changed = append(changed, r.id)
 					return nil
 				}
-				// The agent is retrying right now, so its reply explains the
-				// new request; no separate expiry notice.
+				// The agent is retrying right now: the hook reply names the
+				// expired item (ResidentApproval.Expired), so no separate notice.
+				expiredID = r.id
 				if _, err := tx.Exec(`UPDATE resident_approvals SET state=?,closed_at=? WHERE board_id=?`, ApprovalExpired, formatTime(now), r.id); err != nil {
 					return err
 				}
@@ -349,7 +354,7 @@ func (d *DB) RequestResidentApproval(call ApprovalCall, now time.Time) (*Residen
 		if _, err = tx.Exec(`INSERT INTO resident_approvals(board_id,role_id,identity,call_key,launch,created_at,state,expires_at) VALUES(?,?,?,?,?,?,?,'')`, id, roleID, key, callKey, call.Launch, created, ApprovalPending); err != nil {
 			return err
 		}
-		a = ResidentApproval{BoardID: id, RoleID: roleID, CreatedAt: parseTime(created), State: ApprovalPending}
+		a = ResidentApproval{BoardID: id, RoleID: roleID, CreatedAt: parseTime(created), State: ApprovalPending, Expired: expiredID}
 		rows, err := tx.Query(`SELECT board_id FROM resident_approvals WHERE call_key=? AND role_id=? AND state=? AND board_id<>? ORDER BY board_id`, callKey, roleID, ApprovalPending, id)
 		if err != nil {
 			return err
@@ -411,8 +416,11 @@ func (d *DB) DecideResidentApproval(id int64, expected time.Time, launch string,
 		if expected.IsZero() || r.created != formatTime(expected) {
 			return &ApprovalStateError{ID: id, State: r.state, Msg: "changed since you opened it; reopen it and review again."}
 		}
-		if approve && (launch == "" || r.launch != launch) {
-			return &ApprovalStateError{ID: id, State: ApprovalStale, Msg: "lapsed because the agent was relaunched after it was queued. Ask the agent to re-send the call."}
+		if approve && launch == "" {
+			return &ApprovalStateError{ID: id, State: r.state, Msg: "cannot be approved: the agent's current launch is unknown (is it running?). Nothing changed; try again once it is running."}
+		}
+		if approve && r.launch != launch {
+			return &ApprovalStateError{ID: id, State: r.state, Msg: "was queued by an earlier launch of the agent, which has since been relaunched, so it can no longer be approved. Ask the agent to re-send the call."}
 		}
 		state, note, expires := ApprovalDenied, "denied "+approvalClock(formatTime(now), now), ""
 		if approve {
@@ -451,6 +459,11 @@ func (d *DB) SweepResidentApprovals(currentLaunch string, now time.Time) (int, e
 	type lapse struct{ id, roleID int64 }
 	var lapsed []lapse
 	err := d.WithTx(func(tx *sql.Tx) error {
+		// Take the write lock before reading, like Request/Decide: the TUI
+		// process can decide concurrently on another handle.
+		if _, err := tx.Exec(`UPDATE resident_approvals SET state=state WHERE state IN (?,?)`, ApprovalPending, ApprovalApproved); err != nil {
+			return err
+		}
 		rows, err := tx.Query(`SELECT `+approvalRowColumns+` FROM resident_approvals a JOIN hera_board_items b ON b.id=a.board_id WHERE a.state IN (?,?) ORDER BY a.board_id`, ApprovalPending, ApprovalApproved)
 		if err != nil {
 			return err
@@ -518,6 +531,9 @@ func (d *DB) SweepResidentApprovals(currentLaunch string, now time.Time) (int, e
 // approval item. It can only close an item, never grant one; any other state
 // returns the state-specific error.
 func withdrawResidentApprovalTx(tx *sql.Tx, id int64, note string, now time.Time) error {
+	if _, err := tx.Exec(`UPDATE resident_approvals SET state=state WHERE board_id=?`, id); err != nil {
+		return err
+	}
 	r, err := loadApprovalTx(tx, id)
 	if err != nil {
 		return err
@@ -525,8 +541,12 @@ func withdrawResidentApprovalTx(tx *sql.Tx, id int64, note string, now time.Time
 	if r.state != ApprovalPending {
 		return approvalStateErr(r, now)
 	}
-	if _, err := tx.Exec(`UPDATE resident_approvals SET state=?,closed_at=? WHERE board_id=? AND state=?`, ApprovalWithdrawn, formatTime(now), id, ApprovalPending); err != nil {
+	res, err := tx.Exec(`UPDATE resident_approvals SET state=?,closed_at=? WHERE board_id=? AND state=?`, ApprovalWithdrawn, formatTime(now), id, ApprovalPending)
+	if err != nil {
 		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return ErrResidentApproval
 	}
 	text := "withdrawn by agent"
 	if note != "" {
