@@ -1,10 +1,24 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="referrer" content="no-referrer"><title>Open decisions · Argus</title>
 <!-- Layout adapted from Aaron's decision/template.html. System fonts; no external assets. -->
+<script id="decision-theme">
+globalThis.BoardDecisionTheme = (() => {
+  const key='board-decision-theme',valid=value=>['light','dark','system'].includes(value)?value:'system';
+  function read() {try{return valid(globalThis.localStorage.getItem(key));}catch{return 'system';}}
+  function set(value,persist=true) {
+    const mode=valid(value);document.documentElement.dataset.theme=mode;
+    if(persist)try{globalThis.localStorage.setItem(key,mode);}catch{}
+    return mode;
+  }
+  set(read(),false);
+  return {set};
+})();
+</script>
 <style>
 /* Layout: one reading column under a sticky tally bar. Decisions are open
    sections split by rules; only the options are boxed, because they are the
    things you pick. */
 :root {
+  color-scheme: light;
   --bg: #f2f4f8;
   --surface: #ffffff;
   --ink: #171f2d;
@@ -62,6 +76,10 @@ code {
   font-family: var(--mono); font-size: .9em;
   background: var(--line); padding: 1px 5px; border-radius: 4px;
 }
+a { color: var(--accent); overflow-wrap: anywhere; }
+.theme { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.theme select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 7px; }
+.theme select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Tally bar */
 .bar {
@@ -184,7 +202,7 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 
 .focused {outline:2px solid var(--accent);outline-offset:8px;} .btn:disabled{opacity:.5;cursor:default;} .segs {flex-wrap:wrap;} .decision{overflow-wrap:anywhere;} </style>
 </head><body>
-<header class="bar"><div class="wrap bar-in"><div class="segs" id="segs"></div><span class="tally" id="tally" aria-live="polite">Loading decisions…</span></div></header>
+<header class="bar"><div class="wrap bar-in"><div class="segs" id="segs"></div><span class="tally" id="tally" aria-live="polite">Loading decisions…</span><label class="theme">Theme <select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header>
 <main class="wrap"><div class="lede"><h1>Open decisions</h1><p class="intro">Choose the answers you’re ready to give. The rest stay open.</p><p id="status" role="status"></p><p id="updates" hidden><span id="changes"></span> <button class="btn" id="refresh">Refresh</button></p></div>
 <div id="decisions"></div><section class="finish"><div class="actions"><button class="btn primary" id="submit" disabled>Submit answers</button><button class="btn" id="accept" hidden>Take the recommendations</button><button class="btn" id="copy">Copy answers</button></div><p id="summary" aria-live="polite"></p><textarea id="copy-fallback" readonly hidden aria-label="Answers to copy"></textarea></section></main>
 <script id="decision-logic">
@@ -202,14 +220,42 @@ globalThis.BoardDecisions = (() => {
     if (result.outcome === 'conflict') return {item:result.item,draft:{choice:'',note:draft?.note || ''},status:'conflict'};
     return {item,draft,status:result.outcome === 'resolved' ? 'answered' : ['already_resolved','not_found'].includes(result.outcome) ? 'closed' : 'invalid'};
   }
+  function finish(answers,results,win,confirm) {
+    if(!answers.length || !Array.isArray(results) || results.length!==answers.length)return false;
+    const outcomes=new Map(results.map(result=>[result?.item_id,result?.outcome]));
+    if(outcomes.size!==answers.length || answers.some(answer=>!['resolved','already_resolved'].includes(outcomes.get(answer.item_id))))return false;
+    try{win.close();}catch{}
+    if(!win.closed)confirm(answers.length);
+    return true;
+  }
+  function links(parent,text,doc) {
+    let at=0;
+    for(const match of text.matchAll(/\bhttps?:\/\/[^\s<>"'`]+/gi)) {
+      let url=match[0];
+      // Sentence punctuation is text; balanced URL brackets stay in the link.
+      const pairs={')':'(',']':'[','}':'{'};
+      while(url) {
+        const end=url.slice(-1),open=pairs[end];
+        if(/[.,!?:;]/.test(end) || (open && url.split(end).length>url.split(open).length))url=url.slice(0,-1);else break;
+      }
+      try {const parsed=new URL(url);if(!['http:','https:'].includes(parsed.protocol) || !parsed.hostname)continue;}catch{continue;}
+      parent.append(doc.createTextNode(text.slice(at,match.index)));
+      const link=doc.createElement('a');link.textContent=url;
+      link.setAttribute('href',url);link.setAttribute('target','_blank');link.setAttribute('rel','noopener noreferrer');parent.append(link);
+      at=match.index+url.length;
+    }
+    parent.append(doc.createTextNode(text.slice(at)));
+  }
   function inline(parent,text,doc) {
     let at=0;
     for (const match of text.matchAll(/(`[^`]+`|\*\*[^*]+\*\*)/g)) {
-      parent.append(doc.createTextNode(text.slice(at,match.index)));
+      links(parent,text.slice(at,match.index),doc);
       const bold=match[0].startsWith('**'),node=doc.createElement(bold ? 'strong':'code');
-      node.append(doc.createTextNode(match[0].slice(bold?2:1,bold?-2:-1)));parent.append(node);at=match.index+match[0].length;
+      const content=match[0].slice(bold?2:1,bold?-2:-1);
+      if(bold)inline(node,content,doc);else node.textContent=content;
+      parent.append(node);at=match.index+match[0].length;
     }
-    parent.append(doc.createTextNode(text.slice(at)));
+    links(parent,text.slice(at),doc);
   }
   function markup(text,doc) {
     const root=doc.createElement('div');let list=null,listTag='',paragraph=null;
@@ -226,7 +272,7 @@ globalThis.BoardDecisions = (() => {
     }
     return root;
   }
-  return {draftKey,valid,payload,outcome,markup};
+  return {draftKey,valid,payload,outcome,markup,inline,finish};
 })();
 </script>
 <script>
@@ -237,12 +283,14 @@ globalThis.BoardDecisions = (() => {
   if (location.hash) history.replaceState(null,'',location.pathname+location.search);
   const role=new URLSearchParams(location.search).get('role'),focus=new URLSearchParams(location.search).get('focus');
   const $=id=>document.getElementById(id),L=globalThis.BoardDecisions;
+  $('theme').value=document.documentElement.dataset.theme;
+  $('theme').addEventListener('change',()=>globalThis.BoardDecisionTheme.set($('theme').value));
   const sessionKey=`board-decision-session:${role}`,base=`/api/hera/roles/${role}/board`;
-  let session='',items=[],drafts={},states={},pending=null,busy=false,expired=false,generation=0;
+  let session='',items=[],drafts={},states={},pending=null,busy=false,expired=false,finished=false,generation=0;
   const read=(storage,key)=>{try{return globalThis[storage].getItem(key);}catch{return null;}};
-  const save=(storage,key,value)=>{try{globalThis[storage].setItem(key,value);}catch{$('summary').textContent='Draft storage is unavailable. Copy answers before leaving.';}};
-  function message(text) {$('status').textContent=text;}
-  function expire() {expired=true;message('This link expired. Press o in Argus to reopen it. Your drafts are kept; you can still copy answers.');update();}
+  const save=(storage,key,value)=>{try{globalThis[storage].setItem(key,value);}catch{if(!finished)$('summary').textContent='Draft storage is unavailable. Copy answers before leaving.';}};
+  function message(text) {if(!finished)$('status').textContent=text;}
+  function expire() {if(finished)return;expired=true;message('This link expired. Press o in Argus to reopen it. Your drafts are kept; you can still copy answers.');update();}
   async function api(path,method='GET',body) {
     const response=await fetch(path,{method,cache:'no-store',headers:{'Content-Type':'application/json',...(session?{Authorization:`Bearer ${session}`}:{})},body:body===undefined?undefined:JSON.stringify(body)});
     if (response.status===401 || response.status===403) {expire();throw new Error('Session expired');}
@@ -250,9 +298,17 @@ globalThis.BoardDecisions = (() => {
     return response.json();
   }
   function element(tag,className,text) {const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;}
+  function formatted(tag,className,text) {const node=element(tag,className);L.inline(node,String(text || ''),document);return node;}
+  function sent(count) {
+    finished=true;
+    const main=element('main','wrap'),confirmation=element('section','lede');
+    confirmation.append(element('h1','','Answers sent — you can close this tab'),element('p','intro',`${count} item${count===1?'':'s'} answered.`));
+    main.append(confirmation);main.tabIndex=-1;document.body.replaceChildren(main);main.focus();
+  }
   function persist(item) {save('localStorage',L.draftKey(role,item),JSON.stringify(drafts[item.id]));}
   function active() {return items.filter(item=>!['answered','closed'].includes(states[item.id]));}
   function update() {
+    if(finished)return;
     const open=active(),decided=L.payload(open,drafts).length;
     $('tally').textContent=`${decided} of ${open.length} decided`;
     let missingNote=false;
@@ -262,11 +318,12 @@ globalThis.BoardDecisions = (() => {
     $('accept').hidden=!count;$('accept').disabled=busy;$('accept').textContent=`Take the recommendation for the ${count} undecided`;
   }
   function render() {
+    if(finished)return;
     $('decisions').replaceChildren();$('segs').replaceChildren();
     for(const item of items) {
       const draft=drafts[item.id] || (drafts[item.id]={choice:'',note:''}),state=states[item.id],closed=['answered','closed'].includes(state);
       const card=element('section','decision');card.id=`decision-${item.id}`;
-      const count=element('p','count',`Decision #${item.id}`);count.append(element('span','state',state || 'Open'));card.append(count,element('h2','',item.subject));
+      const count=element('p','count',`Decision #${item.id}`);count.append(element('span','state',state || 'Open'));card.append(count,formatted('h2','',item.subject));
       if(state==='conflict')card.append(element('p','hint','Claude changed this decision. Your note is kept below; review the updated options and choose again.'));
       if(state==='invalid')card.append(element('p','hint','This answer needs attention. Choose an option or add a note for Something else.'));
       const situation=element('div','situation');situation.append(L.markup(item.body,document));card.append(situation);
@@ -276,9 +333,9 @@ globalThis.BoardDecisions = (() => {
         input.addEventListener('change',()=>{draft.choice=option.id;persist(item);const hint=card.querySelector('.note-required');if(hint)hint.hidden=!(draft.choice==='other' && !draft.note.trim());update();});
         const body=element('div','opt-body'),head=element('div','opt-head');head.append(element('span','opt-label',option.label));
         if(option.id===item.structured.recommended)head.append(element('span','pill','Recommended'));body.append(head);
-        if(option.summary)body.append(element('div','',option.summary));
-        for(const [key,text] of [['Upside',option.upside],['Downside',option.downside]])if(text){const row=element('div','trade');row.append(element('span','k',key),element('span','',text));body.append(row);}
-        if(option.id===item.structured.recommended && item.structured.reason)body.append(element('div','why',`Why Claude recommends it: ${item.structured.reason}`));
+        if(option.summary)body.append(formatted('div','',option.summary));
+        for(const [key,text] of [['Upside',option.upside],['Downside',option.downside]])if(text){const row=element('div','trade');row.append(element('span','k',key),formatted('span','',text));body.append(row);}
+        if(option.id===item.structured.recommended && item.structured.reason)body.append(formatted('div','why',`Why Claude recommends it: ${item.structured.reason}`));
         label.append(input,body);options.append(label);
       }
       card.append(options);
@@ -291,6 +348,7 @@ globalThis.BoardDecisions = (() => {
     update();
   }
   function load(next) {
+    if(finished)return;
     generation++;
     const old=new Map(items.map(i=>[i.id,i.updated_at]));items=next;save('localStorage',`board-decision-items:${role}`,JSON.stringify(next));
     for(const item of items)if(old.get(item.id)!==item.updated_at || !drafts[item.id]) {try{drafts[item.id]=JSON.parse(read('localStorage',L.draftKey(role,item))) || {choice:'',note:''};}catch{drafts[item.id]={choice:'',note:''};}states[item.id]='';}
@@ -310,11 +368,12 @@ globalThis.BoardDecisions = (() => {
       }
       save('localStorage',`board-decision-items:${role}`,JSON.stringify(items));
       $('summary').textContent=`${answered} answered, ${attention} need attention`;
+      finished=L.finish(answers,response.results,window,sent);
     } catch(error) {if(!expired)message(error.message);}finally{busy=false;render();}
   });
   $('copy').addEventListener('click',async()=>{
     const text=items.filter(i=>drafts[i.id]?.choice || drafts[i.id]?.note).map(i=>{const d=drafts[i.id],label=i.structured?.options.find(o=>o.id===d.choice)?.label || 'Something else';return `#${i.id} ${i.subject}\nChoice: ${label}\nNote: ${d.note || 'none'}`;}).join('\n\n');
-    try{await navigator.clipboard.writeText(text);$('summary').textContent='Answers copied.';}catch{const box=$('copy-fallback');box.value=text;box.hidden=false;box.focus();box.select();}
+    try{await navigator.clipboard.writeText(text);if(finished)return;$('summary').textContent='Answers copied.';}catch{if(finished)return;const box=$('copy-fallback');box.value=text;box.hidden=false;box.focus();box.select();}
   });
   if(!/^\d+$/.test(role || '')){message('Open this page by pressing o on a coordinator board in Argus.');return;}
   try {const cached=JSON.parse(read('localStorage',`board-decision-items:${role}`));if(Array.isArray(cached))load(cached);}catch{}
@@ -326,9 +385,9 @@ globalThis.BoardDecisions = (() => {
     if(focus){const card=$(`decision-${focus}`);if(card){card.classList.add('focused');card.scrollIntoView();}}
   }catch(error){if(!expired)message(error.message);return;}
   setInterval(async()=>{
-    if(document.hidden || expired || busy)return;
+    if(finished || document.hidden || expired || busy)return;
     const observed=generation;
-    try{const next=(await api(base+'/decisions')).items;if(observed!==generation || busy)return;const revisions=new Map(items.map(i=>[i.id,i.updated_at]));const added=next.filter(i=>!revisions.has(i.id)).length,changed=next.filter(i=>revisions.has(i.id) && revisions.get(i.id)!==i.updated_at).length,closed=items.filter(i=>!next.some(n=>n.id===i.id) && !['answered','closed'].includes(states[i.id])).length;
+    try{const next=(await api(base+'/decisions')).items;if(finished || observed!==generation || busy)return;const revisions=new Map(items.map(i=>[i.id,i.updated_at]));const added=next.filter(i=>!revisions.has(i.id)).length,changed=next.filter(i=>revisions.has(i.id) && revisions.get(i.id)!==i.updated_at).length,closed=items.filter(i=>!next.some(n=>n.id===i.id) && !['answered','closed'].includes(states[i.id])).length;
       if(added || changed || closed){pending=next;$('changes').textContent=`Claude updated ${changed} decisions, added ${added}, and closed ${closed}.`;$('updates').hidden=false;}
     }catch(error){if(!expired)message(error.message);}
   },20000);
