@@ -1115,6 +1115,16 @@ func (a *App) buildUI() {
 		a.heraPage.OnBoardRead = func(roleID, itemID int64, updatedAt time.Time) {
 			go a.mutateHeraBoard(d, roleID, itemID, updatedAt, false)
 		}
+		a.heraPage.OnBoardDecide = func(roleID, focusItemID int64) {
+			go func() {
+				message := a.openBoardDecisions(roleID, focusItemID)
+				a.tapp.QueueUpdateDraw(func() {
+					if message != "" {
+						a.statusbar.SetInfo(message)
+					}
+				})
+			}()
+		}
 		a.heraPage.OnBoardDismiss = func(roleID, itemID int64) { go a.mutateHeraBoard(d, roleID, itemID, time.Time{}, true) }
 		a.heraPage.OnApprovalDecision = func(item *db.HeraBoardItem, approve bool) { a.confirmResidentApproval(d, item, approve) }
 		// Persist + restore the rail's fold/selection state across restarts

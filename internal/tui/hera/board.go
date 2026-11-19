@@ -162,9 +162,9 @@ func boardHint(keys *keymap.Keymap, focused bool) string {
 	if !focused {
 		return "⌘→ open board · " + label(keymap.ActBoardToggle) + " plan"
 	}
-	return fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s dismiss · %s plan · ctrl+q back",
+	return fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s dismiss · %s decide · %s plan · ctrl+q back",
 		label(keymap.ActBoardDown), label(keymap.ActBoardUp), label(keymap.ActBoardReply),
-		label(keymap.ActBoardDismiss), label(keymap.ActBoardToggle))
+		label(keymap.ActBoardDismiss), label(keymap.ActBoardDecide), label(keymap.ActBoardToggle))
 }
 
 type boardLine struct {
@@ -385,7 +385,7 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 			if i.ResidentApproval {
 				lines = append(lines, approvalBodyLines(i.Body, inner.W)...)
 			} else {
-				lines = append(lines, boardBodyLines(i.Body, inner.W)...)
+				lines = append(lines, boardBodyLines(boardItemBody(i), inner.W)...)
 			}
 		} else {
 			header := runewidth.Truncate(prefix+subject, max(0, inner.W-runewidth.StringWidth(unread)), "…") + unread
@@ -437,6 +437,26 @@ func (b *boardView) handleMouse(action tview.MouseAction, event *tcell.EventMous
 func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Primitive)) {
 	act, _ := p.keys().Resolve(keymap.CtxHeraBoard, event)
 	switch {
+	case act == keymap.ActBoardDecide:
+		if p.IsRemote() {
+			return
+		}
+		var role, focus int64
+		if o := p.rail.model.OrchByID(p.boardOrchID); o != nil {
+			if c := o.CoordRole(); c != nil {
+				role = c.RoleID
+			}
+		}
+		if i := p.board.selected(); i != nil {
+			role = i.RoleID
+			if i.Kind == "decision" && !i.Resolved {
+				focus = i.ID
+			}
+		}
+		uxlog.Log("[board] open attempt role=%d focus=%d", role, focus)
+		if p.OnBoardDecide != nil {
+			p.OnBoardDecide(role, focus)
+		}
 	case event.Key() == tcell.KeyDown || act == keymap.ActBoardDown:
 		p.board.cursor = min(len(p.board.items)-1, p.board.cursor+1)
 		p.board.followCursor = true
@@ -538,4 +558,28 @@ func (p *HeraPage) replyToBoard(i *db.HeraBoardItem) {
 	p.coordPane.ResetScroll()
 	p.focus.SetRegion(FocusCoord)
 	uxlog.Log("[board] reply composed role=%d item=%d", i.RoleID, i.ID)
+}
+
+func boardItemBody(i *db.HeraBoardItem) string {
+	if i.Structured == nil {
+		return i.Body
+	}
+	var b strings.Builder
+	b.WriteString(i.Body)
+	b.WriteString("\n\n**Options**\n\n")
+	for _, o := range i.Structured.Options {
+		fmt.Fprintf(&b, "- **%s**", o.Label)
+		if o.ID == i.Structured.Recommended {
+			b.WriteString(" (recommended)")
+		}
+		b.WriteString("\n")
+		if o.Summary != "" {
+			fmt.Fprintf(&b, "  - %s\n", o.Summary)
+		}
+		fmt.Fprintf(&b, "  - Upside: %s\n  - Downside: %s\n", o.Upside, o.Downside)
+	}
+	if i.Structured.Reason != "" {
+		fmt.Fprintf(&b, "\n**Recommendation:** %s", i.Structured.Reason)
+	}
+	return b.String()
 }

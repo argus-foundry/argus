@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -99,4 +100,54 @@ func TestHeraBoardDismissalInboxSender(t *testing.T) {
 	testutil.False(t, got.IsError)
 	testutil.Contains(t, got.Content[0].Text, "from: Aaron (board)")
 	testutil.False(t, strings.Contains(got.Content[0].Text, "from: coord"))
+}
+
+func TestHeraBoardStructuredTools(t *testing.T) {
+	s, d := testHeraServer(t)
+	task := seedCoordinator(t, s, d, "structured", "/wt/structured")
+	b, err := d.HeraLiveBindingByTask(task.ID)
+	testutil.NoError(t, err)
+	call := func(verb, args string) ToolCallResult {
+		t.Helper()
+		return callResult(t, s.toolHeraBoard(1, json.RawMessage(args), verb))
+	}
+	result := call("post", `{"cwd":"/wt/structured","kind":"decision","subject":"Choose","body":"Situation","options":[{"id":"retry","label":"Retry"},{"id":"wait","label":"Wait"}],"recommended":"retry","reason":"Faster"}`)
+	testutil.Equal(t, result.IsError, false)
+	items, err := d.ListHeraBoardItems(b.RoleID, false)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(items), 1)
+	testutil.Equal(t, items[0].Structured.Recommended, "retry")
+	result = call("update", fmt.Sprintf(`{"cwd":"/wt/structured","id":%d,"kind":"decision","subject":"Choose","body":"Situation","recommended":"wait","reason":"Safer"}`, items[0].ID))
+	testutil.Equal(t, result.IsError, false)
+	result = call("update", fmt.Sprintf(`{"cwd":"/wt/structured","id":%d,"kind":"decision","subject":"Choose","body":"Situation","recommended":"missing"}`, items[0].ID))
+	testutil.Equal(t, result.IsError, true)
+	for _, tc := range []struct {
+		name, fields string
+		plain        bool
+	}{{"omit", "", false}, {"clear", `,"options":[]`, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := call("update", fmt.Sprintf(`{"cwd":"/wt/structured","id":%d,"kind":"decision","subject":"Choose","body":"Updated"%s}`, items[0].ID, tc.fields))
+			testutil.Equal(t, result.IsError, false)
+			current, err := d.ListHeraBoardItems(b.RoleID, false)
+			testutil.NoError(t, err)
+			testutil.Equal(t, current[0].Structured == nil, tc.plain)
+		})
+	}
+}
+
+func TestBoardToolSchemaMatchesDecode(t *testing.T) {
+	fields := map[string]bool{}
+	typ := reflect.TypeFor[boardToolParams]()
+	for n := range typ.NumField() {
+		fields[typ.Field(n).Tag.Get("json")] = true
+	}
+	for _, tool := range boardToolDefs() {
+		t.Run(tool.Name, func(t *testing.T) {
+			properties := tool.InputSchema.(map[string]interface{})["properties"].(map[string]interface{})
+			testutil.Equal(t, len(properties), len(fields))
+			for name := range properties {
+				testutil.Equal(t, fields[name], true)
+			}
+		})
+	}
 }

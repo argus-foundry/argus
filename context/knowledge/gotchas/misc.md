@@ -413,3 +413,7 @@
 - **A regular rollout inode may still be a hard link to credentials.** Before transfer, require opened-fd Nlink=1 and native session_meta for the indexed thread with the move-specific 4 MiB budget (context readers retain 64 KiB); rewind that same descriptor before copying so validation does not truncate the conversation.
 
 - **`POST /api/tasks/{id}/reveal` validates on the symlink-resolved path right before `open`, and the launcher/GOOS are Server seams.** Worktree mode additionally rejects final symlinks/non-directories via Lstat and uses fixed `open -a Finder` arguments so a post-check swap cannot activate a bundle. Lexical pre-screen (absolute, `..`, NUL, `.git` segment case-insensitively) then `EvalSymlinks` + `filepath.Rel` containment + a second `.git` check on the resolved relative path (a symlink to `.git` would otherwise pass); only regular files in file mode. Tests must never run real `open`.
+
+## Board decisions
+
+- **An omitted board-update `options` parameter preserves structured options and recommendation.** Only an explicit empty array clears the structure; structure changes mark unread and advance the revision so stale browser answers conflict.

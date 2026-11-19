@@ -40,6 +40,61 @@ func drawBoardRows(t *testing.T, b *boardView, width, height int) (tcell.Simulat
 	return sim, rows
 }
 
+func TestBoardDecideKey(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		items  []*db.HeraBoardItem
+		cursor int
+		focus  int64
+	}{{"structured", []*db.HeraBoardItem{{ID: 3, Kind: "decision", RoleID: 7}}, 0, 3}, {"fyi", []*db.HeraBoardItem{{ID: 4, Kind: "fyi", RoleID: 7}}, 0, 0}, {"no selection", nil, -1, 0}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewHeraPage(memDB(t))
+			p.board.items = tc.items
+			p.board.cursor = tc.cursor
+			var focus int64 = -1
+			p.OnBoardDecide = func(_, id int64) { focus = id }
+			p.handleBoardKey(tcell.NewEventKey(tcell.KeyRune, 'o', 0), nil)
+			testutil.Equal(t, focus, tc.focus)
+		})
+	}
+}
+
+func TestStructuredBoardBody(t *testing.T) {
+	i := &db.HeraBoardItem{Body: "Situation", Structured: &db.HeraBoardStructure{Options: []db.HeraBoardOption{{ID: "retry", Label: "Retry 漢字", Upside: "Recover", Downside: "Cost"}, {ID: "wait", Label: "Wait"}}, Recommended: "retry", Reason: "Faster"}}
+	body := boardItemBody(i)
+	testutil.Contains(t, body, "Retry 漢字")
+	testutil.Contains(t, body, "(recommended)")
+	testutil.Contains(t, body, "Upside: Recover")
+	testutil.Contains(t, body, "Recommendation:")
+	for _, width := range []int{18, 40, 100} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			lines := boardBodyLines(body, width)
+			testutil.Equal(t, len(lines) > 5, true)
+			for _, line := range lines {
+				testutil.Equal(t, tview.TaggedStringWidth(line.text) <= width, true)
+			}
+		})
+	}
+}
+
+func TestBoardDecideNoSelectionAndRemote(t *testing.T) {
+	d := memDB(t)
+	oid := seedOrch(t, d, "decide")
+	seedBoundRole(t, d, oid, "coord", db.HeraKindCoordinator, "t-coord")
+	p := NewHeraPage(d)
+	p.Refresh()
+	testutil.Equal(t, selectOrchByName(p, "decide"), true)
+	c := p.detailsOrch().CoordRole()
+	p.board.cursor = -1
+	var gotRole int64
+	p.OnBoardDecide = func(role, _ int64) { gotRole = role }
+	p.handleBoardKey(key('o'), nil)
+	testutil.Equal(t, gotRole, c.RoleID)
+	remote := NewHeraPage(nil)
+	remote.OnBoardDecide = func(int64, int64) { t.Fatal("remote launcher called") }
+	remote.handleBoardKey(key('o'), nil)
+}
+
 func TestBoardBodyWrapping(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
@@ -435,14 +490,14 @@ func TestBoardHintRendering(t *testing.T) {
 		want           string
 	}{
 		{"unfocused empty", false, true, 100, 6, nil, "⌘→ open board · p plan"},
-		{"focused empty", true, true, 100, 6, nil, "j/k move · ⏎ expand · r reply · x dismiss · p plan · ctrl+q back"},
-		{"focused scrolling", true, false, 100, 6, nil, "j/k move · ⏎ expand · r reply · x dismiss · p plan · ctrl+q back"},
+		{"focused empty", true, true, 100, 6, nil, "j/k move · ⏎ expand · r reply · x dismiss · o decide · p plan · ctrl+q back"},
+		{"focused scrolling", true, false, 100, 6, nil, "j/k move · ⏎ expand · r reply · x dismiss · o decide · p plan · ctrl+q back"},
 		{"narrow", true, false, 12, 6, nil, "j/k move ·"},
 		{"one column", true, false, 3, 6, nil, "j"},
 		{"wide key clipped", true, false, 3, 6, map[string]string{"down": "界"}, ""},
-		{"literal bracket key", true, false, 100, 6, map[string]string{"reply": "["}, "j/k move · ⏎ expand · [ reply · x dismiss · p plan · ctrl+q back"},
+		{"literal bracket key", true, false, 100, 6, map[string]string{"reply": "["}, "j/k move · ⏎ expand · [ reply · x dismiss · o decide · p plan · ctrl+q back"},
 		{"one interior row", false, false, 100, 3, nil, "⌘→ open board · p plan"},
-		{"rebound focused", true, false, 100, 6, map[string]string{"down": "n", "up": "u", "reply": "a", "dismiss": "d", "toggle": "b"}, "n/u move · ⏎ expand · a reply · d dismiss · b plan · ctrl+q back"},
+		{"rebound focused", true, false, 100, 6, map[string]string{"down": "n", "up": "u", "reply": "a", "dismiss": "d", "toggle": "b"}, "n/u move · ⏎ expand · a reply · d dismiss · o decide · b plan · ctrl+q back"},
 		{"rebound unfocused", false, true, 100, 6, map[string]string{"toggle": "b"}, "⌘→ open board · b plan"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

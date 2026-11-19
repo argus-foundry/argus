@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-//go:embed static/index.html static/vendor/* static/manifest.webmanifest static/sw.js static/icon-192.png static/icon-512.png static/apple-touch-icon.png
+//go:embed static/index.html static/decide.html static/vendor/* static/manifest.webmanifest static/sw.js static/icon-192.png static/icon-512.png static/apple-touch-icon.png
 var staticFS embed.FS
 
 // routes returns the HTTP mux with all API endpoints registered.
@@ -20,6 +20,11 @@ func (s *Server) routes() *http.ServeMux {
 	// dashboard HTML; client-side JS reads ?title/&text/&url and prefills the
 	// New Task form. Unauthenticated for the same reason as `/`.
 	mux.HandleFunc("GET /share", s.handleDashboard)
+	mux.HandleFunc("GET /decide", s.handleDecidePage)
+	mux.HandleFunc("POST /api/hera/roles/{role_id}/board/decision-link", s.handleDecisionLink)
+	mux.HandleFunc("POST /api/hera/board/decision-session", s.handleDecisionSession)
+	mux.HandleFunc("GET /api/hera/roles/{role_id}/board/decisions", s.handleDecisions)
+	mux.HandleFunc("POST /api/hera/roles/{role_id}/board/answers", s.handleDecisionAnswers)
 	// Static assets (xterm.js, css, fit-addon) — also unauthenticated since
 	// the dashboard needs them before the user authenticates.
 	mux.HandleFunc("GET /vendor/", s.handleVendor)

@@ -128,7 +128,7 @@ Aaron answered 3 board decisions. Act on these; each is already resolved.
 Still open: #42, #43
 ```
 
-with a `tldr` of "Aaron answered 3 board decisions". The note cap and the per-round item cap (at most 16 items per submit, 3 KiB per note) are chosen so the rendered message always fits the 64 KiB message cap.
+with a `tldr` of "Aaron answered 3 board decisions". The note cap and the per-round item cap (at most 16 items per submit, 4 KiB per note) keep full notes durably on each item. Summary notes SHALL be budgeted evenly across answered items to keep the message within 64 KiB. A shortened note ends with `… [truncated — full note on board item #N; hera_board_list include_resolved=true]`; notes under budget remain untouched.
 
 ### D6. TUI changes
 

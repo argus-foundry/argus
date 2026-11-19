@@ -108,7 +108,7 @@ Each resolved answer SHALL set the item `resolved`, `resolved_by` to `human`, `r
 
 ### Requirement: One summary message to the coordinator
 
-When a submission resolves at least one item, the system SHALL write exactly one self-addressed coordinator message in the same transaction as the item resolutions, delivered through the existing board-notice outbox and shown as `Aaron (board)`. It SHALL list, for each resolved item in id order, the id, subject, the chosen option label (marking when it is the recommendation, or "Something else") and the note or `none`, followed by the ids of the coordinator's items that remain open. It SHALL state that every listed item is already resolved. A submission that resolves nothing SHALL write no message. Resolving through this path SHALL NOT also write the human-dismissal "dropped" notice. The notice SHALL remain durable and deliver after a binding exists if none is live.
+When a submission resolves at least one item, the system SHALL write exactly one self-addressed coordinator message in the same transaction as the item resolutions, delivered through the existing board-notice outbox and shown as `Aaron (board)`. It SHALL list, for each resolved item in id order, the id, subject, the chosen option label (marking when it is the recommendation, or "Something else") and the note or `none`, followed by the ids of the coordinator's items that remain open. It SHALL state that every listed item is already resolved. A submission that resolves nothing SHALL write no message. Resolving through this path SHALL NOT also write the human-dismissal "dropped" notice. Full notes up to 4 KiB SHALL remain durably stored on each item. The summary SHALL fit within 64 KiB by budgeting note space evenly across answered items. Each shortened note SHALL end with `… [truncated — full note on board item #N; hera_board_list include_resolved=true]`; notes under budget SHALL remain untouched. The notice SHALL remain durable and deliver after a binding exists if none is live.
 
 #### Scenario: One message for a round
 
@@ -124,6 +124,11 @@ When a submission resolves at least one item, the system SHALL write exactly one
 
 - **WHEN** every answer in a submission conflicts
 - **THEN** no message is written
+
+#### Scenario: Maximum-size notes
+
+- **WHEN** sixteen answers each contain a 4 KiB note
+- **THEN** full notes remain on the items and the summary fits within 64 KiB, with every shortened note carrying the full-note pointer
 
 #### Scenario: Coordinator unbound
 

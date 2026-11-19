@@ -56,7 +56,7 @@ func TestHeraCoordinatorOrientation_NamesOrch(t *testing.T) {
 
 func TestHeraCoordinatorOrientation_HumanBoard(t *testing.T) {
 	got := HeraCoordinatorOrientation("board")
-	for _, rule := range []string{"hera_board_post", "hera_board_update", "hera_board_resolve", "when settled", "after Aaron replies"} {
+	for _, rule := range []string{"hera_board_post", "hera_board_update", "hera_board_resolve", "when settled", "after Aaron replies", "structured options", "recommended and reason", "press o", "Something else requires a note", "already-resolved answers", "Still open"} {
 		t.Run(rule, func(t *testing.T) { testutil.Contains(t, got, rule) })
 	}
 }

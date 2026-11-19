@@ -44,7 +44,8 @@ type TaskCreator func(name, prompt, project, backend, taskModel, sandboxOverride
 
 // Server is the HTTP REST API server.
 type Server struct {
-	db *db.DB
+	decisions decisionStore
+	db        *db.DB
 
 	// Archive guard seams (SetArchiveGuard): the same verdict inputs hera_archive uses.
 	archiveRunner  hera.ArchiveRunner
@@ -311,15 +312,17 @@ func (s *Server) ListenAndServe(port int) (int, error) {
 	// Auth middleware skips the dashboard route (GET /) and /vendor/ static
 	// assets so the page can load and prompt for the token. All /api/* routes
 	// require auth.
-	handler := authMiddleware(s.token, s.db, s.push, mux, "/",
+	handler := s.decisionMiddleware(authMiddleware(s.token, s.db, s.push, mux, "/",
 		"/share",
+		"/decide",
+		"/api/hera/board/decision-session",
 		"/vendor/",
 		"/manifest.webmanifest",
 		"/sw.js",
 		"/icon-192.png",
 		"/icon-512.png",
 		"/apple-touch-icon.png",
-	)
+	))
 
 	// Add CORS headers for mobile browser access over Tailscale.
 	handler = corsMiddleware(handler)

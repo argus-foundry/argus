@@ -14,6 +14,19 @@ func ev(k tcell.Key, r rune, m tcell.ModMask) *tcell.EventKey {
 	return tcell.NewEventKey(k, r, m)
 }
 
+func TestBoardDecideBinding(t *testing.T) {
+	act, ok := DefaultKeymap().Resolve(CtxHeraBoard, ev(tcell.KeyRune, 'o', 0))
+	testutil.Equal(t, ok, true)
+	testutil.Equal(t, act, ActBoardDecide)
+	keys, warnings := Build(config.Keybindings{HeraBoard: map[string]string{"decide": "v"}})
+	testutil.Equal(t, len(warnings), 0)
+	act, ok = keys.Resolve(CtxHeraBoard, ev(tcell.KeyRune, 'v', 0))
+	testutil.Equal(t, ok, true)
+	testutil.Equal(t, act, ActBoardDecide)
+	_, ok = keys.Resolve(CtxHeraBoard, ev(tcell.KeyRune, 'o', 0))
+	testutil.Equal(t, ok, false)
+}
+
 // TestDefaultsParse + completeness: every default parses, is allowed in its
 // context, and is unique within the context.
 func TestDefaultsParseAndUnique(t *testing.T) {

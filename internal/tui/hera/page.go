@@ -210,6 +210,7 @@ type HeraPage struct {
 	showBoard          bool
 	boardAuto          bool
 	boardHeight        int
+	OnBoardDecide      func(roleID, focusItemID int64)
 	OnBoardRead        func(roleID, itemID int64, updatedAt time.Time)
 	OnBoardDismiss     func(roleID, itemID int64)
 	OnApprovalDecision func(item *db.HeraBoardItem, approve bool)

@@ -7,7 +7,7 @@
 //
 // Increment SW_VERSION on any shell change to bust the cache.
 
-const SW_VERSION = 'argus-shell-v94';
+const SW_VERSION = 'argus-shell-v95';
 const SHELL_ASSETS = [
   '/',
   '/manifest.webmanifest',
@@ -39,6 +39,9 @@ self.addEventListener('fetch', (event) => {
 
   // Same-origin only.
   if (url.origin !== self.location.origin) return;
+
+  // Decision pages always come from the daemon. Never cache launch URLs.
+  if (url.pathname === '/decide') return;
 
   // /api/* — network only, never cache (auth, dynamic data).
   if (url.pathname.startsWith('/api/')) {
