@@ -4,9 +4,91 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
 const html = readFileSync(new URL('../../internal/api/static/decide.html', import.meta.url),'utf8');
-const context = {globalThis: {}, document: {addEventListener() {}}};
+const context = {globalThis: {}, URL, document: {addEventListener() {}}};
 vm.runInNewContext(html.match(/<script id="decision-logic">([\s\S]*?)<\/script>/)[1],context);
 const logic = context.globalThis.BoardDecisions;
+
+class Node {
+ constructor(tag,text=''){this.tag=tag;this.text=text;this.children=[];this.attributes={};}
+ append(...values){this.children.push(...values);}
+ setAttribute(key,value){this.attributes[key]=value;}
+ set textContent(value){this.text=value;this.children=[];}
+ get textContent(){return this.text+this.children.map(c=>typeof c==='string'?c:c.textContent).join('');}
+}
+const doc={createElement:t=>new Node(t),createTextNode:t=>new Node('#text',t)};
+function nodes(root,tag){return [root,...root.children.flatMap(c=>typeof c==='string'?[]:nodes(c))].filter(n=>!tag || n.tag===tag);}
+
+function theme(storage) {
+ const root={dataset:{}},env={};
+ Object.defineProperty(env,'localStorage',{get:typeof storage==='function'?storage:()=>storage});
+ const source=html.match(/<script id="decision-theme">([\s\S]*?)<\/script>/)?.[1];
+ assert.ok(source,'theme restoration must run in the head before styles/body');
+ assert.ok(html.indexOf('id="decision-theme"')<html.indexOf('<style>'));
+ vm.runInNewContext(source,{globalThis:env,document:{documentElement:root}});
+ return {root,api:env.BoardDecisionTheme};
+}
+
+test('theme defaults to system and persists only a validated theme across pages',()=>{
+ const saved=new Map(),storage={getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v)};
+ const first=theme(storage);
+ assert.equal(first.root.dataset.theme,'system');
+ first.api.set('dark');
+ assert.deepEqual([...saved.values()],['dark']);
+ assert.equal(theme(storage).root.dataset.theme,'dark');
+ first.api.set('light');assert.equal(theme(storage).root.dataset.theme,'light');
+ first.api.set('system');assert.equal(theme(storage).root.dataset.theme,'system');
+ first.api.set('javascript:payload');assert.equal(first.root.dataset.theme,'system');
+ assert.deepEqual([...saved.values()],['system']);
+ assert.equal(theme({getItem:()=> 'invalid'}).root.dataset.theme,'system');
+});
+
+test('throwing storage access, reads and writes never prevent theme rendering or changes',()=>{
+ for(const [storage,initial] of [[()=>{throw Error('denied');},'system'],[{getItem(){throw Error('read');},setItem(){throw Error('write');}},'system'], [{getItem:()=> 'dark',setItem(){throw Error('full');}},'dark']]) {
+  const page=theme(storage);
+  assert.equal(page.root.dataset.theme,initial);
+  assert.doesNotThrow(()=>page.api.set('light'));assert.equal(page.root.dataset.theme,'light');
+  assert.doesNotThrow(()=>page.api.set('dark'));assert.equal(page.root.dataset.theme,'dark');
+ }
+});
+
+test('invalid URL candidates remain text and uppercase HTTP(S) references link',()=>{
+ const text='https://). HTTPS://example.com/path! http://, https://example.org/next';
+ const rendered=logic.markup(text,doc);
+ assert.equal(rendered.textContent,text);
+ assert.deepEqual(nodes(rendered,'a').map(n=>n.attributes.href),['HTTPS://example.com/path','https://example.org/next']);
+});
+
+test('balanced URL brackets survive while prose closing brackets remain outside links',()=>{
+ const text='Local http://[::1] and [https://example.com/path].';
+ const rendered=logic.markup(text,doc);
+ assert.equal(rendered.textContent,text);
+ assert.deepEqual(nodes(rendered,'a').map(n=>n.attributes.href),['http://[::1]','https://example.com/path']);
+});
+
+test('links only HTTP(S), trims terminal punctuation and preserves balanced parentheses',()=>{
+ const text='See http://example.com/a, https://example.com/b). https://example.com/wiki_(test). javascript:alert(1) data:text/html,payload';
+ const rendered=logic.markup(text,doc),links=nodes(rendered,'a');
+ assert.deepEqual(links.map(n=>n.attributes.href),['http://example.com/a','https://example.com/b','https://example.com/wiki_(test)']);
+ assert.equal(rendered.textContent,text);
+ for(const link of links){assert.equal(link.attributes.target,'_blank');assert.equal(link.attributes.rel,'noopener noreferrer');assert.equal(link.textContent,link.attributes.href);}
+});
+
+test('formatting links bold text but never URLs in code, including bold code',()=>{
+ const rendered=logic.markup('Paragraph https://example.com\n\n**See https://example.org and `https://code.example`**\n\n- `http://code.test`',doc);
+ assert.equal(nodes(rendered,'p').length,2);
+ assert.equal(nodes(rendered,'ul').length,1);
+ assert.deepEqual(nodes(rendered,'a').map(n=>n.attributes.href),['https://example.com','https://example.org']);
+ assert.equal(nodes(rendered,'code').length,2);
+ assert.ok(nodes(rendered,'code').every(n=>nodes(n,'a').length===0));
+});
+
+test('linkification preserves XSS payloads as literal text and rejects unsafe schemes',()=>{
+ const text='https://example.com/\"><img src=x onerror=alert(1)> javascript:alert(1) data:text/html,<svg onload=alert(1)>';
+ const rendered=logic.markup(text,doc);
+ assert.equal(rendered.textContent,text);
+ assert.equal(nodes(rendered,'img').length,0);assert.equal(nodes(rendered,'svg').length,0);
+ assert.deepEqual(nodes(rendered,'a').map(n=>n.attributes.href),['https://example.com/']);
+});
 
 test('payload includes only decided cards and keeps revisions',()=>{
  const items=[{id:1,updated_at:'a',structured:null},{id:2,updated_at:'b',structured:{options:[{id:'retry'}]}}];
@@ -28,8 +110,6 @@ test('draft keys isolate roles, items and revisions',()=>{
 });
 
 test('markup renderer treats hostile HTML as text',()=>{
- class Node {constructor(tag,text=''){this.tag=tag;this.text=text;this.children=[];}append(...values){this.children.push(...values);} get textContent(){return this.text+this.children.map(c=>typeof c==='string'?c:c.textContent).join('');}}
- const doc={createElement:t=>new Node(t),createTextNode:t=>new Node('#text',t)};
  const node=logic.markup('Hello **bold** and `code`\n\n- <img src=x onerror=alert(1)>\n- second\n\n1. first',doc);
  assert.match(node.textContent,/<img src=x onerror=alert\(1\)>/);
  const tags=[];const walk=n=>{tags.push(n.tag);n.children?.filter(c=>typeof c!=='string').forEach(walk);};walk(node);
