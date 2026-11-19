@@ -62,7 +62,9 @@ jobs:
           govulncheck ./...
 
       - name: Test
-        run: go test -race -count=1 -coverprofile=coverage.out ./...
+        # Keep the per-package hang guard in sync with Makefile TEST_TIMEOUT.
+        # api/tui exceeded 10m in CI; db passed at 571s (2026-11-19).
+        run: go test -race -count=1 -timeout 20m -coverprofile=coverage.out ./...
 
       - name: Filter Coverage
         # Strips entries listed in coverage-ignore.txt (CLI entry points,
