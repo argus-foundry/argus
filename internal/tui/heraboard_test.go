@@ -53,7 +53,18 @@ func TestSmoke_CoordinatorBoard(t *testing.T) {
 		testutil.Equal(t, app.tapp.GetFocus() == app.heraPage, true)
 		w, h := sim.Size()
 		testutil.Contains(t, screenText(sim, w, h), "Choose rollout")
-		testutil.Contains(t, screenText(sim, w, h), "j/k move · ⏎ expand · r reply · x dismiss · p plan · ctrl+q back")
+		testutil.Contains(t, screenText(sim, w, h), "j/k move · ⏎ expand · r reply · x dismiss · o decide · p plan · ctrl+q back")
+	})
+	var decideRole, decideFocus int64
+	readUI(t, app.tapp, func() {
+		app.heraPage.OnBoardDecide = func(role, focus int64) { decideRole = role; decideFocus = focus }
+	})
+	sim.InjectKey(tcell.KeyRune, 'o', 0)
+	syncUI(t, app.tapp)
+	readUI(t, app.tapp, func() {
+		testutil.Equal(t, decideRole, role.ID)
+		testutil.Equal(t, decideFocus, item.ID)
+		testutil.Equal(t, len(sess.writes), 0)
 	})
 	sim.InjectKey(tcell.KeyCtrlQ, 0, 0)
 	syncUI(t, app.tapp)
@@ -70,7 +81,7 @@ func TestSmoke_CoordinatorBoard(t *testing.T) {
 	syncUI(t, app.tapp)
 	readUI(t, app.tapp, func() {
 		w, h := sim.Size()
-		testutil.Contains(t, screenText(sim, w, h), "j/k move · ⏎ expand · a reply · x dismiss · p plan · ctrl+q back")
+		testutil.Contains(t, screenText(sim, w, h), "j/k move · ⏎ expand · a reply · x dismiss · o decide · p plan · ctrl+q back")
 	})
 	sim.InjectKey(tcell.KeyEnter, 0, 0)
 	syncUI(t, app.tapp)

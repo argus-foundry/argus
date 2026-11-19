@@ -860,6 +860,8 @@ func (d *DB) createHeraTables() error {
 	if _, err := d.conn.Exec(ddl); err != nil {
 		return fmt.Errorf("creating hera tables: %w", err)
 	}
+	d.conn.Exec(`ALTER TABLE hera_board_items ADD COLUMN structured TEXT NOT NULL DEFAULT ''`)        //nolint:errcheck
+	d.conn.Exec(`ALTER TABLE hera_board_items ADD COLUMN resolution_choice TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
 	// fix-resident-approval-flow: call_key matches identical call content
 	// across launches/sessions (supersede); decided_at/closed_at/superseded_by
 	// let a decide attempt name the item's real state. Idempotent.

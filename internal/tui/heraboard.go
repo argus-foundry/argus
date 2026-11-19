@@ -1,14 +1,60 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
+
+// openBoardDecisions runs entirely off the UI thread; its caller queues only
+// the final status. Never pass the credential URL through openURL, which logs it.
+func (a *App) openBoardDecisions(roleID, focusItemID int64) string {
+	if a.heraPage.IsRemote() {
+		return ""
+	}
+	uxlog.Log("[board] browser open attempt role=%d focus=%d", roleID, focusItemID)
+	if roleID == 0 {
+		uxlog.Log("[board] browser no coordinator")
+		return "No open decisions"
+	}
+	if !a.db.Config().API.Enabled {
+		uxlog.Log("[board] browser API disabled role=%d", roleID)
+		return "Turn the API on in Settings to answer decisions in the browser"
+	}
+	client, err := a.maintenanceClientFactory()
+	if err != nil {
+		uxlog.Log("[board] browser client unavailable role=%d", roleID)
+		return "Turn the API on in Settings to answer decisions in the browser"
+	}
+	var link struct{ Path, Ticket string }
+	body := fmt.Sprintf(`{"focus_item_id":%d}`, focusItemID)
+	err = client.do(context.Background(), "POST", fmt.Sprintf("/api/hera/roles/%d/board/decision-link", roleID), strings.NewReader(body), &link)
+	if err != nil {
+		if strings.Contains(err.Error(), "no_decisions") {
+			uxlog.Log("[board] browser no decisions role=%d", roleID)
+			return "No open decisions"
+		}
+		uxlog.Log("[board] browser mint failed role=%d", roleID)
+		return "Could not open decisions; check the API in Settings"
+	}
+	// Treat the response as a local daemon path, never an arbitrary open scheme.
+	if !strings.HasPrefix(link.Path, "/decide?") || link.Ticket == "" {
+		uxlog.Log("[board] browser invalid link role=%d", roleID)
+		return "Could not open decisions"
+	}
+	if err = browserOpener(client.baseURL + link.Path + "#t=" + link.Ticket); err != nil {
+		uxlog.Log("[board] browser launch failed role=%d", roleID)
+		return "Could not launch the browser"
+	}
+	uxlog.Log("[board] browser opened role=%d", roleID)
+	return "Decisions opened in browser"
+}
 
 func (a *App) confirmResidentApproval(d *db.DB, item *db.HeraBoardItem, approve bool) {
 	action := "Deny"

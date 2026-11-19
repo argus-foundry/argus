@@ -58,6 +58,7 @@ func TestHelpModal_Draw(t *testing.T) {
 	body := screenString(sim)
 	testutil.Contains(t, body, "Keybindings")
 	testutil.Contains(t, body, "Coordinator board")
+	testutil.Contains(t, body, "answer decisions in browser")
 	testutil.Contains(t, body, "toggle plan / human board")
 	testutil.Contains(t, body, "compose reply / approve exact resident call")
 	testutil.Contains(t, body, "dismiss item / deny resident call")

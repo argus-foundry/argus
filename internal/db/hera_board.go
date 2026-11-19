@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -22,25 +23,27 @@ var (
 
 // HeraBoardItem is a curated human attention item, owned by a durable role.
 type HeraBoardItem struct {
-	ID               int64     `json:"id"`
-	RoleID           int64     `json:"role_id"`
-	Kind             string    `json:"kind"`
-	Subject          string    `json:"subject"`
-	Body             string    `json:"body"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	Read             bool      `json:"read"`
-	Resolved         bool      `json:"resolved"`
-	ResolvedBy       string    `json:"resolved_by"`
-	ResolutionNote   string    `json:"resolution_note"`
-	ResidentApproval bool      `json:"resident_approval,omitempty"`
+	Structured       *HeraBoardStructure `json:"structured"`
+	ResolutionChoice string              `json:"resolution_choice"`
+	ID               int64               `json:"id"`
+	RoleID           int64               `json:"role_id"`
+	Kind             string              `json:"kind"`
+	Subject          string              `json:"subject"`
+	Body             string              `json:"body"`
+	CreatedAt        time.Time           `json:"created_at"`
+	UpdatedAt        time.Time           `json:"updated_at"`
+	Read             bool                `json:"read"`
+	Resolved         bool                `json:"resolved"`
+	ResolvedBy       string              `json:"resolved_by"`
+	ResolutionNote   string              `json:"resolution_note"`
+	ResidentApproval bool                `json:"resident_approval,omitempty"`
 	// ApprovalState is the resident approval state (pending, approved,
 	// consumed, denied, stale, expired, withdrawn, superseded); empty for an
 	// ordinary item.
 	ApprovalState string `json:"approval_state,omitempty"`
 }
 
-const boardColumns = `id, role_id, kind, subject, body, created_at, updated_at, is_read, resolved, resolved_by, resolution_note, COALESCE((SELECT a.state FROM resident_approvals a WHERE a.board_id=hera_board_items.id),'')`
+const boardColumns = `id, role_id, kind, subject, body, created_at, updated_at, is_read, resolved, resolved_by, resolution_note, structured, resolution_choice, COALESCE((SELECT a.state FROM resident_approvals a WHERE a.board_id=hera_board_items.id),'')`
 
 func validBoardContent(kind, subject, body string) bool {
 	return (kind == "decision" || kind == "fyi") && strings.TrimSpace(subject) != "" && len(subject) <= 240 && !strings.ContainsFunc(subject, unicode.IsControl) && len(body) <= 64*1024
@@ -48,13 +51,18 @@ func validBoardContent(kind, subject, body string) bool {
 
 func scanBoard(s rowScanner) (*HeraBoardItem, error) {
 	var i HeraBoardItem
-	var created, updated string
-	err := s.Scan(&i.ID, &i.RoleID, &i.Kind, &i.Subject, &i.Body, &created, &updated, &i.Read, &i.Resolved, &i.ResolvedBy, &i.ResolutionNote, &i.ApprovalState)
+	var created, updated, structured string
+	err := s.Scan(&i.ID, &i.RoleID, &i.Kind, &i.Subject, &i.Body, &created, &updated, &i.Read, &i.Resolved, &i.ResolvedBy, &i.ResolutionNote, &structured, &i.ResolutionChoice, &i.ApprovalState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrHeraBoardNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	if structured != "" {
+		if err := json.Unmarshal([]byte(structured), &i.Structured); err != nil {
+			return nil, err
+		}
 	}
 	i.CreatedAt = parseTime(created)
 	i.UpdatedAt = parseTime(updated)
@@ -62,23 +70,27 @@ func scanBoard(s rowScanner) (*HeraBoardItem, error) {
 	return &i, nil
 }
 
-func (d *DB) PostHeraBoardItem(roleID int64, kind, subject, body string) (*HeraBoardItem, error) {
-	i, err := d.postHeraBoardItem(roleID, kind, subject, body)
+func (d *DB) PostHeraBoardItem(roleID int64, kind, subject, body string, structure ...*HeraBoardStructure) (*HeraBoardItem, error) {
+	i, err := d.postHeraBoardItem(roleID, kind, subject, body, structure...)
 	if err == nil {
 		d.emitBoardChanged(roleID, i.ID, "posted")
 	}
 	return i, err
 }
 
-func (d *DB) postHeraBoardItem(roleID int64, kind, subject, body string) (*HeraBoardItem, error) {
+func (d *DB) postHeraBoardItem(roleID int64, kind, subject, body string, structure ...*HeraBoardStructure) (*HeraBoardItem, error) {
 	if !validBoardContent(kind, subject, body) {
 		return nil, ErrHeraBoardInvalid
+	}
+	raw, err := encodeBoardStructure(kind, firstBoardStructure(structure))
+	if err != nil {
+		return nil, err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := formatTime(time.Now())
-	res, err := d.conn.Exec(`INSERT INTO hera_board_items(role_id,kind,subject,body,created_at,updated_at)
- SELECT id,?,?,?,?,? FROM hera_roles WHERE id=? AND kind='coordinator' AND archived_at IS NULL`, kind, subject, body, now, now, roleID)
+	res, err := d.conn.Exec(`INSERT INTO hera_board_items(role_id,kind,subject,body,structured,created_at,updated_at)
+ SELECT id,?,?,?,?,?,? FROM hera_roles WHERE id=? AND kind='coordinator' AND archived_at IS NULL`, kind, subject, body, raw, now, now, roleID)
 	if err != nil {
 		return nil, err
 	}
@@ -131,15 +143,15 @@ func (d *DB) PostOrRefreshHeraBoardItem(roleID int64, kind, subject, body string
 	return i, nil
 }
 
-func (d *DB) UpdateHeraBoardItem(roleID, id int64, kind, subject, body string) (*HeraBoardItem, error) {
-	i, changed, err := d.updateHeraBoardItem(roleID, id, kind, subject, body)
+func (d *DB) UpdateHeraBoardItem(roleID, id int64, kind, subject, body string, structure ...*HeraBoardStructure) (*HeraBoardItem, error) {
+	i, changed, err := d.updateHeraBoardItem(roleID, id, kind, subject, body, structure...)
 	if err == nil && changed {
 		d.emitBoardChanged(roleID, id, "updated")
 	}
 	return i, err
 }
 
-func (d *DB) updateHeraBoardItem(roleID, id int64, kind, subject, body string) (*HeraBoardItem, bool, error) {
+func (d *DB) updateHeraBoardItem(roleID, id int64, kind, subject, body string, structure ...*HeraBoardStructure) (*HeraBoardItem, bool, error) {
 	if !validBoardContent(kind, subject, body) {
 		return nil, false, ErrHeraBoardInvalid
 	}
@@ -149,14 +161,20 @@ func (d *DB) updateHeraBoardItem(roleID, id int64, kind, subject, body string) (
 	if err != nil {
 		return nil, false, err
 	}
-	changed := before.Kind != kind || before.Subject != subject || before.Body != body
+	next := before.Structured
+	if len(structure) > 0 {
+		next = structure[0]
+	}
+	raw, err := encodeBoardStructure(kind, next)
+	if err != nil {
+		return nil, false, err
+	}
+	old, _ := encodeBoardStructure(before.Kind, before.Structured)
+	changed := before.Kind != kind || before.Subject != subject || before.Body != body || old != raw
 	if before.ResidentApproval {
 		return nil, false, ErrResidentApproval
 	}
-	res, err := d.conn.Exec(`UPDATE hera_board_items SET
- is_read=CASE WHEN kind<>? OR subject<>? OR body<>? THEN 0 ELSE is_read END,
- updated_at=CASE WHEN kind<>? OR subject<>? OR body<>? THEN ? ELSE updated_at END,
- kind=?,subject=?,body=? WHERE role_id=? AND id=? AND resolved=0`, kind, subject, body, kind, subject, body, formatTime(time.Now()), kind, subject, body, roleID, id)
+	res, err := d.conn.Exec(`UPDATE hera_board_items SET is_read=CASE WHEN ? THEN 0 ELSE is_read END, updated_at=CASE WHEN ? THEN ? ELSE updated_at END, kind=?,subject=?,body=?,structured=? WHERE role_id=? AND id=? AND resolved=0`, changed, changed, formatTime(time.Now()), kind, subject, body, raw, roleID, id)
 	if err != nil {
 		return nil, false, err
 	}

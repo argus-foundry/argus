@@ -1,0 +1,336 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="referrer" content="no-referrer"><title>Open decisions · Argus</title>
+<!-- Layout adapted from Aaron's decision/template.html. System fonts; no external assets. -->
+<style>
+/* Layout: one reading column under a sticky tally bar. Decisions are open
+   sections split by rules; only the options are boxed, because they are the
+   things you pick. */
+:root {
+  --bg: #f2f4f8;
+  --surface: #ffffff;
+  --ink: #171f2d;
+  --muted: #566176;
+  --line: #d3d9e4;
+  --accent: #2540c4;
+  --accent-soft: #e7ebff;
+  --on-accent: #ffffff;
+  --rec: #7a4d00;
+  --rec-bg: #fbedc6;
+  --ok: #17734a;
+  --warn: #9a4300;
+  --display: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10141b; --surface: #181e28; --ink: #e7ebf2; --muted: #9aa5b8; --line: #2c3545;
+    --accent: #93a5ff; --accent-soft: #1f2a55; --on-accent: #0d1330;
+    --rec: #f2c76a; --rec-bg: #3a2d0c; --ok: #6fd3a0; --warn: #f0a868;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10141b; --surface: #181e28; --ink: #e7ebf2; --muted: #9aa5b8; --line: #2c3545;
+  --accent: #93a5ff; --accent-soft: #1f2a55; --on-accent: #0d1330;
+  --rec: #f2c76a; --rec-bg: #3a2d0c; --ok: #6fd3a0; --warn: #f0a868;
+  color-scheme: dark;
+}
+
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.55 var(--body);
+  -webkit-text-size-adjust: 100%;
+}
+body::before {
+  content: ""; position: fixed; inset: 0 0 auto; z-index: 10;
+  height: env(safe-area-inset-top, 0px); background: var(--bg);
+}
+.wrap {
+  max-width: 46rem; margin-inline: auto; box-sizing: border-box;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+code {
+  font-family: var(--mono); font-size: .9em;
+  background: var(--line); padding: 1px 5px; border-radius: 4px;
+}
+
+/* Tally bar */
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--bg); border-bottom: 1px solid var(--line);
+}
+.bar-in {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px;
+  padding-block: 8px;
+}
+.segs { display: flex; gap: 4px; }
+.seg {
+  position: relative; width: 26px; height: 26px; padding: 0; border: 0;
+  background: none; cursor: pointer; border-radius: 4px;
+}
+.seg::after {
+  content: ""; position: absolute; inset: 10px 0; border-radius: 3px;
+  background: var(--line);
+}
+.seg[data-done="true"]::after { background: var(--accent); }
+.seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tally { font: 500 13px/1.4 var(--mono); font-variant-numeric: tabular-nums; }
+.sync { margin-left: auto; font-size: 13px; color: var(--muted); }
+.sync[data-state="saved"] { color: var(--ok); }
+.sync[data-state="failed"] { color: var(--warn); }
+
+/* Opening */
+.lede { padding-block: 40px 28px; display: grid; gap: 12px; }
+h1 {
+  margin: 0; font: 700 clamp(1.75rem, 5vw, 2.5rem)/1.08 var(--display);
+  letter-spacing: -.01em; text-wrap: balance;
+}
+.intro { margin: 0; max-width: 62ch; color: var(--muted); }
+
+/* One decision */
+.decision {
+  display: grid; gap: 16px; padding-block: 34px;
+  border-top: 1px solid var(--line); scroll-margin-top: 60px;
+}
+.count {
+  margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  font: 500 12px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.state {
+  padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px;
+  letter-spacing: .06em;
+}
+.decision[data-done="true"] .state { color: var(--ok); border-color: currentColor; }
+h2 {
+  margin: 0; font: 600 1.45rem/1.2 var(--display); text-wrap: balance;
+}
+.situation { display: grid; gap: 10px; max-width: 65ch; }
+.situation p { margin: 0; }
+
+.options { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.opt {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px;
+  padding: 14px 16px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; cursor: pointer;
+}
+.opt:hover { border-color: var(--muted); }
+.opt:has(input:checked) {
+  border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
+}
+.opt:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.opt input { width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--accent); }
+.opt-body { display: grid; gap: 6px; min-width: 0; }
+.opt-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.opt-label { font-weight: 600; font-size: 1.03rem; }
+.pill {
+  font: 500 11px/1.5 var(--mono); letter-spacing: .06em; text-transform: uppercase;
+  padding: 1px 8px; border-radius: 999px; background: var(--rec-bg); color: var(--rec);
+}
+.trade {
+  display: grid; grid-template-columns: 5.25rem minmax(0, 1fr); gap: 8px;
+  font-size: .92rem; color: var(--muted);
+}
+.trade .k {
+  font: 500 11px/1.5 var(--mono); letter-spacing: .06em; text-transform: uppercase;
+  padding-top: 3px;
+}
+.why {
+  margin-top: 2px; padding-top: 8px; border-top: 1px dashed var(--line);
+  font-size: .92rem; color: var(--rec);
+}
+.opt.other { background: transparent; border-style: dashed; }
+.opt.other:has(input:checked) { background: var(--accent-soft); border-style: solid; }
+
+.note { display: grid; gap: 6px; }
+.note label { font-weight: 600; font-size: .92rem; }
+.note label span { font-weight: 400; color: var(--muted); }
+textarea {
+  width: 100%; box-sizing: border-box; min-height: 5.5rem; padding: 10px 12px;
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px; resize: vertical;
+}
+textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.hint { margin: 0; font-size: .88rem; color: var(--warn); }
+
+/* Finish */
+.finish {
+  display: grid; gap: 14px; padding-block: 28px 72px;
+  border-top: 2px solid var(--ink);
+}
+.finish p { margin: 0; max-width: 62ch; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn {
+  font: inherit; font-weight: 600; padding: 10px 16px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.flash { font-size: .92rem; color: var(--ok); }
+#copy-fallback { font: 13px/1.5 var(--mono); min-height: 12rem; }
+.fatal { padding-block: 48px; color: var(--warn); }
+
+.focused {outline:2px solid var(--accent);outline-offset:8px;} .btn:disabled{opacity:.5;cursor:default;} .segs {flex-wrap:wrap;} .decision{overflow-wrap:anywhere;} </style>
+</head><body>
+<header class="bar"><div class="wrap bar-in"><div class="segs" id="segs"></div><span class="tally" id="tally" aria-live="polite">Loading decisions…</span></div></header>
+<main class="wrap"><div class="lede"><h1>Open decisions</h1><p class="intro">Choose the answers you’re ready to give. The rest stay open.</p><p id="status" role="status"></p><p id="updates" hidden><span id="changes"></span> <button class="btn" id="refresh">Refresh</button></p></div>
+<div id="decisions"></div><section class="finish"><div class="actions"><button class="btn primary" id="submit" disabled>Submit answers</button><button class="btn" id="accept" hidden>Take the recommendations</button><button class="btn" id="copy">Copy answers</button></div><p id="summary" aria-live="polite"></p><textarea id="copy-fallback" readonly hidden aria-label="Answers to copy"></textarea></section></main>
+<script id="decision-logic">
+globalThis.BoardDecisions = (() => {
+  function draftKey(role,item) { return `board-decision:${role}:${item.id}:${item.updated_at}`; }
+  function valid(item,draft) {
+    if (!draft || typeof draft.note!=='string') return false;
+    if (draft.choice === 'other') return !!draft.note.trim();
+    return !!item.structured?.options.some(option => option.id === draft.choice);
+  }
+  function payload(items,drafts) {
+    return items.filter(item => valid(item,drafts[item.id])).map(item => ({item_id:item.id,expected_updated_at:item.updated_at,choice:drafts[item.id].choice,note:drafts[item.id].note}));
+  }
+  function outcome(item,draft,result) {
+    if (result.outcome === 'conflict') return {item:result.item,draft:{choice:'',note:draft?.note || ''},status:'conflict'};
+    return {item,draft,status:result.outcome === 'resolved' ? 'answered' : ['already_resolved','not_found'].includes(result.outcome) ? 'closed' : 'invalid'};
+  }
+  function inline(parent,text,doc) {
+    let at=0;
+    for (const match of text.matchAll(/(`[^`]+`|\*\*[^*]+\*\*)/g)) {
+      parent.append(doc.createTextNode(text.slice(at,match.index)));
+      const bold=match[0].startsWith('**'),node=doc.createElement(bold ? 'strong':'code');
+      node.append(doc.createTextNode(match[0].slice(bold?2:1,bold?-2:-1)));parent.append(node);at=match.index+match[0].length;
+    }
+    parent.append(doc.createTextNode(text.slice(at)));
+  }
+  function markup(text,doc) {
+    const root=doc.createElement('div');let list=null,listTag='',paragraph=null;
+    for (const line of String(text || '').split('\n')) {
+      if (!line.trim()) {list=null;paragraph=null;continue;}
+      const bullet=line.match(/^\s*(- |\d+\. )(.*)$/);
+      if (bullet) {
+        const tag=bullet[1]==='- '?'ul':'ol';
+        if (!list || listTag!==tag) {list=doc.createElement(tag);root.append(list);listTag=tag;}
+        const li=doc.createElement('li');inline(li,bullet[2],doc);list.append(li);paragraph=null;
+      } else {
+        list=null;if (!paragraph) {paragraph=doc.createElement('p');root.append(paragraph);} else paragraph.append(doc.createTextNode(' '));inline(paragraph,line,doc);
+      }
+    }
+    return root;
+  }
+  return {draftKey,valid,payload,outcome,markup};
+})();
+</script>
+<script>
+(async () => {
+  'use strict';
+  // Strip the launch credential before any request, including error paths.
+  const ticket=new URLSearchParams(location.hash.slice(1)).get('t');
+  if (location.hash) history.replaceState(null,'',location.pathname+location.search);
+  const role=new URLSearchParams(location.search).get('role'),focus=new URLSearchParams(location.search).get('focus');
+  const $=id=>document.getElementById(id),L=globalThis.BoardDecisions;
+  const sessionKey=`board-decision-session:${role}`,base=`/api/hera/roles/${role}/board`;
+  let session='',items=[],drafts={},states={},pending=null,busy=false,expired=false,generation=0;
+  const read=(storage,key)=>{try{return globalThis[storage].getItem(key);}catch{return null;}};
+  const save=(storage,key,value)=>{try{globalThis[storage].setItem(key,value);}catch{$('summary').textContent='Draft storage is unavailable. Copy answers before leaving.';}};
+  function message(text) {$('status').textContent=text;}
+  function expire() {expired=true;message('This link expired. Press o in Argus to reopen it. Your drafts are kept; you can still copy answers.');update();}
+  async function api(path,method='GET',body) {
+    const response=await fetch(path,{method,cache:'no-store',headers:{'Content-Type':'application/json',...(session?{Authorization:`Bearer ${session}`}:{})},body:body===undefined?undefined:JSON.stringify(body)});
+    if (response.status===401 || response.status===403) {expire();throw new Error('Session expired');}
+    if (!response.ok) throw new Error('Could not reach the decision board. Refresh or try again.');
+    return response.json();
+  }
+  function element(tag,className,text) {const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;}
+  function persist(item) {save('localStorage',L.draftKey(role,item),JSON.stringify(drafts[item.id]));}
+  function active() {return items.filter(item=>!['answered','closed'].includes(states[item.id]));}
+  function update() {
+    const open=active(),decided=L.payload(open,drafts).length;
+    $('tally').textContent=`${decided} of ${open.length} decided`;
+    let missingNote=false;
+    for(const item of open) {const d=drafts[item.id];if(d?.choice==='other' && !d.note.trim())missingNote=true;const seg=$(`seg-${item.id}`);if(seg)seg.dataset.done=String(L.valid(item,d));}
+    $('submit').disabled=expired || busy || !decided || missingNote;$('refresh').disabled=busy;
+    const count=open.filter(item=>!drafts[item.id]?.choice && item.structured?.recommended).length;
+    $('accept').hidden=!count;$('accept').disabled=busy;$('accept').textContent=`Take the recommendation for the ${count} undecided`;
+  }
+  function render() {
+    $('decisions').replaceChildren();$('segs').replaceChildren();
+    for(const item of items) {
+      const draft=drafts[item.id] || (drafts[item.id]={choice:'',note:''}),state=states[item.id],closed=['answered','closed'].includes(state);
+      const card=element('section','decision');card.id=`decision-${item.id}`;
+      const count=element('p','count',`Decision #${item.id}`);count.append(element('span','state',state || 'Open'));card.append(count,element('h2','',item.subject));
+      if(state==='conflict')card.append(element('p','hint','Claude changed this decision. Your note is kept below; review the updated options and choose again.'));
+      if(state==='invalid')card.append(element('p','hint','This answer needs attention. Choose an option or add a note for Something else.'));
+      const situation=element('div','situation');situation.append(L.markup(item.body,document));card.append(situation);
+      const options=element('fieldset','options');options.setAttribute('aria-label',item.subject);options.disabled=closed || busy;
+      for(const option of [...(item.structured?.options || []),...(item.structured?[{id:'other',label:'Something else'}]:[])]) {
+        const label=element('label',`opt${option.id==='other'?' other':''}`),input=element('input');input.type='radio';input.name=`choice-${item.id}`;input.value=option.id;input.checked=draft.choice===option.id;
+        input.addEventListener('change',()=>{draft.choice=option.id;persist(item);const hint=card.querySelector('.note-required');if(hint)hint.hidden=!(draft.choice==='other' && !draft.note.trim());update();});
+        const body=element('div','opt-body'),head=element('div','opt-head');head.append(element('span','opt-label',option.label));
+        if(option.id===item.structured.recommended)head.append(element('span','pill','Recommended'));body.append(head);
+        if(option.summary)body.append(element('div','',option.summary));
+        for(const [key,text] of [['Upside',option.upside],['Downside',option.downside]])if(text){const row=element('div','trade');row.append(element('span','k',key),element('span','',text));body.append(row);}
+        if(option.id===item.structured.recommended && item.structured.reason)body.append(element('div','why',`Why Claude recommends it: ${item.structured.reason}`));
+        label.append(input,body);options.append(label);
+      }
+      card.append(options);
+      const note=element('div','note'),label=element('label','',item.structured?'Note (required for Something else)':'Your answer');label.htmlFor=`note-${item.id}`;
+      const textarea=element('textarea');textarea.id=label.htmlFor;textarea.value=draft.note;textarea.disabled=closed || busy;
+      const hint=element('p','hint note-required','Add a note to answer Something else.');hint.hidden=!(draft.choice==='other' && !draft.note.trim());card.append(hint);
+      textarea.addEventListener('input',()=>{draft.note=textarea.value;if(!item.structured)draft.choice='other';hint.hidden=!(draft.choice==='other' && !draft.note.trim());persist(item);update();});note.append(label,textarea);card.append(note);$('decisions').append(card);
+      const seg=element('button','seg');seg.id=`seg-${item.id}`;seg.setAttribute('aria-label',`Jump to decision #${item.id}`);seg.addEventListener('click',()=>card.scrollIntoView({behavior:'smooth'}));$('segs').append(seg);
+    }
+    update();
+  }
+  function load(next) {
+    generation++;
+    const old=new Map(items.map(i=>[i.id,i.updated_at]));items=next;save('localStorage',`board-decision-items:${role}`,JSON.stringify(next));
+    for(const item of items)if(old.get(item.id)!==item.updated_at || !drafts[item.id]) {try{drafts[item.id]=JSON.parse(read('localStorage',L.draftKey(role,item))) || {choice:'',note:''};}catch{drafts[item.id]={choice:'',note:''};}states[item.id]='';}
+    pending=null;$('updates').hidden=true;render();
+  }
+  $('accept').addEventListener('click',()=>{for(const item of active())if(!drafts[item.id].choice && item.structured?.recommended){drafts[item.id].choice=item.structured.recommended;persist(item);}render();});
+  $('refresh').addEventListener('click',()=>{if(pending)load(pending);});
+  $('submit').addEventListener('click',async()=>{
+    const answers=L.payload(active(),drafts).slice(0,16);if(!answers.length){message('Submit up to 16 answers at a time.');return;}
+    busy=true;generation++;render();
+    try {
+      const response=await api(base+'/answers','POST',{answers});let answered=0,attention=0;
+      for(const result of response.results) {
+        const index=items.findIndex(i=>i.id===result.item_id);if(index<0)continue;
+        const next=L.outcome(items[index],drafts[result.item_id],result);items[index]=next.item;drafts[result.item_id]=next.draft;states[result.item_id]=next.status;persist(items[index]);
+        if(next.status==='answered')answered++;else attention++;
+      }
+      save('localStorage',`board-decision-items:${role}`,JSON.stringify(items));
+      $('summary').textContent=`${answered} answered, ${attention} need attention`;
+    } catch(error) {if(!expired)message(error.message);}finally{busy=false;render();}
+  });
+  $('copy').addEventListener('click',async()=>{
+    const text=items.filter(i=>drafts[i.id]?.choice || drafts[i.id]?.note).map(i=>{const d=drafts[i.id],label=i.structured?.options.find(o=>o.id===d.choice)?.label || 'Something else';return `#${i.id} ${i.subject}\nChoice: ${label}\nNote: ${d.note || 'none'}`;}).join('\n\n');
+    try{await navigator.clipboard.writeText(text);$('summary').textContent='Answers copied.';}catch{const box=$('copy-fallback');box.value=text;box.hidden=false;box.focus();box.select();}
+  });
+  if(!/^\d+$/.test(role || '')){message('Open this page by pressing o on a coordinator board in Argus.');return;}
+  try {const cached=JSON.parse(read('localStorage',`board-decision-items:${role}`));if(Array.isArray(cached))load(cached);}catch{}
+ session=read('sessionStorage',sessionKey) || '';
+  try {
+    if(ticket){session='';const result=await api('/api/hera/board/decision-session','POST',{ticket});if(String(result.role_id)!==role)throw new Error('This link belongs to a different board.');session=result.session;save('sessionStorage',sessionKey,session);}
+    if(!session){expire();return;}
+    load((await api(base+'/decisions')).items);message(items.length?'':'No open decisions.');
+    if(focus){const card=$(`decision-${focus}`);if(card){card.classList.add('focused');card.scrollIntoView();}}
+  }catch(error){if(!expired)message(error.message);return;}
+  setInterval(async()=>{
+    if(document.hidden || expired || busy)return;
+    const observed=generation;
+    try{const next=(await api(base+'/decisions')).items;if(observed!==generation || busy)return;const revisions=new Map(items.map(i=>[i.id,i.updated_at]));const added=next.filter(i=>!revisions.has(i.id)).length,changed=next.filter(i=>revisions.has(i.id) && revisions.get(i.id)!==i.updated_at).length,closed=items.filter(i=>!next.some(n=>n.id===i.id) && !['answered','closed'].includes(states[i.id])).length;
+      if(added || changed || closed){pending=next;$('changes').textContent=`Claude updated ${changed} decisions, added ${added}, and closed ${closed}.`;$('updates').hidden=false;}
+    }catch(error){if(!expired)message(error.message);}
+  },20000);
+})();
+</script></body></html>

@@ -1093,6 +1093,7 @@ Every task returned by `GET /api/tasks` and `GET /api/tasks/{id}` SHALL include 
 - **WHEN** a task is pinned, unpinned, archived or restored by pinning
 - **THEN** both task GETs reflect its stored pin state
 - **AND** archiving clears the pin while pinning clears archived
+
 ### Requirement: Archived tasks reject REST input
 
 The system SHALL load the task before writing any byte for `POST /api/tasks/{id}/input`. An unknown task SHALL return 404 `{"error":"task not found","code":"task_not_found"}`; an archived task SHALL return 409 `{"error":"task is archived","code":"task_archived"}` for both user and system `X-Input-Origin`, with zero bytes reaching the session and no change to needs-input state or input timestamps; a non-archived task with no session SHALL return 404 with code `no_active_session`; allowed input SHALL keep the raw body, 64 KiB limit and `{"status":"ok","bytes":"N"}` response. Input SHALL read the body before acquiring the per-task lock and SHALL check archive state while holding it. Archive, unarchive and input SHALL be serialized per task so that once an archive success is committed no later input reaches the session. A rejection SHALL emit no event and no log line SHALL contain input bytes.
@@ -1233,7 +1234,6 @@ The server SHALL let the master token create, edit and delete database-owned acc
 - **WHEN** a task (including resident and archived rows), default, project or artifact-home mapping, configured resident account or routing tier names the account
 - **THEN** DELETE returns 409 with a `references` body and the account is kept. An incomplete reference read returns 500 and leaves the account unchanged
 
-
 #### Scenario: Concurrent field edits
 
 - **WHEN** Settings and REST edit different fields of the same account
@@ -1293,7 +1293,6 @@ REST and MCP schedule creation and update SHALL validate a non-empty explicit mo
 - **WHEN** a status refresh fails after a successful cached snapshot exists
 - **THEN** status returns 200 with that snapshot and `stale=true`
 
-
 ### Requirement: Project REST endpoints expose and preserve the diligence profile
 
 `GET /api/projects/full`, `POST /api/projects` and `PUT /api/projects/{name}` SHALL return each project's `profile` (empty string for the default binding). `POST` SHALL accept `profile`. `PUT` SHALL preserve the stored profile when `profile` is omitted, clear it when `""`, and set it when a name. An unknown nonempty profile or blank path SHALL return 400, an unknown project on `PUT` 404, a project defined in config.toml 409, and a store failure 500. After a committed change the daemon SHALL emit `config.changed` with payload `{"resource":"projects","name":<name>}` and no task id; a no-op save SHALL emit nothing.
@@ -1340,7 +1339,6 @@ On `/api/tasks/{id}/stream`, the `clipboard` event SHALL be `{"text":""}` for a 
 
 - **WHEN** an empty value is staged before and after the stream connects
 - **THEN** both events are `{"text":""}`
-
 
 ### Requirement: Reveal a contained task path on the daemon host
 
@@ -1399,7 +1397,6 @@ On `/api/tasks/{id}/stream`, the `clipboard` event SHALL be `{"text":""}` for a 
 - **WHEN** watcher allocation fails or a budget is exceeded
 - **THEN** the whole partial watcher is closed and later status responses expose `watch_degraded=true`
 
-
 ### Requirement: Discard one task file
 
 `POST /api/tasks/{id}/git/discard` SHALL accept `{path, scope, delete_untracked}` (scope `local` only) and return 200 `{path, discarded:true, scope}`. Invalid paths return 400 `invalid_path`; unknown task or worktree 404; untracked without the flag, renames, conflicts and clean paths 409; git failures 500, each as `{"error","code"}`. Archived tasks return 409 `task_archived`. Discard and archive SHALL share the per-task lock, and discard SHALL re-read task state under that lock. No event is emitted on failure.
@@ -1418,3 +1415,103 @@ On `/api/tasks/{id}/stream`, the `clipboard` event SHALL be `{"text":""}` for a 
 #### Scenario: Files alongside legacy fields
 - **WHEN** a worktree has a modified file
 - **THEN** the response has `Status` text and a `files` entry with its counts
+
+### Requirement: Board decision launch link
+
+The REST API SHALL expose `POST /api/hera/roles/{role_id}/board/decision-link`, requiring a master or device token (a decision session SHALL NOT mint links), that returns `{"path":"/decide?role=<id>[&focus=<item_id>]","ticket":"<opaque>","expires_at":"<RFC3339>"}`. The optional JSON body `{"focus_item_id":N}` selects the focused card. The ticket SHALL be 256 bits of randomness, held only in daemon memory as a hash, bound to that role id, valid for 90 seconds, and usable once. The endpoint SHALL return 404 `board_item_not_found` for an unknown role and 400 `invalid_request` for a non-coordinator role. The ticket SHALL NOT be logged or persisted.
+
+#### Scenario: Mint a link
+
+- **WHEN** an authenticated client posts to the decision-link endpoint for a coordinator role
+- **THEN** it receives a relative path, a ticket and an expiry roughly 90 seconds ahead
+
+#### Scenario: Non-coordinator role
+
+- **WHEN** the role is a worker or freelance role
+- **THEN** the response is 400 `invalid_request` and no ticket exists
+
+#### Scenario: Decision session cannot mint
+
+- **WHEN** a request authenticated by a decision session calls the decision-link endpoint
+- **THEN** the response is 403
+
+### Requirement: Decision session exchange and auth class
+
+The REST API SHALL expose `POST /api/hera/board/decision-session` with body `{"ticket":"…"}`, served without bearer authentication because the ticket is the credential, returning `{"session":"<opaque>","role_id":N,"expires_at":"<RFC3339>"}`. An unknown, expired or already-used ticket SHALL return 401 and consume nothing. The session SHALL be 256 bits of randomness, held in daemon memory as a hash, bound to the ticket's role id, and valid for eight hours. A session presented as a bearer token SHALL authenticate the request as `X-Argus-Auth: decision:<role_id>` and SHALL be permitted only on `GET /api/hera/roles/{role_id}/board/decisions` and `POST /api/hera/roles/{role_id}/board/answers` with its own role id. Every other route, and those routes with a different role id, SHALL return 403. No existing handler that gates on `master`, `device` or `scope:*` SHALL admit a decision session. Daemon restart SHALL invalidate all tickets and sessions.
+
+#### Scenario: Ticket is single-use
+
+- **WHEN** a ticket is exchanged once and then exchanged again
+- **THEN** the first returns a session and the second returns 401
+
+#### Scenario: Expired ticket
+
+- **WHEN** a ticket is exchanged more than 90 seconds after it was minted
+- **THEN** the response is 401
+
+#### Scenario: Session is role-scoped
+
+- **WHEN** a session for role 12 requests the decisions or answers route for role 13, or any other API route
+- **THEN** the response is 403
+
+#### Scenario: Session cannot reach privileged handlers
+
+- **WHEN** a decision session calls an endpoint that accepts a scope token, such as MCP tool registration
+- **THEN** the response is 403 and nothing is registered
+
+#### Scenario: Restart invalidates
+
+- **WHEN** the daemon restarts after a session was issued
+- **THEN** that session is rejected with 401
+
+### Requirement: Board decisions read endpoint
+
+The REST API SHALL expose `GET /api/hera/roles/{role_id}/board/decisions`, accepting a master or device token for any coordinator role or a decision session for its own role, returning `{"role_id":N,"coordinator":"<name>","items":[…]}` where `items` are the role's open `decision` items in ascending id order. Each item SHALL carry `id`, `subject`, `body`, `updated_at`, `structured` (null for a plain item) and `read`. The endpoint SHALL NOT mark items read and SHALL NOT include `fyi` or resolved items.
+
+#### Scenario: Round contents
+
+- **WHEN** a board has two structured decisions, one plain decision, one fyi and one resolved decision
+- **THEN** the response lists the three open decisions in id order and omits the fyi and the resolved item
+
+#### Scenario: Read state untouched
+
+- **WHEN** the endpoint is called
+- **THEN** no item's read state or `updated_at` changes
+
+### Requirement: Board answers endpoint
+
+The REST API SHALL expose `POST /api/hera/roles/{role_id}/board/answers`, accepting a master or device token for any coordinator role or a decision session for its own role, with body `{"answers":[{"item_id":N,"expected_updated_at":"<RFC3339>","choice":"<option id>|other","note":"<text>"}]}`. The body SHALL contain exactly one JSON value, at most 16 answers, notes of at most 4 KiB, a nonzero `expected_updated_at` per answer, and SHALL be consumed through EOF before any mutation. The endpoint SHALL return 200 with `{"results":[{"item_id":N,"outcome":"<outcome>","item":{…}}],"unread_count":N}` where each outcome is one of `resolved`, `conflict`, `already_resolved`, `not_found` or `invalid`, and `item` is the current item for `conflict` outcomes. A malformed body SHALL return 400 `invalid_request`. All `resolved` items and the single summary message described in `board-decision-page` SHALL commit in one transaction; non-`resolved` outcomes SHALL change nothing and SHALL NOT prevent other answers in the same request from resolving. A `hera.board_changed` event SHALL be emitted once per resolved item after commit.
+
+#### Scenario: Mixed outcomes
+
+- **WHEN** a request answers one current item, one item the coordinator edited after load, and one already-resolved item
+- **THEN** the response reports `resolved`, `conflict` (with the current item) and `already_resolved`, only the first item changes, and one summary message exists
+
+#### Scenario: Nothing resolved
+
+- **WHEN** every answer returns a non-`resolved` outcome
+- **THEN** no item changes and no message is written
+
+#### Scenario: Trailing garbage
+
+- **WHEN** a valid body is followed by another JSON value
+- **THEN** the response is 400 `invalid_request` and nothing changes
+
+#### Scenario: Oversized round
+
+- **WHEN** a request carries 17 answers or a note over 4 KiB
+- **THEN** the response is 400 `invalid_request` and nothing changes
+
+### Requirement: Board item JSON carries structured data and resolution choice
+
+Board item JSON returned by `GET /api/hera/roles/{id}/board` and the new decision endpoints SHALL include `structured` (an object with `options`, `recommended` and `reason`, or null for a plain item) and `resolution_choice` (the chosen option id, `other`, or empty). These fields SHALL be additive; existing fields and their semantics SHALL be unchanged.
+
+#### Scenario: Resolved structured item
+
+- **WHEN** a structured item was answered with option `auto-retry`
+- **THEN** the board JSON for that item carries `resolution_choice: "auto-retry"`, `resolved: true` and `resolved_by: "human"`
+
+#### Scenario: Legacy item
+
+- **WHEN** an item was posted before this change
+- **THEN** its JSON carries `structured: null` and `resolution_choice: ""`

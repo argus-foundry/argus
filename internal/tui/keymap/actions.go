@@ -155,6 +155,7 @@ const (
 	ActHeraInbox   Action = "hera_rail.inbox"
 	// ActHeraMoveAccount is ActTaskMoveAccount for the selected role's task.
 	ActHeraMoveAccount Action = "hera_rail.move_account"
+	ActBoardDecide     Action = "hera_board.decide"
 	ActBoardToggle     Action = "hera_board.toggle"
 	ActBoardReply      Action = "hera_board.reply"
 	ActBoardDismiss    Action = "hera_board.dismiss"
@@ -215,7 +216,7 @@ var defaultSpecs = map[Context]map[Action]string{
 		ActHeraAdopt: "J", ActHeraNewCoord: "n", ActHeraClear: "c",
 		ActHeraCleanup: "C", ActHeraInbox: "i", ActHeraMoveAccount: ">",
 	},
-	CtxHeraBoard: {ActBoardToggle: "p", ActBoardReply: "r", ActBoardDismiss: "x", ActBoardDown: "j", ActBoardUp: "k"},
+	CtxHeraBoard: {ActBoardDecide: "o", ActBoardToggle: "p", ActBoardReply: "r", ActBoardDismiss: "x", ActBoardDown: "j", ActBoardUp: "k"},
 }
 
 // actionLabels are the human-readable descriptions used in the help overlay.
@@ -266,6 +267,7 @@ var actionLabels = map[Action]string{
 	ActHeraCleanup:     "cleanup stuck-task backlog (all projects)",
 	ActHeraInbox:       "view role's message inbox (read-only)",
 	ActHeraMoveAccount: "move to another account (resumes there)",
+	ActBoardDecide:     "answer decisions in browser",
 	ActBoardToggle:     "toggle plan / human board",
 	ActBoardReply:      "compose reply / approve exact resident call",
 	ActBoardDismiss:    "dismiss item / deny resident call",
@@ -341,7 +343,7 @@ var contextOrder = map[Context][]Action{
 	CtxHeraRail: {ActHeraSpawn, ActHeraNewCoord, ActHeraRename, ActHeraArchive, ActHeraPin,
 		ActHeraStatAdv, ActHeraStatRev, ActHeraKanbanAdv, ActHeraKanbanRev, ActHeraAdopt, ActHeraClear,
 		ActHeraCleanup, ActHeraInbox, ActHeraMoveAccount, ActHeraDelete},
-	CtxHeraBoard: {ActBoardToggle, ActBoardReply, ActBoardDismiss, ActBoardDown, ActBoardUp},
+	CtxHeraBoard: {ActBoardDecide, ActBoardToggle, ActBoardReply, ActBoardDismiss, ActBoardDown, ActBoardUp},
 }
 
 // ResidentAccess classifies a Projects-rail action for the resident tab.

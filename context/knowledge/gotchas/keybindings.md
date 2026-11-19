@@ -87,3 +87,7 @@
 - **`ctrl+\` (resident toggle, add-resident-agent) is the only ctrl+punctuation keyspec `keymap.Parse` accepts.** tcell offsets named control keys by 64 (`KeyCtrlBackslash == KeyCtrlSpace+0x1c`), so legacy tests must use the decoder-shaped named key, while extended-keyboard tests use `NewEventKey(KeyRune, '\\', ModCtrl)`. `String()` special-cases it because `ctrlLetters` only covers letters; `global.resident` (`ctrl+\`) and `global.tab_resident` (`0`) appear in generated help automatically.
 
 - **The resident tab's key allowlist lives in the keymap package as data (`residentRailPolicy`, `ResidentRailAccess`, `ResidentRailActions`, `Keymap.ResidentHelpRows`), not as literals in the page.** The `?` overlay swaps the "Projects View (rail)" section for `modal.ResidentSectionsFromKeymap`, and the ctrl+k palette filters `heraRailActionRegistry` through `hera.ResidentRailAllows`. Add a rail action and the inventory test forces a resident decision; the structural rows (navigation, Enter, Tab, ctrl+alt+arrows, ctrl+q, ctrl+z, ctrl+y) are literal in `residentRailExtra`. `ctrl+q` on the resident tab always returns to the origin (ctrl+alt+←/→ is the pane ⇄ rail ladder), as it did before the tab became a team view.
+
+## Board decisions
+
+- **The board’s `o` opens the coordinator’s complete decision round without acknowledging or changing the board selection.** Resolve it through `hera_board.decide`; `d` suggests dismissal and `a` conflicts with the rail archive mnemonic, so neither is the default.
