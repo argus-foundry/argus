@@ -6099,29 +6099,29 @@ func TestPendingGraduate_TUIArchiveAndDeleteRefused(t *testing.T) {
 		testutil.NoError(t, serr)
 		_, werr := os.Stat(task.Worktree)
 		testutil.NoError(t, werr)
-		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+		readUI(t, app.tapp, func() { testutil.Contains(t, app.header.Notice(), "graduation restart pending") })
 		pressEsc(t, app) // cancel the escape offer
 	})
 	t.Run("archive", func(t *testing.T) {
-		app.header.ClearNotice()
+		readUI(t, app.tapp, func() { app.header.ClearNotice() })
 		toggled := *task
 		toggled.Archived = true // the task list flips the flag before firing OnArchive
 		readUI(t, app.tapp, func() { app.tasklist.OnArchive(&toggled) })
 		got, err := d.Get(task.ID)
 		testutil.NoError(t, err)
 		testutil.False(t, got.Archived)
-		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+		readUI(t, app.tapp, func() { testutil.Contains(t, app.header.Notice(), "graduation restart pending") })
 		pressEsc(t, app)
 	})
 	t.Run("hera nuke", func(t *testing.T) {
-		app.header.ClearNotice()
+		readUI(t, app.tapp, func() { app.header.ClearNotice() })
 		readUI(t, app.tapp, func() {
 			app.heraNukeRole(&hera.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})
 		})
 		live, err := d.HeraLiveBindingByTask(task.ID)
 		testutil.NoError(t, err)
 		testutil.True(t, live != nil)
-		testutil.Contains(t, app.header.Notice(), "graduation restart pending")
+		readUI(t, app.tapp, func() { testutil.Contains(t, app.header.Notice(), "graduation restart pending") })
 		pressEsc(t, app)
 	})
 }

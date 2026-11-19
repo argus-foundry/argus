@@ -70,9 +70,9 @@
 - [ ] 9.1 Manual end to end: post a three-decision structured round through MCP, press `o`, answer two (one "Something else" with a note), submit, confirm two items resolved, one open, and exactly one `Aaron (board)` message in the coordinator inbox listing the two answers and the open id
 - [x] 9.2 Manual: edit a decision after the page loaded and submit; confirm the conflict card, preserved draft and unaffected other answers
 - [ ] 9.3 Manual: confirm no ticket or session appears in `ux.log`, `ps` after launch, browser history, or the address bar after load
-- [ ] 9.4 `make pre-pr` clean before opening or updating the PR
+- [x] 9.4 Run full `make pre-pr` once and complete all stages before the PR using the coordinator-approved isolated race recovery and merged coverage filter (89.2%; see `verification.md`)
 - [x] 9.5 Run `/hera-review` and `/hera-review-test-adversary` (per coordinator instruction), audit the pending deltas before archive, and resolve blocking findings
-- [ ] 9.6 Archive in the same PR before merge: `openspec archive add-board-decision-page --yes` (manual merge-and-move fallback if the CLI is absent), inspect the archive diff for every new requirement and scenario, and commit it as the PR's final completion commit
+- [x] 9.6 Archive in the same PR before merge: `openspec archive add-board-decision-page --yes` (manual merge-and-move fallback if the CLI is absent), inspect the archive diff for every new requirement and scenario, and commit it as the PR's final completion commit
 
 ## Verification notes
 

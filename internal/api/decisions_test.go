@@ -208,8 +208,11 @@ func TestDecisionHTTP(t *testing.T) {
 	defer func() {
 		data, err := os.ReadFile(logPath)
 		testutil.NoError(t, err)
+		testutil.Contains(t, string(data), "[decide] minted")
+		testutil.Contains(t, string(data), "outcome=resolved")
 		testutil.Equal(t, strings.Contains(string(data), link.Ticket), false)
 		testutil.Equal(t, strings.Contains(string(data), session.Session), false)
+		testutil.Equal(t, strings.Contains(string(data), "Use a custom answer"), false)
 	}()
 	testutil.Equal(t, req("POST", "/api/hera/board/decision-session", fmt.Sprintf(`{"ticket":%q}`, link.Ticket), "").Code, 401)
 	for _, tc := range []struct {
@@ -229,4 +232,39 @@ func TestDecisionHTTP(t *testing.T) {
 	w = req("GET", "/decide", "", "")
 	testutil.Equal(t, w.Code, http.StatusOK)
 	testutil.Equal(t, strings.Contains(w.Body.String(), "Use a custom answer"), false)
+	w = req("GET", base+"?include_resolved=true", "", "test-token")
+	testutil.Equal(t, w.Code, 200)
+	testutil.Contains(t, w.Body.String(), `"structured":null`)
+	testutil.Contains(t, w.Body.String(), `"resolution_choice":"other"`)
+}
+
+func TestDecisionStructuredJSON(t *testing.T) {
+	s, d, c, _, item := boardRESTFixture(t)
+	structure := &db.HeraBoardStructure{Options: []db.HeraBoardOption{{ID: "retry", Label: "Retry"}, {ID: "wait", Label: "Wait"}}, Recommended: "retry", Reason: "Recover"}
+	item, err := d.UpdateHeraBoardItem(c.ID, item.ID, item.Kind, item.Subject, item.Body, structure)
+	testutil.NoError(t, err)
+	_, err = d.PostHeraBoardItem(c.ID, "fyi", "Only a notice", "Body")
+	testutil.NoError(t, err)
+	handler := s.decisionMiddleware(authMiddleware("test-token", d, nil, s.routes()))
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", fmt.Sprintf("/api/hera/roles/%d/board/decisions", c.ID), nil)
+	r.Header.Set("Authorization", "Bearer test-token")
+	handler.ServeHTTP(w, r)
+	testutil.Equal(t, w.Code, 200)
+	var response struct {
+		RoleID      int64               `json:"role_id"`
+		Coordinator string              `json:"coordinator"`
+		Items       []*db.HeraBoardItem `json:"items"`
+	}
+	testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	testutil.Equal(t, response.RoleID, c.ID)
+	testutil.Equal(t, response.Coordinator, c.Name)
+	testutil.Equal(t, len(response.Items), 1)
+	testutil.DeepEqual(t, response.Items[0].Structured, structure)
+	testutil.Equal(t, response.Items[0].ResolutionChoice, "")
+	testutil.Equal(t, response.Items[0].UpdatedAt, item.UpdatedAt)
+	count, _, err := d.HeraBoardUnread(c.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, count, 2)
+	testutil.Equal(t, response.Items[0].Read, false)
 }

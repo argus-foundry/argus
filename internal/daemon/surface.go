@@ -288,7 +288,9 @@ const (
 	// 54: fresh Codex launches register an inline SessionStart hook that
 	// reports the thread ID at launch. A stale supervisor launches without it,
 	// so a supervisor restart can still lose that session's ID.
-	SupervisorSpawnSurface = 54
+	// 55: new sessions receive structured board-decision guidance in the
+	// materialized Hera builtin skill (add-board-decision-page).
+	SupervisorSpawnSurface = 55
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -615,9 +617,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	// resident.memory_tidy is read only by the daemon timer poll; adding its
-	// schema/default does not change BuildCmd or supervisor spawn behavior.
-	SpawnSurfaceDigest = "cc30f6376ecf0b4774e3a2db62052f813e5358b63f3aac1d5f278d3e858b7fa6"
+	SpawnSurfaceDigest = "afaabd1231de8da81bafc7ce0b64c53871c01d79125c127e6d14ede65e595eb1"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
 	StreamSurfaceDigest = "6db616d49b2aae4049a1e16f5eeb7c4b16aa724b7451c2faab7c0302ef5fd83d"

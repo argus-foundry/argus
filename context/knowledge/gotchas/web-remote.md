@@ -327,4 +327,4 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 
 ## Board decisions
 
-- **`/decide` is a standalone shell, excluded from service-worker caching.** Strip the single-use 90-second fragment ticket before fetching; exchange for an 8-hour in-memory role session kept only in sessionStorage. Decision auth permits only that role’s decisions GET and answers POST; never treat it as a device or plugin token, and bump SW_VERSION for shell changes.
+- **`/decide` is a standalone shell, excluded from service-worker caching.** Strip the single-use 90-second fragment ticket before fetching; exchange for an 8-hour in-memory role session kept only in sessionStorage; decision auth permits only that role’s decisions GET and answers POST; never treat it as a device or plugin token, and bump SW_VERSION for shell changes.

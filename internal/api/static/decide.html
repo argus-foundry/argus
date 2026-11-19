@@ -308,6 +308,7 @@ globalThis.BoardDecisions = (() => {
         const next=L.outcome(items[index],drafts[result.item_id],result);items[index]=next.item;drafts[result.item_id]=next.draft;states[result.item_id]=next.status;persist(items[index]);
         if(next.status==='answered')answered++;else attention++;
       }
+      save('localStorage',`board-decision-items:${role}`,JSON.stringify(items));
       $('summary').textContent=`${answered} answered, ${attention} need attention`;
     } catch(error) {if(!expired)message(error.message);}finally{busy=false;render();}
   });

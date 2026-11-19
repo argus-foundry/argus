@@ -329,4 +329,4 @@ true)` and `db.Delete(id)`; entrypoints that go through `db.Update`
 
 ## Board decisions
 
-- **Decision submits commit successful resolutions and one self-addressed summary in the same transaction.** Invalid/stale items are per-item outcomes; never also write the dropped-decision notice. Full notes stay on board items; evenly budget summary notes to 64 KiB and mark shortened notes with a full-item pointer.
+- **Decision submits commit successful resolutions and one self-addressed summary in the same transaction.** Invalid/stale items are per-item outcomes; never also write the dropped-decision notice; full notes stay on board items; evenly budget summary notes to 64 KiB and mark shortened notes with a full-item pointer.
