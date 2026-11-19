@@ -417,3 +417,8 @@
 ## Board decisions
 
 - **An omitted board-update `options` parameter preserves structured options and recommendation.** Only an explicit empty array clears the structure; structure changes mark unread and advance the revision so stale browser answers conflict.
+
+## Project rename
+
+- **`DB.RenameProject` rewrites every project reference in one transaction, including the key inside the `accounts.projects` config JSON.** A new reference column or JSON-keyed map keyed by project name must be added there or a rename silently orphans it.
+- **Rename does not move worktree directories under `~/.argus/worktrees/<oldname>`, and config.toml-defined projects cannot be renamed (409).** Existing tasks keep their old on-disk paths; only the stored names change.

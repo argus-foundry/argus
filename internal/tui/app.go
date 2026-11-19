@@ -8589,6 +8589,21 @@ func (a *App) handleProjectFormKey(event *tcell.EventKey) {
 			a.projectForm.done = false
 			return
 		}
+		if strings.Contains(name, "/") {
+			a.projectForm.SetError("Name cannot contain '/'")
+			a.projectForm.done = false
+			return
+		}
+		if orig := a.projectForm.origName; a.projectForm.editMode && name != orig {
+			if err := a.db.RenameProject(orig, name); err != nil {
+				uxlog.Log("[project] rename %s -> %s failed: %v", orig, name, err)
+				a.projectForm.SetError("Rename error: " + err.Error())
+				a.projectForm.done = false
+				return
+			}
+			uxlog.Log("[project] renamed %s -> %s", orig, name)
+			a.projectForm.origName = name
+		}
 		if err := a.db.SetProject(name, proj); err != nil {
 			a.projectForm.SetError("Save error: " + err.Error())
 			a.projectForm.done = false

@@ -52,6 +52,8 @@ type Store interface {
 	SetProject(name string, p config.Project) error
 	// DeleteProject removes a project from config.
 	DeleteProject(name string) error
+	// RenameProject renames a project and rewrites every reference to it.
+	RenameProject(oldName, newName string) error
 
 	// AddSchedule inserts a new schedule row.
 	AddSchedule(s *model.ScheduledTask) error

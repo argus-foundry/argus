@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
@@ -329,6 +330,22 @@ func (s *Store) SetProject(name string, p config.Project) error {
 // DeleteProject calls /api/projects/{name}.
 func (s *Store) DeleteProject(name string) error {
 	return s.c.DeleteProject(context.Background(), name)
+}
+
+// RenameProject renames via PUT with new_name, resending the project's current
+// settings because the endpoint requires a path.
+func (s *Store) RenameProject(oldName, newName string) error {
+	projs, err := s.c.ListProjectsFull(context.Background())
+	if err != nil {
+		return err
+	}
+	for _, p := range projs {
+		if p.Name == oldName {
+			p.NewName = newName
+			return s.c.UpdateProject(context.Background(), oldName, p)
+		}
+	}
+	return fmt.Errorf("project %q not found", oldName)
 }
 
 // AddSchedule posts to /api/schedules and stamps the returned ID/CreatedAt

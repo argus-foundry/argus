@@ -152,6 +152,31 @@ func TestStore_DeleteProject(t *testing.T) {
 	testutil.NoError(t, s.DeleteProject("gone"))
 }
 
+func TestStore_RenameProject(t *testing.T) {
+	var gotBody string
+	s, _ := newStore(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("/api/projects/full", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"projects":[{"name":"alpha","path":"/tmp/alpha","branch":"main"}]}`))
+		})
+		mux.HandleFunc("/api/projects/alpha", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "PUT" {
+				http.Error(w, "wrong method", http.StatusMethodNotAllowed)
+				return
+			}
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+			w.WriteHeader(http.StatusOK)
+		})
+	})
+	testutil.NoError(t, s.RenameProject("alpha", "beta"))
+	testutil.Contains(t, gotBody, `"new_name":"beta"`)
+	testutil.Contains(t, gotBody, `"path":"/tmp/alpha"`)
+	if err := s.RenameProject("ghost", "x"); err == nil {
+		t.Fatal("expected error for unknown project")
+	}
+}
+
 func TestStore_Backends(t *testing.T) {
 	s, _ := newStore(t, func(mux *http.ServeMux) {
 		mux.HandleFunc("/api/backends", func(w http.ResponseWriter, r *http.Request) {
