@@ -8,6 +8,31 @@ const context = {globalThis: {}, URL, document: {addEventListener() {}}};
 vm.runInNewContext(html.match(/<script id="decision-logic">([\s\S]*?)<\/script>/)[1],context);
 const logic = context.globalThis.BoardDecisions;
 
+function finish(results,{closeAllowed=true,closeThrows=false,answers=[{item_id:1},{item_id:2}]}={}) {
+ let attempts=0;const confirmations=[];
+ const win={closed:false,close(){attempts++;if(closeThrows)throw Error('Blocked');if(closeAllowed)this.closed=true;}};
+ const complete=logic.finish(answers,results,win,count=>confirmations.push(count));
+ return {complete,closed:win.closed,attempts,confirmations};
+}
+
+test('every submitted item resolved or already resolved closes the tab',()=>{
+ assert.deepEqual(finish([{item_id:1,outcome:'resolved'},{item_id:2,outcome:'already_resolved'}]),{complete:true,closed:true,attempts:1,confirmations:[]});
+});
+
+test('a refused or throwing close leaves a sent confirmation with the submitted count',()=>{
+ const results=[{item_id:1,outcome:'resolved'},{item_id:2,outcome:'resolved'}];
+ for(const options of [{closeAllowed:false},{closeThrows:true}])assert.deepEqual(finish(results,options),{complete:true,closed:false,attempts:1,confirmations:[2]});
+});
+
+test('conflict, invalid, not found and incomplete or mismatched results never close',()=>{
+ const resolved={item_id:1,outcome:'resolved'};
+ for(const results of [
+  ...['conflict','invalid','not_found'].map(outcome=>[resolved,{item_id:2,outcome}]),
+  [resolved], [resolved,{item_id:3,outcome:'resolved'}], [resolved,resolved], [], null,
+ ])assert.deepEqual(finish(results),{complete:false,closed:false,attempts:0,confirmations:[]});
+ assert.deepEqual(finish([],{answers:[]}),{complete:false,closed:false,attempts:0,confirmations:[]});
+});
+
 class Node {
  constructor(tag,text=''){this.tag=tag;this.text=text;this.children=[];this.attributes={};}
  append(...values){this.children.push(...values);}

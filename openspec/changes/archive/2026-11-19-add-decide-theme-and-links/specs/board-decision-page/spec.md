@@ -37,3 +37,22 @@ HTTP and HTTPS URLs in decision subjects, situation/body, option summary, upside
 
 - **WHEN** a reference is followed by an HTML event-handler payload
 - **THEN** the payload stays literal text and no handler executes or external resource loads
+
+### Requirement: Finish successful submissions
+
+After a submission where every submitted item returns resolved or already_resolved, the page SHALL attempt window.close. If the window remains open or closing throws, it SHALL replace the decision content with “Answers sent — you can close this tab” and the number of submitted items answered. Undecided items excluded from the submission SHALL NOT block completion and SHALL remain open on the board. The page SHALL NOT attempt to close or show the sent confirmation if any submitted outcome is conflict, invalid or not_found, if any submitted item has no matching result, or if the request fails. In those cases the existing results and kept drafts SHALL remain available. Completion SHALL prevent polling or late responses from updating removed controls.
+
+#### Scenario: Every submitted answer accepted
+
+- **WHEN** every submitted item returns resolved or already_resolved, with other undecided items on the board
+- **THEN** the tab attempts to close and those undecided items stay open on the board
+
+#### Scenario: Browser refuses closing
+
+- **WHEN** every submitted item is accepted but the browser keeps the tab open or closing throws
+- **THEN** the page replaces the decisions with “Answers sent — you can close this tab” and the answered count
+
+#### Scenario: Submission needs attention
+
+- **WHEN** any submitted item conflicts, is invalid or not_found, has no matching result, or the request fails
+- **THEN** the tab stays open without attempting to close and the existing result handling and kept drafts remain available
