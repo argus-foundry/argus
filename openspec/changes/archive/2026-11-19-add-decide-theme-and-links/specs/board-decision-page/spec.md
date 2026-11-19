@@ -56,3 +56,43 @@ After a submission where every submitted item returns resolved or already_resolv
 
 - **WHEN** any submitted item conflicts, is invalid or not_found, has no matching result, or the request fails
 - **THEN** the tab stays open without attempting to close and the existing result handling and kept drafts remain available
+
+## MODIFIED Requirements
+
+### Requirement: Partial submit and per-item results
+
+Submit SHALL send only decided cards, with each card's `expected_updated_at` from when it was loaded. Undecided cards SHALL remain open on the board and SHALL NOT be submitted. When every submitted item returns `resolved` or `already_resolved`, the page SHALL finish the successful submission even when other cards remain undecided. Otherwise the page SHALL remain open and apply each returned outcome to its card: `resolved` cards become read-only "Answered" cards; a `conflict` card is replaced by the item's current content with the user's draft note kept and the choice cleared, and flagged as changed by the coordinator; `already_resolved` and `not_found` cards are marked closed; `invalid` cards show their error. For submissions that remain open, the page SHALL NOT report overall success unless at least one card resolved, and SHALL state how many resolved and how many need attention.
+
+#### Scenario: Partial submit
+
+- **WHEN** the user decides 3 of 5 cards and all three submitted answers resolve
+- **THEN** three items are resolved with the chosen option and note, two stay open on the board, and the tab attempts to close or shows the sent confirmation with 3 items answered
+
+#### Scenario: Coordinator edited a card mid-round
+
+- **WHEN** the coordinator revised a decision after the page loaded and the user submits an answer for it
+- **THEN** that answer is not recorded, the card refreshes to the revised content with the user's note preserved, and the other answers in the submission still resolve
+
+#### Scenario: Item answered elsewhere
+
+- **WHEN** an item was dismissed in the TUI after the page loaded and the user answers it on the page
+- **THEN** the result is `already_resolved`; the page finishes if every submitted item is accepted, otherwise that card is marked closed on the page that remains open
+
+### Requirement: Live change awareness and drafts
+
+While visible and before a submission finishes successfully, the page SHALL poll the decisions endpoint every 20 seconds. When items were added, revised or resolved elsewhere it SHALL show a banner with a Refresh action and SHALL NOT replace or reorder any card the user is editing. Drafts (choice and note) SHALL persist in `localStorage` keyed by role, item id and the item's `updated_at`, so a draft is discarded when the coordinator revises that item and survives a reload or an expired session. While the decision page remains unfinished, Copy answers SHALL produce a plain-text summary of the current choices and notes.
+
+#### Scenario: New decision arrives
+
+- **WHEN** the coordinator posts a new decision while the unfinished decision page is open
+- **THEN** a banner offers Refresh and no existing card changes until the user accepts
+
+#### Scenario: Revised item discards its draft
+
+- **WHEN** the coordinator revises an item and the user refreshes
+- **THEN** the card shows the new content with no stale choice, while drafts for unrevised items remain
+
+#### Scenario: Copy fallback
+
+- **WHEN** Copy answers completes while the decision page is unfinished
+- **THEN** a text block listing each decision, its choice and its note is copied or shown selected for manual copying
