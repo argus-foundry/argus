@@ -97,6 +97,10 @@ type residentManager struct {
 	// idleTracker adds content-aware idleness to the raw signal for the
 	// automatic switch (see sessionIdle).
 	idleTracker agent.ContentIdleTracker
+	// approvalLaunch returns the current resident launch generation for the
+	// approval sweep ("" = unknown, skip the launch comparison). nil reads
+	// the launch file.
+	approvalLaunch func() string
 
 	// switchTicks and noneEligible are tick-loop state for the automatic
 	// account switch (see maybeAutoSwitch); only tick and MoveAccount touch them.
@@ -411,6 +415,7 @@ func (m *residentManager) run(done <-chan struct{}) {
 	t := time.NewTicker(residentTickInterval)
 	defer t.Stop()
 	m.tick()
+	m.sweepApprovals()
 	m.deliverNotices()
 	m.deliverTimers()
 	for {
@@ -419,9 +424,30 @@ func (m *residentManager) run(done <-chan struct{}) {
 			return
 		case <-t.C:
 			m.tick()
+			m.sweepApprovals()
 			m.deliverNotices()
 			m.deliverTimers()
 		}
+	}
+}
+
+// sweepApprovals closes resident approval items that can no longer act
+// (relaunched before use, or approved past the retry window) and queues one
+// notice each (fix-resident-approval-flow).
+func (m *residentManager) sweepApprovals() {
+	launch := ""
+	if m.approvalLaunch != nil {
+		launch = m.approvalLaunch()
+	} else if l, err := agent.ReadResidentApprovalLaunch(); err == nil {
+		launch = l.Generation
+	}
+	n, err := m.db.SweepResidentApprovals(launch, m.now())
+	if err != nil {
+		residentLog("[resident-approval] sweep failed: %v", err)
+		return
+	}
+	if n > 0 {
+		residentLog("[resident-approval] sweep lapsed %d item(s)", n)
 	}
 }
 

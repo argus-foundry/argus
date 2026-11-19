@@ -34,9 +34,13 @@ type HeraBoardItem struct {
 	ResolvedBy       string    `json:"resolved_by"`
 	ResolutionNote   string    `json:"resolution_note"`
 	ResidentApproval bool      `json:"resident_approval,omitempty"`
+	// ApprovalState is the resident approval state (pending, approved,
+	// consumed, denied, stale, expired, withdrawn, superseded); empty for an
+	// ordinary item.
+	ApprovalState string `json:"approval_state,omitempty"`
 }
 
-const boardColumns = `id, role_id, kind, subject, body, created_at, updated_at, is_read, resolved, resolved_by, resolution_note, EXISTS(SELECT 1 FROM resident_approvals a WHERE a.board_id=hera_board_items.id)`
+const boardColumns = `id, role_id, kind, subject, body, created_at, updated_at, is_read, resolved, resolved_by, resolution_note, COALESCE((SELECT a.state FROM resident_approvals a WHERE a.board_id=hera_board_items.id),'')`
 
 func validBoardContent(kind, subject, body string) bool {
 	return (kind == "decision" || kind == "fyi") && strings.TrimSpace(subject) != "" && len(subject) <= 240 && !strings.ContainsFunc(subject, unicode.IsControl) && len(body) <= 64*1024
@@ -45,7 +49,7 @@ func validBoardContent(kind, subject, body string) bool {
 func scanBoard(s rowScanner) (*HeraBoardItem, error) {
 	var i HeraBoardItem
 	var created, updated string
-	err := s.Scan(&i.ID, &i.RoleID, &i.Kind, &i.Subject, &i.Body, &created, &updated, &i.Read, &i.Resolved, &i.ResolvedBy, &i.ResolutionNote, &i.ResidentApproval)
+	err := s.Scan(&i.ID, &i.RoleID, &i.Kind, &i.Subject, &i.Body, &created, &updated, &i.Read, &i.Resolved, &i.ResolvedBy, &i.ResolutionNote, &i.ApprovalState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrHeraBoardNotFound
 	}
@@ -54,6 +58,7 @@ func scanBoard(s rowScanner) (*HeraBoardItem, error) {
 	}
 	i.CreatedAt = parseTime(created)
 	i.UpdatedAt = parseTime(updated)
+	i.ResidentApproval = i.ApprovalState != ""
 	return &i, nil
 }
 
@@ -90,6 +95,40 @@ func (d *DB) postHeraBoardItem(roleID int64, kind, subject, body string) (*HeraB
 	}
 	uxlog.Log("[board] posted role=%d item=%d kind=%s", roleID, id, kind)
 	return scanBoard(d.conn.QueryRow(`SELECT `+boardColumns+` FROM hera_board_items WHERE id=?`, id))
+}
+
+// PostOrRefreshHeraBoardItem is for repeating system notices: when the role
+// already has an open, non-approval item with the same kind and subject, it
+// replaces that item's body, bumps updated_at and marks it unread instead of
+// posting a duplicate. Otherwise it posts a new item.
+func (d *DB) PostOrRefreshHeraBoardItem(roleID int64, kind, subject, body string) (*HeraBoardItem, error) {
+	if !validBoardContent(kind, subject, body) {
+		return nil, ErrHeraBoardInvalid
+	}
+	d.mu.Lock()
+	var id int64
+	err := d.conn.QueryRow(`SELECT id FROM hera_board_items WHERE role_id=? AND kind=? AND subject=? AND resolved=0
+ AND NOT EXISTS(SELECT 1 FROM resident_approvals a WHERE a.board_id=hera_board_items.id) ORDER BY id DESC LIMIT 1`, roleID, kind, subject).Scan(&id)
+	d.mu.Unlock()
+	if errors.Is(err, sql.ErrNoRows) {
+		return d.PostHeraBoardItem(roleID, kind, subject, body)
+	}
+	if err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	_, err = d.conn.Exec(`UPDATE hera_board_items SET body=?,is_read=0,updated_at=? WHERE id=? AND resolved=0`, body, formatTime(time.Now()), id)
+	var i *HeraBoardItem
+	if err == nil {
+		i, err = scanBoard(d.conn.QueryRow(`SELECT `+boardColumns+` FROM hera_board_items WHERE id=?`, id))
+	}
+	d.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	uxlog.Log("[board] refreshed role=%d item=%d kind=%s", roleID, id, kind)
+	d.emitBoardChanged(roleID, id, "updated")
+	return i, nil
 }
 
 func (d *DB) UpdateHeraBoardItem(roleID, id int64, kind, subject, body string) (*HeraBoardItem, error) {
@@ -326,14 +365,27 @@ func (d *DB) resolveHeraBoardItem(roleID, id int64, by, note, expected string) (
 	if err != nil {
 		return false, err
 	}
+	if i.ResidentApproval {
+		// Approval items are decided only by the human approve/deny path.
+		// The agent may withdraw its own pending item (never a grant);
+		// everything else gets the item's real state.
+		if by != "agent" {
+			return false, residentApprovalStateErrTx(tx, id, time.Now())
+		}
+		if err := withdrawResidentApprovalTx(tx, id, note, time.Now()); err != nil {
+			return false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return false, err
+		}
+		uxlog.Log("[resident-approval] withdrawn role=%d item=%d", roleID, id)
+		return true, nil
+	}
 	if i.Resolved {
 		if expected == "" || (i.ResolvedBy == by && i.ResolutionNote == note) {
 			return false, nil
 		}
 		return false, ErrHeraBoardResolved
-	}
-	if i.ResidentApproval {
-		return false, ErrResidentApproval
 	}
 	if expected != "" && formatTime(i.UpdatedAt) != expected {
 		uxlog.Log("[board] dismiss conflict role=%d item=%d", roleID, id)

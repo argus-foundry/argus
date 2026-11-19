@@ -200,7 +200,7 @@ func (m *residentManager) maybeAutoSwitch(task *model.Task, cfg config.Config, s
 		if !m.noneUsableEpisode(task.ID) {
 			m.setNoneUsableEpisode(task.ID, true)
 			residentLog("[resident] auto switch from %s refused: every account in resident.accounts is depleted (%s)", cur, usageSummary(usage[cur], now))
-			m.postBoard(task, "decision",
+			m.postBoard(task, "fyi",
 				fmt.Sprintf("%s is out of usage budget on every listed account", cfg.Resident.Name),
 				fmt.Sprintf("Account %s is depleted (%s) and every other account in resident.accounts is depleted too. It will move automatically as soon as one recovers.", cur, usageSummary(usage[cur], now)))
 		}
@@ -408,7 +408,9 @@ func (m *residentManager) postBoard(task *model.Task, kind, subject, body string
 		residentLog("[resident] board post skipped: coordinator role (err=%v)", err)
 		return
 	}
-	if _, err := m.db.PostHeraBoardItem(roles[0].ID, kind, subject, body); err != nil {
+	// System notices repeat (every depletion episode, every move); refresh an
+	// open item with the same subject instead of stacking duplicates.
+	if _, err := m.db.PostOrRefreshHeraBoardItem(roles[0].ID, kind, subject, body); err != nil {
 		residentLog("[resident] board post failed: %v", err)
 	}
 }

@@ -153,3 +153,27 @@ func TestResidentPermissionHookFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestQueuedApprovalMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		resp    daemon.ResidentPermissionResp
+		want    []string
+		notWant []string
+	}{
+		{"new", daemon.ResidentPermissionResp{BoardID: 574}, []string{"Queued for Aaron's approval as #574; nothing ran.", "hera_inbox", "timeout_seconds 120", "60 minutes", "hera_board_resolve on #574"}, []string{"Already queued", "replaces"}},
+		{"reused", daemon.ResidentPermissionResp{BoardID: 574, Reused: true}, []string{"Already queued for Aaron's approval as #574 and still waiting"}, []string{"replaces"}},
+		{"expired", daemon.ResidentPermissionResp{BoardID: 580, Expired: 574}, []string{"Your earlier approval #574 expired unused before this retry"}, nil},
+		{"supersedes", daemon.ResidentPermissionResp{BoardID: 574, Superseded: []int64{561, 562}}, []string{"It replaces #561, #562, now closed."}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := queuedApprovalMessage(tc.resp)
+			for _, w := range tc.want {
+				testutil.Contains(t, msg, w)
+			}
+			for _, w := range tc.notWant {
+				testutil.False(t, strings.Contains(msg, w))
+			}
+		})
+	}
+}

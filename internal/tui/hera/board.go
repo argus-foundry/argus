@@ -330,9 +330,13 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 	// Reserve the footer before layout and scrolling, including empty boards.
 	hintText := boardHint(keys, focused)
 	if item := b.selected(); focused && item != nil && item.ResidentApproval {
-		reply, _ := keys.BindingFor(keymap.CtxHeraBoard, keymap.ActBoardReply)
-		dismiss, _ := keys.BindingFor(keymap.CtxHeraBoard, keymap.ActBoardDismiss)
-		hintText = fmt.Sprintf("%s approve once · %s deny · ⏎ expand · PgUp/PgDn scroll", reply.String(), dismiss.String())
+		if item.ApprovalState != "" && item.ApprovalState != db.ApprovalPending {
+			hintText = approvalStatusLine(item) + " · ⏎ expand · PgUp/PgDn scroll"
+		} else {
+			reply, _ := keys.BindingFor(keymap.CtxHeraBoard, keymap.ActBoardReply)
+			dismiss, _ := keys.BindingFor(keymap.CtxHeraBoard, keymap.ActBoardDismiss)
+			hintText = fmt.Sprintf("%s approve once · %s deny · ⏎ expand · PgUp/PgDn scroll", reply.String(), dismiss.String())
+		}
 	}
 	hint := runewidth.Truncate(hintText, inner.W, "")
 	tview.Print(screen, tview.Escape(hint), inner.X, inner.Y+inner.H-1, inner.W, tview.AlignLeft, theme.ColorDimmed)
@@ -477,6 +481,14 @@ func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Pri
 }
 
 func (p *HeraPage) decideBoardApproval(i *db.HeraBoardItem, approve bool) {
+	// A decided or lapsed item never reopens the approve/deny dialog; say
+	// what already happened instead.
+	if i.ApprovalState != "" && i.ApprovalState != db.ApprovalPending {
+		if p.OnInfo != nil {
+			p.OnInfo(approvalStatusLine(i))
+		}
+		return
+	}
 	if p.board.expandedID != i.ID {
 		p.board.expandedID = i.ID
 		if p.OnBoardRead != nil {
@@ -490,6 +502,16 @@ func (p *HeraPage) decideBoardApproval(i *db.HeraBoardItem, approve bool) {
 	if p.OnApprovalDecision != nil {
 		p.OnApprovalDecision(i, approve)
 	}
+}
+
+// approvalStatusLine summarizes a decided approval item from its stored
+// state and resolution note (which carries the decision times).
+func approvalStatusLine(i *db.HeraBoardItem) string {
+	line := fmt.Sprintf("#%d %s", i.ID, i.ApprovalState)
+	if i.ResolutionNote != "" {
+		line += ": " + i.ResolutionNote
+	}
+	return line
 }
 
 func (p *HeraPage) replyToBoard(i *db.HeraBoardItem) {

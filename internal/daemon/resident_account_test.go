@@ -194,8 +194,8 @@ func TestAutoSwitch_NoEligibleAccountPostsOnceAndRecovers(t *testing.T) {
 	se.tickN(6)
 	testutil.False(t, se.moved())
 	items := se.boardItems(t)
-	testutil.Equal(t, len(items), 1) // one per episode, not per tick
-	testutil.Equal(t, items[0].Kind, "decision")
+	testutil.Equal(t, len(items), 1)        // one per episode, not per tick
+	testutil.Equal(t, items[0].Kind, "fyi") // nothing to decide
 	testutil.Equal(t, len(se.notif.calls), 0)
 
 	se.usage["work"] = usagebudget.Reading{FiveHour: win(10, time.Now())}

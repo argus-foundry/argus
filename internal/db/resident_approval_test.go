@@ -36,7 +36,7 @@ func TestResidentApprovalExactGrant(t *testing.T) {
 	testutil.Contains(t, items[0].Body, "9007199254740993")
 	_, err = d.UpdateHeraBoardItem(a.RoleID, a.BoardID, "fyi", "different", "changed")
 	testutil.Error(t, err)
-	testutil.Error(t, d.ResolveHeraBoardItem(a.RoleID, a.BoardID, "agent", "approved"))
+	testutil.Error(t, d.ResolveHeraBoardItem(a.RoleID, a.BoardID, "human", "approved"))
 	testutil.NoError(t, d.DecideResidentApproval(a.BoardID, a.CreatedAt, call.Launch, true, now))
 	testutil.Error(t, d.DecideResidentApproval(a.BoardID, a.CreatedAt, call.Launch, true, now))
 	notices, err := d.PendingHeraBoardNotices()
@@ -74,7 +74,7 @@ func TestResidentApprovalMismatchAndExpiry(t *testing.T) {
 			case "launch":
 				call.Launch = "other"
 			case "expiry":
-				now = now.Add(11 * time.Minute)
+				now = now.Add(ResidentApprovalWindow + time.Minute)
 			}
 			_, allow, err := d.RequestResidentApproval(call, now)
 			testutil.NoError(t, err)

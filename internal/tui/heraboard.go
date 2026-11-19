@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -14,7 +15,7 @@ func (a *App) confirmResidentApproval(d *db.DB, item *db.HeraBoardItem, approve 
 	message := fmt.Sprintf("Deny the exact call shown on board #%d? Solo will be told to continue other work.", item.ID)
 	if approve {
 		action = "Approve once"
-		message = fmt.Sprintf("Approve the exact call shown on board #%d once? The grant expires in ten minutes. A changed launch requires a new request.", item.ID)
+		message = fmt.Sprintf("Approve the exact call shown on board #%d once? The agent then has %d minutes to run it; a relaunch first voids the approval.", item.ID, int(db.ResidentApprovalWindow/time.Minute))
 	}
 	a.openHeraConfirm(action, message, func() {
 		go func() {
@@ -28,7 +29,16 @@ func (a *App) confirmResidentApproval(d *db.DB, item *db.HeraBoardItem, approve 
 			uxlog.Log("[resident-approval] human decision item=%d approve=%t err=%v", item.ID, approve, err)
 			a.tapp.QueueUpdateDraw(func() {
 				if err != nil {
-					a.statusbar.SetError("Approval failed: " + err.Error())
+					// A state error already explains what happened (already
+					// approved, lapsed, superseded...); it is not a failure
+					// of this click, so it is not prefixed as one.
+					var state *db.ApprovalStateError
+					if errors.As(err, &state) {
+						a.statusbar.SetError("Not applied: " + err.Error())
+					} else {
+						a.statusbar.SetError("Approval failed: " + err.Error())
+					}
+					a.heraPage.Refresh()
 					return
 				}
 				a.heraPage.Refresh()
