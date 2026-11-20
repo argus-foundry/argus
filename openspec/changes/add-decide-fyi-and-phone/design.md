@@ -32,6 +32,10 @@ TUI `o` preselects its current coordinator, including an empty board. The phone 
 
 Keep decision option cards, required plain/other notes, recommendation shortcuts and tally within Decisions. FYIs show subject/body using the same safe renderer, comment box and exclusive pending Comment, Dismiss or Comment and dismiss action. Typing alone does not queue an action. Comment actions require non-whitespace notes; dismiss requires none. Switching boards/tabs never discards drafts or changes the scope of the queued submission. One persistent Review queued control and one Submit actions control cover queued actions on every board and tab, including invalid notes that must be fixed explicitly; unavailable boards receive explicit refusal results without blocking other authorized board batches.
 
+### Visual direction
+
+Use a compact technical tool layout: 14px body text, approximately 1.4rem/1.1rem headings, half-height section/lede spacing, approximately 30px desktop rail rows, a main column up to 60rem, 1px borders and radii no larger than 4px. Use monospace for item IDs, state labels, tab labels and counts. Show tab counts as solid contrasting square badges (3–4px radius, tabular numerals): decision accent and a distinct FYI color, with muted/outlined zero badges; smaller matching badges appear on non-empty rail rows. These remain open-item counts, not unread-state counts. Keep phone controls/options at least 40px tall, avoid horizontal scrolling at 390px and retain readable contrast in Light/Dark/System.
+
 ### Coordinator decisions: keyboard and phone behavior
 
 - **Every row is navigable:** Cmd+Up/Down traverses the depth-first rail order including greyed coordinators/sub-coordinators; it clamps at the first/last row. This matches rail movement and avoids jumps when a board empties.
