@@ -1,6 +1,6 @@
 ## 1. Approval and contracts
 
-- [ ] 1.1 Obtain Aaron's approval of this spec and unpublished mockup before production code.
+- [x] 1.1 Obtain Aaron's approval of this spec and unpublished mockup before production code; record approved Submit / Submit & close addition.
 - [ ] 1.2 Write failing delta-derived Go/API tests for annotation validation, revision anchors, receipts, comments on decisions, closed items, auth and bounded decoding.
 - [ ] 1.3 Write failing page interaction tests for arbitrary/cross-node text ranges, overlaps, types, selection toolbar/panel, links versus selection, keyboard/touch and queue states.
 
@@ -18,6 +18,8 @@
 - [ ] 3.3 Add current-item desktop annotations panel and modal phone sheet with document ordering, entry-to-highlight scroll/flash and General comment label; queue comment-only decisions and FYI comment actions; carry annotations with answers, review and Copy responses using existing submit.
 - [ ] 3.4 Persist guarded annotation drafts and frozen retries; preserve recoverable stale quotes/comments on conflicts and refresh, requiring explicit reanchoring/removal.
 - [ ] 3.5 Verify 1200px and 390px light/dark, no horizontal overflow, keyboard, native touch selection, cross-node/nested text ranges, repeated/overlapping selections, deletion-only feedback and option selection isolation; bump SW_VERSION when shell asset changes.
+
+- [ ] 3.6 Test and implement Submit to continue with refreshed boards/counts and inline receipts, plus Submit & close retaining all-confirmed close behavior, through the same retry-safe path and disabled conditions.
 
 ## 4. Guidance, parity and release checks
 
