@@ -618,9 +618,13 @@ globalThis.BoardDecisions = (() => {
       }
       persist();
     }
+    if(!failed&&!closeAfter){
+      screen='browse';
+      try{const next=await snapshot();busy=false;message('Actions sent. You can keep reviewing.');reconcile(next);}
+      catch(e){busy=false;message('Actions sent. Board refresh failed: '+e.message);render();}return;
+    }
     busy=false;
     if(!failed&&closeAfter){sent();return;}
-    if(!failed){screen='browse';message('Actions sent. You can keep reviewing.');try{reconcile(await snapshot());}catch(e){message('Actions sent. Board refresh failed: '+e.message);render();}return;}
     screen='review';message((Object.values(acceptedCounts).some(n=>n>0)?'Some actions were accepted.':'No actions were confirmed.')+' Review the remaining responses and retry; accepted actions are cleared.');render();
   }
   function closeDrawer(){$('drawer').close();$('drawer-trigger').focus();}

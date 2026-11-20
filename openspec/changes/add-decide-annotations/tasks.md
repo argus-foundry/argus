@@ -17,7 +17,7 @@
 - [x] 3.2 Add verified Plannotator Copy/Delete/Comment toolbar, safe inline highlights, Comment Save/Cancel/Edit and Delete removal; preserve native selection, keyboard fallback, radio/link isolation and 40px targets.
 - [x] 3.3 Add current-item desktop annotations panel and modal phone sheet with document ordering, entry-to-highlight scroll/flash and General comment label; queue comment-only decisions and FYI comment actions; carry annotations with answers, review and Copy responses using existing submit.
 - [x] 3.4 Persist guarded annotation drafts and frozen retries; preserve recoverable stale quotes/comments on conflicts and refresh, requiring explicit reanchoring/removal.
-- [ ] 3.5 Verify 1200px and 390px light/dark, no horizontal overflow, keyboard, native touch selection, cross-node/nested text ranges, repeated/overlapping selections, deletion-only feedback and option selection isolation; bump SW_VERSION when shell asset changes.
+- [x] 3.5 Verify 1200px and 390px light/dark, no horizontal overflow, keyboard, native touch selection, cross-node/nested text ranges, repeated/overlapping selections, deletion-only feedback and option selection isolation; bump SW_VERSION when shell asset changes. Automated Chromium/WebKit desktop and 390px checks pass; physical-phone long-press and software keyboard checks remain manual.
 
 - [x] 3.6 Test and implement Submit to continue with refreshed boards/counts and inline receipts, plus Submit & close retaining all-confirmed close behavior, through the same retry-safe path and disabled conditions.
 

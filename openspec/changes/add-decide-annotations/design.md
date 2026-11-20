@@ -77,3 +77,11 @@ Aaron approved the spec and mockup, adding the two submit behaviors described be
 ## Approval addition: submit and continue
 
 Submit and Submit & close share batch construction, stable action IDs, frozen uncertain payload recovery, validation and disabled conditions. Submit keeps the page open, clears confirmed queued drafts, removes resolved items, refreshes boards/counts and displays per-item receipts inline. Submit & close retains the existing all-confirmed close attempt and confirmation fallback. Any partial failure stays open for both controls. Annotation-only comments leave decisions open and available for later answers.
+
+## Implementation verification
+
+- Annotation browser matrix: 52 passing cases across Chromium and WebKit at 1200px and 390px, including all six shared Go/browser projection vectors, overlap/identical ranges, independent removal, UTF-8 limits, keyboard fallback, option/link isolation, stale drafts, uncertain retries and both submit controls.
+- Existing Decide and rail regressions: 48 passing cases across Chromium desktop and WebKit phone.
+- Isolated real API/browser matrix: four passing cases verify browser-generated Unicode anchors, receipt recovery/replay, annotation-only decisions staying open, and later answering.
+- Desktop and phone dark screenshots visually inspected; panel/sheet positioning and no horizontal overflow asserted. Physical iOS/Android long-press handles and software keyboard positioning still need a manual device check.
+- Native macOS annotation entry/editing remains the named follow-up `macos-decide-annotation-parity`; TUI/phone launch the shared page. Coordinator guidance changes take effect after a supervisor restart (spawn surface 57).
