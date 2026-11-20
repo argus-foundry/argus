@@ -251,18 +251,23 @@ func (d *DB) answerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]He
 		results = append(results, r)
 	}
 	if len(sections) > 0 {
-		rows, e := tx.Query(`SELECT id FROM hera_board_items WHERE role_id=? AND kind='decision' AND resolved=0 ORDER BY id`, roleID)
+		rows, e := tx.Query(`SELECT id,kind FROM hera_board_items WHERE role_id=? AND resolved=0 ORDER BY id`, roleID)
 		if e != nil {
 			return nil, e
 		}
-		var open []string
+		var open, openFYIs []string
 		for rows.Next() {
 			var id int64
-			if e = rows.Scan(&id); e != nil {
+			var kind string
+			if e = rows.Scan(&id, &kind); e != nil {
 				rows.Close()
 				return nil, e
 			}
-			open = append(open, fmt.Sprintf("#%d", id))
+			if kind == "decision" {
+				open = append(open, fmt.Sprintf("#%d", id))
+			} else {
+				openFYIs = append(openFYIs, fmt.Sprintf("#%d", id))
+			}
 		}
 		e = rows.Err()
 		rows.Close()
@@ -277,7 +282,7 @@ func (d *DB) answerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]He
 		if commentCount > 0 {
 			head = tldr + ". Act on answers and address every annotation; comment-only decisions remain open.\n\n"
 		}
-		tail := "\n\nStill open: " + strings.Join(open, ", ")
+		tail := "\n\nStill open: " + strings.Join(open, ", ") + "\nStill open FYIs: " + strings.Join(openFYIs, ", ")
 		budget := (64*1024 - len(head) - len(tail) - len(strings.Join(sections, "\n\n"))) / len(sections)
 		for n := range sections {
 			note := notes[n]

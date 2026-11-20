@@ -14,7 +14,7 @@ import (
 )
 
 func TestAnnotatedAnswersReplayOutboxAndPartialFailure(t *testing.T) {
-	d, c, _ := fyiFixture(t)
+	d, c, fyi := fyiFixture(t)
 	one, err := d.PostHeraBoardItem(c.ID, "decision", "Choose", "Body", decisionFixture())
 	testutil.NoError(t, err)
 	two, err := d.PostHeraBoardItem(c.ID, "decision", "Explain", "Body")
@@ -64,6 +64,8 @@ func TestAnnotatedAnswersReplayOutboxAndPartialFailure(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(pending), 1)
 	testutil.Contains(t, pending[0].Body, "COMMENT #1")
+	testutil.Contains(t, pending[0].Body, fmt.Sprintf("Still open: #%d", two.ID))
+	testutil.Contains(t, pending[0].Body, fmt.Sprintf("Still open FYIs: #%d", fyi.ID))
 	testutil.NoError(t, d.MarkHeraMessageDelivered(pending[0].ID, HeraDeliveryIdleSubmit))
 	pending, err = d.PendingHeraBoardNotices()
 	testutil.NoError(t, err)
@@ -92,11 +94,14 @@ func TestAnnotatedResponseRollback(t *testing.T) {
 			testutil.Error(t, err)
 			items, err := d.ListHeraBoardItems(c.ID, true)
 			testutil.NoError(t, err)
+			found := 0
 			for _, item := range items {
 				if item.ID == i.ID {
+					found++
 					testutil.DeepEqual(t, item, i)
 				}
 			}
+			testutil.Equal(t, found, 1)
 			_, err = d.HeraBoardFYIReceipt(c.ID, "rollback")
 			testutil.ErrorIs(t, err, ErrHeraBoardNotFound)
 			messages, err := d.HeraInbox(c.ID)
