@@ -8,6 +8,25 @@ const context = {globalThis: {}, URL, TextEncoder, document: {addEventListener()
 vm.runInNewContext(html.match(/<script id="decision-logic">([\s\S]*?)<\/script>/)[1],context);
 const logic = context.globalThis.BoardDecisions;
 
+test('typed annotations queue decision feedback without satisfying required answer notes',()=>{
+ const annotation={annotation_id:'one',type:'DELETION',comment:''};
+ const d={choice:'',action:'comment',note:'',annotations:[annotation]};
+ assert.equal(logic.valid({kind:'decision'},d),true);
+ assert.equal(logic.valid({kind:'decision'},{...d,choice:'other'}),false);
+ assert.equal(logic.valid({kind:'fyi'},d),true);
+ assert.equal(logic.valid({kind:'fyi'},{...d,action:'dismiss'}),false);
+ assert.equal(logic.valid({kind:'decision'},{...d,annotations:[{...annotation,type:'COMMENT'}]}),false);
+ assert.equal(logic.valid({kind:'decision'},{...d,annotations:Array.from({length:21},()=>annotation)}),false);
+ assert.equal(logic.valid({kind:'decision'},{...d,stale:{annotations:[annotation]}}),false);
+});
+
+test('decision comments require matching durable action receipts and never accept a closed item',()=>{
+ const sent={action_id:'comment-1',item_id:3,action:'comment'};
+ assert.equal(logic.accepted('decision',sent,{action_id:'comment-1',item_id:3,outcome:'commented'}),true);
+ assert.equal(logic.accepted('decision',sent,{action_id:'wrong',item_id:3,outcome:'commented'}),false);
+ assert.equal(logic.accepted('decision',sent,{action_id:'comment-1',item_id:3,outcome:'already_resolved'}),false);
+});
+
 test('mixed actions validate comments and partition by role and kind in bounded batches',()=>{
  const records=Array.from({length:18},(_,n)=>({role:1,item:{id:n,kind:'fyi',updated_at:'r'},draft:{action:'comment',note:'feedback'}}));
  records.push({role:2,item:{id:99,kind:'decision'},draft:{choice:'other',note:'yes'}});
@@ -132,6 +151,13 @@ test('formatting links bold text but never URLs in code, including bold code',()
  assert.deepEqual(nodes(rendered,'a').map(n=>n.attributes.href),['https://example.com','https://example.org']);
  assert.equal(nodes(rendered,'code').length,2);
  assert.ok(nodes(rendered,'code').every(n=>nodes(n,'a').length===0));
+});
+
+test('nested lists retain document-order newline projection',()=>{
+ const rendered=logic.markup('A **bold** paragraph\nwith `code`.\n\n- First\n  - Nested **item**\n1. Last',doc);
+ assert.equal(rendered.textContent,'A bold paragraph with code.\nFirst\nNested item\nLast');
+ assert.equal(nodes(rendered,'ul').length,2);
+ assert.equal(nodes(rendered,'ol').length,1);
 });
 
 test('linkification preserves XSS payloads as literal text and rejects unsafe schemes',()=>{

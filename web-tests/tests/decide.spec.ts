@@ -135,7 +135,7 @@ for (const outcome of ['resolved', 'already_resolved']) {
     const mode = outcome === 'resolved' ? 'dark' : 'light';
     await page.getByLabel('Theme').selectOption(mode);
     await page.locator('#decision-40 input[value="review"]').check();
-    await page.getByRole('button', { name: 'Submit actions', exact: true }).click();
+    await page.getByRole('button', { name: 'Submit & close', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Actions sent — you can close this tab' })).toBeVisible();
     await expect(page.locator('main')).toContainText('1 answers · 0 comments · 0 dismissals');
     await expect(page.locator('html')).toHaveCSS('color-scheme', mode);
@@ -159,7 +159,7 @@ test('a fully accepted partial round closes a script-opened tab', async ({ page 
   await popup.goto(`${origin}/decide?role=7#t=launch-secret`);
   await popup.locator('#decision-40 input[value="review"]').check();
   const closed = popup.waitForEvent('close');
-  await popup.getByRole('button', { name: 'Submit actions', exact: true }).click();
+  await popup.getByRole('button', { name: 'Submit & close', exact: true }).click();
   await closed;
   expect(popup.isClosed()).toBe(true);
   expect(page.isClosed()).toBe(false);
@@ -183,7 +183,7 @@ test('an expiring in-flight poll cannot touch controls removed by the sent confi
   await page.clock.fastForward(20000);
   await polling;
   await page.locator('#decision-40 input[value="review"]').check();
-  await page.getByRole('button', { name: 'Submit actions', exact: true }).click();
+  await page.getByRole('button', { name: 'Submit & close', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Actions sent — you can close this tab' })).toBeVisible();
   await page.evaluate(() => {
     (globalThis as any).lateControlLookups = [];
@@ -210,7 +210,7 @@ test('a pending copy cannot touch controls removed by the sent confirmation', as
   await page.goto(`${origin}/decide?role=7#t=launch-secret`);
   await page.locator('#decision-40 input[value="review"]').check();
   await page.getByRole('button', { name: 'Copy responses', exact: true }).click();
-  await page.getByRole('button', { name: 'Submit actions', exact: true }).click();
+  await page.getByRole('button', { name: 'Submit & close', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Actions sent — you can close this tab' })).toBeVisible();
   const lookups = await page.evaluate(async () => {
     const accessed: string[] = [], original = document.getElementById.bind(document);
@@ -230,7 +230,7 @@ for (const outcome of ['conflict', 'invalid', 'not_found', 'request_failed']) {
     await page.locator('#decision-40 input[value="review"]').check();
     await page.locator('#note-40').fill('Keep this note');
     const response = page.waitForResponse(`${origin}/api/hera/roles/7/board/answers`);
-    await page.getByRole('button', { name: 'Submit actions', exact: true }).click();
+    await page.getByRole('button', { name: 'Submit & close', exact: true }).click();
     await response;
     await expect(page.locator('#status')).toContainText('Review the remaining responses');
     await expect(page.locator('#main')).toContainText('Keep this note');

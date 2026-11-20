@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test';
+export default defineConfig({testDir:'./tests',testMatch:'decide-annotations.spec.ts',workers:1,fullyParallel:false,timeout:30000,reporter:'list',use:{trace:'retain-on-failure',screenshot:'only-on-failure'},projects:['chromium','webkit'].flatMap(browserName=>[1200,390].map(width=>({name:browserName+'-'+width,use:{browserName:browserName as 'chromium'|'webkit',viewport:{width,height:844}}})))});

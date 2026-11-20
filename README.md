@@ -290,7 +290,7 @@ When a **worker** is selected the details region shows its live agent terminal. 
 | Key (coordinator board) | Action |
 | --- | --- |
 | `p` | Toggle plan / board (rail or details focused) |
-| `o` | Open the common Decide rail page with this coordinator preselected, including empty and FYI-only boards; requires the local REST API. Rebind with `[keybindings.hera_board] decide`. |
+| `o` | Open the common Decide rail page with this coordinator preselected, including empty and FYI-only boards; select body/option text for Copy, Delete suggestion or Comment. Review queued sends with Submit (continue) or Submit & close; requires the local REST API. Rebind with `[keybindings.hera_board] decide`. |
 | `Cmd+→` | Follow the focus ladder into the right details / board pane |
 | `↑` / `↓` / `j` / `k` | Select previous / next item |
 | `Enter` | Expand / collapse; expanding marks the item read |
@@ -1034,9 +1034,9 @@ Every authenticated token has the same permissions **except** a small master-onl
 | `GET` | `/api/hera/board/decision-counts` | Master/device only; `{decisions,fyis,total,roles}` counts open items, including read FYIs, across the visible coordinator rail. |
 | `GET` | `/api/hera/board/decision-navigation` | Master/device or rail-board session; visible coordinator rows in rail order with `parent_role_id` and open-kind counts; hidden/archived branches are excluded. |
 | `GET` | `/api/hera/roles/{role_id}/board/decide-items` | Master/device or rail-board session; all open decisions/FYIs, kind counts and coordinator names. No read acknowledgment. |
-| `POST` | `/api/hera/roles/{role_id}/board/fyi-actions` | `{actions:[{action_id,item_id,expected_updated_at,action,note}]}` (1–16); comment, dismiss or comment_and_dismiss. Durable idempotent receipts; dismiss is silent; comment leaves the FYI open. |
-| `GET` | `/api/hera/roles/{role_id}/board/fyi-actions/{action_id}` | Master/device only; successful receipt with full comment and original outcome. Rail-board sessions and scope tokens are denied. |
-| `POST` | `/api/hera/roles/{role_id}/board/answers` | `{answers:[{item_id,expected_updated_at,choice,note}]}` (1–16 answers, 4 KiB notes) → per-item results and unread count. Commits answers plus one coordinator summary atomically; full notes stay on items if summary notes are shortened. |
+| `POST` | `/api/hera/roles/{role_id}/board/fyi-actions` | `{actions:[{action_id,item_id,expected_updated_at,action,note,annotations?}]}` (1–16); comment, dismiss or comment_and_dismiss. Durable idempotent receipts; dismiss is silent; comment leaves the FYI open. Up to 20 typed range annotations; each comment is at most 4 KiB UTF-8. |
+| `GET` | `/api/hera/roles/{role_id}/board/fyi-actions/{action_id}` | Master/device only; successful FYI or decision receipt with kind/action, full annotations and original outcome. Recover shortened summaries through the authenticated API proxy using the role/action pointer. Rail-board sessions and scope tokens are denied. |
+| `POST` | `/api/hera/roles/{role_id}/board/answers` | `{answers:[{item_id,expected_updated_at,choice,note,action?,action_id?,annotations?}]}` (1–16 answers, 4 KiB notes) → per-item results and unread count. Answer is the default action; comment leaves the decision open. Annotations and comments require a durable action ID. Commits receipts, answers and one coordinator summary atomically; full feedback remains in receipts. |
 | `PUT` | `/api/hera/roles/{role_id}/board/{item_id}/read-state` | `{read, expected_updated_at}` → `{item, unread_count}`. Revision-checked (409 `revision_conflict` leaves a changed item unread; 409 `item_resolved`); never rewrites `updated_at`. Errors are `{error, code}`. |
 | `POST` | `/api/hera/roles/{role_id}/board/{item_id}/dismiss` | `{expected_updated_at, note?}` → `{item, unread_count}`. Human dismissal reusing the single durable coordinator-notice transaction; identical repeat is a no-op, changed revision is 409. |
 | `GET` | `/api/tasks/{id}/hera-messages?limit=&before_id=` | Read-only Hera mail history for every role the task is or was bound to: `{messages, next_before_id}` (limit 1–500, default 100; newest page by id, returned oldest first). Never marks read or touches delivery. |

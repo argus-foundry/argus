@@ -246,6 +246,15 @@ func seedHera(d *db.DB, task *model.Task) error {
 	if err != nil {
 		return err
 	}
+	if os.Getenv("ARGUS_TEST_DECIDE_FIXTURE") == "1" {
+		_, err = d.PostHeraBoardItem(role.ID, "decision", "Annotation fixture", "Hello **bold** 😀\n\n- First bullet\n  - Nested detail", &db.HeraBoardStructure{
+			Options:     []db.HeraBoardOption{{ID: "a", Label: "Ship", Summary: "Try this path"}},
+			Recommended: "a", Reason: "A useful fixture",
+		})
+		if err != nil {
+			return err
+		}
+	}
 	return d.UpsertHeraRoleStatus(role.ID, db.HeraStatusWorking)
 }
 

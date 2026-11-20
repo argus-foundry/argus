@@ -119,12 +119,12 @@ Accepted decision comment outcomes SHALL additionally be commented. Annotation-b
 
 #### Scenario: Mixed successful submit
 
-- **WHEN** all submitted answers, comments and dismissals succeed while untouched items and comment-only FYIs remain open
+- **WHEN** Submit & close confirms all submitted answers, comments and dismissals while untouched items and comment-only FYIs remain open
 - **THEN** the page attempts to close
 
 #### Scenario: Browser refuses closing
 
-- **WHEN** every submitted action succeeds but closing is refused or throws
+- **WHEN** Submit & close confirms every submitted action but closing is refused or throws
 - **THEN** the sent confirmation, accepted counts and Return to Argus link replace the action controls
 
 #### Scenario: Submission needs attention
@@ -133,6 +133,17 @@ Accepted decision comment outcomes SHALL additionally be commented. Annotation-b
 - **THEN** no close attempt or overall sent confirmation occurs and confirmed results and remaining drafts stay available
 
 
+
+
+#### Scenario: Continue after submit
+
+- **WHEN** Submit confirms queued answers and annotation-only comments
+- **THEN** resolved items disappear, confirmed drafts clear, receipts appear inline, boards/counts refresh and the page stays open for further work
+
+#### Scenario: Shared submit recovery
+
+- **WHEN** either submission control receives a partial failure or an uncertain result
+- **THEN** the page stays open and retains the identical action ID and frozen payload until reconciled, using the same disabled conditions and retry path
 
 ### Requirement: One summary message to the coordinator
 
@@ -307,13 +318,3 @@ Annotations SHALL persist in the same guarded localStorage response records as n
 
 - **WHEN** every queued annotation-only decision comment is confirmed
 - **THEN** the existing completion flow runs and those decisions remain open
-
-#### Scenario: Continue after submit
-
-- **WHEN** Submit confirms queued answers and annotation-only comments
-- **THEN** resolved items disappear, confirmed drafts clear, receipts appear inline, boards/counts refresh and the page stays open for further work
-
-#### Scenario: Shared submit recovery
-
-- **WHEN** either submission control receives a partial failure or an uncertain result
-- **THEN** the page stays open and retains the identical action ID and frozen payload until reconciled, using the same disabled conditions and retry path
