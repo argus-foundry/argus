@@ -39,6 +39,20 @@ func TestBoardSummaryFallbacks(t *testing.T) {
 	testutil.Equal(t, BoardSummary(failedBoardReader{}, &db.HeraRole{Kind: db.HeraKindWorker}), "")
 }
 
+func TestBoardSummaryAnnotationGuidance(t *testing.T) {
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	for _, store := range []any{d, failedBoardReader{}} {
+		t.Run(fmt.Sprintf("%T", store), func(t *testing.T) {
+			got := BoardSummary(store, &db.HeraRole{Kind: db.HeraKindCoordinator})
+			for _, rule := range []string{"address every annotation", "COMMENT", "DELETION", "suggestion", "fyi-actions", "comment-only decisions remain open"} {
+				testutil.Contains(t, got, rule)
+			}
+		})
+	}
+}
+
 type failedBoardOutbox struct{}
 
 func (failedBoardOutbox) PendingHeraBoardNotices() ([]*db.HeraMessage, error) {

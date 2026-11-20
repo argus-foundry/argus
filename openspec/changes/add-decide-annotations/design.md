@@ -6,7 +6,7 @@ The shipped rail-style page at commit 7fa00e96c5c6283fe8df56aacdf1fc8970f204aa i
 
 **Goals:** Let Aaron attach precise feedback to passages in decisions and FYIs, review it with quoted context and send it once with existing actions; preserve it through reload, revisions and uncertain delivery.
 
-**Non-goals:** Annotation UI in the TUI board view; annotating subject lines or headings; Replace/replacement suggestions (absent from the installed Plannotator); threaded discussion; publishing this mockup; production code in this phase. Native Mac app entry and annotation UI are the named follow-up `macos-decide-annotation-parity`; Mac currently has no Decide entry. TUI/phone launch keep using the shared web page.
+**Non-goals:** Annotation UI in the TUI board view; annotating subject lines or headings; Replace/replacement suggestions (absent from the installed Plannotator); threaded discussion; publishing this mockup. Native Mac app entry and annotation UI are the named follow-up `macos-decide-annotation-parity`; Mac currently has no Decide entry. TUI/phone launch keep using the shared web page.
 
 ## Reference: Plannotator behaviour
 
@@ -41,6 +41,14 @@ Aaron's Plannotator-style correction supersedes the original whole-block/inline-
 
 9. **Guidance:** Update builtin Hera board guidance, board-tool description and coordinator spawn/reclaim orientation: annotations arrive as type/quote/comment entries, with Delete meaning a suggestion rather than an applied board edit; address each one, retrieve full receipts when truncated, distinguish feedback-only open decisions from answered decisions, and keep settled follow-up reflected on the board. This is a spawn-surface change and requires the inventory/contract checks.
 
+### Canonical rendered text contract
+
+The shared fixture is `internal/db/testdata/decide-annotation-vectors.json`; Go and browser tests load the same vectors. Within `body`, split source at LF. Whitespace-only lines end the current paragraph without adding empty blocks. A line matching `^\s*(- |\d+\. )(.*)$` creates a separate list-item block using the captured text (including nested/indented bullets); other consecutive nonempty lines form a paragraph, joined with exactly one additional space. Preserve source whitespace on paragraph lines; do not normalize CRLF. Join the resulting paragraph/list-item blocks with exactly one LF.
+
+Inline rendering strips only paired matches of `` (`[^`]+`|\*\*[^*]+\*\*) ``. Bold contents are processed recursively; code contents are literal. Unmatched markers and links remain literal authored text (autolinking retains the URL text). Other selectable fields use this inline rule alone, without paragraph/list processing or whitespace normalization.
+
+The selectable field order is `body`, then each option in displayed order (`label`, `summary`, `upside`, `downside`, omitting empty fields). Insert `reason` immediately after the recommended option's last rendered field, before the next option. Join fields with exactly one LF. Selection endpoints use field-local UTF-16 code-unit offsets; reject offsets splitting a surrogate pair. Hash the selected projection as UTF-8 using lowercase SHA-256 hex. Prefix/suffix are at most 64 Unicode code points of immediate context in the complete joined projection. They are checked in place, never searched to reanchor. Quotes are derived on the server and shortened at a valid UTF-8 boundary to at most 512 bytes; the full anchor remains in the receipt.
+
 ## Risks / tradeoffs
 
 - Selecting text inside options could accidentally answer a decision → separate radio choice labels from authored selectable fields and test pointer/keyboard propagation.
@@ -50,7 +58,7 @@ Aaron's Plannotator-style correction supersedes the original whole-block/inline-
 
 ## Migration plan
 
-After approval, write delta-derived tests first, extend the existing receipt model to decision actions and annotation arrays, then implement renderer and queued-state changes. Existing notes/actions without annotations retain their behavior. Follow repository breaking-change policy rather than adding legacy migration layers. Validate and archive into base specs in the eventual implementation PR before merge; this spec-only branch stays active.
+After approval, write delta-derived tests first, extend the existing receipt model to decision actions and annotation arrays, then implement renderer and queued-state changes. Existing notes/actions without annotations retain their behavior. Follow repository breaking-change policy rather than adding legacy migration layers. Validate and archive into base specs in the eventual implementation PR before merge; the approved change is implemented and archived in this PR.
 
 ## Open questions
 
