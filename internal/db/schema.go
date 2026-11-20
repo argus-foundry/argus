@@ -857,6 +857,7 @@ func (d *DB) createHeraTables() error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_hera_blocks_blocker ON hera_blocks(blocker_role_id);
 	`
+	ddl += heraBoardFYISchema
 	if _, err := d.conn.Exec(ddl); err != nil {
 		return fmt.Errorf("creating hera tables: %w", err)
 	}

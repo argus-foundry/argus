@@ -267,7 +267,7 @@ var actionLabels = map[Action]string{
 	ActHeraCleanup:     "cleanup stuck-task backlog (all projects)",
 	ActHeraInbox:       "view role's message inbox (read-only)",
 	ActHeraMoveAccount: "move to another account (resumes there)",
-	ActBoardDecide:     "answer decisions in browser",
+	ActBoardDecide:     "open Decide board in browser",
 	ActBoardToggle:     "toggle plan / human board",
 	ActBoardReply:      "compose reply / approve exact resident call",
 	ActBoardDismiss:    "dismiss item / deny resident call",

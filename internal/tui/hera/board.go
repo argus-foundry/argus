@@ -449,7 +449,7 @@ func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Pri
 		}
 		if i := p.board.selected(); i != nil {
 			role = i.RoleID
-			if i.Kind == "decision" && !i.Resolved {
+			if !i.Resolved {
 				focus = i.ID
 			}
 		}

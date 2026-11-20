@@ -4,9 +4,36 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
 const html = readFileSync(new URL('../../internal/api/static/decide.html', import.meta.url),'utf8');
-const context = {globalThis: {}, URL, document: {addEventListener() {}}};
+const context = {globalThis: {}, URL, TextEncoder, document: {addEventListener() {}}};
 vm.runInNewContext(html.match(/<script id="decision-logic">([\s\S]*?)<\/script>/)[1],context);
 const logic = context.globalThis.BoardDecisions;
+
+test('mixed actions validate comments and partition by role and kind in bounded batches',()=>{
+ const records=Array.from({length:18},(_,n)=>({role:1,item:{id:n,kind:'fyi',updated_at:'r'},draft:{action:'comment',note:'feedback'}}));
+ records.push({role:2,item:{id:99,kind:'decision'},draft:{choice:'other',note:'yes'}});
+ assert.equal(logic.valid(records[0].item,records[0].draft),true);
+ assert.equal(logic.valid({kind:'fyi'},{action:'comment',note:' '}),false);
+ assert.equal(logic.valid({kind:'fyi'},{action:'dismiss',note:''}),true);
+ const groups=logic.batches(records);
+ assert.deepEqual(Array.from(groups,g=>[g.role,g.kind,g.records.length]),[[1,'fyi',16],[1,'fyi',2],[2,'decision',1]]);
+});
+
+test('FYI results must match action and item IDs and comment-only requires delivered feedback',()=>{
+ const sent={action_id:'retry-1',item_id:3,action:'comment'};
+ assert.equal(logic.accepted('fyi',sent,{action_id:'retry-1',item_id:3,outcome:'commented'}),true);
+ for(const r of [{action_id:'wrong',item_id:3,outcome:'commented'},{action_id:'retry-1',item_id:4,outcome:'commented'},{action_id:'retry-1',item_id:3,outcome:'already_resolved'}])assert.equal(logic.accepted('fyi',sent,r),false);
+ assert.equal(logic.accepted('fyi',{...sent,action:'dismiss'},{action_id:'retry-1',item_id:3,outcome:'already_resolved'}),true);
+});
+
+test('keyboard traverses empty rows with clamping and ignores editing, modifiers and IME',()=>{
+ const rows=[{role_id:1},{role_id:2},{role_id:3}];
+ const event={key:'ArrowDown',metaKey:true};
+ assert.equal(logic.navigate(event,rows,1,'decision').role,2);
+ assert.equal(logic.navigate(event,rows,3,'decision').role,3);
+ assert.equal(logic.navigate({...event,key:'ArrowRight'},rows,1,'decision').tab,'fyi');
+ for(const flags of [{isComposing:true},{shiftKey:true},{altKey:true},{metaKey:false}])assert.equal(logic.navigate({...event,...flags},rows,1,'decision'),null);
+ assert.equal(logic.navigate({...event,target:{closest:()=>({})}},rows,1,'decision'),null);
+});
 
 function finish(results,{closeAllowed=true,closeThrows=false,answers=[{item_id:1},{item_id:2}]}={}) {
  let attempts=0;const confirmations=[];

@@ -290,7 +290,9 @@ const (
 	// so a supervisor restart can still lose that session's ID.
 	// 55: new sessions receive structured board-decision guidance in the
 	// materialized Hera builtin skill (add-board-decision-page).
-	SupervisorSpawnSurface = 55
+	// 56: new sessions receive FYI comment/dismissal and durable receipt
+	// recovery guidance in the Hera builtin skill (add-decide-fyi-and-phone).
+	SupervisorSpawnSurface = 56
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -617,7 +619,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest = "afaabd1231de8da81bafc7ce0b64c53871c01d79125c127e6d14ede65e595eb1"
+	SpawnSurfaceDigest = "27c6a7aa0ef811541e7a44b88bac1adf02d2d32a0ee6fb01dbf239b9ed4e3f1e"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
 	StreamSurfaceDigest = "6db616d49b2aae4049a1e16f5eeb7c4b16aa724b7451c2faab7c0302ef5fd83d"

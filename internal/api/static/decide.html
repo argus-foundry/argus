@@ -1,5 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="referrer" content="no-referrer"><title>Open decisions · Argus</title>
-<!-- Layout adapted from Aaron's decision/template.html. System fonts; no external assets. -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="referrer" content="no-referrer"><title>Decide · Argus</title>
 <script id="decision-theme">
 globalThis.BoardDecisionTheme = (() => {
   const key='board-decision-theme',valid=value=>['light','dark','system'].includes(value)?value:'system';
@@ -200,16 +199,35 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 #copy-fallback { font: 13px/1.5 var(--mono); min-height: 12rem; }
 .fatal { padding-block: 48px; color: var(--warn); }
 
-.focused {outline:2px solid var(--accent);outline-offset:8px;} .btn:disabled{opacity:.5;cursor:default;} .segs {flex-wrap:wrap;} .decision{overflow-wrap:anywhere;} </style>
-</head><body>
-<header class="bar"><div class="wrap bar-in"><div class="segs" id="segs"></div><span class="tally" id="tally" aria-live="polite">Loading decisions…</span><label class="theme">Theme <select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header>
-<main class="wrap"><div class="lede"><h1>Open decisions</h1><p class="intro">Choose the answers you’re ready to give. The rest stay open.</p><p id="status" role="status"></p><p id="updates" hidden><span id="changes"></span> <button class="btn" id="refresh">Refresh</button></p></div>
-<div id="decisions"></div><section class="finish"><div class="actions"><button class="btn primary" id="submit" disabled>Submit answers</button><button class="btn" id="accept" hidden>Take the recommendations</button><button class="btn" id="copy">Copy answers</button></div><p id="summary" aria-live="polite"></p><textarea id="copy-fallback" readonly hidden aria-label="Answers to copy"></textarea></section></main>
+.focused {outline:2px solid var(--accent);outline-offset:8px;} .btn:disabled{opacity:.5;cursor:default;} .segs {flex-wrap:wrap;} .decision{overflow-wrap:anywhere;}
+
+.mock-control{border-bottom:1px dashed var(--line);padding-block:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px}.mock-control select,.switcher select{font:inherit;color:var(--ink);background:var(--surface);padding:9px;border:1px solid var(--line);border-radius:6px;max-width:100%;min-width:0}.mock-control label{display:flex;gap:8px;align-items:center;flex:1;min-width:0}.mock-control select{flex:1}.mock-control .btn{font-size:13px;padding:8px 12px}.preview-label{color:var(--muted);font:12px var(--mono);margin:0}.tabs{display:flex;gap:8px;margin-block:22px 0}.tabs .btn{flex:1}.tabs [aria-selected="true"],.fyi-actions [aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}.switcher{display:grid;gap:8px;padding-block:18px;border-bottom:1px solid var(--line)}.switcher .btn{justify-self:start;font-size:14px;padding:6px 10px}.switcher label{display:grid;gap:6px;font-size:14px}.directory-row{width:100%;text-align:left;display:grid;gap:8px;margin-bottom:12px;padding:20px}.directory-row strong{font:600 1.25rem var(--display)}.directory-meta{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:14px}.directory-row .queued{color:var(--accent)}.directory{margin-top:28px}.subtle{font-size:14px;color:var(--muted);margin:0}.fyi-actions{display:flex;gap:8px;flex-wrap:wrap}.fyi-actions .btn{font-size:14px;padding:10px 12px}.queue{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding-block:14px;z-index:6;box-shadow:0 -8px 24px var(--bg)}.queue-inner{display:grid;gap:10px}.queue .btn.primary{flex:1}.queue p{margin:0;font-size:13px;color:var(--muted)}.queue .actions{align-items:center}.note textarea{font-size:16px}.lede{padding-block:28px 18px}.lede p{margin:0}.decision{scroll-margin-top:110px}.count,.pill,.trade .k{text-transform:none;letter-spacing:0}.confirmation{padding-block:45px;display:grid;gap:20px}.confirmation h1{font-size:2rem}.receipt{padding-block:16px;border-top:1px solid var(--line);display:grid;gap:6px}.receipt p{margin:0}.error{color:var(--warn)}.clear{border:0;background:transparent;color:var(--accent);font:inherit;text-decoration:underline;padding:8px 0}.directory-heading{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-block:24px 8px}.directory-heading h2{font-size:1rem}.note label{font-weight:500}.review-list{display:grid;gap:10px}.review-list .receipt{padding:12px 0}.mock-scope{font-size:13px;color:var(--muted)}@media(max-width:450px){.mock-control{gap:10px}.mock-control label{flex-basis:100%}.theme{margin-left:0}.bar-in{justify-content:space-between}.lede{padding-top:24px}.trade{grid-template-columns:4.4rem minmax(0,1fr)}.queue .actions{gap:8px}.queue .btn{padding:10px 12px}.directory-row{padding:16px}}
+
+.page-layout{display:grid;grid-template-columns:250px minmax(0,1fr);max-width:1300px;margin:auto;min-height:75vh}.board-column{min-width:0}.board-column>.wrap{max-width:50rem}#rail{border-right:1px solid var(--line);padding:24px 10px;position:sticky;top:52px;align-self:start;max-height:calc(100vh - 150px);overflow:auto}.rail-heading{font:600 16px var(--display);padding:0 12px}.rail-help{color:var(--muted);font-size:12px;padding:0 12px;margin-bottom:22px}.rail-row{width:100%;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--ink);font:inherit;text-align:left;display:flex;gap:8px;align-items:center;padding:13px 12px;margin:4px 0;cursor:pointer}.rail-row:hover{background:var(--surface)}.rail-row[aria-current="true"]{border-color:var(--accent);background:var(--accent-soft);box-shadow:inset 3px 0 var(--accent)}.rail-row.empty{color:var(--muted)}.rail-row.empty .row-name{opacity:.6}.rail-row.nested{padding-left:28px}.row-name{flex:1;min-width:0;overflow-wrap:anywhere}.row-counts{font:12px var(--mono);color:var(--muted);white-space:nowrap}.rail-row .queued-dot{width:6px;height:6px;flex-shrink:0;border-radius:50%;background:var(--accent)}.row-branch{color:var(--muted)}.phone-trigger{display:none}.queue-inner{max-width:60rem}dialog{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:18px;max-width:calc(100vw - 36px);width:350px;box-sizing:border-box}dialog::backdrop{background:rgba(0,0,0,.45)}.drawer-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:22px}.drawer-head h2{font-size:1.2rem}.tabs-help{font-size:12px;color:var(--muted);margin:8px 0 0}.mock-control{max-width:1300px}.mock-control .preview-label{flex:1}@media(max-width:700px){.page-layout{display:block}#rail{display:none}.phone-trigger{display:block;width:calc(100% - 32px);margin:16px 16px 0;text-align:left}.tabs-help{display:none}.queue{padding-bottom:max(14px,env(safe-area-inset-bottom,0px))}}
+
+/* Compact tool layout; count badges keep open-item semantics. */
+:root{--bg:#e8ecf2;--fyi-badge:#155e75;--on-fyi-badge:#fff}
+:root[data-theme="dark"]{--bg:#10141b;--fyi-badge:#67e8f9;--on-fyi-badge:#083344}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10141b;--fyi-badge:#67e8f9;--on-fyi-badge:#083344}}
+body{font-size:14px;line-height:1.45}h1{font-size:1.4rem;line-height:1.2}h2{font-size:1.1rem;line-height:1.25}.confirmation h1{font-size:1.4rem}
+.wrap{max-width:60rem}.page-layout{max-width:1540px;grid-template-columns:228px minmax(0,1fr)}.board-column>.wrap{max-width:60rem;padding-inline:20px}.mock-control{max-width:1540px;padding-block:6px;gap:6px}.mock-control .btn{font-size:12px;padding:4px 10px}.bar-in{padding-block:6px}.theme{font-size:12px}.theme select{padding:5px;border-radius:4px}.tally{font-size:12px}.lede{padding-block:14px 10px;gap:6px}.intro{max-width:none}.mock-scope{font:11px/1.4 var(--mono)}
+.decision{gap:10px;padding-block:17px}.count{gap:7px;font:11px/1.4 var(--mono)}.state{font:11px/1.4 var(--mono);padding:1px 5px;border-radius:3px}.situation{gap:6px;max-width:none}.situation ul,.situation ol{padding-left:20px;margin-block:6px}.situation p{margin:0}.pill{font:10px/1.4 var(--mono);padding:1px 5px;border-radius:3px}.options{gap:6px}.opt{padding:8px 10px;gap:8px;border-radius:4px;min-height:40px;box-sizing:border-box}.opt input{width:16px;height:16px;margin-top:2px}.opt-body{gap:3px}.opt-head{gap:4px 8px}.opt-label{font-size:14px}.trade{font-size:12px;line-height:1.4;gap:6px;grid-template-columns:4.25rem minmax(0,1fr)}.trade .k{font:10px/1.4 var(--mono);padding-top:1px}.why{margin-top:2px;padding-top:5px;font-size:12px}.note{gap:4px}.note label{font-size:12px}.note textarea{font-size:14px;min-height:3.5rem;padding:7px 9px;border-radius:4px}.hint{font-size:12px}.subtle{font-size:12px}.actions{gap:6px}.btn{font-size:13px;font-weight:500;padding:6px 10px;border-radius:4px;min-height:32px}.fyi-actions{gap:6px}.fyi-actions .btn{font-size:12px;padding:6px 10px}.clear{font-size:12px;padding:4px 0}.queue{padding-block:8px;box-shadow:none}.queue-inner{gap:6px;max-width:72rem}.queue p{font-size:12px}.queue .actions{gap:6px}.tabs{margin-block:12px 0;gap:6px}.tabs .btn{font:12px/1.4 var(--mono);display:flex;justify-content:center;align-items:center;gap:8px;padding:6px 10px}.tabs-help{font:10px/1.4 var(--mono);margin-top:5px}
+.count-badge{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 4px;box-sizing:border-box;border:1px solid transparent;border-radius:3px;background:var(--accent);color:var(--on-accent);font:600 12px/1 var(--mono);font-variant-numeric:tabular-nums}.count-badge.fyi{background:var(--fyi-badge);color:var(--on-fyi-badge)}.count-badge.zero{background:transparent;color:var(--muted);border-color:var(--line)}
+#rail{padding:12px 7px;top:44px}.rail-heading{font:500 12px/1.4 var(--mono);padding-inline:8px}.rail-help{font:10px/1.4 var(--mono);padding-inline:8px;margin-block:5px 12px}.rail-row{font-size:13px;line-height:18px;padding:5px 8px;min-height:30px;box-sizing:border-box;margin:1px 0;gap:6px;border-radius:4px}.rail-row.nested{padding-left:20px}.rail-row[aria-current="true"]{box-shadow:inset 2px 0 var(--accent)}.row-counts{display:inline-flex;gap:3px;align-items:center}.row-counts .count-badge{min-width:18px;height:18px;font-size:10px;padding:0 3px}.rail-row .queued-dot{width:4px;height:4px}dialog{border-radius:4px;padding:12px}.drawer-head{margin-bottom:12px}.drawer-head h2{font:500 13px var(--mono)}.receipt{padding-block:10px;gap:4px}.confirmation{padding-block:24px;gap:12px}
+@media(max-width:700px){.page-layout{display:block}.board-column>.wrap{padding-inline:12px}.wrap{padding-inline:12px}.phone-trigger{width:calc(100% - 24px);margin:10px 12px 0;font-size:13px}.btn,.theme select,.rail-row,.clear{min-height:40px}.rail-row{padding-block:10px}.mock-control .btn{min-height:32px}.note textarea{font-size:16px}.queue .btn{min-height:40px;padding:7px 10px}.queue{padding-bottom:max(8px,env(safe-area-inset-bottom,0px))}.opt{min-height:40px}.lede{padding-top:14px}.tabs .btn{min-height:40px}.fyi-actions .btn{min-height:40px}.theme select{min-height:40px}.trade{grid-template-columns:4.25rem minmax(0,1fr)}}
+</style></head>
+<body>
+<header class="bar"><div class="wrap bar-in"><strong>Argus / Decide</strong><span class="tally" id="tally" aria-live="polite">Loading boards…</span><label class="theme">Theme <select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header>
+<button class="btn phone-trigger" id="drawer-trigger">Coordinators ▾</button>
+<div class="page-layout"><aside id="rail"><h2 class="rail-heading">Coordinators</h2><p class="rail-help">⌘ / Ctrl ↑ ↓ to move</p><nav id="desktop-nav" aria-label="Coordinators"></nav></aside><div class="board-column"><div class="wrap"><p id="status" role="status"></p><p id="updates" hidden><span id="changes">Boards changed.</span> <button class="btn" id="refresh">Refresh</button></p><main id="main" tabindex="-1"></main></div></div></div>
+<footer class="queue" id="queue"><div class="wrap queue-inner"><div class="actions"><button class="btn" id="review" disabled>Review queued</button><button class="btn primary" id="submit" disabled>Submit actions</button><button class="btn" id="copy">Copy responses</button></div><p id="queued-description"></p><p id="confirmed" aria-live="polite"></p><p id="summary" aria-live="polite"></p><textarea id="copy-fallback" readonly hidden aria-label="Responses to copy"></textarea></div></footer>
+<dialog id="drawer"><div class="drawer-head"><h2>Coordinators</h2><button class="btn" id="drawer-close">Close</button></div><nav id="phone-nav" aria-label="Choose coordinator"></nav></dialog>
 <script id="decision-logic">
 globalThis.BoardDecisions = (() => {
   function draftKey(role,item) { return `board-decision:${role}:${item.id}:${item.updated_at}`; }
   function valid(item,draft) {
-    if (!draft || typeof draft.note!=='string') return false;
+    if (!draft || typeof draft.note!=='string' || new TextEncoder().encode(draft.note).length>4096) return false;
+    if(item.kind==='fyi')return ['comment','dismiss','comment_and_dismiss'].includes(draft.action)&&(draft.action==='dismiss'||!!draft.note.trim());
     if (draft.choice === 'other') return !!draft.note.trim();
     return !!item.structured?.options.some(option => option.id === draft.choice);
   }
@@ -272,124 +290,235 @@ globalThis.BoardDecisions = (() => {
     }
     return root;
   }
-  return {draftKey,valid,payload,outcome,markup,inline,finish};
+  function batches(records) {
+    const groups=new Map();
+    for(const record of records){const key=record.role+':'+record.item.kind;let group=groups.get(key);if(!group){group=[];groups.set(key,group);}group.push(record);}
+    return [...groups.values()].flatMap(group=>{const out=[];for(let n=0;n<group.length;n+=16)out.push({role:group[0].role,kind:group[0].item.kind,records:group.slice(n,n+16)});return out;});
+  }
+  function accepted(kind,sent,result){return !!result&&sent.item_id===result.item_id&&(kind!=='fyi'||sent.action_id===result.action_id)&&(kind==='fyi'&&sent.action==='comment'?result.outcome==='commented':['resolved','already_resolved'].includes(result.outcome));}
+  function editable(target){return !!target?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]');}
+  function navigate(e,rows,role,tab){
+    if(e.isComposing||e.altKey||e.shiftKey||!(e.metaKey||e.ctrlKey)||editable(e.target)||!rows.length)return null;
+    if(e.key==='ArrowUp'||e.key==='ArrowDown'){const at=rows.findIndex(row=>row.role_id===role);return {role:rows[Math.max(0,Math.min(rows.length-1,at+(e.key==='ArrowDown'?1:-1)))].role_id,tab};}
+    if(e.key==='ArrowLeft'||e.key==='ArrowRight')return {role,tab:e.key==='ArrowLeft'?'decision':'fyi'};
+    return null;
+  }
+  return {draftKey,valid,payload,outcome,markup,inline,finish,batches,accepted,editable,navigate};
 })();
 </script>
 <script>
 (async () => {
   'use strict';
-  // Strip the launch credential before any request, including error paths.
   const ticket=new URLSearchParams(location.hash.slice(1)).get('t');
-  if (location.hash) history.replaceState(null,'',location.pathname+location.search);
-  const role=new URLSearchParams(location.search).get('role'),focus=new URLSearchParams(location.search).get('focus');
+  if(location.hash)history.replaceState(null,'',location.pathname+location.search);
+  const query=new URLSearchParams(location.search),focus=Number(query.get('focus'));
   const $=id=>document.getElementById(id),L=globalThis.BoardDecisions;
-  $('theme').value=document.documentElement.dataset.theme;
-  $('theme').addEventListener('change',()=>globalThis.BoardDecisionTheme.set($('theme').value));
-  const sessionKey=`board-decision-session:${role}`,base=`/api/hera/roles/${role}/board`;
-  let session='',items=[],drafts={},states={},pending=null,busy=false,expired=false,finished=false,generation=0;
-  const read=(storage,key)=>{try{return globalThis[storage].getItem(key);}catch{return null;}};
-  const save=(storage,key,value)=>{try{globalThis[storage].setItem(key,value);}catch{if(!finished)$('summary').textContent='Draft storage is unavailable. Copy answers before leaving.';}};
-  function message(text) {if(!finished)$('status').textContent=text;}
-  function expire() {if(finished)return;expired=true;message('This link expired. Press o in Argus to reopen it. Your drafts are kept; you can still copy answers.');update();}
-  async function api(path,method='GET',body) {
+  const storage={read(key){try{return JSON.parse(localStorage.getItem(key));}catch{return null;}},save(key,value){try{localStorage.setItem(key,JSON.stringify(value));}catch{if(!finished)$('summary').textContent='Draft storage unavailable. Copy responses before leaving.';}}};
+  const sessionKey='board-decision-session',draftKey='board-responses';
+  let session='',rows=[],records={},selected=0,tab='decision',screen='browse',pending=null,busy=false,expired=false,finished=false,generation=0,polling=false,acceptedSnapshot='';
+  const acceptedCounts={answers:0,comments:0,dismissals:0};
+  const key=(role,id)=>`${role}:${id}`,base=role=>`/api/hera/roles/${role}/board`;
+  const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
+  const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.onclick=fn;return b;};
+  const fmt=(tag,cls,text)=>{const n=el(tag,cls);L.inline(n,String(text||''),document);return n;};
+  const queued=()=>Object.values(records).filter(r=>r.item.kind==='fyi'?!!r.draft.action:!!r.draft.choice);
+  const rowFor=role=>rows.find(r=>r.role_id===role);
+  const labelFor=role=>{const r=rowFor(role)||Object.values(records).find(r=>r.role===role);return r?`${r.orchestrator} / ${r.coordinator}`:`Coordinator ${role}`;};
+  const draft=()=>({choice:'',action:'',note:''});
+  function persist(){storage.save(draftKey,records);storage.save('board-response-counts',acceptedCounts);}
+  function message(text){if(!finished&&!expired)$('status').textContent=text;}
+  function returnLink(){const a=el('a','btn','Return to Argus');a.href='/';return a;}
+  function expire(){if(finished)return;expired=true;$('status').textContent=query.has('role')?'This session expired. Press o in Argus to reopen. Drafts are kept.':'This session expired. Return to Argus to relaunch. Drafts are kept.';if(!$('status').querySelector('a'))$('status').append(' ',returnLink());update();}
+  async function api(path,method='GET',body){
     const response=await fetch(path,{method,cache:'no-store',headers:{'Content-Type':'application/json',...(session?{Authorization:`Bearer ${session}`}:{})},body:body===undefined?undefined:JSON.stringify(body)});
-    if (response.status===401 || response.status===403) {expire();throw new Error('Session expired');}
-    if (!response.ok) throw new Error('Could not reach the decision board. Refresh or try again.');
-    return response.json();
+    let data;try{data=await response.json();}catch{data={};}
+    if(response.status===401){expire();throw Object.assign(Error('Session expired'),{definitive:true});}
+    if(!response.ok)throw Object.assign(Error(data.error||'Could not reach the board. Try again.'),{definitive:response.status>=400&&response.status<500,unavailable:response.status===403});
+    return data;
   }
-  function element(tag,className,text) {const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;}
-  function formatted(tag,className,text) {const node=element(tag,className);L.inline(node,String(text || ''),document);return node;}
-  function sent(count) {
-    finished=true;
-    const main=element('main','wrap'),confirmation=element('section','lede');
-    confirmation.append(element('h1','','Answers sent — you can close this tab'),element('p','intro',`${count} item${count===1?'':'s'} answered.`));
-    main.append(confirmation);main.tabIndex=-1;document.body.replaceChildren(main);main.focus();
-  }
-  function persist(item) {save('localStorage',L.draftKey(role,item),JSON.stringify(drafts[item.id]));}
-  function active() {return items.filter(item=>!['answered','closed'].includes(states[item.id]));}
-  function update() {
+  function update(){
     if(finished)return;
-    const open=active(),decided=L.payload(open,drafts).length;
-    $('tally').textContent=`${decided} of ${open.length} decided`;
-    let missingNote=false;
-    for(const item of open) {const d=drafts[item.id];if(d?.choice==='other' && !d.note.trim())missingNote=true;const seg=$(`seg-${item.id}`);if(seg)seg.dataset.done=String(L.valid(item,d));}
-    $('submit').disabled=expired || busy || !decided || missingNote;$('refresh').disabled=busy;
-    const count=open.filter(item=>!drafts[item.id]?.choice && item.structured?.recommended).length;
-    $('accept').hidden=!count;$('accept').disabled=busy;$('accept').textContent=`Take the recommendation for the ${count} undecided`;
+    const q=queued(),invalid=q.some(r=>!L.valid(r.item,r.draft));
+    $('tally').textContent=`${q.length} queued · ${new Set(q.map(r=>r.role)).size} boards`;
+    $('confirmed').textContent=Object.values(acceptedCounts).some(n=>n>0)?`Confirmed: ${acceptedCounts.answers} answers · ${acceptedCounts.comments} comments · ${acceptedCounts.dismissals} dismissals`:'';
+    $('submit').disabled=busy||expired||!q.length||invalid;
+    $('review').disabled=busy||!q.length;
+    $('submit').textContent=busy?'Sending…':'Submit actions';
+    $('queued-description').textContent=invalid?'Add required notes before submitting.':q.length?`${q.length} actions across ${new Set(q.map(r=>r.role)).size} coordinators. Unselected items stay open.`:'Only selected actions are submitted. Everything else stays open.';
   }
-  function render() {
-    if(finished)return;
-    $('decisions').replaceChildren();$('segs').replaceChildren();
-    for(const item of items) {
-      const draft=drafts[item.id] || (drafts[item.id]={choice:'',note:''}),state=states[item.id],closed=['answered','closed'].includes(state);
-      const card=element('section','decision');card.id=`decision-${item.id}`;
-      const count=element('p','count',`Decision #${item.id}`);count.append(element('span','state',state || 'Open'));card.append(count,formatted('h2','',item.subject));
-      if(state==='conflict')card.append(element('p','hint','Claude changed this decision. Your note is kept below; review the updated options and choose again.'));
-      if(state==='invalid')card.append(element('p','hint','This answer needs attention. Choose an option or add a note for Something else.'));
-      const situation=element('div','situation');situation.append(L.markup(item.body,document));card.append(situation);
-      const options=element('fieldset','options');options.setAttribute('aria-label',item.subject);options.disabled=closed || busy;
-      for(const option of [...(item.structured?.options || []),...(item.structured?[{id:'other',label:'Something else'}]:[])]) {
-        const label=element('label',`opt${option.id==='other'?' other':''}`),input=element('input');input.type='radio';input.name=`choice-${item.id}`;input.value=option.id;input.checked=draft.choice===option.id;
-        input.addEventListener('change',()=>{draft.choice=option.id;persist(item);const hint=card.querySelector('.note-required');if(hint)hint.hidden=!(draft.choice==='other' && !draft.note.trim());update();});
-        const body=element('div','opt-body'),head=element('div','opt-head');head.append(element('span','opt-label',option.label));
-        if(option.id===item.structured.recommended)head.append(element('span','pill','Recommended'));body.append(head);
-        if(option.summary)body.append(formatted('div','',option.summary));
-        for(const [key,text] of [['Upside',option.upside],['Downside',option.downside]])if(text){const row=element('div','trade');row.append(element('span','k',key),formatted('span','',text));body.append(row);}
-        if(option.id===item.structured.recommended && item.structured.reason)body.append(formatted('div','why',`Why Claude recommends it: ${item.structured.reason}`));
-        label.append(input,body);options.append(label);
+  function badge(kind,n){const b=el('span',`count-badge ${kind}${!n?' zero':''}`,String(n));b.setAttribute('aria-hidden','true');return b;}
+  function drawNav(){
+    for(const id of ['desktop-nav','phone-nav']){
+      const nav=$(id);nav.replaceChildren();
+      for(const row of rows){
+        const n=row.decisions+row.fyis,b=button('',()=>{visit(row.role_id);if($('drawer').open)closeDrawer();},`rail-row${!n?' empty':''}`);
+        let depth=0,parent=row.parent_role_id,seen=new Set();while(parent&&!seen.has(parent)){seen.add(parent);depth++;parent=rowFor(parent)?.parent_role_id;}
+        b.style.paddingLeft=`${10+depth*16}px`;b.dataset.role=row.role_id;b.setAttribute('aria-current',String(selected===row.role_id));b.setAttribute('aria-label',`${row.orchestrator} / ${row.coordinator}, ${row.decisions} decisions, ${row.fyis} FYIs`);
+        if(depth)b.append(el('span','row-branch','↳'));
+        b.append(el('span','row-name',row.orchestrator));
+        if(n){const counts=el('span','row-counts');counts.append(badge('decision',row.decisions),badge('fyi',row.fyis));b.append(counts);}
+        if(queued().some(r=>r.role===row.role_id))b.append(el('span','queued-dot'));
+        nav.append(b);
+      }
+    }
+    $('drawer-trigger').textContent=`${rowFor(selected)?.orchestrator||'Coordinators'} ▾`;
+  }
+  function visit(role){if(busy)return;selected=role;screen='browse';render();window.scrollTo(0,0);}
+  function renderCard(main,r){
+    const i=r.item,d=r.draft,card=el('section','decision');card.id=`decision-${i.id}`;
+    const count=el('p','count',`${i.kind==='fyi'?'FYI':'Decision'} #${i.id}`),state=el('span','state',r.status||((i.kind==='fyi'?d.action:d.choice)?'Queued':'Open'));
+    count.append(state);card.append(count,fmt('h2','',i.subject));const body=el('div','situation');body.append(L.markup(i.body,document));card.append(body);
+    const locked=busy||!!d.sent,controls=[];
+    const changed=()=>{r.status='';persist();hint.hidden=L.valid(i,d)||!(i.kind==='fyi'?d.action:d.choice);state.textContent=(i.kind==='fyi'?d.action:d.choice)?'Queued':'Open';drawNav();update();};
+    if(i.kind==='decision'&&i.structured){
+      const options=el('fieldset','options');options.setAttribute('aria-label',i.subject);
+      for(const o of [...i.structured.options,{id:'other',label:'Something else'}]){
+        const label=el('label',`opt${o.id==='other'?' other':''}`),input=el('input');input.type='radio';input.name=`choice-${i.id}`;input.value=o.id;input.checked=d.choice===o.id;input.disabled=locked;input.onchange=()=>{d.choice=o.id;changed();};
+        const ob=el('div','opt-body'),head=el('div','opt-head');head.append(el('span','opt-label',o.label));if(o.id===i.structured.recommended)head.append(el('span','pill','Recommended'));ob.append(head);
+        if(o.summary)ob.append(fmt('div','',o.summary));for(const [k,v]of [['Upside',o.upside],['Downside',o.downside]])if(v){const trade=el('div','trade');trade.append(el('span','k',k),fmt('span','',v));ob.append(trade);}
+        if(o.id===i.structured.recommended&&i.structured.reason)ob.append(fmt('div','why',`Why the coordinator recommends it: ${i.structured.reason}`));
+        label.append(input,ob);options.append(label);
       }
       card.append(options);
-      const note=element('div','note'),label=element('label','',item.structured?'Note (required for Something else)':'Your answer');label.htmlFor=`note-${item.id}`;
-      const textarea=element('textarea');textarea.id=label.htmlFor;textarea.value=draft.note;textarea.disabled=closed || busy;
-      const hint=element('p','hint note-required','Add a note to answer Something else.');hint.hidden=!(draft.choice==='other' && !draft.note.trim());card.append(hint);
-      textarea.addEventListener('input',()=>{draft.note=textarea.value;if(!item.structured)draft.choice='other';hint.hidden=!(draft.choice==='other' && !draft.note.trim());persist(item);update();});note.append(label,textarea);card.append(note);$('decisions').append(card);
-      const seg=element('button','seg');seg.id=`seg-${item.id}`;seg.setAttribute('aria-label',`Jump to decision #${item.id}`);seg.addEventListener('click',()=>card.scrollIntoView({behavior:'smooth'}));$('segs').append(seg);
+    }
+    const note=el('div','note'),label=el('label','',i.kind==='fyi'?'Comment':i.structured?'Note (required for Something else)':'Your answer'),text=el('textarea');text.id=`note-${i.id}`;label.htmlFor=text.id;text.value=d.note;text.disabled=locked;text.maxLength=4096;text.oninput=()=>{d.note=text.value;if(i.kind==='decision'&&!i.structured)d.choice=d.note.trim()?'other':'';changed();};note.append(label,text);card.append(note);
+    const hint=el('p','hint','Add a note to send this response (up to 4 KiB).');hint.hidden=L.valid(i,d)||!(i.kind==='fyi'?d.action:d.choice);hint.setAttribute('role','alert');card.append(hint);
+    if(i.kind==='fyi'){
+      const actions=el('div','fyi-actions');
+      for(const [action,name]of [['comment','Comment'],['dismiss','Dismiss'],['comment_and_dismiss','Comment and dismiss']]){
+        const b=button(name,()=>{d.action=d.action===action?'':action;delete d.action_id;persist();render();});b.disabled=locked;b.setAttribute('aria-pressed',String(d.action===action));actions.append(b);
+      }
+      card.append(actions,el('p','subtle',d.action==='dismiss'?'Dismiss silently. No coordinator message.':d.action==='comment'?'Send feedback. This FYI stays open.':d.action==='comment_and_dismiss'?'Send feedback and dismiss this FYI.':'Typing alone does not queue feedback. Choose an action.'));
+    }
+    if(d.sent)card.append(el('p','hint','Result unconfirmed. Retry this exact response before editing it.'));
+    if(i.kind==='fyi'?d.action:d.choice){const clear=button('Clear queued response',()=>{r.draft=draft();persist();render();},'clear');clear.disabled=locked;card.append(clear);}
+    main.append(card);
+  }
+  function renderReview(main){
+    const heading=el('section','lede');heading.append(el('h1','','Queued responses'));main.append(heading);
+    main.append(button('← Keep reviewing boards',()=>{screen='browse';render();}));
+    for(const r of Object.values(records).filter(r=>queued().includes(r)||r.status?.startsWith('Item changed.'))){
+      const i=r.item,d=r.draft,row=el('section','receipt');row.append(el('strong','',labelFor(r.role)),el('p','',`#${i.id} ${i.subject}`),el('p','subtle',i.kind==='fyi'?d.action:i.structured?.options.find(o=>o.id===d.choice)?.label||'Something else'));
+      if(d.note&&d.action!=='dismiss')row.append(el('p','subtle',d.note));
+      if(r.unavailable||!rowFor(r.role))row.append(el('p','hint','Unavailable: coordinator is hidden, archived or removed. Other boards can still submit.'));
+      if(r.status)row.append(el('p','hint',r.status));
+      if(!L.valid(i,d))row.append(el('p','hint','Required note missing or too long. Edit this response.'));
+      if(rowFor(r.role)&&!r.unavailable)row.append(button('Edit on board',()=>{selected=r.role;tab=i.kind;screen='browse';render();document.getElementById(`decision-${i.id}`)?.scrollIntoView();},'clear'));
+      const clear=button('Clear queued response',()=>{r.draft=draft();persist();render();},'clear');clear.disabled=busy||!!d.sent;row.append(clear);main.append(row);
+    }
+  }
+  function render(){
+    if(finished)return;const main=$('main');main.replaceChildren();drawNav();
+    if(screen==='review')renderReview(main);
+    else {
+      const row=rowFor(selected),lede=el('section','lede');main.append(lede);
+      if(!row){lede.append(el('h1','','No visible coordinators'),el('p','intro','Return to Argus or refresh when a coordinator is available.'));if(queued().length)lede.append(button('Review queued responses',()=>{screen='review';render();}));}
+      else {
+        lede.append(el('h1','',row.orchestrator),el('p','subtle',`${row.coordinator} · Choose responses to queue. Everything else stays open.`));
+        const tabs=el('div','tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Board items');
+        for(const [kind,label,n]of [['decision','Decisions',row.decisions],['fyi','FYIs',row.fyis]]){const b=button('',()=>{tab=kind;render();});b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===kind));b.setAttribute('aria-label',`${label}, ${n} open`);b.append(el('span','',label),badge(kind,n));tabs.append(b);}main.append(tabs,el('p','tabs-help','⌘ / Ctrl ← Decisions · → FYIs'));
+        const visible=Object.values(records).filter(r=>r.role===selected&&!r.closed&&!r.unavailable&&r.item.kind===tab);
+        if(!visible.length){const empty=el('section','decision');empty.append(el('h2','',row.decisions+row.fyis?`No open ${tab==='fyi'?'FYIs':'decisions'}`:`Nothing open for ${row.orchestrator}`));main.append(empty);}
+        if(tab==='decision'&&visible.some(r=>r.item.structured?.recommended&&!r.draft.choice)){const b=button('Take the recommendations',()=>{for(const r of visible)if(!r.draft.choice&&r.item.structured?.recommended&&!r.draft.sent)r.draft.choice=r.item.structured.recommended;persist();render();});b.disabled=busy;main.append(b);}
+        for(const r of visible)renderCard(main,r);
+      }
     }
     update();
   }
-  function load(next) {
-    if(finished)return;
-    generation++;
-    const old=new Map(items.map(i=>[i.id,i.updated_at]));items=next;save('localStorage',`board-decision-items:${role}`,JSON.stringify(next));
-    for(const item of items)if(old.get(item.id)!==item.updated_at || !drafts[item.id]) {try{drafts[item.id]=JSON.parse(read('localStorage',L.draftKey(role,item))) || {choice:'',note:''};}catch{drafts[item.id]={choice:'',note:''};}states[item.id]='';}
-    pending=null;$('updates').hidden=true;render();
+  function reconcile(next){
+    rows=next.rows;acceptedSnapshot=JSON.stringify(next);
+    const latest=new Map(next.boards.flatMap(b=>b.items.map(item=>[key(b.role,item.id),{...b,item}])));
+    for(const r of Object.values(records)){
+      r.unavailable=!rowFor(r.role)||next.unavailable.includes(r.role);
+      const current=latest.get(key(r.role,r.item.id));
+      if(!current){if(!r.unavailable&&!r.draft.sent){r.closed=true;if(r.draft.choice||r.draft.action)r.status='Item closed elsewhere. Clear this queued response or submit to confirm.';}continue;}
+      if(r.item.updated_at!==current.item.updated_at&&!r.draft.sent){r.draft={...draft(),note:r.draft.note};r.status='Item changed. Note kept; select your response again.';}
+      if(!r.draft.sent)r.item=current.item;r.closed=false;
+    }
+    for(const [k,b]of latest){if(!records[k])records[k]={role:b.role,coordinator:b.coordinator,orchestrator:b.orchestrator,item:b.item,draft:draft()};}
+    if(!rowFor(selected))selected=rows.find(r=>r.decisions+r.fyis)?.role_id||rows[0]?.role_id||0;
+    persist();pending=null;$('updates').hidden=true;render();
   }
-  $('accept').addEventListener('click',()=>{for(const item of active())if(!drafts[item.id].choice && item.structured?.recommended){drafts[item.id].choice=item.structured.recommended;persist(item);}render();});
-  $('refresh').addEventListener('click',()=>{if(pending)load(pending);});
-  $('submit').addEventListener('click',async()=>{
-    const answers=L.payload(active(),drafts).slice(0,16);if(!answers.length){message('Submit up to 16 answers at a time.');return;}
-    busy=true;generation++;render();
-    try {
-      const response=await api(base+'/answers','POST',{answers});let answered=0,attention=0;
-      for(const result of response.results) {
-        const index=items.findIndex(i=>i.id===result.item_id);if(index<0)continue;
-        const next=L.outcome(items[index],drafts[result.item_id],result);items[index]=next.item;drafts[result.item_id]=next.draft;states[result.item_id]=next.status;persist(items[index]);
-        if(next.status==='answered')answered++;else attention++;
+  async function snapshot(){
+    const nav=await api('/api/hera/board/decision-navigation');const unavailable=[];
+    const boards=await Promise.all(nav.roles.map(async row=>{try{return {...await api(base(row.role_id)+'/decide-items'),role:row.role_id};}catch(e){if(e.unavailable){unavailable.push(row.role_id);return {role:row.role_id,items:[]};}throw e;}}));
+    return {rows:nav.roles,boards,unavailable};
+  }
+  function sent(){
+    finished=true;generation++;clearInterval(timer);storage.save('board-response-counts',{answers:0,comments:0,dismissals:0});
+    try{window.close();}catch{}
+    if(window.closed)return;
+    const main=el('main','wrap');main.tabIndex=-1;const section=el('section','confirmation');section.append(el('h1','','Actions sent — you can close this tab'),el('p','intro',`${acceptedCounts.answers} answers · ${acceptedCounts.comments} comments · ${acceptedCounts.dismissals} dismissals`),returnLink());main.append(section);document.body.replaceChildren(main);main.focus();
+  }
+  async function submit(){
+    if(busy||expired||finished)return;
+    const q=queued();if(!q.length||q.some(r=>!L.valid(r.item,r.draft)))return;
+    busy=true;generation++;pending=null;$('updates').hidden=true;render();
+    let failed=false;
+    for(const group of L.batches(q)){
+      const previouslyUncertain=group.records.map(r=>!!r.draft.sent);
+      const payload=group.records.map(r=>{
+        const d=r.draft;if(d.sent)return d.sent;
+        const p={item_id:r.item.id,expected_updated_at:r.item.updated_at,note:d.note};
+        if(group.kind==='fyi'){d.action_id=d.action_id||Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');p.action_id=d.action_id;p.action=d.action;if(d.action==='dismiss')p.note='';}else p.choice=d.choice;
+        d.sent=p;return p;
+      });persist();
+      try{
+        const response=await api(base(group.role)+(group.kind==='fyi'?'/fyi-actions':'/answers'),'POST',group.kind==='fyi'?{actions:payload}:{answers:payload});
+        for(let n=0;n<group.records.length;n++){
+          const r=group.records[n],p=payload[n];const matches=Array.isArray(response.results)&&response.results.length===payload.length?response.results.filter(v=>v.item_id===p.item_id&&(group.kind!=='fyi'||v.action_id===p.action_id)):[];const result=matches.length===1?matches[0]:null;
+          if(L.accepted(group.kind,p,result)){
+            if(group.kind==='decision')acceptedCounts.answers++;else{if(p.action!=='dismiss'&&result.outcome!=='already_resolved')acceptedCounts.comments++;if(p.action!=='comment')acceptedCounts.dismissals++;}
+            if(!(group.kind==='fyi'&&p.action==='comment')){const row=rowFor(r.role);if(row){if(group.kind==='fyi')row.fyis=Math.max(0,row.fyis-1);else row.decisions=Math.max(0,row.decisions-1);}}
+            r.draft=draft();r.status=group.kind==='fyi'&&p.action==='comment'?'Comment sent · still open':'Accepted';r.closed=!(group.kind==='fyi'&&p.action==='comment');
+          }else{
+            failed=true;r.status=result?.outcome||'Result unconfirmed. Retry to confirm.';
+            if(result&&['conflict','invalid','not_found','already_resolved'].includes(result.outcome)){
+              const note=r.draft.note;r.draft={...r.draft,sent:undefined,action_id:undefined};
+              if(result.outcome==='conflict'){r.item=result.item;r.draft={...draft(),note};r.status='Item changed. Note kept; choose your response again.';}
+            }
+          }
+        }
+      }catch(e){
+        failed=true;for(const [n,r] of group.records.entries()){r.status=e.message;if(e.unavailable)r.unavailable=true;if(e.definitive&&!previouslyUncertain[n]){delete r.draft.sent;delete r.draft.action_id;}}
       }
-      save('localStorage',`board-decision-items:${role}`,JSON.stringify(items));
-      $('summary').textContent=`${answered} answered, ${attention} need attention`;
-      finished=L.finish(answers,response.results,window,sent);
-    } catch(error) {if(!expired)message(error.message);}finally{busy=false;render();}
-  });
-  $('copy').addEventListener('click',async()=>{
-    const text=items.filter(i=>drafts[i.id]?.choice || drafts[i.id]?.note).map(i=>{const d=drafts[i.id],label=i.structured?.options.find(o=>o.id===d.choice)?.label || 'Something else';return `#${i.id} ${i.subject}\nChoice: ${label}\nNote: ${d.note || 'none'}`;}).join('\n\n');
-    try{await navigator.clipboard.writeText(text);if(finished)return;$('summary').textContent='Answers copied.';}catch{if(finished)return;const box=$('copy-fallback');box.value=text;box.hidden=false;box.focus();box.select();}
-  });
-  if(!/^\d+$/.test(role || '')){message('Open this page by pressing o on a coordinator board in Argus.');return;}
-  try {const cached=JSON.parse(read('localStorage',`board-decision-items:${role}`));if(Array.isArray(cached))load(cached);}catch{}
- session=read('sessionStorage',sessionKey) || '';
-  try {
-    if(ticket){session='';const result=await api('/api/hera/board/decision-session','POST',{ticket});if(String(result.role_id)!==role)throw new Error('This link belongs to a different board.');session=result.session;save('sessionStorage',sessionKey,session);}
-    if(!session){expire();return;}
-    load((await api(base+'/decisions')).items);message(items.length?'':'No open decisions.');
-    if(focus){const card=$(`decision-${focus}`);if(card){card.classList.add('focused');card.scrollIntoView();}}
-  }catch(error){if(!expired)message(error.message);return;}
-  setInterval(async()=>{
-    if(finished || document.hidden || expired || busy)return;
-    const observed=generation;
-    try{const next=(await api(base+'/decisions')).items;if(finished || observed!==generation || busy)return;const revisions=new Map(items.map(i=>[i.id,i.updated_at]));const added=next.filter(i=>!revisions.has(i.id)).length,changed=next.filter(i=>revisions.has(i.id) && revisions.get(i.id)!==i.updated_at).length,closed=items.filter(i=>!next.some(n=>n.id===i.id) && !['answered','closed'].includes(states[i.id])).length;
-      if(added || changed || closed){pending=next;$('changes').textContent=`Claude updated ${changed} decisions, added ${added}, and closed ${closed}.`;$('updates').hidden=false;}
-    }catch(error){if(!expired)message(error.message);}
-  },20000);
+      persist();
+    }
+    busy=false;
+    if(!failed){sent();return;}
+    screen='review';message((Object.values(acceptedCounts).some(n=>n>0)?'Some actions were accepted.':'No actions were confirmed.')+' Review the remaining responses and retry; accepted actions are cleared.');render();
+  }
+  function closeDrawer(){$('drawer').close();$('drawer-trigger').focus();}
+  $('drawer-trigger').onclick=()=>{$('drawer').showModal();};$('drawer-close').onclick=closeDrawer;$('drawer').addEventListener('cancel',e=>{e.preventDefault();closeDrawer();});
+  $('drawer').addEventListener('keydown',e=>{if(e.key!=='Tab')return;const nodes=[...$('drawer').querySelectorAll('button')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}});
+  document.addEventListener('keydown',e=>{if(busy||finished||$('drawer').open)return;const next=L.navigate(e,rows,selected,tab);if(!next)return;e.preventDefault();selected=next.role;tab=next.tab;screen='browse';render();$('main').focus({preventScroll:true});});
+  let touch=null;$('main').addEventListener('touchstart',e=>{touch=e.touches.length===1&&!L.editable(e.target)&&!e.target.closest('button,a,label,input,textarea,select,[role="button"],[role="tab"]')?{x:e.touches[0].clientX,y:e.touches[0].clientY}:null;},{passive:true});
+  $('main').addEventListener('touchend',e=>{const start=touch;touch=null;if(!start||!e.changedTouches.length||busy||screen!=='browse'||getSelection()?.toString())return;const dx=e.changedTouches[0].clientX-start.x,dy=e.changedTouches[0].clientY-start.y;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5){tab=dx<0?'fyi':'decision';render();}},{passive:true});
+  $('theme').value=document.documentElement.dataset.theme||'system';$('theme').onchange=()=>BoardDecisionTheme.set($('theme').value);
+  $('review').onclick=()=>{screen='review';render();};$('submit').onclick=submit;$('refresh').onclick=()=>{if(pending&&!busy)reconcile(pending);};
+  $('copy').onclick=async()=>{
+    const text=queued().map(r=>`${labelFor(r.role)}\n#${r.item.id} ${r.item.subject}\n${r.item.kind==='fyi'?r.draft.action:r.draft.choice}\n${r.draft.action==='dismiss'?'':r.draft.note}`).join('\n\n');
+    try{await navigator.clipboard.writeText(text);if(!finished)$('summary').textContent='Responses copied.';}catch{if(finished)return;$('copy-fallback').hidden=false;$('copy-fallback').value=text;$('copy-fallback').select();}
+  };
+  async function poll(){
+    if(document.hidden||busy||expired||finished||polling)return;
+    const epoch=generation;polling=true;
+    try{const next=await snapshot();if(finished||busy||epoch!==generation)return;if(acceptedSnapshot!==JSON.stringify(next)){pending=next;$('updates').hidden=false;}}
+    catch(e){if(!finished&&epoch===generation)message(e.message);}
+    finally{polling=false;}
+  }
+  const timer=setInterval(poll,20000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});
+  try{
+    const savedCounts=storage.read('board-response-counts');if(savedCounts)for(const k of Object.keys(acceptedCounts))acceptedCounts[k]=Number.isSafeInteger(savedCounts[k])&&savedCounts[k]>0?savedCounts[k]:0;
+    const saved=storage.read(draftKey);if(saved&&typeof saved==='object')records=Object.fromEntries(Object.entries(saved).filter(([,r])=>r?.item&&r?.draft&&typeof r.draft.note==='string'));
+    if(ticket){try{sessionStorage.removeItem(sessionKey);}catch{};const exchange=await api('/api/hera/board/decision-session','POST',{ticket});session=exchange.session;selected=Number(exchange.initial_role_id)||0;try{sessionStorage.setItem(sessionKey,JSON.stringify({session,initial_role_id:selected}));}catch{message('Session storage unavailable. Keep this page open.');}}
+    else{let savedSession;try{savedSession=JSON.parse(sessionStorage.getItem(sessionKey));}catch{}session=savedSession?.session||'';selected=Number(savedSession?.initial_role_id)||0;}
+    if(!session){expire();render();return;}
+    const epoch=generation,next=await snapshot();if(finished||epoch!==generation)return;
+    reconcile(next);const initial=Object.values(records).find(r=>r.role===selected&&r.item.id===focus&&!r.closed);
+    const counts=rowFor(selected);tab=initial?.item.kind||(!counts?.decisions&&counts?.fyis?'fyi':'decision');render();
+    if(initial){const n=document.getElementById(`decision-${focus}`);n?.classList.add('focused');n?.scrollIntoView();}
+  }catch(e){if(!finished){message(e.message);render();}}
 })();
+
 </script></body></html>

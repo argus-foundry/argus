@@ -46,7 +46,7 @@ func TestBoardDecideKey(t *testing.T) {
 		items  []*db.HeraBoardItem
 		cursor int
 		focus  int64
-	}{{"structured", []*db.HeraBoardItem{{ID: 3, Kind: "decision", RoleID: 7}}, 0, 3}, {"fyi", []*db.HeraBoardItem{{ID: 4, Kind: "fyi", RoleID: 7}}, 0, 0}, {"no selection", nil, -1, 0}} {
+	}{{"structured", []*db.HeraBoardItem{{ID: 3, Kind: "decision", RoleID: 7}}, 0, 3}, {"fyi", []*db.HeraBoardItem{{ID: 4, Kind: "fyi", RoleID: 7}}, 0, 4}, {"no selection", nil, -1, 0}} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := NewHeraPage(memDB(t))
 			p.board.items = tc.items

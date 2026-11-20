@@ -330,3 +330,5 @@ true)` and `db.Delete(id)`; entrypoints that go through `db.Update`
 ## Board decisions
 
 - **Decision submits commit successful resolutions and one self-addressed summary in the same transaction.** Invalid/stale items are per-item outcomes; never also write the dropped-decision notice; full notes stay on board items; evenly budget summary notes to 64 KiB and mark shortened notes with a full-item pointer.
+
+- **FYI receipts, resolutions and one comment summary commit in the same transaction.** Replay immutable role/action receipts before checking current item state, without re-emitting events or mail; comment-only preserves read state and revision, and silent dismiss never creates mail. Shortened notes point to master/device-authenticated receipt retrieval, which remains forbidden to page sessions.
