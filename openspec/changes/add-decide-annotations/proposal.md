@@ -4,8 +4,8 @@ Aaron needs to comment on individual passages in long decisions and FYIs, keepin
 
 ## What changes
 
-- Make body paragraphs and individual list lines, including nested lines, annotatable; include structured option summaries and tradeoffs.
-- Add inline comment editing, saved markers, keyboard and phone interaction, and quoted annotations in Review queued and Copy responses.
+- Allow arbitrary text selections in body and option text, including nested lists and spans across formatting.
+- Add a Plannotator-style Copy/Delete/Comment toolbar, inline highlights, an annotations sidebar and phone sheet, and typed quoted feedback in Review queued and Copy responses.
 - Queue annotation-only feedback without resolving decisions; include annotations with answers and FYI actions.
 - Extend durable receipts, revision checks and the board-notice outbox; preserve drafts through retry, uncertainty and conflicts.
 - Teach coordinators to address every annotation in the existing board guidance and spawn orientation.
@@ -18,7 +18,7 @@ None.
 
 ### Modified capabilities
 
-- `board-decision-page`: Block annotation interaction, queued feedback and draft recovery.
+- `board-decision-page`: Text-range annotation interaction, queued feedback and draft recovery.
 - `coordinator-board`: Durable annotations and coordinator guidance.
 - `rest-api`: Annotation-bearing answers, decision comments and FYI actions through existing routes.
 

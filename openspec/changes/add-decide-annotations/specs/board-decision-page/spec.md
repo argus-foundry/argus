@@ -56,7 +56,7 @@ Saved annotations SHALL additionally queue feedback and satisfy comment content 
 Submit SHALL snapshot only explicitly queued answers and FYI actions across all tabs/coordinators, including each item's loaded `expected_updated_at`, and SHALL leave all unqueued items untouched. FYI actions SHALL carry stable action IDs and immutable payloads retained on uncertain outcomes and reload; the page SHALL reconcile an uncertain result before allowing payload edits and SHALL generate a new ID for a revised action after a definitive conflict/invalid result. The page SHALL partition requests by owning role and endpoint in batches of at most 16, prevent concurrent duplicate submits and match every submitted action to a result. When every submitted action succeeds it SHALL finish even if untouched items remain open. Otherwise it SHALL stay open and apply results per card: resolved decisions become read-only Answered; dismissed FYIs become read-only Dismissed; accepted comments remain open but their queued action/draft is cleared and marked sent; conflicts replace current content, preserve note text, clear the pending choice/action and flag the edit; already_resolved/not_found cards are marked closed; invalid cards show an error. A comment-only action against an already-resolved item SHALL need attention rather than count as delivered. Confirmed actions SHALL NOT be resubmitted during retry of failed or unconfirmed work. The page SHALL report accepted action counts and remaining failures, never overall success on a partial failure.
 
 
-Snapshots and immutable retries SHALL include annotations and required decision response action IDs. Decision comment outcomes SHALL accept commented, clear confirmed feedback and leave the item open. Fresh feedback rejected on closed items SHALL retain drafts for attention; already_resolved SHALL NOT confirm undelivered annotations. Conflicts SHALL keep all original quotes/comments in recoverable stale drafts and require reanchoring or removal before requeue.
+Snapshots and immutable retries SHALL include annotations and required decision response action IDs. Decision comment outcomes SHALL accept commented, clear confirmed feedback and leave the item open. Fresh feedback rejected on closed items SHALL retain drafts for attention; already_resolved SHALL NOT confirm undelivered annotations. Conflicts SHALL keep all original types, ranges, quotes/comments in recoverable stale drafts and require reanchoring or removal before requeue.
 
 #### Scenario: Partial answer round
 
@@ -163,7 +163,7 @@ When an answer-route submission resolves at least one decision or accepts at lea
 - **WHEN** an answer or comment commits without a live coordinator binding
 - **THEN** the corresponding summary remains durable for later delivery
 
-The existing summary SHALL include quoted annotation/comment pairs under each owning item, with no additional annotation messages. General notes and annotation feedback SHALL share the 64 KiB budget; shortened or omitted annotation entries SHALL point to full durable response receipts by role and action ID. Full annotations SHALL persist with those receipts, including on resolved answers.
+The existing summary SHALL include annotation type, quoted selection and comment under each owning item, with no additional annotation messages. General notes and annotation feedback SHALL share the 64 KiB budget; shortened or omitted annotation entries SHALL point to full durable response receipts by role and action ID. Full annotations SHALL persist with those receipts, including on resolved answers.
 
 #### Scenario: Annotations share the response summary
 
@@ -173,81 +173,110 @@ The existing summary SHALL include quoted annotation/comment pairs under each ow
 
 ## ADDED Requirements
 
-### Requirement: Block annotations on decisions and FYIs
+### Requirement: Text-range annotations on decisions and FYIs
 
-The page SHALL support one saved annotation per rendered body paragraph or individual bullet/numbered-list line, including nested lines, and per structured option summary, upside and downside. Parent list anchors SHALL exclude descendant text. Headings, subjects, option labels and recommendation reasons SHALL NOT be annotatable. Revision-local anchors SHALL distinguish duplicate text and preserve safe bold/code/link rendering.
+The page SHALL allow any nonempty span of rendered body or authored option text to be selected, including nested list text, option labels/summary/upside/downside/recommendation reason, and ranges spanning paragraphs, bullets, fields, bold/code/link text within one item. Subjects, headings and UI control text SHALL NOT be selectable annotation content; cross-item ranges SHALL be rejected without altering selection or drafts. A range SHALL identify its item revision, stable annotation ID, source-field paths, start/end UTF-16 offsets over rendered text, selected-text hash and up to 64 Unicode code points of prefix/suffix context at each boundary. A canonical ordered text projection SHALL use newlines between source fields and exclude markup, UI labels and highlight wrappers. The server SHALL validate the range against expected_updated_at and derive a quoted preview of at most 512 UTF-8 bytes without splitting characters. Longer selections SHALL retain their full range/hash even when previews shorten. Repeated and overlapping text SHALL remain distinguishable by offsets and IDs.
 
-#### Scenario: Body units
+#### Scenario: Arbitrary and nested text
 
-- **WHEN** a body includes a wrapped paragraph, repeated bullets and nested numbered lines
-- **THEN** each rendered paragraph and list line has an independent focusable anchor, including nested lines; duplicate text has distinct anchors
+- **WHEN** Aaron selects part of a sentence, text across bold/link nodes, nested bullets or a span across paragraphs
+- **THEN** only the selected range is anchored with offsets/context and formatting and links remain safely rendered
 
-#### Scenario: Structured options
+#### Scenario: Option text
 
-- **WHEN** an option exposes summary, upside, downside, label and recommendation reason
-- **THEN** only summary, upside and downside expose annotation controls
+- **WHEN** Aaron selects a phrase from option text including its label or recommendation reason
+- **THEN** that exact phrase can be annotated without choosing the option
 
-#### Scenario: Kinds and excluded text
+#### Scenario: Excluded boundaries
 
-- **WHEN** Aaron views a decision or FYI with a subject and body heading
-- **THEN** both kinds allow body annotations while subject and heading do not
+- **WHEN** a selection includes an item subject, heading, UI control or another item
+- **THEN** annotation creation is refused clearly and no incorrect range is saved
 
-### Requirement: Inline annotation editing
+#### Scenario: Repeated and long selection
 
-Hover or focus SHALL show a subtle affordance; click/tap on a block or affordance and Enter on its focused target SHALL open a labeled inline editor immediately under that block. Save SHALL retain a non-whitespace comment and show a small marker; Edit and Remove SHALL be available. Cancel SHALL preserve the previous saved value and restore target focus. Link activation SHALL follow the safe link without opening an editor; annotation activation SHALL NOT follow a link or choose a decision option. Phone affordances SHALL remain visible with at least 40px tap targets, and annotation gestures SHALL NOT trigger tab swipes.
+- **WHEN** two identical phrases occur in one item and a selection exceeds its quote preview budget
+- **THEN** offset/context/hash identify the intended occurrence and the full range remains recoverable even with a shortened preview
 
-#### Scenario: Edit and remove
+### Requirement: Selection toolbar and typed highlights
 
-- **WHEN** Aaron saves, edits, cancels and removes an annotation
-- **THEN** the marker reflects the saved value, Cancel restores that value and Remove clears the marker
+A nonempty valid mouse, touch or keyboard selection SHALL expose a small floating viewport-clamped toolbar with Copy, Delete and Comment, matching the installed Plannotator types. Comment SHALL open a quote-and-comment composer and require non-whitespace text before Save. Delete SHALL immediately save a DELETION suggestion with optional empty comment; it SHALL show a distinct red highlight/strikethrough without modifying board content. COMMENT SHALL show a distinct inline highlight. Replace/suggest and replacement payloads SHALL NOT be offered. Cancel/Escape SHALL discard only unsaved editor changes. Overlapping and identical ranges SHALL be allowed as distinct annotation IDs; the latest painted annotation SHALL receive direct highlight activation, and every overlapping annotation SHALL remain independently accessible/removable in the panel. Removing one SHALL preserve all remaining ranges.
 
-#### Scenario: Keyboard and touch
+#### Scenario: Toolbar and types
 
-- **WHEN** Aaron focuses a block and presses Enter, or taps it at 390px
-- **THEN** the anchored editor opens and remains within the viewport in either theme
+- **WHEN** Aaron selects text and activates Comment or Delete
+- **THEN** Comment opens a composer and Delete queues a redline suggestion without requiring comment text; no Replace type appears
 
-#### Scenario: Links and choices
+#### Scenario: Overlapping selections
 
-- **WHEN** Aaron clicks a reference link or an option summary comment affordance
-- **THEN** the link follows only on link activation; annotation activation opens only the editor and leaves the answer choice unchanged
+- **WHEN** Aaron comments on a phrase and suggests deleting an overlapping span
+- **THEN** both annotations persist, direct overlap activation selects the newest highlight and removing either preserves the other
+
+#### Scenario: No source edits
+
+- **WHEN** Aaron saves a Delete annotation
+- **THEN** the coordinator-authored item body and option data remain unchanged until the coordinator acts on the suggestion
+
+#### Scenario: Cancel and copy
+
+- **WHEN** Aaron copies a selection or cancels a pending Comment
+- **THEN** Copy changes no queued response and Cancel preserves existing saved annotations
+
+### Requirement: Annotation sidebar and phone sheet
+
+The page SHALL show an annotations panel for the current item in a desktop right column and a modal bottom sheet/drawer at phone width. Interacting with item content or its Annotations control SHALL select the current item. The panel SHALL list annotations in document order by start offset, end offset and creation order, with type, quoted selection and any comment. Entry activation SHALL scroll to and flash its highlight for two seconds. Highlight activation SHALL select the corresponding entry for editing/removal. Comments SHALL expose Edit, Save, Cancel and Remove; Delete suggestions SHALL expose Remove. The existing note SHALL be labeled General comment and remain the single whole-item feedback/required-answer-note store. It SHALL retain prior answer validation and explicit FYI queue semantics. The sheet SHALL have a labeled title, Close/Escape, focus trap/restoration and controls of at least 40px. Text selection on touch SHALL preserve native long-press/drag handles until the toolbar action captures the range; controls SHALL remain reachable with the on-screen keyboard. Keyboard users SHALL be able to select text normally or invoke Annotate/Enter from a focused passage as a whole-passage selection fallback, then reach the toolbar with Tab. Editing shortcuts SHALL not override text entry. Normal unselected link activation SHALL follow its URL; selection/annotation/highlight gestures SHALL neither follow links nor toggle radio choices, and SHALL not trigger tab swipes.
+
+#### Scenario: Panel and highlight navigation
+
+- **WHEN** Aaron activates a sidebar entry or an inline highlight
+- **THEN** the corresponding entry/range becomes active, the passage scrolls into view and flashes without changing the answer
+
+#### Scenario: Phone selection and sheet
+
+- **WHEN** Aaron long-presses a phrase at 390px and opens Comment or the annotations list
+- **THEN** native text selection yields the toolbar and the modal sheet/composer remains reachable without horizontal scrolling in either theme
+
+#### Scenario: Keyboard path
+
+- **WHEN** Aaron focuses a passage and invokes Annotate/Enter, then tabs to Comment
+- **THEN** a captured selection reaches the labeled composer and Save/Cancel restores sensible focus
+
+#### Scenario: Links and options
+
+- **WHEN** Aaron follows an unselected reference link or selects linked/option text for annotation
+- **THEN** only an ordinary link click navigates and annotation gestures never activate links or select options
+
+#### Scenario: General comment
+
+- **WHEN** Aaron writes whole-item feedback in the existing note
+- **THEN** it is labeled General comment, uses the existing note field and does not create a second global-comment annotation
 
 ### Requirement: Queued annotation feedback
 
-Saving an annotation SHALL queue the item in the existing global response queue. Review queued and Copy responses SHALL include every saved annotation beneath its owning coordinator/item, with quoted block text and comment. Without a decision choice, annotations SHALL queue Comment and leave the decision open after acceptance. An option answer SHALL carry annotations; other/plain answers SHALL retain their required general note. FYI annotations SHALL satisfy Comment or Comment and dismiss; saving on an unset FYI SHALL select Comment and saving on Dismiss SHALL visibly change it to Comment and dismiss. No annotations SHALL be silently dropped. Editor typing alone SHALL NOT queue feedback. Removing the last annotation SHALL remove an implicit comment-only action if no explicit valid note comment remains.
+Saving a valid Comment or Delete annotation SHALL queue the item in the existing global response queue; typing in a composer alone SHALL NOT queue feedback. Review queued and Copy responses SHALL list every annotation beneath its owning coordinator/item with type, quoted selection and any comment, and explicitly identify Delete as a suggestion. A decision with annotations and no chosen answer SHALL queue Comment and remain open after acceptance, including a deletion-only response with no note. Option answers SHALL carry annotations; Something else and plain answers SHALL still require their general answer note. On FYIs, the first annotation SHALL default an unset action to Comment, and Dismiss plus annotations SHALL visibly become Comment and dismiss. Removing the last annotation SHALL unqueue an implicit annotation-only comment unless an explicit valid note comment remains. One existing Submit actions SHALL send queued feedback across all boards/tabs.
 
-#### Scenario: Decision comment
+#### Scenario: Deletion-only feedback
 
-- **WHEN** Aaron saves annotations on structured or plain decision without choosing an answer
-- **THEN** Comment is queued, acceptance counts as a comment and the decision stays open with unchanged read state and revision
+- **WHEN** Aaron saves a Delete suggestion on a structured or plain decision without an answer choice or note
+- **THEN** the item queues Comment, acceptance counts as a comment and the decision remains open with unchanged read state/revision
 
-#### Scenario: Answer with feedback
+#### Scenario: Answer and required note
 
-- **WHEN** Aaron chooses a declared option and annotates two bullets
-- **THEN** one answer action carries both annotations and resolves only when submitted
+- **WHEN** Aaron adds range annotations and chooses an option or Something else
+- **THEN** the declared option answer includes all annotations; Something else and plain answers remain invalid without their required note
 
-#### Scenario: Required answer note
+#### Scenario: FYI action conversion
 
-- **WHEN** Aaron selects Something else or enters a plain answer with annotations but no general answer note
-- **THEN** that answer remains invalid until its required note is supplied
+- **WHEN** Aaron saves any annotation on an unset FYI or on Dismiss
+- **THEN** the action becomes Comment or visibly becomes Comment and dismiss respectively
 
-#### Scenario: FYI actions
+#### Scenario: Review and removal
 
-- **WHEN** Aaron saves an annotation on an FYI with no action or with Dismiss selected
-- **THEN** the queued action becomes Comment or visibly becomes Comment and dismiss respectively
-
-#### Scenario: Review and copy
-
-- **WHEN** annotations are queued on several coordinators and tabs
-- **THEN** one existing submit covers them all and Review queued and Copy responses show each quoted block and comment
-
-#### Scenario: Typing and removal
-
-- **WHEN** Aaron types without saving, then saves and removes the sole annotation on an otherwise untouched decision
-- **THEN** typing queues nothing, saving queues Comment and removing unqueues it
+- **WHEN** Aaron reviews multiple typed annotations then removes the only annotation from an otherwise untouched item
+- **THEN** Review and Copy include every type/quote/comment and removal unqueues only the now-empty implicit response
 
 ### Requirement: Annotation draft recovery and limits
 
-Annotations SHALL persist in the same guarded localStorage response records as note drafts, bound to role, item and updated_at. Each saved comment SHALL be non-whitespace and at most 4096 UTF-8 bytes; at most 20 annotations SHALL be saved per item. The UI SHALL retain editor text on validation/storage failure and expose the limit/error. Drafts SHALL survive reload, tab/board changes and expiry. Frozen uncertain payloads SHALL include annotations and action IDs, remain immutable until reconciled, and retry identically. A conflict or accepted refresh changing the item revision SHALL retain notes, old anchors and quotes in a recoverable stale draft, clear the queued choice/action and require explicit reanchoring or removal before resubmission. No stale annotation SHALL be silently discarded or automatically rebound. Accepted actions SHALL clear only their confirmed drafts; failures and visibility refusals SHALL prevent overall finish and retain feedback. All-confirmed annotation-only comments SHALL finish even though items remain open.
+Annotations SHALL persist in the same guarded localStorage response records as note drafts, bound to role, item and updated_at. Each COMMENT SHALL require non-whitespace text at most 4096 UTF-8 bytes; DELETION SHALL allow an empty comment (any supplied comment SHALL be at most 4096 UTF-8 bytes); at most 20 annotations of all types combined SHALL be saved per item. The UI SHALL retain editor text on validation/storage failure and expose the limit/error. Drafts SHALL survive reload, tab/board changes and expiry. Frozen uncertain payloads SHALL include annotations and action IDs, remain immutable until reconciled, and retry identically. A conflict or accepted refresh changing the item revision SHALL retain notes, old anchors and quotes in a recoverable stale draft, clear the queued choice/action and require explicit reanchoring or removal before resubmission. No stale annotation SHALL be silently discarded or automatically rebound. Accepted actions SHALL clear only their confirmed drafts; failures and visibility refusals SHALL prevent overall finish and retain feedback. All-confirmed annotation-only comments SHALL finish even though items remain open.
 
 #### Scenario: Byte and count limits
 

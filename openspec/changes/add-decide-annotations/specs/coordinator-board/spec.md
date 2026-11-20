@@ -7,10 +7,10 @@ Coordinator orientation and builtin Hera guidance SHALL instruct agents to put h
 The same guidance SHALL tell coordinators to post a decision as structured whenever it has distinct options: two to four options, always a recommendation with a reason, with the body stating only the situation and the options appearing only in `options`. It SHALL tell coordinators that Aaron presses `o` on the board to answer a round of decisions in the browser, that each answer arrives as one summarized message in which the listed items are already resolved, that `Still open` items need follow-up, and that a "Something else" answer's note is the answer.
 
 
-The board tool description, builtin Hera skill and coordinator spawn/reclaim orientation SHALL additionally explain quoted annotations and require coordinators to address each comment, retrieving full response receipts when summaries are shortened. They SHALL distinguish feedback-only open decisions from answered decisions and update settled follow-up on the board.
+The board tool description, builtin Hera skill and coordinator spawn/reclaim orientation SHALL additionally explain typed range annotations and require coordinators to address each comment, retrieving full response receipts when summaries are shortened. They SHALL distinguish feedback-only open decisions from answered decisions and update settled follow-up on the board.
 #### Scenario: Annotated feedback arrives
 
-- **WHEN** a coordinator receives a summary with several quoted comments
+- **WHEN** a coordinator receives a summary with several typed quoted comments
 - **THEN** its guidance requires addressing each annotation and does not treat a comment-only decision as resolved
 
 
@@ -38,7 +38,7 @@ An FYI comment or comment-and-dismiss SHALL also accept annotations in addition 
 #### Scenario: Annotated FYI receipt
 
 - **WHEN** an FYI annotation without a general note is submitted as Comment
-- **THEN** full quote/comment pairs persist in the receipt and the FYI stays open
+- **THEN** full type/range/quote/comment entries persist in the receipt and the FYI stays open
 
 
 #### Scenario: Silent FYI dismissal
@@ -66,7 +66,7 @@ An FYI comment or comment-and-dismiss SHALL also accept annotations in addition 
 A successful FYI batch containing new comments SHALL atomically create exactly one self-addressed summary for the owning coordinator through the existing board-notice outbox, attributed `Aaron (board)`. It SHALL list commented item IDs/subjects/notes in ID order, explicitly distinguishing open commented items from comment-and-dismiss items already resolved, followed by that coordinator's remaining open decision and FYI IDs. Silent dismissals SHALL NOT appear as feedback entries or generate notices, though their state SHALL be reflected in remaining-open IDs when a comment notice is produced. A batch with no new comments SHALL enqueue no notice. Summary size SHALL stay within 64 KiB using evenly budgeted notes, preserving full notes in action receipts; shortened notes SHALL end with a pointer naming role ID and action ID. An authenticated `GET /api/hera/roles/{role_id}/board/fyi-actions/{action_id}` SHALL return the successful receipt and full comment to master/device clients and return 404 for an unknown receipt; decision sessions and scope tokens SHALL receive 403. This read route SHALL be documented for coordinator recovery through the authenticated API proxy. Delivery SHALL be durable and exactly once even when no binding exists at commit, and SHALL never also create a dropped notice.
 
 
-The same existing summary SHALL include each annotation as a quoted block followed by its comment; no separate annotation notice SHALL be sent. Notes and annotation entries SHALL share the 64 KiB summary budget, with a role/action receipt pointer for every shortened or omitted entry. Full stored annotation feedback SHALL be included in the privileged receipt response.
+The same existing summary SHALL include each annotation as a type, quoted selection and any comment; no separate annotation notice SHALL be sent. Notes and annotation entries SHALL share the 64 KiB summary budget, with a role/action receipt pointer for every shortened or omitted entry. Full stored annotation feedback SHALL be included in the privileged receipt response.
 #### Scenario: Large annotation summary
 
 - **WHEN** sixteen FYI actions each carry twenty 4 KiB annotations
@@ -92,7 +92,9 @@ The same existing summary SHALL include each annotation as a quoted block follow
 
 ### Requirement: Durable human decision annotations
 
-Annotation-bearing answers and all decision comments SHALL have durable receipts keyed by owning role and action ID, with normalized payload fingerprint, original revision/anchors, server-derived quote text and full comments retained for board-history lifetime. Decision comments SHALL leave the decision open with unchanged revision/read state. Receipt, resolution if any and one existing answer-route summary SHALL commit atomically through the board-notice outbox, attributed Aaron (board). Summaries SHALL distinguish comments still open from answers already resolved and include remaining open IDs of both kinds. Quotes SHALL be bounded to 512 UTF-8 bytes without splitting characters. Summary notes/annotations SHALL fit 64 KiB with receipt recovery pointers. Identical receipt replay SHALL precede current item checks and create no duplicate notices/events. Changed-payload ID reuse SHALL be invalid. New feedback on already-closed items SHALL be invalid rather than accepted as delivered. Resident approvals SHALL remain protected. Successful annotation feedback SHALL survive daemon restarts/coordinator recycles and pending notices SHALL deliver once binding exists.
+Each stored annotation SHALL retain its type, stable ID, server-validated range offsets/context and quote preview. COMMENT requires a nonempty comment; DELETION may have an empty comment and denotes a removal suggestion, never a direct board edit. Summaries and full receipt recovery SHALL expose type, quote and any comment; no replacement text field SHALL exist because Replace is not supported. Coordinators SHALL address deletion suggestions as well as comments.
+
+Annotation-bearing answers and all decision comments SHALL have durable receipts keyed by owning role and action ID, with normalized payload fingerprint, original revision, annotation IDs/types, range offsets/context, server-derived quote text and full comments retained for board-history lifetime. Decision comments SHALL leave the decision open with unchanged revision/read state. Receipt, resolution if any and one existing answer-route summary SHALL commit atomically through the board-notice outbox, attributed Aaron (board). Summaries SHALL distinguish comments still open from answers already resolved and include remaining open IDs of both kinds. Quotes SHALL be bounded to 512 UTF-8 bytes without splitting characters. Summary notes/annotations SHALL fit 64 KiB with receipt recovery pointers. Identical receipt replay SHALL precede current item checks and create no duplicate notices/events. Changed-payload ID reuse SHALL be invalid. New feedback on already-closed items SHALL be invalid rather than accepted as delivered. Resident approvals SHALL remain protected. Successful annotation feedback SHALL survive daemon restarts/coordinator recycles and pending notices SHALL deliver once binding exists.
 
 #### Scenario: Atomic annotation response
 
