@@ -61,6 +61,13 @@ func TestHeraCoordinatorOrientation_HumanBoard(t *testing.T) {
 	}
 }
 
+func TestHeraCoordinatorOrientation_Annotations(t *testing.T) {
+	got := HeraCoordinatorOrientation("board")
+	for _, rule := range []string{"address every annotation", "COMMENT", "DELETION", "suggestion", "fyi-actions", "comment-only decisions remain open"} {
+		t.Run(rule, func(t *testing.T) { testutil.Contains(t, got, rule) })
+	}
+}
+
 // TestHeraCoordinatorOrientation_CarriesFiveDisciplineHabits is a snapshot-style
 // test asserting the add-coordinator-context-management D4 habits all survive in
 // the spawn orientation text: small window, low-default-effort-with-escalation,

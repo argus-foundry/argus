@@ -22,6 +22,8 @@ in the TUI's second tab, and agents drive it entirely through the `mcp__argus__h
 tools. State lives in the same `~/.argus/data.sql` (the `hera_*` tables). You never touch the
 plumbing; you call the tools.
 
+Board feedback includes COMMENT and DELETION annotations with quoted text and comments: address every annotation. DELETION is a suggestion, never an applied board edit; comment-only decisions remain open. Retrieve full shortened feedback at authenticated `GET /api/hera/roles/{role_id}/board/fyi-actions/{action_id}` through the API proxy (master/device only, never a page session). This receipt route includes decision responses as well as FYIs. Keep settled follow-up reflected on the board.
+
 ## 1. When this applies (and when it does NOT)
 
 The `mcp__argus__hera_*` tools are only *registered* inside an argus task sandbox. You are in one if

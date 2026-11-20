@@ -28,27 +28,31 @@ CREATE TABLE IF NOT EXISTS hera_board_fyi_receipts (
 );`
 
 type HeraBoardFYIAction struct {
-	ActionID          string    `json:"action_id"`
-	ItemID            int64     `json:"item_id"`
-	ExpectedUpdatedAt time.Time `json:"expected_updated_at"`
-	Action            string    `json:"action"`
-	Note              string    `json:"note"`
+	ActionID          string                `json:"action_id"`
+	ItemID            int64                 `json:"item_id"`
+	ExpectedUpdatedAt time.Time             `json:"expected_updated_at"`
+	Action            string                `json:"action"`
+	Note              string                `json:"note"`
+	Choice            string                `json:"choice,omitempty"`
+	Annotations       []HeraBoardAnnotation `json:"annotations,omitempty"`
 }
 
 type HeraBoardFYIResult struct {
-	ActionID string         `json:"action_id"`
-	ItemID   int64          `json:"item_id"`
-	Outcome  string         `json:"outcome"`
-	Item     *HeraBoardItem `json:"item,omitempty"`
+	ActionID           string                       `json:"action_id"`
+	ItemID             int64                        `json:"item_id"`
+	Outcome            string                       `json:"outcome"`
+	Item               *HeraBoardItem               `json:"item,omitempty"`
+	AnnotationOutcomes []HeraBoardAnnotationOutcome `json:"annotation_outcomes,omitempty"`
 }
 
 type HeraBoardFYIActionReceipt struct {
 	HeraBoardFYIAction
-	RoleID      int64          `json:"role_id"`
-	Fingerprint string         `json:"fingerprint"`
-	Outcome     string         `json:"outcome"`
-	Item        *HeraBoardItem `json:"item"`
-	CreatedAt   time.Time      `json:"created_at"`
+	RoleID             int64                        `json:"role_id"`
+	Fingerprint        string                       `json:"fingerprint"`
+	Outcome            string                       `json:"outcome"`
+	Item               *HeraBoardItem               `json:"item"`
+	CreatedAt          time.Time                    `json:"created_at"`
+	AnnotationOutcomes []HeraBoardAnnotationOutcome `json:"annotation_outcomes,omitempty"`
 }
 
 type HeraBoardKindCounts struct {
@@ -132,6 +136,11 @@ func (d *DB) FYIHeraBoardItems(roleID int64, actions []HeraBoardFYIAction) ([]He
 		var comments []*HeraBoardFYIActionReceipt
 		for _, a := range actions {
 			a.ExpectedUpdatedAt = a.ExpectedUpdatedAt.UTC()
+			a.Annotations = append([]HeraBoardAnnotation(nil), a.Annotations...)
+			for n := range a.Annotations {
+				a.Annotations[n].Quote = ""
+				a.Annotations[n].QuoteTruncated = false
+			}
 			raw, err := json.Marshal(a)
 			if err != nil {
 				return err
@@ -142,7 +151,7 @@ func (d *DB) FYIHeraBoardItems(roleID int64, actions []HeraBoardFYIAction) ([]He
 			previous, err := readFYIReceipt(tx, roleID, a.ActionID)
 			if err == nil {
 				if previous.Fingerprint == fingerprint {
-					r.Outcome, r.Item = previous.Outcome, previous.Item
+					r.Outcome, r.Item, r.AnnotationOutcomes = previous.Outcome, previous.Item, previous.AnnotationOutcomes
 					uxlog.Log("[board] FYI replay role=%d action=%s item=%d", roleID, a.ActionID, a.ItemID)
 				} else {
 					uxlog.Log("[board] FYI changed-payload reuse rejected role=%d action=%s", roleID, a.ActionID)
@@ -164,14 +173,21 @@ func (d *DB) FYIHeraBoardItems(roleID int64, actions []HeraBoardFYIAction) ([]He
 				r.Outcome = "not_found"
 			case a.ExpectedUpdatedAt.IsZero():
 			case a.Action != "dismiss" && a.Action != "comment" && a.Action != "comment_and_dismiss":
-			case a.Action != "dismiss" && strings.TrimSpace(a.Note) == "":
+			case a.Action != "dismiss" && strings.TrimSpace(a.Note) == "" && len(a.Annotations) == 0:
+			case a.Action == "dismiss" && len(a.Annotations) > 0:
 			case i.Resolved:
-				if a.Action != "comment" {
+				if a.Action != "comment" && len(a.Annotations) == 0 {
 					r.Outcome = "already_resolved"
 				}
 			case !i.UpdatedAt.Equal(a.ExpectedUpdatedAt):
 				r.Outcome, r.Item = "conflict", i
 			default:
+				var valid bool
+				a.Annotations, r.AnnotationOutcomes, valid = validateBoardAnnotations(i, a.Annotations)
+				if !valid {
+					results = append(results, r)
+					continue
+				}
 				now := time.Now().UTC()
 				r.Outcome = "commented"
 				if a.Action != "comment" {
@@ -188,7 +204,7 @@ func (d *DB) FYIHeraBoardItems(roleID int64, actions []HeraBoardFYIAction) ([]He
 					resolved = append(resolved, i.ID)
 				}
 				r.Item = i
-				receipt := &HeraBoardFYIActionReceipt{HeraBoardFYIAction: a, RoleID: roleID, Fingerprint: fingerprint, Outcome: r.Outcome, Item: i, CreatedAt: now}
+				receipt := &HeraBoardFYIActionReceipt{HeraBoardFYIAction: a, RoleID: roleID, Fingerprint: fingerprint, Outcome: r.Outcome, Item: i, CreatedAt: now, AnnotationOutcomes: r.AnnotationOutcomes}
 				raw, err = json.Marshal(receipt)
 				if err != nil {
 					return err
@@ -263,6 +279,14 @@ func writeFYISummary(tx *sql.Tx, roleID int64, comments []*HeraBoardFYIActionRec
 	}
 	for n, c := range comments {
 		note := c.Note
+		if len(c.Annotations) > 0 {
+			note, err = boardFeedback(c.Note, c.Annotations, budget, roleID, c.ActionID)
+			if err != nil {
+				return err
+			}
+			sections[n] += note
+			continue
+		}
 		if len(note) > budget {
 			marker := fmt.Sprintf("… [truncated — full comment: authenticated GET /api/hera/roles/%d/board/fyi-actions/%s; role %d action %s]", roleID, c.ActionID, roleID, c.ActionID)
 			limit := budget - len(marker)

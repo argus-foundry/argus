@@ -1,6 +1,7 @@
 package db
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,16 +69,21 @@ func encodeBoardStructure(kind string, s *HeraBoardStructure) (string, error) {
 }
 
 type HeraBoardAnswer struct {
-	ItemID            int64     `json:"item_id"`
-	ExpectedUpdatedAt time.Time `json:"expected_updated_at"`
-	Choice            string    `json:"choice"`
-	Note              string    `json:"note"`
+	ActionID          string                `json:"action_id,omitempty"`
+	Action            string                `json:"action,omitempty"`
+	Annotations       []HeraBoardAnnotation `json:"annotations,omitempty"`
+	ItemID            int64                 `json:"item_id"`
+	ExpectedUpdatedAt time.Time             `json:"expected_updated_at"`
+	Choice            string                `json:"choice"`
+	Note              string                `json:"note"`
 }
 
 type HeraBoardAnswerResult struct {
-	ItemID  int64          `json:"item_id"`
-	Outcome string         `json:"outcome"`
-	Item    *HeraBoardItem `json:"item,omitempty"`
+	ActionID           string                       `json:"action_id,omitempty"`
+	ItemID             int64                        `json:"item_id"`
+	Outcome            string                       `json:"outcome"`
+	Item               *HeraBoardItem               `json:"item,omitempty"`
+	AnnotationOutcomes []HeraBoardAnnotationOutcome `json:"annotation_outcomes,omitempty"`
 }
 
 // AnswerHeraBoardItems commits the successful answers and their single notice
@@ -92,16 +98,22 @@ func (d *DB) AnswerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]He
 	}
 	for _, r := range results {
 		uxlog.Log("[board] answer role=%d item=%d outcome=%s", roleID, r.ItemID, r.Outcome)
-		if r.Outcome == "resolved" {
-			d.emitBoardChanged(roleID, r.ItemID, "resolved")
-		}
 	}
 	return results, nil
 }
 
 func (d *DB) answerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]HeraBoardAnswerResult, error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
+	var newlyResolved []int64
+	committed := false
+	defer func() {
+		d.mu.Unlock()
+		if committed {
+			for _, id := range newlyResolved {
+				d.emitBoardChanged(roleID, id, "resolved")
+			}
+		}
+	}()
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return nil, err
@@ -113,9 +125,45 @@ func (d *DB) answerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]He
 	var sections []string
 	var notes []string
 	var answeredIDs []int64
+	var receiptIDs []string
+	var feedbackAnnotations [][]HeraBoardAnnotation
+	answeredCount, commentCount := 0, 0
 	now := formatTime(time.Now())
 	for _, a := range answers {
-		r := HeraBoardAnswerResult{ItemID: a.ItemID, Outcome: "invalid"}
+		r := HeraBoardAnswerResult{ActionID: a.ActionID, ItemID: a.ItemID, Outcome: "invalid"}
+		durable := a.ActionID != "" || a.Action == "comment" || len(a.Annotations) > 0
+		if a.Action == "" {
+			a.Action = "answer"
+		}
+		a.ExpectedUpdatedAt = a.ExpectedUpdatedAt.UTC()
+		a.Annotations = append([]HeraBoardAnnotation(nil), a.Annotations...)
+		// Fingerprint only client fields; derived quote must never affect replay.
+		for n := range a.Annotations {
+			a.Annotations[n].Quote = ""
+			a.Annotations[n].QuoteTruncated = false
+		}
+		raw, e := json.Marshal(a)
+		if e != nil {
+			return nil, e
+		}
+		fingerprint := fmt.Sprintf("%x", sha256.Sum256(raw))
+		if durable {
+			if !boardFYIActionID.MatchString(a.ActionID) {
+				results = append(results, r)
+				continue
+			}
+			previous, e := readFYIReceipt(tx, roleID, a.ActionID)
+			if e == nil {
+				if previous.Fingerprint == fingerprint {
+					r.Outcome, r.Item, r.AnnotationOutcomes = previous.Outcome, previous.Item, previous.AnnotationOutcomes
+				}
+				results = append(results, r)
+				continue
+			}
+			if !errors.Is(e, ErrHeraBoardNotFound) {
+				return nil, e
+			}
+		}
 		i, e := scanBoard(tx.QueryRow(`SELECT `+boardColumns+` FROM hera_board_items WHERE role_id=? AND id=?`, roleID, a.ItemID))
 		switch {
 		case errors.Is(e, ErrHeraBoardNotFound):
@@ -126,12 +174,21 @@ func (d *DB) answerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]He
 			r.Outcome = "not_found"
 		case i.ResidentApproval:
 		case i.Resolved:
-			r.Outcome = "already_resolved"
-		case a.ExpectedUpdatedAt.IsZero() || len(a.Note) > 4096:
+			if !durable {
+				r.Outcome = "already_resolved"
+			}
+		case a.ExpectedUpdatedAt.IsZero() || len(a.Note) > 4096 || !utf8.ValidString(a.Note):
+		case a.Action != "answer" && a.Action != "comment":
 		case !i.UpdatedAt.Equal(a.ExpectedUpdatedAt):
 			r.Outcome = "conflict"
 			r.Item = i
 		default:
+			var valid bool
+			a.Annotations, r.AnnotationOutcomes, valid = validateBoardAnnotations(i, a.Annotations)
+			if !valid {
+				results = append(results, r)
+				continue
+			}
 			label := ""
 			if a.Choice == "other" && strings.TrimSpace(a.Note) != "" {
 				label = "Something else"
@@ -146,19 +203,49 @@ func (d *DB) answerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]He
 					}
 				}
 			}
-			if label != "" {
+			if a.Action == "comment" {
+				if a.Choice != "" || (strings.TrimSpace(a.Note) == "" && len(a.Annotations) == 0) {
+					results = append(results, r)
+					continue
+				}
+				r.Outcome, r.Item = "commented", i
+				commentCount++
+				sections = append(sections, fmt.Sprintf("#%d %s\n  State: open; comment only\n  Note: ", i.ID, i.Subject))
+			} else if label != "" {
 				_, e = tx.Exec(`UPDATE hera_board_items SET resolved=1,resolved_by='human',resolution_choice=?,resolution_note=?,updated_at=? WHERE role_id=? AND id=?`, a.Choice, a.Note, now, roleID, a.ItemID)
 				if e != nil {
 					return nil, e
 				}
 				r.Outcome = "resolved"
+				i.Resolved, i.ResolvedBy, i.ResolutionChoice, i.ResolutionNote = true, "human", a.Choice, a.Note
+				i.UpdatedAt, _ = time.Parse(time.RFC3339Nano, now)
+				if durable {
+					r.Item = i
+				}
+				newlyResolved = append(newlyResolved, i.ID)
+				answeredCount++
+				sections = append(sections, fmt.Sprintf("#%d %s\n  Choice: %s\n  Note: ", i.ID, i.Subject, label))
+			}
+			if r.Outcome == "resolved" || r.Outcome == "commented" {
 				note := a.Note
 				if note == "" {
 					note = "none"
 				}
-				sections = append(sections, fmt.Sprintf("#%d %s\n  Choice: %s\n  Note: ", i.ID, i.Subject, label))
+				feedbackAnnotations = append(feedbackAnnotations, a.Annotations)
 				notes = append(notes, note)
 				answeredIDs = append(answeredIDs, i.ID)
+				receiptIDs = append(receiptIDs, a.ActionID)
+				if durable {
+					receipt := HeraBoardFYIActionReceipt{HeraBoardFYIAction: HeraBoardFYIAction{ActionID: a.ActionID, ItemID: a.ItemID, ExpectedUpdatedAt: a.ExpectedUpdatedAt, Action: a.Action, Note: a.Note, Choice: a.Choice, Annotations: a.Annotations}, RoleID: roleID, Fingerprint: fingerprint, Outcome: r.Outcome, Item: i, CreatedAt: time.Now().UTC(), AnnotationOutcomes: r.AnnotationOutcomes}
+					raw, e = json.Marshal(receipt)
+					if e != nil {
+						return nil, e
+					}
+					_, e = tx.Exec(`INSERT INTO hera_board_fyi_receipts(role_id,action_id,fingerprint,receipt) VALUES(?,?,?,?)`, roleID, a.ActionID, fingerprint, string(raw))
+					if e != nil {
+						return nil, e
+					}
+				}
 			}
 		}
 		results = append(results, r)
@@ -182,14 +269,31 @@ func (d *DB) answerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]He
 		if e != nil {
 			return nil, e
 		}
-		tldr := fmt.Sprintf("Aaron answered %d board decisions", len(sections))
+		tldr := fmt.Sprintf("Aaron answered %d board decisions", answeredCount)
+		if commentCount > 0 {
+			tldr += fmt.Sprintf("; commented on %d open decisions", commentCount)
+		}
 		head := tldr + ". Act on these; each is already resolved.\n\n"
+		if commentCount > 0 {
+			head = tldr + ". Act on answers and address every annotation; comment-only decisions remain open.\n\n"
+		}
 		tail := "\n\nStill open: " + strings.Join(open, ", ")
 		budget := (64*1024 - len(head) - len(tail) - len(strings.Join(sections, "\n\n"))) / len(sections)
 		for n := range sections {
 			note := notes[n]
+			if len(feedbackAnnotations[n]) > 0 {
+				note, e = boardFeedback(note, feedbackAnnotations[n], budget, roleID, receiptIDs[n])
+				if e != nil {
+					return nil, e
+				}
+				sections[n] += note
+				continue
+			}
 			if len(note) > budget {
 				marker := fmt.Sprintf("… [truncated — full note on board item #%d; hera_board_list include_resolved=true]", answeredIDs[n])
+				if receiptIDs[n] != "" {
+					marker = fmt.Sprintf("… [truncated — full feedback: authenticated GET /api/hera/roles/%d/board/fyi-actions/%s]", roleID, receiptIDs[n])
+				}
 				limit := budget - len(marker)
 				if limit < 0 {
 					return nil, ErrHeraBoardInvalid
@@ -210,5 +314,6 @@ func (d *DB) answerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]He
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
+	committed = true
 	return results, nil
 }

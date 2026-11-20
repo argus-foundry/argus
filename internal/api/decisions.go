@@ -288,19 +288,25 @@ func (s *Server) handleDecisionAnswers(w http.ResponseWriter, r *http.Request) {
 	var p struct {
 		Answers []db.HeraBoardAnswer `json:"answers"`
 	}
-	if !decodeDecisionJSON(w, r, &p, 16*(6*4096+1024)) {
+	if !decodeDecisionJSON(w, r, &p, boardResponseBodyMaxBytes) {
 		return
 	}
 	valid := len(p.Answers) > 0 && len(p.Answers) <= 16
 	seen := map[int64]bool{}
+	ids := map[string]bool{}
 	for _, a := range p.Answers {
-		if seen[a.ItemID] || a.ItemID <= 0 || a.ExpectedUpdatedAt.IsZero() || len(a.Note) > 4096 {
+		durable := a.ActionID != "" || a.Action == "comment" || len(a.Annotations) > 0
+		if seen[a.ItemID] || a.ItemID <= 0 || a.ExpectedUpdatedAt.IsZero() || len(a.Note) > 4096 || !db.ValidBoardAnnotationEnvelope(a.Annotations) || (durable && (!fyiActionID.MatchString(a.ActionID) || ids[a.ActionID])) {
 			valid = false
 		}
 		seen[a.ItemID] = true
+		if durable {
+			ids[a.ActionID] = true
+		}
 	}
 	if !valid {
-		writeJSON(w, 400, map[string]string{"code": "invalid_request", "error": "answers require 1-16 items, revisions and notes up to 4 KiB"})
+		uxlog.Log("[decide] invalid answer envelope role=%d", role)
+		writeJSON(w, 400, map[string]string{"code": "invalid_request", "error": "answers require 1-16 unique items, revisions, notes up to 4 KiB, and at most 20 valid annotations; feedback requires a unique action_id"})
 		return
 	}
 	results, err := s.db.AnswerHeraBoardItems(role, p.Answers)
