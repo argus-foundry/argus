@@ -83,3 +83,21 @@ func TestProjectProfile_OverlappingNoopEmitsNoEvent(t *testing.T) {
 	testutil.Equal(t, do(h, "PUT", "/api/projects/p", `{"path":"/renamed"}`).Code, http.StatusOK)
 	testutil.Equal(t, len(sink.events()), 1)
 }
+
+func TestProjectRename_ConfigTomlConflict(t *testing.T) {
+	srv, _ := testServer(t)
+	dir := t.TempDir()
+	d, err := db.Open(filepath.Join(dir, "data.sql"))
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	testutil.NoError(t, os.WriteFile(filepath.Join(dir, config.FileName), []byte("[projects.onlyfile]\npath = \"/repo\"\n"), 0600))
+	srv.db = d
+	h := authMiddleware(srv.token, d, nil, srv.routes())
+	testutil.Equal(t, do(h, "PUT", "/api/projects/onlyfile", `{"path":"/repo","new_name":"other"}`).Code, http.StatusConflict)
+	testutil.NoError(t, d.SetProject("dbproj", config.Project{Path: "/repo"}))
+	testutil.Equal(t, do(h, "PUT", "/api/projects/dbproj", `{"path":"/repo","new_name":"onlyfile"}`).Code, http.StatusConflict)
+	stored, err := d.Projects()
+	testutil.NoError(t, err)
+	_, ok := stored["dbproj"]
+	testutil.True(t, ok)
+}

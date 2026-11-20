@@ -3969,6 +3969,60 @@ func TestApp_HandleProjectFormKey_DoneSuccess(t *testing.T) {
 	}
 }
 
+func TestApp_HandleProjectFormKey_RenameSuccess(t *testing.T) {
+	d := testDB(t)
+	app := New(d, agent.NewRunner(nil), false)
+	dir := t.TempDir()
+	testutil.NoError(t, d.SetProject("old", config.Project{Path: dir}))
+
+	app.openProjectForm(true, "old", config.Project{Path: dir})
+	app.projectForm.fields[pfFieldName] = []rune("fresh")
+	app.projectForm.focused = pfFieldProfile
+	app.handleProjectFormKey(formAdvanceKey)
+
+	testutil.Equal(t, app.mode, modeTaskList)
+	cfg := d.Config()
+	if _, ok := cfg.Projects["old"]; ok {
+		t.Error("old project name should be gone")
+	}
+	if _, ok := cfg.Projects["fresh"]; !ok {
+		t.Error("project should exist under new name")
+	}
+}
+
+func TestApp_HandleProjectFormKey_RenameErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		newName string
+		want    string
+	}{
+		{"collision", "other", "exists"},
+		{"slash", "a/b", "invalid project name"},
+		{"dotdot", "..", "invalid project name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			app := New(d, agent.NewRunner(nil), false)
+			dir := t.TempDir()
+			testutil.NoError(t, d.SetProject("old", config.Project{Path: dir}))
+			testutil.NoError(t, d.SetProject("other", config.Project{Path: dir}))
+
+			app.openProjectForm(true, "old", config.Project{Path: dir})
+			app.projectForm.fields[pfFieldName] = []rune(tt.newName)
+			app.projectForm.focused = pfFieldProfile
+			app.handleProjectFormKey(formAdvanceKey)
+
+			testutil.Equal(t, app.mode, modeProjectForm)
+			testutil.Equal(t, app.projectForm.done, false)
+			testutil.Contains(t, app.projectForm.errMsg, tt.want)
+			if _, ok := d.Config().Projects["old"]; !ok {
+				t.Error("old project must remain")
+			}
+		})
+	}
+}
+
 func TestApp_OpenAndCloseScheduleForm(t *testing.T) {
 	d := testDB(t)
 	runner := agent.NewRunner(nil)

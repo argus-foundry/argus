@@ -1871,6 +1871,8 @@ type projectJSON struct {
 	// Profile is a pointer so a request can tell omitted (preserve) from ""
 	// (clear); responses always carry it.
 	Profile *string `json:"profile,omitempty"`
+	// NewName renames the project on PUT; empty or equal to the path name is a plain update.
+	NewName string `json:"new_name,omitempty"`
 }
 
 // projectSandboxOverride is a JSON-friendly view of config.ProjectSandboxConfig.
@@ -2044,6 +2046,31 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.beforeProjectSave != nil {
 		s.beforeProjectSave()
+	}
+	if newName := strings.TrimSpace(req.NewName); newName != "" && newName != name {
+		err := s.db.RenameProject(name, newName)
+		switch {
+		case errors.Is(err, db.ErrInvalidProjectName):
+			writeErr(w, http.StatusBadRequest, err.Error(), nil)
+			return
+		case errors.Is(err, db.ErrProjectConfigDefined):
+			writeErr(w, http.StatusConflict, "project is defined in config.toml", nil)
+			return
+		case errors.Is(err, db.ErrProjectNotFound):
+			writeErr(w, http.StatusNotFound, "project not found", nil)
+			return
+		case errors.Is(err, db.ErrProjectExists):
+			writeErr(w, http.StatusConflict, "project already exists", nil)
+			return
+		case err != nil:
+			uxlog.Log("[project] rename %q -> %q failed: %v", name, newName, err)
+			writeErr(w, http.StatusInternalServerError, "", err)
+			return
+		}
+		events.Emit(model.EventTypeConfigChanged, "", map[string]string{"resource": "projects", "name": name})
+		events.Emit(model.EventTypeConfigChanged, "", map[string]string{"resource": "projects", "name": newName})
+		uxlog.Log("[project] renamed %q -> %q", name, newName)
+		name = newName
 	}
 	stored, changed, err := s.db.SaveProject(name, projectFromJSON(req), db.ProjectSaveOptions{PreserveProfile: req.Profile == nil, RequireExisting: true})
 	if errors.Is(err, db.ErrProjectNotFound) {

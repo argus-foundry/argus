@@ -4686,3 +4686,39 @@ func TestHandleGitComparison(t *testing.T) {
 		testutil.Equal(t, w.Code, http.StatusInternalServerError)
 	})
 }
+
+func TestHandleUpdateProject_Rename(t *testing.T) {
+	srv, d := testServer(t)
+	handler := authMiddleware(srv.token, d, nil, srv.routes())
+	testutil.NoError(t, d.SetProject("alpha", config.Project{Path: "/tmp/a"}))
+	testutil.NoError(t, d.SetProject("taken", config.Project{Path: "/tmp/t"}))
+
+	put := func(name, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, authedReq("PUT", "/api/projects/"+name, body))
+		return w
+	}
+
+	t.Run("exists", func(t *testing.T) {
+		testutil.Equal(t, put("alpha", `{"path":"/tmp/a","new_name":"taken"}`).Code, http.StatusConflict)
+	})
+	t.Run("not found", func(t *testing.T) {
+		testutil.Equal(t, put("ghost", `{"path":"/tmp/a","new_name":"x"}`).Code, http.StatusNotFound)
+	})
+	t.Run("invalid name", func(t *testing.T) {
+		testutil.Equal(t, put("alpha", `{"path":"/tmp/a","new_name":"a/b"}`).Code, http.StatusBadRequest)
+	})
+	t.Run("success renames and updates fields", func(t *testing.T) {
+		w := put("alpha", `{"path":"/tmp/a2","new_name":" beta "}`)
+		testutil.Equal(t, w.Code, http.StatusOK)
+		var got projectJSON
+		testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		testutil.Equal(t, got.Name, "beta")
+		testutil.Equal(t, got.Path, "/tmp/a2")
+		projects, _ := d.Projects()
+		if _, ok := projects["alpha"]; ok {
+			t.Fatal("old name should be gone")
+		}
+		testutil.Equal(t, projects["beta"].Path, "/tmp/a2")
+	})
+}

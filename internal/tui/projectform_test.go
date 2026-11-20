@@ -156,15 +156,13 @@ func TestProjectForm_BacktabFromName_GoesToProfile(t *testing.T) {
 	testutil.Equal(t, pf.focused, pfFieldProfile)
 }
 
-func TestProjectForm_EditMode_BacktabSkipsName(t *testing.T) {
+func TestProjectForm_EditMode_BacktabReachesName(t *testing.T) {
 	pf := NewProjectForm()
 	pf.LoadProject("test", config.Project{Path: "/tmp"})
-	// In edit mode, focused starts at Path.
-	pf.focused = pfFieldPath
+	testutil.Equal(t, pf.focused, pfFieldPath)
 
-	// Backtab from Path skips Name → goes to Profile (the last field).
 	pf.HandleKey(tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone))
-	testutil.Equal(t, pf.focused, pfFieldProfile)
+	testutil.Equal(t, pf.focused, pfFieldName)
 }
 
 func TestProjectForm_TabFromProfile_EditMode(t *testing.T) {
@@ -172,9 +170,8 @@ func TestProjectForm_TabFromProfile_EditMode(t *testing.T) {
 	pf.LoadProject("test", config.Project{Path: t.TempDir()})
 	pf.focused = pfFieldProfile
 
-	// Tab from Profile → wraps to Name → edit mode skips → Path.
 	pf.HandleKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
-	testutil.Equal(t, pf.focused, pfFieldPath)
+	testutil.Equal(t, pf.focused, pfFieldName)
 }
 
 func TestProjectForm_PasteSandbox_Ignored(t *testing.T) {
@@ -761,16 +758,22 @@ func TestProjectForm_PathField_AltDeleteUpdatesAC(t *testing.T) {
 	testutil.Equal(t, string(pf.fields[pfFieldPath]), root+"/")
 }
 
-// The name field stays read-only under word-motion keys in edit mode.
-func TestProjectForm_EditMode_NameReadOnlyUnderWordMotion(t *testing.T) {
+func TestProjectForm_EditMode_NameEditable(t *testing.T) {
 	pf := NewProjectForm()
 	pf.LoadProject("myproj", config.Project{Path: "/tmp"})
-	pf.focused = pfFieldName // force focus to the (normally skipped) name field
+	pf.focused = pfFieldName
+	typeRunes(pf, "2")
+	name, _ := pf.Result()
+	testutil.Equal(t, name, "myproj2")
+	testutil.Equal(t, pf.origName, "myproj")
+
 	pf.HandleKey(tcell.NewEventKey(tcell.KeyBackspace2, 0, tcell.ModAlt))
-	pf.HandleKey(tcell.NewEventKey(tcell.KeyDelete, 0, tcell.ModAlt))
-	pf.HandleKey(tcell.NewEventKey(tcell.KeyCtrlW, 0, tcell.ModNone))
-	pf.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModAlt))
-	testutil.Equal(t, string(pf.fields[pfFieldName]), "myproj")
+	name, _ = pf.Result()
+	testutil.Equal(t, name, "")
+
+	pf.PasteHandler()("pasted", func(p tview.Primitive) {})
+	name, _ = pf.Result()
+	testutil.Equal(t, name, "pasted")
 }
 
 // Plain (non-Alt) Delete forward-deletes the character under the cursor.
