@@ -41,6 +41,7 @@ func (stubStore) Projects() (map[string]config.Project, error) {
 	return map[string]config.Project{}, nil
 }
 func (stubStore) SetProject(string, config.Project) error   { return nil }
+func (stubStore) RenameProject(string, string) error        { return nil }
 func (stubStore) DeleteProject(string) error                { return nil }
 func (stubStore) AddSchedule(*model.ScheduledTask) error    { return nil }
 func (stubStore) UpdateSchedule(*model.ScheduledTask) error { return nil }
