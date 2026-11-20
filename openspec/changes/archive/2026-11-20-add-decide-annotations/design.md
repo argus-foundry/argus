@@ -72,7 +72,7 @@ Aaron approved the spec and mockup, adding the two submit behaviors described be
 - Playwright: 20 combinations covering highlights/panel, toolbar, composer, annotated FYI panel and review at 1200px/390px in Light/Dark have no horizontal overflow. Desktop sidebar and phone sheet/composer screenshots visually inspected.
 - Verified native DOM Range capture across bold/text nodes, several list lines and nested text; independent overlapping highlights; partial option-text Delete without choosing that option; Comment Save/Edit/Remove; panel activation scroll/flash; keyboard whole-passage selection fallback; and typed annotations in Review queued.
 - Phone-width modal sheet, focus behavior and selection toolbar were checked in desktop browser automation. Physical iOS/Android long-press handles and software-keyboard placement still require real-device verification during implementation; no claim of physical touch QA is made.
-- Mockup remains fictional, local and unpublished. Production source remains unchanged.
+- Mockup remains fictional, local and unpublished. At spec review production source was unchanged; implementation verification follows below.
 
 ## Approval addition: submit and continue
 
@@ -80,8 +80,10 @@ Submit and Submit & close share batch construction, stable action IDs, frozen un
 
 ## Implementation verification
 
-- Annotation browser matrix: 56 passing cases across Chromium and WebKit at 1200px and 390px, including all six shared Go/browser projection vectors, overlap/identical ranges, independent removal, UTF-8 limits, keyboard fallback, option/link isolation, stale drafts, uncertain retries, unsaved-composer revision changes and both submit controls.
+- Annotation browser matrix: 60 passing cases across Chromium and WebKit at 1200px and 390px, including all six shared Go/browser projection vectors, overlap/identical ranges, independent removal, UTF-8 limits, keyboard fallback, option/link isolation, stale drafts, uncertain retries, unsaved-composer revision changes and both submit controls and touch-selection/swipe isolation.
 - Existing Decide and rail regressions: 48 passing cases across Chromium desktop and WebKit phone.
 - Isolated real API/browser matrix: four passing cases verify browser-generated Unicode anchors, receipt recovery/replay, annotation-only decisions staying open, and later answering.
 - Desktop and phone dark screenshots visually inspected; panel/sheet positioning and no horizontal overflow asserted. Physical iOS/Android long-press handles and software keyboard positioning still need a manual device check.
 - Native macOS annotation entry/editing remains the named follow-up `macos-decide-annotation-parity`; TUI/phone launch the shared page. Coordinator guidance changes take effect after a supervisor restart (spawn surface 57).
+
+- Final local gates: build, vet, formatting, lint, reachable-vulnerability scan, full race/coverage (89.1% filtered, 88% floor) and all 811 workspace tests pass. The single make pre-pr invocation stopped at formatting because installed Go tools were missing from PATH; remaining gates ran individually after correcting PATH, with one lint simplification fixed and rechecked. No full gate was repeated.

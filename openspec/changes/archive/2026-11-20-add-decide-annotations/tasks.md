@@ -26,4 +26,4 @@
 - [x] 4.1 Update builtin Hera board guidance, board tool descriptions and coordinator spawn/reclaim orientation to address every typed comment/deletion suggestion and retrieve shortened feedback. SPAWN SURFACE CHANGE: update inventory and corresponding contract tests.
 - [x] 4.2 Evaluate all frontends: web implements annotation editing; TUI board editing is a non-goal and its launch uses shared web; retain named native follow-up macos-decide-annotation-parity.
 - [x] 4.3 Update README Reference for receipt recovery/payloads, relevant gotchas and uxlog calls without logging feedback text.
-- [ ] 4.4 Run relevant tests, coverage and full make pre-pr; validate all specs strictly and archive into base specs in the eventual implementation PR before merge.
+- [x] 4.4 Run relevant tests, coverage and full make pre-pr; validate all specs strictly and archive into base specs in the eventual implementation PR before merge.
