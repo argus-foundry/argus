@@ -80,7 +80,7 @@ Submit and Submit & close share batch construction, stable action IDs, frozen un
 
 ## Implementation verification
 
-- Annotation browser matrix: 52 passing cases across Chromium and WebKit at 1200px and 390px, including all six shared Go/browser projection vectors, overlap/identical ranges, independent removal, UTF-8 limits, keyboard fallback, option/link isolation, stale drafts, uncertain retries and both submit controls.
+- Annotation browser matrix: 56 passing cases across Chromium and WebKit at 1200px and 390px, including all six shared Go/browser projection vectors, overlap/identical ranges, independent removal, UTF-8 limits, keyboard fallback, option/link isolation, stale drafts, uncertain retries, unsaved-composer revision changes and both submit controls.
 - Existing Decide and rail regressions: 48 passing cases across Chromium desktop and WebKit phone.
 - Isolated real API/browser matrix: four passing cases verify browser-generated Unicode anchors, receipt recovery/replay, annotation-only decisions staying open, and later answering.
 - Desktop and phone dark screenshots visually inspected; panel/sheet positioning and no horizontal overflow asserted. Physical iOS/Android long-press handles and software keyboard positioning still need a manual device check.

@@ -375,7 +375,7 @@ globalThis.BoardDecisions = (() => {
     const text=fields.slice(a,b+1).map((f,n)=>f.textContent.slice(n===0?lo:0,n===b-a?hi:undefined)).join('\n');if(!text.trim())return;
     const whole=fields.map(f=>f.textContent).join('\n'),from=fields.slice(0,a).reduce((n,f)=>n+f.textContent.length+1,0)+lo;
     let quote='',quoteBytes=0;for(const c of text){const size=new TextEncoder().encode(c).length;if(quoteBytes+size>512)break;quote+=c;quoteBytes+=size;}
-    selectionDraft={record:key(r.role,r.item.id),quote,start_path:fieldKey(start),end_path:fieldKey(end),start_offset:lo,end_offset:hi,selected_text_hash:hashText(text),prefix:Array.from(whole.slice(0,from)).slice(-64).join(''),suffix:Array.from(whole.slice(from+text.length)).slice(0,64).join('')};
+    selectionDraft={record:key(r.role,r.item.id),revision:r.item.updated_at,quote,start_path:fieldKey(start),end_path:fieldKey(end),start_offset:lo,end_offset:hi,selected_text_hash:hashText(text),prefix:Array.from(whole.slice(0,from)).slice(-64).join(''),suffix:Array.from(whole.slice(from+text.length)).slice(0,64).join('')};
     activeItem=selectionDraft.record;annotationError=null;renderPanel();
     toolbar.replaceChildren(button('Copy',async()=>{try{await navigator.clipboard.writeText(text);}catch{message('Copy unavailable. Use the browser Copy command on the selected text.');}toolbar.hidden=true;}),button('Delete',()=>saveSelection('DELETION','')),button('Comment',()=>{composer={...selectionDraft,type:'COMMENT',comment:''};toolbar.hidden=true;openPanel(activeItem,true);}));
     const rect=range.getBoundingClientRect(),v=window.visualViewport;
@@ -383,6 +383,10 @@ globalThis.BoardDecisions = (() => {
   }
   function saveSelection(type,comment){
     const pending=composer||selectionDraft,r=records[pending?.record];if(!r||r.draft.sent||busy||expired)return;
+    if(pending.revision!==r.item.updated_at){
+      const old=r.draft.stale;r.draft.stale={revision:pending.revision,note:old?.note||r.draft.note,annotations:[...(old?.annotations||[]),{...pending,type,comment}]};
+      composer=null;selectionDraft=null;toolbar.hidden=true;persist();render();message('The item changed. Your feedback is kept in a stale draft; review it before sending.');return;
+    }
     if((type==='COMMENT'&&!comment.trim())||new TextEncoder().encode(comment).length>4096||(!pending.annotation_id&&anns(r).length>=20)){
       const text='Comments need text up to 4 KiB. Maximum 20 annotations per item.';annotationError={record:pending.record,text};message(text);renderPanel();
       if(!composer){const error=el('span','hint',text);error.setAttribute('role','alert');toolbar.append(error);}return;
@@ -400,7 +404,7 @@ globalThis.BoardDecisions = (() => {
   function closeSheet(){sheet.close();composer=null;const r=records[activeItem];(document.querySelector(`#decision-${r?.item.id} .annotation-trigger`)||restoreFocus)?.focus();}
   function sortedAnnotations(r){const paths=fieldsFor(r).map(fieldKey);return anns(r).map((a,n)=>({...a,sequence:n})).sort((a,b)=>paths.indexOf(a.start_path)-paths.indexOf(b.start_path)||a.start_offset-b.start_offset||paths.indexOf(a.end_path)-paths.indexOf(b.end_path)||a.end_offset-b.end_offset||a.sequence-b.sequence);}
   function chooseAnnotation(r,a,edit=false){
-    activeItem=key(r.role,r.item.id);activeAnnotation=a.annotation_id;composer=edit?{...a,record:activeItem}:null;renderPanel();
+    activeItem=key(r.role,r.item.id);activeAnnotation=a.annotation_id;composer=edit?{...a,record:activeItem,revision:r.item.updated_at}:null;renderPanel();
     const marks=[...document.querySelectorAll('mark[data-ann]')].filter(n=>n.dataset.ann===a.annotation_id);marks[0]?.scrollIntoView({block:'center',behavior:'smooth'});for(const m of marks)m.classList.add('range-flash');setTimeout(()=>marks.forEach(m=>m.classList.remove('range-flash')),2000);if(edit)openPanel(activeItem,true);
   }
   function renderPanel(){

@@ -176,7 +176,7 @@ func validateBoardAnnotations(i *HeraBoardItem, annotations []HeraBoardAnnotatio
 					hi = a.EndOffset
 				}
 				boundary := func(p int) bool {
-					return p >= 0 && p <= len(units) && !(p > 0 && p < len(units) && units[p] >= 0xdc00 && units[p] <= 0xdfff)
+					return p >= 0 && p <= len(units) && (p == 0 || p == len(units) || units[p] < 0xdc00 || units[p] > 0xdfff)
 				}
 				if !boundary(lo) || !boundary(hi) || lo > hi {
 					problem = "invalid UTF-16 offsets"
