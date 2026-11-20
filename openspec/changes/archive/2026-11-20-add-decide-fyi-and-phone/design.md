@@ -2,13 +2,13 @@
 
 The base board-decision-page spec and archived `add-board-decision-page` and `add-decide-theme-and-links` changes define a standalone `/decide` shell, a 90-second single-use fragment ticket, an eight-hour in-memory role-scoped session, durable answer summaries, safe DOM links, Light/Dark/System appearance and close-on-success behavior. FYIs are currently excluded and a phone user cannot initiate this flow from the PWA.
 
-The PWA already has a per-device token. It must use that credential only in authenticated API headers, keeping the standalone page on a narrower board-only session. Aaron has selected the rail-style page described below. The coordinator’s six interaction decisions are recorded here. These spec/mockup revisions do not authorize implementation.
+The PWA already has a per-device token. It must use that credential only in authenticated API headers, keeping the standalone page on a narrower board-only session. Aaron has selected the rail-style page described below. The coordinator’s six interaction decisions are recorded here. Aaron approved the spec and mockup before implementation.
 
 ## Goals / non-goals
 
 **Goals:** Handle open decisions and FYIs on a phone, retain coordinator ownership, make comment retries safe, preserve the existing TUI ticket launch mechanism and give every submitted action a verifiable result.
 
-**Non-goals:** macOS app changes or a macOS follow-up (explicitly dropped by Aaron); live push/SSE updates (retain polling); `/decision` skill posting to the board (separate later change); editing coordinator-authored content; changing resident-approval protections; duplicating kanban section headings/collapse controls in the page (use the canonical rail order and nesting, including the ordering induced by kanban groups, without reproducing their chrome).
+**Non-goals:** macOS app changes (explicitly dropped by Aaron); macOS has no /decide entry point — follow-up if the Mac app resumes; live push/SSE updates (retain polling); `/decision` skill posting to the board (separate later change); editing coordinator-authored content; changing resident-approval protections; duplicating kanban section headings/collapse controls in the page (use the canonical rail order and nesting, including the ordering induced by kanban groups, without reproducing their chrome).
 
 ## Decisions
 
@@ -65,7 +65,7 @@ Poll navigation metadata and mixed-item reads every 20 seconds while visible, wi
 
 Add a global `Decide` entry alongside Tasks, Projects, + New and Settings; verify the narrow phone navigation can accommodate it without overflow. Its badge is the sum of open decisions and FYIs across eligible coordinators (not unread counts). `GET /api/hera/board/decision-counts` is master/device-only and returns totals plus per-role counts. Refresh on app entry/foreground and the existing visible polling cadence; no new push dependency. Keep entry available at zero so Aaron can see an empty page. A failed badge fetch shows unavailable rather than a misleading zero; a failed launch stays in the PWA with retry feedback.
 
-Frontend evaluation: TUI launches the common page with its coordinator preselected, including empty/FYI-only boards; web receives the same rail/drawer page and mixed-action UI; macOS is explicitly excluded at Aaron's direction, superseding a follow-up for this work. Update the README Reference endpoints and launch description. No key binding is added, removed or rebound. Preserve the service worker's network-only `/decide` behavior and exclusion from shell assets; API responses containing data or credentials are not cached. Bump `SW_VERSION` when changing the PWA/decide shell assets in the implementation PR, using the then-current version rather than pinning today's value.
+Frontend evaluation: TUI launches the common page with its coordinator preselected, including empty/FYI-only boards; web receives the same rail/drawer page and mixed-action UI; macOS is explicitly excluded at Aaron's direction; named follow-up: no /decide entry point until the Mac app resumes. Update the README Reference endpoints and launch description. No key binding is added, removed or rebound. Preserve the service worker's network-only `/decide` behavior and exclusion from shell assets; API responses containing data or credentials are not cached. Bump `SW_VERSION` when changing the PWA/decide shell assets in the implementation PR, using the then-current version rather than pinning today's value.
 
 ## Risks / trade-offs
 
@@ -86,4 +86,4 @@ The layout question is settled: Aaron selected the shared coordinator rail with 
 - **Session scope decision (coordinator-approved):** Both launches use the explicit rail-board session class, replacing the old one-coordinator snapshot. TUI role is only the starting selection. Every read/write rechecks current visibility; hidden/archived-board writes fail clearly while other authorized board submissions continue. No broader API authorization is granted.
 - **Web entry recommendation:** Keep the global Decide entry and total open-count badge so the phone can reach the queue without first choosing a project.
 - **Presentation simplification:** Reuse canonical rail ordering and nesting without reproducing kanban group headings/fold controls; this is a named Non-goal, not a difference in coordinator membership or traversal order.
-- **Implementation approval:** The layout decision authorizes these spec and mockup revisions; implementation still awaits Aaron’s approval.
+- **Implementation approval:** Aaron approved the spec, revised mockup, rail-board session scope and phone entry; implementation follows this approved contract.

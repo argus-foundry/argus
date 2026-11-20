@@ -1026,6 +1026,12 @@ textarea.settings-input { min-height: 70px; resize: vertical; }
   animation: toast-in 0.2s ease-out;
 }
 @keyframes toast-in { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+/* Five compact navigation entries fit a 390px phone. */
+.tabs {display:flex;min-width:0;}
+.tab {min-width:0;padding-inline:10px;flex:1;text-align:center;white-space:nowrap;font:inherit;}
+button.tab {background:transparent;border:0;color:inherit;cursor:pointer;}
+#decide-count {font:11px ui-monospace,monospace;background:var(--accent,#4768dc);color:white;border-radius:3px;padding:1px 4px;}
+@media(max-width:450px){.tab{padding-inline:6px;font-size:12px;}}
 </style>
 </head>
 <body>
@@ -1070,6 +1076,7 @@ textarea.settings-input { min-height: 70px; resize: vertical; }
   <div class="tabs">
     <div class="tab active" data-tab="tasks" onclick="switchTab('tasks')">Tasks</div>
     <div class="tab" data-tab="hera" onclick="switchTab('hera')">Projects</div>
+    <button class="tab" id="decide-entry-button" type="button" onclick="openDecide()">Decide <span id="decide-count" aria-label="Open responses">…</span></button>
     <div class="tab" data-tab="create" onclick="switchTab('create')">+ New</div>
     <div class="tab" data-tab="settings" onclick="switchTab('settings')">Settings</div>
   </div>
@@ -2147,6 +2154,7 @@ async function tryConnect() {
       refresh().then(() => applyPendingTaskOpen());
       loadProjects();
       loadBackends();
+      refreshDecideCounts();
       startRefreshTimer();
       // applyPendingShare only touches DOM + sessionStorage, not the tasks
       // list, so it can run immediately without waiting for refresh.
@@ -2175,6 +2183,7 @@ function startRefreshTimer() {
   // wrong subset.
   refreshTimer = setInterval(() => {
     if (openTaskByIdInFlight) return;
+    if (!document.hidden) refreshDecideCounts();
     // Keep the Hera roster live while its tab is foregrounded; otherwise poll
     // the task list as usual. The detail overlay (opened from a Hera role)
     // sits on top of whichever tab is active, so a refresh here is harmless.
@@ -5452,6 +5461,7 @@ window.addEventListener('pageshow', syncViewportOnForeground);
 document.addEventListener('visibilitychange', syncViewportOnForeground);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { clearTimeout(keepPlaceTimer); keepPlaceTimer = null; keepPlaceDeferred = ''; }
+  else if (TOKEN) refreshDecideCounts();
 });
 
 // --- Create Task ---
@@ -8124,6 +8134,27 @@ window.addEventListener('offline', () => {
     showOffline();
   }
 });
+
+/* Decide entry */
+
+let decideCountLoading=false,decideLaunching=false;
+async function refreshDecideCounts(){
+  if(document.hidden||decideCountLoading)return;
+  decideCountLoading=true;
+  const badge=document.getElementById('decide-count');
+  try{const response=await api('/api/hera/board/decision-counts',{cache:'no-store'});if(!response.ok)throw Error();const data=await response.json();if(!Number.isInteger(data.total)||data.total<0)throw Error();badge.textContent=String(data.total);badge.title=data.total+' open decisions and FYIs';}
+  catch{badge.textContent='?';badge.title='Board counts unavailable';}
+  finally{decideCountLoading=false;}
+}
+async function openDecide(){
+  if(decideLaunching)return;decideLaunching=true;
+  const entry=document.getElementById('decide-entry-button');entry.disabled=true;
+  try{const response=await api('/api/hera/board/decision-link',{method:'POST',body:'{}',cache:'no-store'});if(!response.ok)throw Error();const data=await response.json();const url=new URL(data.path,location.origin);if(data.path!=='/decide'||url.origin!==location.origin||!data.ticket)throw Error();location.assign(data.path+'#t='+encodeURIComponent(data.ticket));}
+  catch{showToast('Could not open Decide. Check your connection and retry.');}
+  finally{decideLaunching=false;entry.disabled=false;}
+}
+
+/* End Decide entry */
 
 // --- Init ---
 if (TOKEN) tryConnect();

@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 const shell = readFileSync(resolve(__dirname, '../../internal/api/static/decide.html'), 'utf8');
 const origin = 'http://decide.test';
 const item = {
-  id: 40, updated_at: 'revision',
+  id: 40, role_id: 7, kind: 'decision', updated_at: 'revision',
   subject: 'Review https://example.com/subject',
   body: 'See https://example.com/body).\n\nKeep `https://example.com/code` literal. <img src=x onerror=alert(1)> javascript:alert(1) data:text/html,payload',
   structured: {
@@ -29,10 +29,12 @@ async function fixture(page: Page, { items = [item], outcome = 'resolved', answe
       await route.fulfill({ contentType: 'text/html', body: html });
     } else if (url.pathname === '/api/hera/board/decision-session') {
       expect(route.request().postDataJSON()).toEqual({ ticket: 'launch-secret' });
-      await route.fulfill({ json: { role_id: 7, session: 'session-secret' } });
-    } else if (url.pathname === '/api/hera/roles/7/board/decisions') {
+      await route.fulfill({ json: { initial_role_id: 7, session: 'session-secret' } });
+    } else if (url.pathname === '/api/hera/board/decision-navigation') {
+      await route.fulfill({ json: {roles:[{role_id:7,parent_role_id:null,orchestrator:'Release',coordinator:'coord',decisions:items.length,fyis:0}]} });
+    } else if (url.pathname === '/api/hera/roles/7/board/decide-items') {
       expect(route.request().headers().authorization).toBe('Bearer session-secret');
-      await route.fulfill({ json: { items } });
+      await route.fulfill({ json: { items,coordinator:'coord',orchestrator:'Release' } });
     } else if (url.pathname === '/api/hera/roles/7/board/answers') {
       expect(route.request().headers().authorization).toBe('Bearer session-secret');
       const { answers } = route.request().postDataJSON();
@@ -91,7 +93,7 @@ test('phone themes and all decision references preserve security boundaries', as
 test('System follows live color scheme changes', async ({ page }) => {
   await fixture(page);
   await page.emulateMedia({ colorScheme: 'light' });
-  await page.goto(`${origin}/decide`);
+  await page.goto(`${origin}/decide#t=launch-secret`);
   await expect(page.getByLabel('Theme')).toHaveValue('system');
   await expect(page.locator('html')).toHaveCSS('color-scheme', 'light');
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -133,9 +135,9 @@ for (const outcome of ['resolved', 'already_resolved']) {
     const mode = outcome === 'resolved' ? 'dark' : 'light';
     await page.getByLabel('Theme').selectOption(mode);
     await page.locator('#decision-40 input[value="review"]').check();
-    await page.getByRole('button', { name: 'Submit answers', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Answers sent — you can close this tab' })).toBeVisible();
-    await expect(page.locator('main')).toContainText('1 item answered.');
+    await page.getByRole('button', { name: 'Submit actions', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Actions sent — you can close this tab' })).toBeVisible();
+    await expect(page.locator('main')).toContainText('1 answers · 0 comments · 0 dismissals');
     await expect(page.locator('html')).toHaveCSS('color-scheme', mode);
     await expect(page.locator('.decision')).toHaveCount(0);
     expect(await page.evaluate(() => (globalThis as any).closeAttempts)).toBe(1);
@@ -157,7 +159,7 @@ test('a fully accepted partial round closes a script-opened tab', async ({ page 
   await popup.goto(`${origin}/decide?role=7#t=launch-secret`);
   await popup.locator('#decision-40 input[value="review"]').check();
   const closed = popup.waitForEvent('close');
-  await popup.getByRole('button', { name: 'Submit answers', exact: true }).click();
+  await popup.getByRole('button', { name: 'Submit actions', exact: true }).click();
   await closed;
   expect(popup.isClosed()).toBe(true);
   expect(page.isClosed()).toBe(false);
@@ -173,28 +175,28 @@ test('an expiring in-flight poll cannot touch controls removed by the sent confi
   await expect(page.locator('#decision-40')).toBeVisible();
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
-  await page.route('**/board/decisions', async route => {
+  await page.route('**/board/decide-items', async route => {
     await held;
     await route.fulfill({ status: 401, json: { error: 'expired' } });
   });
-  const polling = page.waitForRequest(`${origin}/api/hera/roles/7/board/decisions`);
+  const polling = page.waitForRequest(`${origin}/api/hera/roles/7/board/decide-items`);
   await page.clock.fastForward(20000);
   await polling;
   await page.locator('#decision-40 input[value="review"]').check();
-  await page.getByRole('button', { name: 'Submit answers', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Answers sent — you can close this tab' })).toBeVisible();
+  await page.getByRole('button', { name: 'Submit actions', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Actions sent — you can close this tab' })).toBeVisible();
   await page.evaluate(() => {
     (globalThis as any).lateControlLookups = [];
     const original = document.getElementById.bind(document);
     document.getElementById = id => { (globalThis as any).lateControlLookups.push(id); return original(id); };
   });
-  const expired = page.waitForResponse(response => response.url().endsWith('/decisions') && response.status() === 401);
+  const expired = page.waitForResponse(response => response.url().endsWith('/decide-items') && response.status() === 401);
   release();
   await expired;
   await page.waitForLoadState('networkidle');
   expect(await page.evaluate(() => (globalThis as any).lateControlLookups)).toEqual([]);
   expect(errors).toEqual([]);
-  await expect(page.getByRole('heading', { name: 'Answers sent — you can close this tab' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Actions sent — you can close this tab' })).toBeVisible();
 });
 
 test('a pending copy cannot touch controls removed by the sent confirmation', async ({ page }) => {
@@ -207,9 +209,9 @@ test('a pending copy cannot touch controls removed by the sent confirmation', as
   });
   await page.goto(`${origin}/decide?role=7#t=launch-secret`);
   await page.locator('#decision-40 input[value="review"]').check();
-  await page.getByRole('button', { name: 'Copy answers', exact: true }).click();
-  await page.getByRole('button', { name: 'Submit answers', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Answers sent — you can close this tab' })).toBeVisible();
+  await page.getByRole('button', { name: 'Copy responses', exact: true }).click();
+  await page.getByRole('button', { name: 'Submit actions', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Actions sent — you can close this tab' })).toBeVisible();
   const lookups = await page.evaluate(async () => {
     const accessed: string[] = [], original = document.getElementById.bind(document);
     document.getElementById = id => { accessed.push(id); return original(id); };
@@ -228,13 +230,14 @@ for (const outcome of ['conflict', 'invalid', 'not_found', 'request_failed']) {
     await page.locator('#decision-40 input[value="review"]').check();
     await page.locator('#note-40').fill('Keep this note');
     const response = page.waitForResponse(`${origin}/api/hera/roles/7/board/answers`);
-    await page.getByRole('button', { name: 'Submit answers', exact: true }).click();
+    await page.getByRole('button', { name: 'Submit actions', exact: true }).click();
     await response;
-    if (outcome === 'request_failed') await expect(page.locator('#status')).toContainText('Could not reach');
-    else await expect(page.locator('.state')).toHaveText(outcome === 'conflict' ? 'conflict' : outcome === 'not_found' ? 'closed' : 'invalid');
+    await expect(page.locator('#status')).toContainText('Review the remaining responses');
+    await expect(page.locator('#main')).toContainText('Keep this note');
+    await page.getByRole('button', {name:'Edit on board'}).click();
     await expect(page.locator('#decision-40')).toBeVisible();
     await expect(page.locator('#note-40')).toHaveValue('Keep this note');
-    await expect(page.getByRole('heading', { name: 'Answers sent — you can close this tab' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Actions sent — you can close this tab' })).toHaveCount(0);
     expect(await page.evaluate(() => (globalThis as any).closeAttempts)).toBe(0);
     expect(page.isClosed()).toBe(false);
   });

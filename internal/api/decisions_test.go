@@ -64,10 +64,15 @@ func TestDecisionSessionRouteDenylist(t *testing.T) {
 	testutil.NoError(t, err)
 	patterns := regexp.MustCompile(`mux.HandleFunc\("([A-Z]+) ([^"]+)"`).FindAllStringSubmatch(string(source), -1)
 	testutil.Equal(t, len(patterns) > 100, true)
+	base := fmt.Sprintf("/api/hera/roles/%d/board/", c.ID)
 	for _, pattern := range patterns {
 		t.Run(pattern[1]+" "+pattern[2], func(t *testing.T) {
 			path := regexp.MustCompile(`\{[^}]+\}`).ReplaceAllString(pattern[2], fmt.Sprint(c.ID))
-			if strings.HasSuffix(path, "/board/decisions") || strings.HasSuffix(path, "/board/answers") {
+			// Keep this contract independent of the production allowlist: using
+			// decisionSessionRoute here would hide accidental scope broadening.
+			allowedRead := pattern[1] == "GET" && (path == "/api/hera/board/decision-navigation" || path == base+"decisions" || path == base+"decide-items")
+			allowedWrite := pattern[1] == "POST" && (path == base+"answers" || path == base+"fyi-actions")
+			if allowedRead || allowedWrite {
 				return
 			}
 			r := httptest.NewRequest(pattern[1], path, strings.NewReader("{}"))
@@ -121,7 +126,7 @@ func TestDecisionRequestValidation(t *testing.T) {
 	r := httptest.NewRequest("POST", base+"/decision-link", strings.NewReader("{}"))
 	r.Header.Set("Authorization", "Bearer "+device)
 	handler.ServeHTTP(w, r)
-	testutil.Equal(t, w.Code, 409)
+	testutil.Equal(t, w.Code, 200)
 }
 
 func TestDecisionMixedAnswers(t *testing.T) {

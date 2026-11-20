@@ -246,12 +246,7 @@ func (o *Ops) StepStatus(sel heramodel.Selection, dir int) error {
 // orchestrator's kanban_status) per Aaron's explicit "wrapping to active"
 // instruction — overloading one shared ladder with a wrap flag would make the
 // existing clamped caller (StepStatus) harder to read for no shared benefit.
-var kanbanOrder = []db.HeraKanbanStatus{
-	db.HeraKanbanActive,
-	db.HeraKanbanBacklog,
-	db.HeraKanbanBlocked,
-	db.HeraKanbanDone,
-}
+var kanbanOrder = heramodel.RailKanbanOrder()
 
 func kanbanIndex(s db.HeraKanbanStatus) int {
 	for i, v := range kanbanOrder {
