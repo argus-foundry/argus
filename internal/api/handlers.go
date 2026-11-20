@@ -2048,16 +2048,14 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		s.beforeProjectSave()
 	}
 	if newName := strings.TrimSpace(req.NewName); newName != "" && newName != name {
-		if strings.Contains(newName, "/") {
-			writeErr(w, http.StatusBadRequest, "project name must not contain '/'", nil)
-			return
-		}
-		if s.db.ProjectInConfigToml(newName) {
-			writeErr(w, http.StatusConflict, "project is defined in config.toml", nil)
-			return
-		}
 		err := s.db.RenameProject(name, newName)
 		switch {
+		case errors.Is(err, db.ErrInvalidProjectName):
+			writeErr(w, http.StatusBadRequest, err.Error(), nil)
+			return
+		case errors.Is(err, db.ErrProjectConfigDefined):
+			writeErr(w, http.StatusConflict, "project is defined in config.toml", nil)
+			return
 		case errors.Is(err, db.ErrProjectNotFound):
 			writeErr(w, http.StatusNotFound, "project not found", nil)
 			return

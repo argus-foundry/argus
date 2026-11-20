@@ -54,10 +54,8 @@ func TestRenameProject(t *testing.T) {
 		testutil.NoError(t, d.SetProject("taken", config.Project{Path: "/x"}))
 		testutil.ErrorIs(t, d.RenameProject("missing", "z"), ErrProjectNotFound)
 		testutil.ErrorIs(t, d.RenameProject("old", "taken"), ErrProjectExists)
-		for _, bad := range []string{"", "  ", "a/b", "old"} {
-			if err := d.RenameProject("old", bad); err == nil {
-				t.Fatalf("expected error for %q", bad)
-			}
+		for _, bad := range []string{"", "  ", "a/b", "old", ".", "..", `a\b`, "a\nb"} {
+			testutil.ErrorIs(t, d.RenameProject("old", bad), ErrInvalidProjectName)
 		}
 		testutil.Equal(t, countWhere(t, d, "tasks", "project", "old"), 1)
 	})

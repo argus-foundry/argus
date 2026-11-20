@@ -3997,7 +3997,8 @@ func TestApp_HandleProjectFormKey_RenameErrors(t *testing.T) {
 		want    string
 	}{
 		{"collision", "other", "exists"},
-		{"slash", "a/b", "'/'"},
+		{"slash", "a/b", "invalid project name"},
+		{"dotdot", "..", "invalid project name"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

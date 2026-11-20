@@ -6,21 +6,38 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
-var ErrProjectExists = errors.New("project already exists")
+var (
+	ErrProjectExists        = errors.New("project already exists")
+	ErrInvalidProjectName   = errors.New("invalid project name")
+	ErrProjectConfigDefined = errors.New("project is defined in config.toml")
+)
+
+func validProjectName(name string) error {
+	if name == "" || name == "." || name == ".." {
+		return fmt.Errorf("%w: %q", ErrInvalidProjectName, name)
+	}
+	for _, r := range name {
+		if r == '/' || r == '\\' || unicode.IsControl(r) {
+			return fmt.Errorf("%w: must not contain path separators or control characters", ErrInvalidProjectName)
+		}
+	}
+	return nil
+}
 
 // RenameProject rewrites every reference to a project name in one transaction.
 func (d *DB) RenameProject(oldName, newName string) error {
 	newName = strings.TrimSpace(newName)
-	if newName == "" {
-		return errors.New("project name must not be empty")
-	}
-	if strings.Contains(newName, "/") {
-		return errors.New("project name must not contain '/'")
+	if err := validProjectName(newName); err != nil {
+		return err
 	}
 	if newName == oldName {
-		return errors.New("new project name must differ from the old one")
+		return fmt.Errorf("%w: new name must differ from the old one", ErrInvalidProjectName)
+	}
+	if d.ProjectInConfigToml(oldName) || d.ProjectInConfigToml(newName) {
+		return ErrProjectConfigDefined
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
