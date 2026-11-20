@@ -13,6 +13,10 @@ import (
 
 var fyiActionID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
+// Six wire bytes per decoded byte covers JSON escaping. Context, paths and
+// hashes are bounded separately; a whole batch remains bounded before decoding.
+const boardResponseBodyMaxBytes = 16 * (6*(21*4096+20*1024) + 4096)
+
 func initialDecisionRole(role int64) *int64 {
 	if role == 0 {
 		return nil
@@ -70,14 +74,14 @@ func (s *Server) handleFYIActions(w http.ResponseWriter, r *http.Request) {
 	var p struct {
 		Actions []db.HeraBoardFYIAction `json:"actions"`
 	}
-	if !decodeDecisionJSON(w, r, &p, 16*(6*4096+1024)) {
+	if !decodeDecisionJSON(w, r, &p, boardResponseBodyMaxBytes) {
 		return
 	}
 	valid := len(p.Actions) > 0 && len(p.Actions) <= 16
 	ids := map[string]bool{}
 	items := map[int64]bool{}
 	for _, a := range p.Actions {
-		if !fyiActionID.MatchString(a.ActionID) || ids[a.ActionID] || items[a.ItemID] || a.ItemID <= 0 || a.ExpectedUpdatedAt.IsZero() || len(a.Note) > 4096 || !utf8.ValidString(a.Note) || (a.Action == "dismiss" && a.Note != "") {
+		if !fyiActionID.MatchString(a.ActionID) || ids[a.ActionID] || items[a.ItemID] || a.ItemID <= 0 || a.ExpectedUpdatedAt.IsZero() || len(a.Note) > 4096 || !utf8.ValidString(a.Note) || !db.ValidBoardAnnotationEnvelope(a.Annotations) || (a.Action == "dismiss" && a.Note != "") {
 			valid = false
 		}
 		ids[a.ActionID] = true
@@ -85,7 +89,7 @@ func (s *Server) handleFYIActions(w http.ResponseWriter, r *http.Request) {
 	}
 	if !valid {
 		uxlog.Log("[decide] invalid FYI envelope role=%d", role)
-		writeCodedErr(w, 400, "invalid_request", "FYI actions require 1-16 unique IDs/items, revisions and notes up to 4 KiB")
+		writeCodedErr(w, 400, "invalid_request", "FYI actions require 1-16 unique IDs/items, revisions, notes up to 4 KiB, and at most 20 valid annotations with unique annotation_id values and comments up to 4 KiB")
 		return
 	}
 	results, err := s.db.FYIHeraBoardItems(role, p.Actions)

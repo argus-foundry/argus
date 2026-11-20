@@ -337,3 +337,11 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **A rail-board session is dynamic board-only authority, never a device credential.** Recheck the shared rail projection on every read/write; keep hidden-board drafts unavailable while other boards submit, and never close on a refused or missing result. Strip a new ticket and supersede any stored session before exchange, including failure paths.
 
 - **Poll snapshots must be accepted explicitly rather than overwrite edits.** Fence late results by submission generation and stop polling on completion; compare consistent snapshot shapes to avoid a permanent refresh banner.
+
+- **Decide anchors use the rendered projection, never raw Markdown or visual line wraps.** Literal LF text nodes separate paragraph/list blocks and source fields; offsets are UTF-16 while contexts are Unicode code points and limits are UTF-8 bytes. Shared Go/browser vectors guard emoji and inline-formatting drift.
+
+- **Paint overlapping Decide highlights oldest first and retain every annotation ID.** Newer marks receive the direct click, while panel entries retain access to earlier ranges; rebuild marks from source text after removal so removing an overlap cannot erase another annotation.
+
+- **Keep native touch selection intact before opening annotation controls.** Capture the range before focus moves, delay touch/selectionchange capture, exclude selectable fields from tab swipes, and clamp the toolbar to the visual viewport. Browser phone-width checks do not replace physical iOS/Android long-press and keyboard QA.
+
+- **Both Decide submit buttons use the same frozen payload and action ID.** Submit refreshes in place with inline receipts; Submit & close alone attempts closing after all actions are confirmed. Uncertain responses keep annotation removal/edit locked until the exact payload is reconciled.

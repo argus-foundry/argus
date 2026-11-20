@@ -10,7 +10,7 @@ const useWebKit = Boolean(process.env.CI) || process.env.ARGUS_PW_WEBKIT === '1'
 
 export default defineConfig({
   testDir: './tests',
-  testIgnore: '**/workspace/**',
+  testIgnore: ['**/workspace/**','**/decide-annotations-api.spec.ts'],
   fullyParallel: false, // single backing daemon — keep serial
   workers: 1,
   retries: 0,

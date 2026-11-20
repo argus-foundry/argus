@@ -292,7 +292,9 @@ const (
 	// materialized Hera builtin skill (add-board-decision-page).
 	// 56: new sessions receive FYI comment/dismissal and durable receipt
 	// recovery guidance in the Hera builtin skill (add-decide-fyi-and-phone).
-	SupervisorSpawnSurface = 56
+	// 57: coordinator spawn/reclaim and the materialized Hera skill require
+	// addressing typed annotations and recovering full decision/FYI receipts.
+	SupervisorSpawnSurface = 57
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -619,7 +621,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest = "27c6a7aa0ef811541e7a44b88bac1adf02d2d32a0ee6fb01dbf239b9ed4e3f1e"
+	SpawnSurfaceDigest = "33303b497c736ce7a553ebf8c4f6cf35fc76003638d63bcb9666d6bb715dfb2a"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
 	StreamSurfaceDigest = "6db616d49b2aae4049a1e16f5eeb7c4b16aa724b7451c2faab7c0302ef5fd83d"

@@ -215,19 +215,28 @@ body{font-size:14px;line-height:1.45}h1{font-size:1.4rem;line-height:1.2}h2{font
 .count-badge{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 4px;box-sizing:border-box;border:1px solid transparent;border-radius:3px;background:var(--accent);color:var(--on-accent);font:600 12px/1 var(--mono);font-variant-numeric:tabular-nums}.count-badge.fyi{background:var(--fyi-badge);color:var(--on-fyi-badge)}.count-badge.zero{background:transparent;color:var(--muted);border-color:var(--line)}
 #rail{padding:12px 7px;top:44px}.rail-heading{font:500 12px/1.4 var(--mono);padding-inline:8px}.rail-help{font:10px/1.4 var(--mono);padding-inline:8px;margin-block:5px 12px}.rail-row{font-size:13px;line-height:18px;padding:5px 8px;min-height:30px;box-sizing:border-box;margin:1px 0;gap:6px;border-radius:4px}.rail-row.nested{padding-left:20px}.rail-row[aria-current="true"]{box-shadow:inset 2px 0 var(--accent)}.row-counts{display:inline-flex;gap:3px;align-items:center}.row-counts .count-badge{min-width:18px;height:18px;font-size:10px;padding:0 3px}.rail-row .queued-dot{width:4px;height:4px}dialog{border-radius:4px;padding:12px}.drawer-head{margin-bottom:12px}.drawer-head h2{font:500 13px var(--mono)}.receipt{padding-block:10px;gap:4px}.confirmation{padding-block:24px;gap:12px}
 @media(max-width:700px){.page-layout{display:block}.board-column>.wrap{padding-inline:12px}.wrap{padding-inline:12px}.phone-trigger{width:calc(100% - 24px);margin:10px 12px 0;font-size:13px}.btn,.theme select,.rail-row,.clear{min-height:40px}.rail-row{padding-block:10px}.mock-control .btn{min-height:32px}.note textarea{font-size:16px}.queue .btn{min-height:40px;padding:7px 10px}.queue{padding-bottom:max(8px,env(safe-area-inset-bottom,0px))}.opt{min-height:40px}.lede{padding-top:14px}.tabs .btn{min-height:40px}.fyi-actions .btn{min-height:40px}.theme select{min-height:40px}.trade{grid-template-columns:4.25rem minmax(0,1fr)}}
+
+body .page-layout{grid-template-columns:200px minmax(0,1fr) 290px;max-width:1540px}.board-column>.wrap{padding-inline:18px}.selectable{cursor:text;user-select:text;-webkit-user-select:text;border-radius:2px}.selectable:focus-visible{outline:1px dashed var(--accent);outline-offset:3px}.selectable a{user-select:text}.selection-body p{margin:5px 0}.selection-body ul,.selection-body ol{padding-left:20px;margin-block:5px}.selection-body li{margin-block:4px}.annotation-trigger{margin-left:auto;border:1px solid var(--line);border-radius:3px;background:var(--surface);color:var(--accent);font:11px var(--mono);padding:4px 7px;cursor:pointer}.opt{cursor:default}.opt-label{cursor:text}.range-highlight{padding:1px 0;border-radius:1px;cursor:pointer;color:inherit}.range-comment{background:#ffe18c66;border-bottom:2px solid #ad7900}.range-delete{background:#f5737350;text-decoration:line-through;text-decoration-color:#d64747;border-bottom:1px solid #d64747}.range-flash{outline:2px solid var(--accent);outline-offset:3px;animation:flash 1s ease-in-out 2}@keyframes flash{50%{background:var(--accent-soft)}}#annotation-panel{position:sticky;top:46px;align-self:start;max-height:calc(100vh - 140px);overflow:auto;border-left:1px solid var(--line);padding:14px 12px;box-sizing:border-box}.annotation-panel-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px}.annotation-panel-head h2{font:600 13px var(--mono)}.annotation-help{font-size:11px;color:var(--muted);margin:10px 0 15px}.annotation-card{border:1px solid var(--line);border-radius:3px;background:var(--surface);padding:10px;margin:8px 0;display:grid;gap:7px;cursor:pointer;overflow-wrap:anywhere}.annotation-card.selected{border-color:var(--accent)}.annotation-card:focus-visible{outline:2px solid var(--accent)}.annotation-card-head{display:flex;justify-content:space-between;align-items:center;font:11px var(--mono)}.annotation-card blockquote,.annotation-composer blockquote{border-left:2px solid var(--line);margin:0;padding-left:8px;font:11px/1.5 var(--mono);color:var(--muted);overflow-wrap:anywhere}.annotation-card p{font-size:12px;margin:0;white-space:pre-wrap}.annotation-card .actions{gap:12px}.annotation-card .clear{min-height:24px;font-size:11px}.delete-label{color:var(--warn)}.comment-label{color:var(--accent)}.annotation-composer{border:1px solid var(--accent);border-radius:3px;padding:10px;display:grid;gap:8px;background:var(--surface);margin:10px 0}.annotation-composer label,.annotation-composer strong{font:600 12px var(--mono)}.annotation-composer textarea{min-height:110px;font-size:14px;padding:8px;border-radius:3px}.annotation-composer .btn{font-size:12px}#selection-toolbar{position:fixed;z-index:50;background:var(--surface);border:1px solid var(--line);border-radius:4px;box-shadow:0 3px 12px #0003;display:flex;gap:2px;padding:3px;max-width:calc(100vw - 16px);box-sizing:border-box}#selection-toolbar .btn{font-size:12px;min-height:36px;border:0;padding:5px 12px;background:transparent}#annotation-sheet{padding:0;max-width:100%;width:100%;max-height:80dvh;margin:auto 0 0;position:fixed;inset:auto 0 0;box-sizing:border-box;border-radius:5px 5px 0 0}.sheet-head{display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;background:var(--bg);padding:10px 12px;z-index:1;border-bottom:1px solid var(--line)}.sheet-head h2{font:600 13px var(--mono)}#sheet-content{padding:12px}.annotation-trigger{min-height:28px}
+@media(max-width:1000px) and (min-width:851px){body .page-layout{grid-template-columns:175px minmax(0,1fr) 260px}.board-column>.wrap{padding-inline:12px}}
+@media(max-width:850px){body .page-layout{display:block}#rail,#annotation-panel{display:none!important}.phone-trigger{display:block;width:calc(100% - 24px);margin:10px 12px 0}.board-column>.wrap{padding-inline:12px}.annotation-trigger,#selection-toolbar .btn,.annotation-card .clear{min-height:40px}.annotation-composer textarea{font-size:16px}.annotation-composer .btn{min-height:40px}.annotation-panel-head h2{font-size:14px}.annotation-card p{font-size:14px}.annotation-card blockquote{font-size:12px}.range-highlight{padding:2px 0}}
+
 </style></head>
 <body>
 <header class="bar"><div class="wrap bar-in"><strong>Argus / Decide</strong><span class="tally" id="tally" aria-live="polite">Loading boards…</span><label class="theme">Theme <select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header>
 <button class="btn phone-trigger" id="drawer-trigger">Coordinators ▾</button>
-<div class="page-layout"><aside id="rail"><h2 class="rail-heading">Coordinators</h2><p class="rail-help">⌘ / Ctrl ↑ ↓ to move</p><nav id="desktop-nav" aria-label="Coordinators"></nav></aside><div class="board-column"><div class="wrap"><p id="status" role="status"></p><p id="updates" hidden><span id="changes">Boards changed.</span> <button class="btn" id="refresh">Refresh</button></p><main id="main" tabindex="-1"></main></div></div></div>
-<footer class="queue" id="queue"><div class="wrap queue-inner"><div class="actions"><button class="btn" id="review" disabled>Review queued</button><button class="btn primary" id="submit" disabled>Submit actions</button><button class="btn" id="copy">Copy responses</button></div><p id="queued-description"></p><p id="confirmed" aria-live="polite"></p><p id="summary" aria-live="polite"></p><textarea id="copy-fallback" readonly hidden aria-label="Responses to copy"></textarea></div></footer>
+<div class="page-layout"><aside id="rail"><h2 class="rail-heading">Coordinators</h2><p class="rail-help">⌘ / Ctrl ↑ ↓ to move</p><nav id="desktop-nav" aria-label="Coordinators"></nav></aside><div class="board-column"><div class="wrap"><p id="status" role="status"></p><p id="updates" hidden><span id="changes">Boards changed.</span> <button class="btn" id="refresh">Refresh</button></p><div id="receipts" aria-live="polite"></div><main id="main" tabindex="-1"></main></div></div><aside id="annotation-panel" aria-label="Item annotations"></aside></div>
+<footer class="queue" id="queue"><div class="wrap queue-inner"><div class="actions"><button class="btn" id="review" disabled>Review queued</button><button class="btn primary" id="submit" disabled>Submit</button><button class="btn" id="submit-close" disabled>Submit &amp; close</button><button class="btn" id="copy">Copy responses</button></div><p id="queued-description"></p><p id="confirmed" aria-live="polite"></p><p id="summary" aria-live="polite"></p><textarea id="copy-fallback" readonly hidden aria-label="Responses to copy"></textarea></div></footer>
 <dialog id="drawer"><div class="drawer-head"><h2>Coordinators</h2><button class="btn" id="drawer-close">Close</button></div><nav id="phone-nav" aria-label="Choose coordinator"></nav></dialog>
+<div id="selection-toolbar" role="toolbar" aria-label="Annotate selected text" hidden></div><dialog id="annotation-sheet" aria-labelledby="sheet-title"><div class="sheet-head"><h2 id="sheet-title">Annotations</h2><button class="btn" id="sheet-close">Close</button></div><div id="sheet-content"></div></dialog>
 <script id="decision-logic">
 globalThis.BoardDecisions = (() => {
   function draftKey(role,item) { return `board-decision:${role}:${item.id}:${item.updated_at}`; }
   function valid(item,draft) {
     if (!draft || typeof draft.note!=='string' || new TextEncoder().encode(draft.note).length>4096) return false;
-    if(item.kind==='fyi')return ['comment','dismiss','comment_and_dismiss'].includes(draft.action)&&(draft.action==='dismiss'||!!draft.note.trim());
+    const a=draft.annotations||[];if(!Array.isArray(a))return false;
+    if(draft.stale||a.length>20||a.some(v=>!v||!['COMMENT','DELETION'].includes(v.type)||typeof v.comment!=='string'||new TextEncoder().encode(v.comment).length>4096||(v.type==='COMMENT'&&!v.comment.trim())))return false;
+    if(item.kind==='decision'&&!draft.choice&&draft.action==='comment')return !!draft.note.trim()||!!a.length;
+    if(item.kind==='fyi')return ['comment','dismiss','comment_and_dismiss'].includes(draft.action)&&(draft.action==='dismiss'?!a.length:(!!draft.note.trim()||!!a.length));
     if (draft.choice === 'other') return !!draft.note.trim();
     return !!item.structured?.options.some(option => option.id === draft.choice);
   }
@@ -276,16 +285,20 @@ globalThis.BoardDecisions = (() => {
     links(parent,text.slice(at),doc);
   }
   function markup(text,doc) {
-    const root=doc.createElement('div');let list=null,listTag='',paragraph=null;
+    const root=doc.createElement('div');let lists=[],paragraph=null,blocks=0;
     for (const line of String(text || '').split('\n')) {
-      if (!line.trim()) {list=null;paragraph=null;continue;}
-      const bullet=line.match(/^\s*(- |\d+\. )(.*)$/);
+      if (!line.trim()) {lists=[];paragraph=null;continue;}
+      const bullet=line.match(/^(\s*)(- |\d+\. )(.*)$/);
       if (bullet) {
-        const tag=bullet[1]==='- '?'ul':'ol';
-        if (!list || listTag!==tag) {list=doc.createElement(tag);root.append(list);listTag=tag;}
-        const li=doc.createElement('li');inline(li,bullet[2],doc);list.append(li);paragraph=null;
+        const tag=bullet[2]==='- '?'ul':'ol',depth=bullet[1].length;
+        while(lists.length&&lists.at(-1).depth>depth)lists.pop();
+        if(lists.at(-1)?.depth===depth&&lists.at(-1).tag!==tag)lists.pop();
+        if(!lists.length||lists.at(-1).depth<depth){const node=doc.createElement(tag),parent=lists.at(-1)?.lastItem||root;parent.append(node);lists.push({depth,tag,node});}
+        const current=lists.at(-1),list=current.node;
+        if(blocks++)list.append(doc.createTextNode('\n'));
+        const li=doc.createElement('li');inline(li,bullet[3],doc);list.append(li);current.lastItem=li;paragraph=null;
       } else {
-        list=null;if (!paragraph) {paragraph=doc.createElement('p');root.append(paragraph);} else paragraph.append(doc.createTextNode(' '));inline(paragraph,line,doc);
+        lists=[];if (!paragraph) {paragraph=doc.createElement('p');if(blocks++)root.append(doc.createTextNode('\n'));root.append(paragraph);} else paragraph.append(doc.createTextNode(' '));inline(paragraph,line,doc);
       }
     }
     return root;
@@ -295,7 +308,7 @@ globalThis.BoardDecisions = (() => {
     for(const record of records){const key=record.role+':'+record.item.kind;let group=groups.get(key);if(!group){group=[];groups.set(key,group);}group.push(record);}
     return [...groups.values()].flatMap(group=>{const out=[];for(let n=0;n<group.length;n+=16)out.push({role:group[0].role,kind:group[0].item.kind,records:group.slice(n,n+16)});return out;});
   }
-  function accepted(kind,sent,result){return !!result&&sent.item_id===result.item_id&&(kind!=='fyi'||sent.action_id===result.action_id)&&(kind==='fyi'&&sent.action==='comment'?result.outcome==='commented':['resolved','already_resolved'].includes(result.outcome));}
+  function accepted(kind,sent,result){return !!result&&sent.item_id===result.item_id&&(!sent.action_id||sent.action_id===result.action_id)&&(sent.action==='comment'?result.outcome==='commented':sent.annotations?.length?result.outcome==='resolved':['resolved','already_resolved'].includes(result.outcome));}
   function editable(target){return !!target?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]');}
   function navigate(e,rows,role,tab){
     if(e.isComposing||e.altKey||e.shiftKey||!(e.metaKey||e.ctrlKey)||editable(e.target)||!rows.length)return null;
@@ -321,10 +334,126 @@ globalThis.BoardDecisions = (() => {
   const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
   const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.onclick=fn;return b;};
   const fmt=(tag,cls,text)=>{const n=el(tag,cls);L.inline(n,String(text||''),document);return n;};
-  const queued=()=>Object.values(records).filter(r=>r.item.kind==='fyi'?!!r.draft.action:!!r.draft.choice);
+  const queued=()=>Object.values(records).filter(r=>r.draft.choice||r.draft.action);
   const rowFor=role=>rows.find(r=>r.role_id===role);
   const labelFor=role=>{const r=rowFor(role)||Object.values(records).find(r=>r.role===role);return r?`${r.orchestrator} / ${r.coordinator}`:`Coordinator ${role}`;};
-  const draft=()=>({choice:'',action:'',note:''});
+  const draft=()=>({choice:'',action:'',note:'',annotations:[]});
+  const anns=r=>Array.isArray(r.draft.annotations)?r.draft.annotations:[];
+  const toolbar=$('selection-toolbar'),sheet=$('annotation-sheet');
+  let activeItem='',activeAnnotation='',selectionDraft=null,composer=null,selectionTimer,restoreFocus=null,annotationError=null;
+  const fieldsFor=r=>[...document.querySelectorAll(`#decision-${r.item.id} [data-field]`)];
+  const fieldKey=n=>n.dataset.field;
+  function selectable(r,path,node){
+    node.dataset.field=path;node.classList.add('selectable');node.tabIndex=0;
+    const name=path==='body'?'this passage':path==='reason'?'the recommendation reason':'this option '+path.split('.').at(-1);
+    node.setAttribute('aria-label',`Annotate ${name}. Press Enter to select this passage.`);
+    node.onkeydown=e=>{if(e.target===node&&e.key==='Enter'){e.preventDefault();const range=document.createRange();range.selectNodeContents(node);const s=getSelection();s.removeAllRanges();s.addRange(range);captureSelection();toolbar.querySelector('button')?.focus();}};
+    return node;
+  }
+  // Synchronous SHA-256 also works on HTTP origins where SubtleCrypto is absent.
+  function hashText(text){
+    const bytes=new TextEncoder().encode(text),words=[],primes=[],constants=[];
+    for(let n=2;constants.length<64;n++){if(primes.some(p=>n%p===0))continue;primes.push(n);constants.push((Math.cbrt(n)%1*4294967296)|0);}
+    const state=primes.slice(0,8).map(n=>(Math.sqrt(n)%1*4294967296)|0),size=((bytes.length+9+63)>>6)<<4;
+    for(let n=0;n<bytes.length;n++)words[n>>2]=(words[n>>2]||0)|(bytes[n]<<(24-(n%4)*8));
+    words[bytes.length>>2]=(words[bytes.length>>2]||0)|(128<<(24-(bytes.length%4)*8));words[size-1]=bytes.length*8;
+    const ro=(n,b)=>(n>>>b)|(n<<(32-b));
+    for(let offset=0;offset<size;offset+=16){const w=Array.from({length:64},(_,n)=>words[offset+n]||0);for(let n=16;n<64;n++){const a=w[n-15],b=w[n-2];w[n]=(w[n-16]+(ro(a,7)^ro(a,18)^(a>>>3))+w[n-7]+(ro(b,17)^ro(b,19)^(b>>>10)))|0;}
+      let [a,b,c,d,e,f,g,h]=state;for(let n=0;n<64;n++){const t=(h+(ro(e,6)^ro(e,11)^ro(e,25))+((e&f)^(~e&g))+constants[n]+w[n])|0,u=((ro(a,2)^ro(a,13)^ro(a,22))+((a&b)^(a&c)^(b&c)))|0;h=g;g=f;f=e;e=(d+t)|0;d=c;c=b;b=a;a=(t+u)|0;}[a,b,c,d,e,f,g,h].forEach((v,n)=>state[n]=(state[n]+v)|0);
+    }return state.map(n=>(n>>>0).toString(16).padStart(8,'0')).join('');
+  }
+  function captureSelection(){
+    if(busy||expired||finished||sheet.open||composer||document.activeElement?.closest('#selection-toolbar'))return;
+    const s=getSelection();if(!s?.rangeCount||s.isCollapsed){toolbar.hidden=true;return;}
+    const range=s.getRangeAt(0),parent=n=>n.nodeType===3?n.parentElement:n;
+    const start=parent(range.startContainer)?.closest('[data-field]'),end=parent(range.endContainer)?.closest('[data-field]');
+    if(!start||!end||start.closest('.decision')!==end.closest('.decision')){toolbar.hidden=true;return;}
+    const r=Object.values(records).find(r=>`decision-${r.item.id}`===start.closest('.decision').id);if(!r||r.draft.sent||r.draft.stale)return;
+    const fields=fieldsFor(r),a=fields.indexOf(start),b=fields.indexOf(end);if(a<0||b<a)return;
+    const offset=(field,node,pos)=>{const p=document.createRange();p.selectNodeContents(field);p.setEnd(node,pos);return p.toString().length;};
+    const lo=offset(start,range.startContainer,range.startOffset),hi=offset(end,range.endContainer,range.endOffset);
+    const text=fields.slice(a,b+1).map((f,n)=>f.textContent.slice(n===0?lo:0,n===b-a?hi:undefined)).join('\n');if(!text.trim())return;
+    const whole=fields.map(f=>f.textContent).join('\n'),from=fields.slice(0,a).reduce((n,f)=>n+f.textContent.length+1,0)+lo;
+    let quote='',quoteBytes=0;for(const c of text){const size=new TextEncoder().encode(c).length;if(quoteBytes+size>512)break;quote+=c;quoteBytes+=size;}
+    selectionDraft={record:key(r.role,r.item.id),revision:r.item.updated_at,quote,start_path:fieldKey(start),end_path:fieldKey(end),start_offset:lo,end_offset:hi,selected_text_hash:hashText(text),prefix:Array.from(whole.slice(0,from)).slice(-64).join(''),suffix:Array.from(whole.slice(from+text.length)).slice(0,64).join('')};
+    activeItem=selectionDraft.record;annotationError=null;renderPanel();
+    toolbar.replaceChildren(button('Copy',async()=>{try{await navigator.clipboard.writeText(text);}catch{message('Copy unavailable. Use the browser Copy command on the selected text.');}toolbar.hidden=true;}),button('Delete',()=>saveSelection('DELETION','')),button('Comment',()=>{composer={...selectionDraft,type:'COMMENT',comment:''};toolbar.hidden=true;openPanel(activeItem,true);}));
+    const rect=range.getBoundingClientRect(),v=window.visualViewport;
+    toolbar.hidden=false;toolbar.style.left=Math.max(8,Math.min(innerWidth-toolbar.offsetWidth-8,rect.left))+'px';toolbar.style.top=Math.max((v?.offsetTop||0)+8,Math.min((v?.height||innerHeight)+(v?.offsetTop||0)-60,rect.top-48))+'px';
+  }
+  function saveSelection(type,comment){
+    const pending=composer||selectionDraft,r=records[pending?.record];if(!r||r.draft.sent||busy||expired)return;
+    if(pending.revision!==r.item.updated_at){
+      const old=r.draft.stale;r.draft.stale={revision:pending.revision,note:old?.note||r.draft.note,annotations:[...(old?.annotations||[]),{...pending,type,comment}]};
+      composer=null;selectionDraft=null;toolbar.hidden=true;persist();render();message('The item changed. Your feedback is kept in a stale draft; review it before sending.');return;
+    }
+    if((type==='COMMENT'&&!comment.trim())||new TextEncoder().encode(comment).length>4096||(!pending.annotation_id&&anns(r).length>=20)){
+      const text='Comments need text up to 4 KiB. Maximum 20 annotations per item.';annotationError={record:pending.record,text};message(text);renderPanel();
+      if(!composer){const error=el('span','hint',text);error.setAttribute('role','alert');toolbar.append(error);}return;
+    }
+    const a={...pending,type,comment,annotation_id:pending.annotation_id||'ann-'+crypto.getRandomValues(new Uint32Array(4)).join('-')};delete a.record;
+    const existing=anns(r).findIndex(v=>v.annotation_id===a.annotation_id);r.draft.annotations=[...anns(r)];if(existing<0)r.draft.annotations.push(a);else r.draft.annotations[existing]=a;
+    if(!r.draft.choice&&!r.draft.action){r.draft.action='comment';r.draft.implicit=true;}
+    if(r.draft.action==='dismiss')r.draft.action='comment_and_dismiss';
+    activeAnnotation=a.annotation_id;activeItem=key(r.role,r.item.id);composer=null;annotationError=null;selectionDraft=null;toolbar.hidden=true;getSelection()?.removeAllRanges();persist();render();
+  }
+  function openPanel(id,focusComposer=false){
+    activeItem=id;restoreFocus=document.activeElement;renderPanel();if(innerWidth<=850&&!sheet.open)sheet.showModal();
+    if(focusComposer)document.querySelector((sheet.open?'#sheet-content':'#annotation-panel')+' textarea')?.focus();
+  }
+  function closeSheet(){sheet.close();composer=null;const r=records[activeItem];(document.querySelector(`#decision-${r?.item.id} .annotation-trigger`)||restoreFocus)?.focus();}
+  function sortedAnnotations(r){const paths=fieldsFor(r).map(fieldKey);return anns(r).map((a,n)=>({...a,sequence:n})).sort((a,b)=>paths.indexOf(a.start_path)-paths.indexOf(b.start_path)||a.start_offset-b.start_offset||paths.indexOf(a.end_path)-paths.indexOf(b.end_path)||a.end_offset-b.end_offset||a.sequence-b.sequence);}
+  function chooseAnnotation(r,a,edit=false){
+    activeItem=key(r.role,r.item.id);activeAnnotation=a.annotation_id;composer=edit?{...a,record:activeItem,revision:r.item.updated_at}:null;renderPanel();
+    const marks=[...document.querySelectorAll('mark[data-ann]')].filter(n=>n.dataset.ann===a.annotation_id);marks[0]?.scrollIntoView({block:'center',behavior:'smooth'});for(const m of marks)m.classList.add('range-flash');setTimeout(()=>marks.forEach(m=>m.classList.remove('range-flash')),2000);if(edit)openPanel(activeItem,true);
+  }
+  function renderPanel(){
+    const r=records[activeItem]?.role===selected&&!records[activeItem].closed&&!records[activeItem].unavailable&&records[activeItem].item.kind===tab?records[activeItem]:Object.values(records).find(r=>r.role===selected&&!r.closed&&!r.unavailable&&r.item.kind===tab);
+    $('annotation-panel').hidden=screen!=='browse';
+    for(const target of [$('annotation-panel'),$('sheet-content')]){
+      target.replaceChildren();if(!r){target.append(el('p','subtle','Select an item to see its annotations.'));continue;}
+      activeItem=key(r.role,r.item.id);const head=el('div','annotation-panel-head');head.append(el('h2','','Annotations'),el('span','subtle',`#${r.item.id} · ${anns(r).length} / 20`));target.append(head,el('p','subtle',r.item.subject),el('p','annotation-help','Select text → Comment or Delete. Activate an annotation to find its highlight.'));
+      if(annotationError?.record===activeItem){const error=el('p','hint',annotationError.text);error.setAttribute('role','alert');target.append(error);}
+      const locked=busy||expired||!!r.draft.sent;
+      for(const a of sortedAnnotations(r)){
+        const card=el('section','annotation-card'+(activeAnnotation===a.annotation_id?' selected':''));card.tabIndex=0;card.setAttribute('aria-label',`${a.type==='DELETION'?'Delete suggestion':'Comment'}: ${a.quote}`);
+        card.append(el('strong',a.type==='DELETION'?'delete-label':'comment-label',a.type==='DELETION'?'Delete suggestion':'Comment'),el('blockquote','',a.quote));if(a.comment)card.append(el('p','',a.comment));
+        const controls=el('div','actions');if(a.type==='COMMENT'){const b=button('Edit',()=>chooseAnnotation(r,a,true),'clear');b.disabled=locked;controls.append(b);}
+        const remove=button('Remove',()=>{r.draft.annotations=anns(r).filter(v=>v.annotation_id!==a.annotation_id);if(!anns(r).length&&r.draft.implicit){r.draft.action='';delete r.draft.implicit;}composer=null;persist();render();},'clear');remove.disabled=locked;controls.append(remove);card.append(controls);
+        card.onclick=e=>{if(!e.target.closest('button'))chooseAnnotation(r,a);};card.onkeydown=e=>{if(e.target===card&&['Enter',' '].includes(e.key)){e.preventDefault();chooseAnnotation(r,a);}};target.append(card);
+      }
+      if(!anns(r).length)target.append(el('p','subtle','No annotations yet. Select a phrase to get started.'));
+      if(composer?.record===activeItem){
+        const edit=el('section','annotation-composer'),label=el('label','','Comment'),input=el('textarea');input.id=target===$('annotation-panel')?'compose-desktop':'compose-phone';label.htmlFor=input.id;input.value=composer.comment;input.oninput=()=>composer.comment=input.value;
+        const save=()=>saveSelection('COMMENT',input.value);input.onkeydown=e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();save();}if(e.key==='Escape'){e.preventDefault();composer=null;renderPanel();}};
+        edit.append(el('strong','',composer.annotation_id?'Edit comment':'New comment'),el('blockquote','',composer.quote),label,input,el('p','subtle','Up to 4 KiB · maximum 20 annotations per item'));
+        const controls=el('div','actions');controls.append(button('Save comment',save,'btn primary'),button('Cancel',()=>{composer=null;renderPanel();}));edit.append(controls);target.append(edit);
+      }
+      target.append(button('General comment ↗',()=>{if(sheet.open)closeSheet();document.getElementById('note-'+r.item.id)?.focus();},'clear'));
+    }
+  }
+  function paintHighlights(){
+    for(const r of Object.values(records)){
+      const fields=fieldsFor(r),paths=fields.map(fieldKey);
+      for(const a of anns(r)){
+        const start=paths.indexOf(a.start_path),end=paths.indexOf(a.end_path);if(start<0||end<start)continue;
+        for(let n=start;n<=end;n++){
+          const field=fields[n],lo=n===start?a.start_offset:0,hi=n===end?a.end_offset:field.textContent.length;
+          const walker=document.createTreeWalker(field,NodeFilter.SHOW_TEXT),pieces=[];let text,offset=0;
+          while(text=walker.nextNode()){const len=text.textContent.length,from=Math.max(0,lo-offset),to=Math.min(len,hi-offset);if(to>from)pieces.push({text,from,to});offset+=len;}
+          for(const p of pieces.reverse()){const range=document.createRange();range.setStart(p.text,p.from);range.setEnd(p.text,p.to);const mark=el('mark','range-highlight '+(a.type==='DELETION'?'range-delete':'range-comment'));mark.dataset.ann=a.annotation_id;mark.tabIndex=0;mark.setAttribute('aria-label',a.type==='DELETION'?'Delete suggestion':'Comment');mark.onclick=e=>{if(getSelection()?.toString().trim())return;e.preventDefault();e.stopPropagation();openPanel(key(r.role,r.item.id));chooseAnnotation(r,a);};mark.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();openPanel(key(r.role,r.item.id));chooseAnnotation(r,a);}};range.surroundContents(mark);}
+        }
+      }
+    }
+  }
+  document.addEventListener('selectionchange',()=>{clearTimeout(selectionTimer);selectionTimer=setTimeout(()=>{if(!L.editable(document.activeElement))captureSelection();},400);});
+  document.addEventListener('mouseup',e=>{if(!e.target.closest('#selection-toolbar,.annotation-card,.annotation-composer,button'))setTimeout(captureSelection,0);});
+  document.addEventListener('touchend',()=>{clearTimeout(selectionTimer);selectionTimer=setTimeout(captureSelection,400);},{passive:true});
+  document.addEventListener('click',e=>{if(e.target.closest('[data-field] a')&&getSelection()?.toString().trim())e.preventDefault();});
+  toolbar.onpointerdown=e=>e.preventDefault();
+  $('sheet-close').onclick=closeSheet;sheet.addEventListener('cancel',e=>{e.preventDefault();closeSheet();});
+  sheet.addEventListener('keydown',e=>{if(e.key!=='Tab')return;const nodes=[...sheet.querySelectorAll('button,textarea,[tabindex="0"]')].filter(n=>!n.disabled),first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')toolbar.hidden=true;});
   function persist(){storage.save(draftKey,records);storage.save('board-response-counts',acceptedCounts);}
   function message(text){if(!finished&&!expired)$('status').textContent=text;}
   function returnLink(){const a=el('a','btn','Return to Argus');a.href='/';return a;}
@@ -343,7 +472,9 @@ globalThis.BoardDecisions = (() => {
     $('confirmed').textContent=Object.values(acceptedCounts).some(n=>n>0)?`Confirmed: ${acceptedCounts.answers} answers · ${acceptedCounts.comments} comments · ${acceptedCounts.dismissals} dismissals`:'';
     $('submit').disabled=busy||expired||!q.length||invalid;
     $('review').disabled=busy||!q.length;
-    $('submit').textContent=busy?'Sending…':'Submit actions';
+    $('submit-close').disabled=$('submit').disabled;
+    $('submit').textContent=busy?'Sending…':'Submit';
+    $('submit-close').textContent=busy?'Sending…':'Submit & close';
     $('queued-description').textContent=invalid?'Add required notes before submitting.':q.length?`${q.length} actions across ${new Set(q.map(r=>r.role)).size} coordinators. Unselected items stay open.`:'Only selected actions are submitted. Everything else stays open.';
   }
   function badge(kind,n){const b=el('span',`count-badge ${kind}${!n?' zero':''}`,String(n));b.setAttribute('aria-hidden','true');return b;}
@@ -366,40 +497,45 @@ globalThis.BoardDecisions = (() => {
   function visit(role){if(busy)return;selected=role;screen='browse';render();window.scrollTo(0,0);}
   function renderCard(main,r){
     const i=r.item,d=r.draft,card=el('section','decision');card.id=`decision-${i.id}`;
-    const count=el('p','count',`${i.kind==='fyi'?'FYI':'Decision'} #${i.id}`),state=el('span','state',r.status||((i.kind==='fyi'?d.action:d.choice)?'Queued':'Open'));
-    count.append(state);card.append(count,fmt('h2','',i.subject));const body=el('div','situation');body.append(L.markup(i.body,document));card.append(body);
-    const locked=busy||!!d.sent,controls=[];
-    const changed=()=>{r.status='';persist();hint.hidden=L.valid(i,d)||!(i.kind==='fyi'?d.action:d.choice);state.textContent=(i.kind==='fyi'?d.action:d.choice)?'Queued':'Open';drawNav();update();};
+    const count=el('p','count',`${i.kind==='fyi'?'FYI':'Decision'} #${i.id}`),state=el('span','state',r.status||((d.choice||d.action)?'Queued':'Open'));
+    count.append(state,button('Annotations '+anns(r).length,()=>openPanel(key(r.role,i.id)),'annotation-trigger'));card.append(count,fmt('h2','',i.subject));const body=el('div','situation');body.append(selectable(r,'body',L.markup(i.body,document)));card.append(body);
+    card.onpointerdown=e=>{if(!e.target.closest('button,input,textarea')){activeItem=key(r.role,i.id);renderPanel();}};
+    const locked=busy||expired||!!d.sent;
+    const changed=()=>{r.status='';persist();hint.hidden=L.valid(i,d)||!(d.action||d.choice);state.textContent=(d.action||d.choice)?'Queued':'Open';drawNav();update();};
     if(i.kind==='decision'&&i.structured){
       const options=el('fieldset','options');options.setAttribute('aria-label',i.subject);
       for(const o of [...i.structured.options,{id:'other',label:'Something else'}]){
-        const label=el('label',`opt${o.id==='other'?' other':''}`),input=el('input');input.type='radio';input.name=`choice-${i.id}`;input.value=o.id;input.checked=d.choice===o.id;input.disabled=locked;input.onchange=()=>{d.choice=o.id;changed();};
-        const ob=el('div','opt-body'),head=el('div','opt-head');head.append(el('span','opt-label',o.label));if(o.id===i.structured.recommended)head.append(el('span','pill','Recommended'));ob.append(head);
-        if(o.summary)ob.append(fmt('div','',o.summary));for(const [k,v]of [['Upside',o.upside],['Downside',o.downside]])if(v){const trade=el('div','trade');trade.append(el('span','k',k),fmt('span','',v));ob.append(trade);}
-        if(o.id===i.structured.recommended&&i.structured.reason)ob.append(fmt('div','why',`Why the coordinator recommends it: ${i.structured.reason}`));
+        const label=el('div',`opt${o.id==='other'?' other':''}`),input=el('input');input.type='radio';input.name=`choice-${i.id}`;input.value=o.id;input.setAttribute('aria-label',o.label);input.checked=d.choice===o.id;input.disabled=locked;input.onchange=()=>{d.choice=o.id;changed();};
+        const ob=el('div','opt-body'),head=el('div','opt-head');head.append(o.id==='other'?el('span','opt-label',o.label):selectable(r,`options.${o.id}.label`,fmt('span','opt-label',o.label)));if(o.id===i.structured.recommended)head.append(el('span','pill','Recommended'));ob.append(head);
+        if(o.summary)ob.append(selectable(r,`options.${o.id}.summary`,fmt('div','',o.summary)));for(const [k,v]of [['Upside',o.upside],['Downside',o.downside]])if(v){const trade=el('div','trade');trade.append(el('span','k',k),selectable(r,`options.${o.id}.${k.toLowerCase()}`,fmt('span','',v)));ob.append(trade);}
+
+        if(o.id===i.structured.recommended&&i.structured.reason){const why=el('div','why');why.append(el('span','','Why the coordinator recommends it: '),selectable(r,'reason',fmt('span','',i.structured.reason)));ob.append(why);}
         label.append(input,ob);options.append(label);
       }
       card.append(options);
     }
-    const note=el('div','note'),label=el('label','',i.kind==='fyi'?'Comment':i.structured?'Note (required for Something else)':'Your answer'),text=el('textarea');text.id=`note-${i.id}`;label.htmlFor=text.id;text.value=d.note;text.disabled=locked;text.maxLength=4096;text.oninput=()=>{d.note=text.value;if(i.kind==='decision'&&!i.structured)d.choice=d.note.trim()?'other':'';changed();};note.append(label,text);card.append(note);
+    const note=el('div','note'),label=el('label','',i.kind==='decision'&&!i.structured?'General comment / your answer (required)':'General comment'+(i.structured?' (required for Something else)':'')),text=el('textarea');text.id=`note-${i.id}`;label.htmlFor=text.id;text.value=d.note;text.disabled=locked;text.maxLength=4096;text.oninput=()=>{d.note=text.value;if(i.kind==='decision'&&!i.structured&&d.action!=='comment')d.choice=d.note.trim()?'other':'';changed();};note.append(label,text);card.append(note);
     const hint=el('p','hint','Add a note to send this response (up to 4 KiB).');hint.hidden=L.valid(i,d)||!(i.kind==='fyi'?d.action:d.choice);hint.setAttribute('role','alert');card.append(hint);
+    if(i.kind==='decision'&&!i.structured&&d.action==='comment'){const answer=button('Use general comment as answer',()=>{d.choice='other';d.action='';delete d.implicit;persist();render();});answer.disabled=locked;card.append(answer);}
     if(i.kind==='fyi'){
       const actions=el('div','fyi-actions');
       for(const [action,name]of [['comment','Comment'],['dismiss','Dismiss'],['comment_and_dismiss','Comment and dismiss']]){
-        const b=button(name,()=>{d.action=d.action===action?'':action;delete d.action_id;persist();render();});b.disabled=locked;b.setAttribute('aria-pressed',String(d.action===action));actions.append(b);
+        const b=button(name,()=>{d.action=d.action===action?'':action;if(d.action==='dismiss'&&anns(r).length)d.action='comment_and_dismiss';delete d.implicit;delete d.action_id;persist();render();});b.disabled=locked;b.setAttribute('aria-pressed',String(d.action===action));actions.append(b);
       }
       card.append(actions,el('p','subtle',d.action==='dismiss'?'Dismiss silently. No coordinator message.':d.action==='comment'?'Send feedback. This FYI stays open.':d.action==='comment_and_dismiss'?'Send feedback and dismiss this FYI.':'Typing alone does not queue feedback. Choose an action.'));
     }
+    if(d.stale){const recovery=el('section','annotation-card');recovery.append(el('strong','','Stale draft — review before sending'),el('p','',d.stale.note||''));for(const a of d.stale.annotations||[])recovery.append(el('blockquote','',a.quote),el('p','',a.comment));recovery.append(button('Remove stale draft',()=>{delete d.stale;persist();render();}),button('Copy stale draft',async()=>{const text=JSON.stringify(d.stale,null,2);try{await navigator.clipboard.writeText(text);}catch{$('copy-fallback').hidden=false;$('copy-fallback').value=text;$('copy-fallback').select();}}));card.append(recovery);}
     if(d.sent)card.append(el('p','hint','Result unconfirmed. Retry this exact response before editing it.'));
-    if(i.kind==='fyi'?d.action:d.choice){const clear=button('Clear queued response',()=>{r.draft=draft();persist();render();},'clear');clear.disabled=locked;card.append(clear);}
+    if(d.choice||d.action){const clear=button('Clear queued response',()=>{r.draft=draft();persist();render();},'clear');clear.disabled=locked;card.append(clear);}
     main.append(card);
   }
   function renderReview(main){
     const heading=el('section','lede');heading.append(el('h1','','Queued responses'));main.append(heading);
     main.append(button('← Keep reviewing boards',()=>{screen='browse';render();}));
     for(const r of Object.values(records).filter(r=>queued().includes(r)||r.status?.startsWith('Item changed.'))){
-      const i=r.item,d=r.draft,row=el('section','receipt');row.append(el('strong','',labelFor(r.role)),el('p','',`#${i.id} ${i.subject}`),el('p','subtle',i.kind==='fyi'?d.action:i.structured?.options.find(o=>o.id===d.choice)?.label||'Something else'));
+      const i=r.item,d=r.draft,row=el('section','receipt');row.append(el('strong','',labelFor(r.role)),el('p','',`#${i.id} ${i.subject}`),el('p','subtle',i.kind==='fyi'?d.action:!d.choice&&d.action==='comment'?'Feedback only · decision stays open':i.structured?.options.find(o=>o.id===d.choice)?.label||'Something else'));
       if(d.note&&d.action!=='dismiss')row.append(el('p','subtle',d.note));
+      for(const a of anns(r)){const entry=el('div','annotation-card');entry.append(el('strong','',a.type==='DELETION'?'Delete suggestion':'Comment'),el('blockquote','',a.quote));if(a.comment)entry.append(el('p','',a.comment));row.append(entry);}
       if(r.unavailable||!rowFor(r.role))row.append(el('p','hint','Unavailable: coordinator is hidden, archived or removed. Other boards can still submit.'));
       if(r.status)row.append(el('p','hint',r.status));
       if(!L.valid(i,d))row.append(el('p','hint','Required note missing or too long. Edit this response.'));
@@ -408,7 +544,7 @@ globalThis.BoardDecisions = (() => {
     }
   }
   function render(){
-    if(finished)return;const main=$('main');main.replaceChildren();drawNav();
+    if(finished)return;toolbar.hidden=true;const main=$('main');main.replaceChildren();drawNav();
     if(screen==='review')renderReview(main);
     else {
       const row=rowFor(selected),lede=el('section','lede');main.append(lede);
@@ -423,7 +559,7 @@ globalThis.BoardDecisions = (() => {
         for(const r of visible)renderCard(main,r);
       }
     }
-    update();
+    update();paintHighlights();renderPanel();
   }
   function reconcile(next){
     rows=next.rows;acceptedSnapshot=JSON.stringify(next);
@@ -432,7 +568,7 @@ globalThis.BoardDecisions = (() => {
       r.unavailable=!rowFor(r.role)||next.unavailable.includes(r.role);
       const current=latest.get(key(r.role,r.item.id));
       if(!current){if(!r.unavailable&&!r.draft.sent){r.closed=true;if(r.draft.choice||r.draft.action)r.status='Item closed elsewhere. Clear this queued response or submit to confirm.';}continue;}
-      if(r.item.updated_at!==current.item.updated_at&&!r.draft.sent){r.draft={...draft(),note:r.draft.note};r.status='Item changed. Note kept; select your response again.';}
+      if(r.item.updated_at!==current.item.updated_at&&!r.draft.sent){r.draft={...draft(),note:r.draft.note,...(anns(r).length?{stale:{revision:r.item.updated_at,note:r.draft.note,annotations:anns(r)}}:r.draft.stale?{stale:r.draft.stale}:{})};r.status='Item changed. Note and annotations kept; review the stale draft and select your response again.';}
       if(!r.draft.sent)r.item=current.item;r.closed=false;
     }
     for(const [k,b]of latest){if(!records[k])records[k]={role:b.role,coordinator:b.coordinator,orchestrator:b.orchestrator,item:b.item,draft:draft()};}
@@ -450,7 +586,7 @@ globalThis.BoardDecisions = (() => {
     if(window.closed)return;
     const main=el('main','wrap');main.tabIndex=-1;const section=el('section','confirmation');section.append(el('h1','','Actions sent — you can close this tab'),el('p','intro',`${acceptedCounts.answers} answers · ${acceptedCounts.comments} comments · ${acceptedCounts.dismissals} dismissals`),returnLink());main.append(section);document.body.replaceChildren(main);main.focus();
   }
-  async function submit(){
+  async function submit(closeAfter=false){
     if(busy||expired||finished)return;
     const q=queued();if(!q.length||q.some(r=>!L.valid(r.item,r.draft)))return;
     busy=true;generation++;pending=null;$('updates').hidden=true;render();
@@ -460,22 +596,24 @@ globalThis.BoardDecisions = (() => {
       const payload=group.records.map(r=>{
         const d=r.draft;if(d.sent)return d.sent;
         const p={item_id:r.item.id,expected_updated_at:r.item.updated_at,note:d.note};
-        if(group.kind==='fyi'){d.action_id=d.action_id||Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');p.action_id=d.action_id;p.action=d.action;if(d.action==='dismiss')p.note='';}else p.choice=d.choice;
+        if(group.kind==='fyi'){d.action_id=d.action_id||Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');p.action_id=d.action_id;p.action=d.action;if(d.action==='dismiss')p.note=''; }else{p.choice=d.choice;p.action=d.choice?'answer':'comment';}
+        if(anns(r).length){p.annotations=anns(r).map(({annotation_id,type,start_path,end_path,start_offset,end_offset,selected_text_hash,prefix,suffix,comment})=>({annotation_id,type,start_path,end_path,start_offset,end_offset,selected_text_hash,prefix,suffix,comment}));}
+        if(!p.action_id&&(p.annotations?.length||p.action==='comment')){d.action_id=d.action_id||'action-'+crypto.getRandomValues(new Uint32Array(4)).join('-');p.action_id=d.action_id;}
         d.sent=p;return p;
       });persist();
       try{
         const response=await api(base(group.role)+(group.kind==='fyi'?'/fyi-actions':'/answers'),'POST',group.kind==='fyi'?{actions:payload}:{answers:payload});
         for(let n=0;n<group.records.length;n++){
-          const r=group.records[n],p=payload[n];const matches=Array.isArray(response.results)&&response.results.length===payload.length?response.results.filter(v=>v.item_id===p.item_id&&(group.kind!=='fyi'||v.action_id===p.action_id)):[];const result=matches.length===1?matches[0]:null;
+          const r=group.records[n],p=payload[n];const matches=Array.isArray(response.results)&&response.results.length===payload.length?response.results.filter(v=>v.item_id===p.item_id&&(!p.action_id||v.action_id===p.action_id)):[];const result=matches.length===1?matches[0]:null;
           if(L.accepted(group.kind,p,result)){
-            if(group.kind==='decision')acceptedCounts.answers++;else{if(p.action!=='dismiss'&&result.outcome!=='already_resolved')acceptedCounts.comments++;if(p.action!=='comment')acceptedCounts.dismissals++;}
-            if(!(group.kind==='fyi'&&p.action==='comment')){const row=rowFor(r.role);if(row){if(group.kind==='fyi')row.fyis=Math.max(0,row.fyis-1);else row.decisions=Math.max(0,row.decisions-1);}}
-            r.draft=draft();r.status=group.kind==='fyi'&&p.action==='comment'?'Comment sent · still open':'Accepted';r.closed=!(group.kind==='fyi'&&p.action==='comment');
+            if(group.kind==='decision'&&p.action!=='comment')acceptedCounts.answers++;else{if(p.action!=='dismiss'&&result.outcome!=='already_resolved')acceptedCounts.comments++;if(group.kind==='fyi'&&p.action!=='comment')acceptedCounts.dismissals++;}
+            if(!(p.action==='comment')){const row=rowFor(r.role);if(row){if(group.kind==='fyi')row.fyis=Math.max(0,row.fyis-1);else row.decisions=Math.max(0,row.decisions-1);}}
+            r.draft=draft();r.status=p.action==='comment'?'Comment sent · still open':'Accepted';r.closed=p.action!=='comment';const receipt=el('p','receipt',`${labelFor(r.role)} · #${r.item.id}: ${r.status}`);$('receipts').append(receipt);
           }else{
             failed=true;r.status=result?.outcome||'Result unconfirmed. Retry to confirm.';
             if(result&&['conflict','invalid','not_found','already_resolved'].includes(result.outcome)){
-              const note=r.draft.note;r.draft={...r.draft,sent:undefined,action_id:undefined};
-              if(result.outcome==='conflict'){r.item=result.item;r.draft={...draft(),note};r.status='Item changed. Note kept; choose your response again.';}
+              const note=r.draft.note,stale=anns(r).length?{revision:r.item.updated_at,note,annotations:anns(r)}:undefined;r.draft={...r.draft,sent:undefined,action_id:undefined};
+              if(result.outcome==='conflict'){r.item=result.item;r.draft={...draft(),note,...(stale?{stale}:{})};r.status='Item changed. Note and annotations kept; review the stale draft and choose your response again.';}
             }
           }
         }
@@ -484,20 +622,25 @@ globalThis.BoardDecisions = (() => {
       }
       persist();
     }
+    if(!failed&&!closeAfter){
+      screen='browse';
+      try{const next=await snapshot();busy=false;message('Actions sent. You can keep reviewing.');reconcile(next);}
+      catch(e){busy=false;message('Actions sent. Board refresh failed: '+e.message);render();}return;
+    }
     busy=false;
-    if(!failed){sent();return;}
+    if(!failed&&closeAfter){sent();return;}
     screen='review';message((Object.values(acceptedCounts).some(n=>n>0)?'Some actions were accepted.':'No actions were confirmed.')+' Review the remaining responses and retry; accepted actions are cleared.');render();
   }
   function closeDrawer(){$('drawer').close();$('drawer-trigger').focus();}
   $('drawer-trigger').onclick=()=>{$('drawer').showModal();};$('drawer-close').onclick=closeDrawer;$('drawer').addEventListener('cancel',e=>{e.preventDefault();closeDrawer();});
   $('drawer').addEventListener('keydown',e=>{if(e.key!=='Tab')return;const nodes=[...$('drawer').querySelectorAll('button')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}});
-  document.addEventListener('keydown',e=>{if(busy||finished||$('drawer').open)return;const next=L.navigate(e,rows,selected,tab);if(!next)return;e.preventDefault();selected=next.role;tab=next.tab;screen='browse';render();$('main').focus({preventScroll:true});});
-  let touch=null;$('main').addEventListener('touchstart',e=>{touch=e.touches.length===1&&!L.editable(e.target)&&!e.target.closest('button,a,label,input,textarea,select,[role="button"],[role="tab"]')?{x:e.touches[0].clientX,y:e.touches[0].clientY}:null;},{passive:true});
+  document.addEventListener('keydown',e=>{if(busy||finished||$('drawer').open||sheet.open||composer||getSelection()?.toString())return;const next=L.navigate(e,rows,selected,tab);if(!next)return;e.preventDefault();selected=next.role;tab=next.tab;screen='browse';render();$('main').focus({preventScroll:true});});
+  let touch=null;$('main').addEventListener('touchstart',e=>{touch=e.touches.length===1&&!L.editable(e.target)&&!e.target.closest('button,a,label,input,textarea,select,[data-field],mark,[role="button"],[role="tab"]')?{x:e.touches[0].clientX,y:e.touches[0].clientY}:null;},{passive:true});
   $('main').addEventListener('touchend',e=>{const start=touch;touch=null;if(!start||!e.changedTouches.length||busy||screen!=='browse'||getSelection()?.toString())return;const dx=e.changedTouches[0].clientX-start.x,dy=e.changedTouches[0].clientY-start.y;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5){tab=dx<0?'fyi':'decision';render();}},{passive:true});
   $('theme').value=document.documentElement.dataset.theme||'system';$('theme').onchange=()=>BoardDecisionTheme.set($('theme').value);
-  $('review').onclick=()=>{screen='review';render();};$('submit').onclick=submit;$('refresh').onclick=()=>{if(pending&&!busy)reconcile(pending);};
+  $('review').onclick=()=>{screen='review';render();};$('submit').onclick=()=>submit(false);$('submit-close').onclick=()=>submit(true);$('refresh').onclick=()=>{if(pending&&!busy)reconcile(pending);};
   $('copy').onclick=async()=>{
-    const text=queued().map(r=>`${labelFor(r.role)}\n#${r.item.id} ${r.item.subject}\n${r.item.kind==='fyi'?r.draft.action:r.draft.choice}\n${r.draft.action==='dismiss'?'':r.draft.note}`).join('\n\n');
+    const text=queued().map(r=>`${labelFor(r.role)}\n#${r.item.id} ${r.item.subject}\n${r.draft.choice||r.draft.action}\n${r.draft.action==='dismiss'?'':r.draft.note}\n${anns(r).map(a=>`${a.type==='DELETION'?'Delete suggestion':'Comment'}: ${a.quote}\n${a.comment}`).join('\n')}`).join('\n\n');
     try{await navigator.clipboard.writeText(text);if(!finished)$('summary').textContent='Responses copied.';}catch{if(finished)return;$('copy-fallback').hidden=false;$('copy-fallback').value=text;$('copy-fallback').select();}
   };
   async function poll(){
