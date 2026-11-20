@@ -2,11 +2,20 @@
   {
     "name": "JavaScript whitespace and CRLF list matching",
     "body": "\ufeff- A\r\n\u00a0- B\nword\r\nnext\n\n\u0085",
-    "fields": [{"path":"body","text":"A\nB\nword\r next\n\u0085"}],
-    "selection": {"start_path":"body","end_path":"body","start_offset":0,"end_offset":1},
+    "fields": [{"path":"body","text":"\ufeff- A\r\nB\nword\r next\n\u0085"}],
+    "selection": {"start_path":"body","end_path":"body","start_offset":3,"end_offset":4},
     "selected": "A",
-    "prefix": "",
-    "suffix": "\nB\nword\r next\n\u0085"
+    "prefix": "\ufeff- ",
+    "suffix": "\r\nB\nword\r next\n\u0085"
+  },
+  {
+    "name": "empty list item retains its block boundary",
+    "body": "- \n- Next",
+    "fields": [{"path":"body","text":"\nNext"}],
+    "selection": {"start_path":"body","end_path":"body","start_offset":1,"end_offset":5},
+    "selected": "Next",
+    "prefix": "\n",
+    "suffix": ""
   },
   {
     "name": "paragraphs and nested lists",

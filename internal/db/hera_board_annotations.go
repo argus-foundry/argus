@@ -54,7 +54,7 @@ var boardInline = regexp.MustCompile("(`[^`]+`|\\*\\*[^*]+\\*\\*)")
 // TrimSpace disagree with the page on BOM, NBSP, NEL and CRLF list endings.
 const boardJSWhitespace = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 
-var boardBullet = regexp.MustCompile(`^[\t\n\x0B\f\r \x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]*(- |\d+\. )([^\r\x{2028}\x{2029}]*)(?:[\r\x{2028}\x{2029}])?$`)
+var boardBullet = regexp.MustCompile(`^[\t\n\x0B\f\r \x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]*(- |\d+\. )([^\r\x{2028}\x{2029}]*)$`)
 
 func boardInlineText(text string) string {
 	return boardInline.ReplaceAllStringFunc(text, func(s string) string {
