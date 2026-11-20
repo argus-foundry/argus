@@ -2,53 +2,62 @@
 
 ### Requirement: Decision session exchange and auth class
 
-The REST API SHALL expose `POST /api/hera/board/decision-session` with body `{"ticket":"…"}`, served without bearer authentication because the ticket is the credential, returning `{"session":"<opaque>","role_ids":[N,…],"expires_at":"<RFC3339>"}` and `role_id` for a single-role TUI ticket. An unknown, expired or already-used ticket SHALL return 401 and consume nothing. The session SHALL have 256 bits of randomness, be held in daemon memory only as a hash, be bound to the ticket's immutable role-ID set and expire absolutely eight hours after exchange. An empty role set SHALL produce an empty page with no board permissions. Session auth SHALL remain a distinct decision auth class; middleware SHALL NOT trust a client-supplied internal auth tag. It SHALL permit only `GET .../board/decisions`, `POST .../board/answers`, `GET .../board/decide-items` and `POST .../board/fyi-actions` under `/api/hera/roles/{role_id}` for roles in that set. Each request SHALL recheck the role is an existing coordinator whose role and orchestrator are neither archived nor nuked. Any other route or role SHALL return 403; no handler gating on master, device or scope tokens SHALL admit a decision session. Neither polling nor new coordinator creation SHALL widen its role set. Daemon restart SHALL invalidate all tickets and sessions.
+POST /api/hera/board/decision-session SHALL accept one ticket body without bearer authentication because the ticket is the credential, returning `{session,initial_role_id,expires_at}`. An unknown/expired/used ticket SHALL return 401. Sessions SHALL have 256 random bits, be stored only as hashes in daemon memory and expire absolutely eight hours after exchange. Both TUI and phone launches SHALL use an explicit rail-board auth class permitting only GET /api/hera/board/decision-navigation and the per-role GET board/decisions, POST board/answers, GET board/decide-items and POST board/fyi-actions routes for currently rail-visible coordinators. The launch role SHALL be initial selection only. Middleware SHALL not trust client-supplied internal auth tags. Each request SHALL use canonical rail visibility checks excluding hidden, archived, nuked or non-coordinator targets, including parent visibility restrictions. All other routes, including broad roster/count discovery, launch minting, receipt-history reads and privileged handlers, SHALL return 403 for this session class. Master/device/scope gates SHALL not admit a rail-board session implicitly. Daemon restart SHALL invalidate tickets/sessions. An empty visible roster SHALL yield an empty page, not broader permissions.
 
-#### Scenario: Ticket is single-use
+#### Scenario: Ticket is single-use and short-lived
 
-- **WHEN** a ticket is exchanged twice
-- **THEN** the first returns a session and the second returns 401
-
-#### Scenario: Expired ticket
-
-- **WHEN** a ticket is exchanged after its 90-second lifetime
+- **WHEN** a ticket is exchanged a second time or after 90 seconds
 - **THEN** the response is 401
 
-#### Scenario: Session is role-scoped
+#### Scenario: Shared TUI and phone scope
 
-- **WHEN** a TUI session for role 12 accesses role 13 or a phone session accesses a role outside its snapshot
-- **THEN** the response is 403
+- **WHEN** a session launched on role 12 requests another currently rail-visible coordinator’s allowed board route
+- **THEN** the request is authorized; the same request for a hidden/archived/nuked role or worker returns 403
 
-#### Scenario: New or removed coordinator
+#### Scenario: Visibility changes
 
-- **WHEN** a coordinator is created after minting or an included coordinator is archived or nuked
-- **THEN** the existing session gains no new role and cannot access the removed role
+- **WHEN** a coordinator is newly visible or becomes hidden during a session
+- **THEN** navigation refresh may include the new row and hidden-board requests fail immediately, regardless of stale client metadata
 
-#### Scenario: Session cannot reach privileged handlers
+#### Scenario: Privileged route rejected
 
-- **WHEN** a decision session requests launch minting, aggregate counts, general board mutation or MCP tool registration
-- **THEN** the response is 403 and nothing changes
+- **WHEN** a rail-board session requests link minting, aggregate counts, receipt history, general mutation or MCP tool registration
+- **THEN** it receives 403 with no side effects
 
 #### Scenario: Restart invalidates
 
 - **WHEN** the daemon restarts
-- **THEN** prior sessions return 401 while durable action receipts remain available to a newly authorized session
+- **THEN** prior sessions return 401 while durable receipts remain available after a new authorized launch
+
+### Requirement: Board decision launch link
+
+POST /api/hera/roles/{role_id}/board/decision-link SHALL require a master or device token and return `{path:"/decide?role=<id>[&focus=<item_id>]",ticket,expires_at}`. An optional focus_item_id body SHALL select initial focus. The ticket SHALL be 256 random bits hashed only in daemon memory, valid 90 seconds and single-use. It SHALL mint the same rail-board session class as phone launch; the role ID SHALL specify preselection only. Unknown targets SHALL return 404 board_item_not_found; non-coordinators SHALL return 400 invalid_request; hidden/archived/nuked targets SHALL be refused without granting access. Empty boards SHALL be valid launch targets. Decision sessions SHALL not mint tickets. No ticket SHALL be logged or persisted.
+
+#### Scenario: TUI preselection
+
+- **WHEN** a master/device client launches an empty visible coordinator role
+- **THEN** it receives a common-page ticket whose initial_role_id selects that coordinator while navigation may reach other visible coordinators
+
+#### Scenario: Invalid target
+
+- **WHEN** the target is unknown, non-coordinator or not visible under rail rules
+- **THEN** launch is rejected with no ticket or unauthorized board access
 
 ## ADDED Requirements
 
 ### Requirement: Authenticated aggregate decision launch
 
-`POST /api/hera/board/decision-link` SHALL require a master or device token, reject other authenticated token classes with 403 and unauthenticated requests with 401, and return `{"path":"/decide","ticket":"<opaque>","expires_at":"<RFC3339>"}`. It SHALL accept an empty body or one empty JSON object and reject malformed/trailing JSON with 400 before minting. The server SHALL choose an explicit snapshot of all existing coordinator role IDs whose role and orchestrator are neither archived nor nuked, including those with no open items or no live binding. Clients SHALL NOT supply their own session scope. The ticket SHALL have 256 bits of randomness, be held only as a hash in daemon memory, expire in 90 seconds and exchange once through the existing session endpoint. The path SHALL be same-origin relative and contain no credentials. The existing role-specific launch endpoint SHALL retain its single-role ticket behavior.
+`POST /api/hera/board/decision-link` SHALL require a master or device token, reject other authenticated token classes with 403 and unauthenticated requests with 401, and return `{"path":"/decide","ticket":"<opaque>","expires_at":"<RFC3339>"}`. It SHALL accept an empty body or one empty JSON object and reject malformed/trailing JSON with 400 before minting. The server SHALL mint the rail-board auth class, whose permitted coordinator membership is resolved through current canonical rail visibility rules, including empty and unbound visible coordinators and nested sub-coordinators. Clients SHALL NOT supply authorization scope. The initial role SHALL be the first non-empty coordinator in rail order, or the first visible row when all are empty, or null when no rows exist. The ticket SHALL have 256 bits of randomness, be held only as a hash in daemon memory, expire in 90 seconds and exchange once through the existing session endpoint. The path SHALL be same-origin relative and contain no credentials. The role-specific launch endpoint SHALL use the same session class with its requested coordinator as preselection.
 
 #### Scenario: Phone launch without the TUI
 
 - **WHEN** a device-authenticated PWA requests an aggregate launch
-- **THEN** it receives a ticket exchangeable for the server-selected role set without any TUI action
+- **THEN** it receives a ticket exchangeable for the rail-board session without any TUI action
 
 #### Scenario: No eligible coordinators
 
 - **WHEN** the eligible role set is empty
-- **THEN** launch succeeds with an empty-scope ticket and the page shows zero open items
+- **THEN** launch succeeds with no initial selection and the page shows no visible coordinators without broadening API access
 
 #### Scenario: Scoped credential rejected
 
@@ -57,7 +66,7 @@ The REST API SHALL expose `POST /api/hera/board/decision-session` with body `{"t
 
 ### Requirement: Aggregate open board counts
 
-`GET /api/hera/board/decision-counts` SHALL require master/device authentication and return `{"decisions":N,"fyis":N,"total":N,"roles":[{"role_id":N,"orchestrator":"…","coordinator":"…","decisions":N,"fyis":N}]}` for the same eligibility rule as aggregate launch, ordered by role ID. Counts SHALL include open items regardless of read state, exclude resolved items and leave read state and timestamps unchanged. Totals and per-role counts SHALL come from one consistent read snapshot. Decision sessions SHALL NOT call this discovery endpoint.
+`GET /api/hera/board/decision-counts` SHALL require master/device authentication and return `{"decisions":N,"fyis":N,"total":N,"roles":[{"role_id":N,"orchestrator":"…","coordinator":"…","decisions":N,"fyis":N}]}` for the same canonical rail visibility/order policy as navigation, including visible empty and nested coordinators. Counts SHALL include open items regardless of read state, exclude resolved items and leave read state and timestamps unchanged. Totals and per-role counts SHALL come from one consistent read snapshot. Decision sessions SHALL NOT call this discovery endpoint.
 
 #### Scenario: Count both kinds
 
@@ -66,7 +75,7 @@ The REST API SHALL expose `POST /api/hera/board/decision-session` with body `{"t
 
 ### Requirement: Mixed decision page item reads
 
-`GET /api/hera/roles/{role_id}/board/decide-items` SHALL accept master/device tokens for an eligible coordinator or a decision session containing that eligible role ID. It SHALL return `{"role_id":N,"orchestrator":"…","coordinator":"…","decisions":N,"fyis":N,"items":[…]}` from a consistent snapshot, with all open decisions and FYIs in ascending item-ID order. Each item SHALL include existing decision fields plus `kind`; FYIs SHALL have null structured data. The endpoint SHALL NOT mark items read or change timestamps. Existing `/board/decisions` SHALL retain its decision-only filter and response shape; a multi-role session SHALL access it only for included eligible roles.
+`GET /api/hera/roles/{role_id}/board/decide-items` SHALL accept master/device tokens for an eligible coordinator or a rail-board session for a currently rail-visible coordinator. It SHALL return `{"role_id":N,"orchestrator":"…","coordinator":"…","decisions":N,"fyis":N,"items":[…]}` from a consistent snapshot, with all open decisions and FYIs in ascending item-ID order. Each item SHALL include existing decision fields plus `kind`; FYIs SHALL have null structured data. The endpoint SHALL NOT mark items read or change timestamps. Existing `/board/decisions` SHALL retain its decision-only filter and response shape; a rail-board session SHALL access it only for currently rail-visible coordinators.
 
 #### Scenario: Mixed read
 
@@ -75,12 +84,12 @@ The REST API SHALL expose `POST /api/hera/board/decision-session` with body `{"t
 
 #### Scenario: Wrong role
 
-- **WHEN** a session requests decide-items for a role outside its immutable set
+- **WHEN** a session requests decide-items for a role not visible under canonical rail rules
 - **THEN** it receives 403 and no board data
 
 ### Requirement: Retry-safe FYI actions endpoint
 
-`POST /api/hera/roles/{role_id}/board/fyi-actions` SHALL accept master/device tokens or a decision session containing that eligible role. The body SHALL be `{"actions":[{"action_id":"<opaque client ID>","item_id":N,"expected_updated_at":"<RFC3339>","action":"comment|dismiss|comment_and_dismiss","note":"…"}]}` with one to sixteen actions. Each action ID SHALL be 1–128 ASCII letters, digits, hyphens or underscores, unique within the request; item IDs SHALL also be unique within the request. Timestamps SHALL be nonzero, notes SHALL be at most 4 KiB UTF-8 and comment actions SHALL require non-whitespace notes; dismiss SHALL require an empty note. Invalid envelope, duplicate IDs/items, oversized notes or trailing JSON SHALL return 400 `invalid_request` before any mutation. An unsupported action or empty required comment SHALL yield a per-action invalid result. The whole body SHALL be consumed through EOF before mutation.
+`POST /api/hera/roles/{role_id}/board/fyi-actions` SHALL accept master/device tokens or a rail-board session for a currently rail-visible coordinator. The body SHALL be `{"actions":[{"action_id":"<opaque client ID>","item_id":N,"expected_updated_at":"<RFC3339>","action":"comment|dismiss|comment_and_dismiss","note":"…"}]}` with one to sixteen actions. Each action ID SHALL be 1–128 ASCII letters, digits, hyphens or underscores, unique within the request; item IDs SHALL also be unique within the request. Timestamps SHALL be nonzero, notes SHALL be at most 4 KiB UTF-8 and comment actions SHALL require non-whitespace notes; dismiss SHALL require an empty note. Invalid envelope, duplicate IDs/items, oversized notes or trailing JSON SHALL return 400 `invalid_request` before any mutation. An unsupported action or empty required comment SHALL yield a per-action invalid result. The whole body SHALL be consumed through EOF before mutation.
 
 The response SHALL be `{"results":[{"action_id":"…","item_id":N,"outcome":"commented|resolved|already_resolved|conflict|not_found|invalid","item":{…}}],"unread_count":N}`; conflict SHALL include current item content. Missing/wrong-role/non-FYI items SHALL return not_found without leaking content; resident approvals SHALL be invalid. Current revision mismatch SHALL return conflict. Already-resolved FYIs SHALL return already_resolved for dismiss/comment_and_dismiss without storing a new comment or notice; comment-only SHALL return invalid because feedback was not delivered. Successful receipt replay SHALL precede these item-state checks and return the original result. Successful outcomes SHALL obey the coordinator-board durable FYI contract; other outcomes SHALL not mutate or block unrelated successful actions. All successful receipts, resolutions and at most one FYI summary SHALL commit atomically per request. After commit, each newly resolved item SHALL emit one `hera.board_changed` event; comment-only SHALL not pretend the item changed revision. Decision answers SHALL retain their existing endpoint, payload and summary semantics.
 
@@ -108,3 +117,17 @@ The response SHALL be `{"results":[{"action_id":"…","item_id":N,"outcome":"com
 
 - **WHEN** a request contains seventeen actions, duplicate item IDs, an oversized note or trailing JSON
 - **THEN** it returns 400 before any receipt, item change or notice is committed
+
+### Requirement: Scoped decision navigation metadata
+
+GET /api/hera/board/decision-navigation SHALL accept master/device tokens or a rail-board session and return `{roles:[{role_id,parent_role_id,orchestrator,coordinator,decisions,fyis}]}` from a consistent snapshot. Rows SHALL be exactly the canonical Hera rail-visible coordinator projection in depth-first rail order, excluding hidden/archived/nuked branches and workers, including nested sub-coordinators and empty or unbound visible coordinators. parent_role_id SHALL reference the canonical visible coordinator parent or null. Counts SHALL include open items regardless of read state; reads SHALL not mutate item state. The endpoint SHALL share visibility/order policy with the TUI rather than inventing a name/ID sort. It SHALL expose no task/session bodies or broad roster details. Kanban section headings and collapse controls are omitted while their ordering is preserved.
+
+#### Scenario: Canonical tree and counts
+
+- **WHEN** the rail includes a parent, its sub-coordinator, an empty coordinator, plain workers and hidden/archived branches
+- **THEN** metadata contains only the visible coordinator rows in rail order with canonical parent IDs and accurate kind counts, including the empty row
+
+#### Scenario: Session cannot use broad roster
+
+- **WHEN** a rail-board session calls scoped navigation then the general Hera roster
+- **THEN** scoped navigation succeeds and the general roster is forbidden

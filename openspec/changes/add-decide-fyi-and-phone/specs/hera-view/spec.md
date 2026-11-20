@@ -2,34 +2,34 @@
 
 ### Requirement: Board `o` opens the decision page in the browser
 
-With the coordinator board focused, the bound `hera_board.decide` key (default `o`) SHALL request a launch ticket for that coordinator role and open the daemon-served decision page in the default browser, passing the selected open decision or FYI as focus. It SHALL work on any selected row or without selection whenever either kind has open items. It SHALL NOT change selection, expansion, read state, focus or the coordinator composer. Only when neither kind has open items SHALL it show a one-line no-open-items notice and open nothing. If the REST API is disabled it SHALL instruct the user to enable it in Settings and open nothing. In `--remote` mode, where the Hera page is inert, the key SHALL do nothing. Launches SHALL retain the existing single-role, 90-second fragment ticket and eight-hour session boundary and SHALL log success/failure/skipped outcomes under `[board]` without credentials. The default key and its rebindable action SHALL remain unchanged.
+With a visible coordinator board focused, the bound hera_board.decide key (default o) SHALL request a launch ticket and open the common rail/drawer decision page with that coordinator preselected, passing any selected open decision or FYI as focus. The same page SHALL permit selecting other rail-visible coordinators; launch role SHALL not restrict session scope. The key SHALL work without selection and on an empty or FYI-only board. An empty selected board SHALL show `Nothing open for <name>` rather than suppressing browser launch. TUI selection, expansion, read state, focus and composer SHALL remain unchanged. If REST is disabled the footer SHALL instruct enabling it in Settings and open nothing. In remote mode, where Hera is inert, the key SHALL do nothing. Launch SHALL retain the 90-second single-use fragment-ticket and eight-hour session lifetime and log success/failure/skips under board without credentials. The default key and rebindable action SHALL remain unchanged.
 
-#### Scenario: Open from a structured decision
+#### Scenario: Open current board
 
-- **WHEN** Aaron selects a structured decision and presses `o`
-- **THEN** its coordinator's page opens focused on that decision with board state unchanged
+- **WHEN** Aaron presses o on a visible coordinator
+- **THEN** the shared page opens with that coordinator selected and other visible coordinators available in the nav
 
-#### Scenario: Open from an FYI-only board
+#### Scenario: FYI focus
 
-- **WHEN** the board has only FYIs and Aaron presses `o` on one
-- **THEN** the page opens with FYIs selected and that FYI focused
+- **WHEN** Aaron presses o on an FYI-only board’s selected FYI
+- **THEN** that coordinator and FYIs tab are selected and the FYI is focused
+
+#### Scenario: Empty board
+
+- **WHEN** Aaron presses o on a visible coordinator with no open items
+- **THEN** the browser opens with that greyed coordinator selected and its empty state shown in both tabs
 
 #### Scenario: No selection
 
-- **WHEN** open items exist but no row is selected
-- **THEN** `o` opens the single-coordinator page without a focus target
-
-#### Scenario: Nothing to answer
-
-- **WHEN** neither decisions nor FYIs are open
-- **THEN** a one-line notice says there are no open board items and no browser opens
+- **WHEN** no board row is selected and Aaron presses o
+- **THEN** the coordinator is preselected without an item focus target
 
 #### Scenario: API disabled
 
-- **WHEN** Aaron presses `o` while the REST API is disabled
+- **WHEN** o is pressed with REST disabled
 - **THEN** the footer says to enable the API in Settings and no browser opens
 
 #### Scenario: Reply key unchanged
 
-- **WHEN** Aaron presses `r` on any board item
+- **WHEN** r is pressed on any board item
 - **THEN** the plain reply prefix is composed exactly as before

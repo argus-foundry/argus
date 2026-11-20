@@ -2,29 +2,44 @@
 
 The base board-decision-page spec and archived `add-board-decision-page` and `add-decide-theme-and-links` changes define a standalone `/decide` shell, a 90-second single-use fragment ticket, an eight-hour in-memory role-scoped session, durable answer summaries, safe DOM links, Light/Dark/System appearance and close-on-success behavior. FYIs are currently excluded and a phone user cannot initiate this flow from the PWA.
 
-The PWA already has a per-device token. It must use that credential only in authenticated API headers, keeping the standalone page on a narrower board-only session. Recommendations below are proposed defaults pending Aaron's approval, not approval to implement.
+The PWA already has a per-device token. It must use that credential only in authenticated API headers, keeping the standalone page on a narrower board-only session. Aaron has selected the rail-style page described below. The coordinator’s six interaction decisions are recorded here. These spec/mockup revisions do not authorize implementation.
 
 ## Goals / non-goals
 
-**Goals:** Handle open decisions and FYIs on a phone, retain coordinator ownership, make comment retries safe, preserve the existing TUI ticket path and give every submitted action a verifiable result.
+**Goals:** Handle open decisions and FYIs on a phone, retain coordinator ownership, make comment retries safe, preserve the existing TUI ticket launch mechanism and give every submitted action a verifiable result.
 
-**Non-goals:** macOS app changes or a macOS follow-up (explicitly dropped by Aaron); live push/SSE updates (retain polling); `/decision` skill posting to the board (separate later change); editing coordinator-authored content; changing resident-approval protections.
+**Non-goals:** macOS app changes or a macOS follow-up (explicitly dropped by Aaron); live push/SSE updates (retain polling); `/decision` skill posting to the board (separate later change); editing coordinator-authored content; changing resident-approval protections; duplicating kanban section headings/collapse controls in the page (use the canonical rail order and nesting, including the ordering induced by kanban groups, without reproducing their chrome).
 
 ## Decisions
 
 ### Launch and session boundary
 
-Add `POST /api/hera/board/decision-link`, authenticated by master/device only, to snapshot all eligible coordinator role IDs. Eligible means an existing coordinator whose role and orchestrator are neither archived nor nuked; lack of a live binding does not exclude it. Include coordinators with zero open items so new items for those roles can appear during the session. The response is `{path:"/decide",ticket,expires_at}`. The PWA navigates in its current browsing context to the same-origin relative path with `#t=<ticket>`. It never passes a device token to the page, URL, history or fragment. Same-context navigation avoids popup blockers and works in installed PWAs.
+Both entry points mint the same board-only session via a 90-second single-use hashed fragment ticket. `POST /api/hera/board/decision-link` (master/device only) opens `/decide` for the phone; `POST /api/hera/roles/{role_id}/board/decision-link` uses `/decide?role=<id>[&focus=<item_id>]` for TUI preselection. The requested role is initial selection, not authorization scope. Empty boards may launch. An unavailable/hidden/archived target is rejected rather than exposing a board omitted from the rail.
 
-Reuse the existing exchange endpoint and single-use 90-second hashed ticket store. Exchange returns `{session,role_ids,expires_at}` and, for a single-role TUI ticket, retains `role_id`. Sessions hold immutable role-ID sets, are hashed in daemon memory and expire eight hours after exchange. New coordinator roles are excluded until the user reopens from the PWA. Each read/write rechecks membership and role eligibility; removed/archived/nuked roles cannot retain access. Neither expiry nor scope silently expands on polling. No wildcard or device-equivalent session is introduced.
+To support one shared page whose nav matches the rail, replace the previously proposed immutable one-role/set scope with an explicit **rail-board session class**: eight-hour absolute lifetime, 256-bit random credential hashed only in daemon memory, authorized only for board reads/answers/FYI actions and the new scoped navigation endpoint. Every request resolves coordinator membership through the canonical Hera rail visibility policy: exclude archived, hidden and nuked coordinators/orchestrators and plain workers; include nested sub-coordinators and coordinators without open items or live bindings. New visible coordinators can appear on accepted refresh; hidden/removed coordinators immediately cease to be authorized. This dynamic scope is deliberate and limited to the human’s current visible boards, never a device-equivalent API credential.
 
-Keep the existing role-specific decision-link endpoint and its one-role ticket unchanged. A role ID or focus in the URL is display context, never authorization. The existing decision-only read and answers routes remain available; new `/board/decide-items` and `/board/fyi-actions` routes supply the page's mixed-kind flow. A session can access these and the existing decision/answer routes only for roles in its set, and no other API routes, including count discovery, launch minting or general board mutations.
+Exchange returns `{session,initial_role_id,expires_at}`. `GET /api/hera/board/decision-navigation` supplies the currently permitted coordinator tree, in rail order, with parent role IDs and kind counts. The page only sends its credential to that route and the allowed per-role decision/answer/mixed-item/FYI routes. It cannot mint links, access broad discovery/roster endpoints, mutate general board metadata or read privileged receipt history. Count discovery remains master/device-only for the PWA badge. Requests that lose visibility fail closed; queued drafts remain recoverable but are not submitted to hidden boards. A refresh shows removed-board drafts as unavailable in Review queued. Submitting still processes other authorized boards; a refused board gets a clear visibility error and retains its drafts. The page never reports full success or closes while any submitted board is refused; Aaron can explicitly clear its actions or restore visibility.
+
+The PWA uses its device token only in an authorization header and navigates in its current browsing context to a same-origin relative path plus `#t=<ticket>`. The page strips the fragment before any request, exchanges it once, and keeps the session only in sessionStorage. It never reads the PWA token. TUI `o` retains the same transport; both sessions and tickets die on daemon restart. A role/focus URL parameter never grants access.
 
 ### Page layout and navigation
 
-Use one global Decisions/FYIs tab pair with aggregate open counts; each tab groups cards by coordinator, labeled with orchestrator plus coordinator name and stable role ID. Each coordinator heading shows its Decisions/FYIs open counts from the same loaded snapshot. Order groups by role ID and cards by item ID. Initial tab is Decisions unless its open count is zero and FYIs exist. A valid focused FYI selects FYIs and scrolls/highlights it; a focused decision selects Decisions. Empty tabs stay visible with zero counts and an empty state.
+Use a desktop two-pane layout: coordinator rail on the left, selected board in the main pane. The rail lists exactly the visible coordinator projection of the Hera rail in its existing order, with canonical parent nesting for sub-coordinators only. Plain workers never appear. Use the same ordering policy (including pinned/kanban order); omit section headings and fold controls as the named presentation simplification in Non-goals. This is one view, with no entry-mode switch, coordinator-directory screen or all-board card stream.
 
-Keep decision option cards, required plain/other notes, recommendation shortcuts and tally within Decisions. FYI cards show subject/body using the same safe renderer plus a comment box and one exclusive pending action: Comment, Dismiss or Comment and dismiss. Typing alone does not queue an action. Comment actions require non-whitespace text; dismiss needs none. Switching tabs/groups preserves drafts. One Submit actions button sends all explicitly queued actions across both tabs, with a pending count; it cannot silently omit a queued invalid comment.
+Each nav row shows small open Decisions/FYIs counts such as `2 · 1`, labeled accessibly by kind. Zero-item rows show no counts and are greyed, but remain fully selectable. The selected row has a distinct marker even when greyed. Empty boards show `Nothing open for <name>` in either tab, with both zero-count tabs still available. Nav membership/order does not depend on board counts; rows do not vanish after dismissal.
+
+TUI `o` preselects its current coordinator, including an empty board. The phone selects the first coordinator with open items in rail traversal order, or the first row if all are empty. No coordinators yields a whole-page empty state. Main-pane tabs show counts only for the selected board. On initial selection choose Decisions unless it has no decisions and has FYIs; a valid focus selects the item’s kind and scrolls/highlights it. User-chosen tab is retained when moving to another coordinator, even if that tab is empty.
+
+Keep decision option cards, required plain/other notes, recommendation shortcuts and tally within Decisions. FYIs show subject/body using the same safe renderer, comment box and exclusive pending Comment, Dismiss or Comment and dismiss action. Typing alone does not queue an action. Comment actions require non-whitespace notes; dismiss requires none. Switching boards/tabs never discards drafts or changes the scope of the queued submission. One persistent Review queued control and one Submit actions control cover queued actions on every board and tab, including invalid notes that must be fixed explicitly; unavailable boards receive explicit refusal results without blocking other authorized board batches.
+
+### Coordinator decisions: keyboard and phone behavior
+
+- **Every row is navigable:** Cmd+Up/Down traverses the depth-first rail order including greyed coordinators/sub-coordinators; it clamps at the first/last row. This matches rail movement and avoids jumps when a board empties.
+- **Board tabs:** Cmd+Left selects Decisions and Cmd+Right selects FYIs. Ctrl+Up/Down/Left/Right are desktop aliases for cross-platform use. Ignore events with additional Alt/Shift modifiers or active composition.
+- **Text editing wins:** Never intercept any of these shortcuts in input, textarea, select, contenteditable or textbox-role controls (including nested descendants), or during IME composition. Preserve default browser behavior for unhandled events. Handled events prevent native scroll/history actions; navigation leaves focus on the navigation context rather than moving it into a note.
+- **Phone tree:** At narrow width replace the left rail with a top coordinator button opening a drawer containing the identical tree, counts and greyed selectable rows. Choosing a row closes the drawer; Close/Escape dismisses it, with focus restored to the trigger, and the modal traps focus while open. No phone keyboard shortcut requirement.
+- **Phone tabs:** The visible tab bar always works. Horizontal swipes on non-editable, non-interactive main-pane background may also select the adjacent tab; vertical scrolling, text selection and note/option interaction remain native. Keyboard/swipe/tab changes preserve all queued responses.
+- **Submission:** Keep all queued answers until explicit submit, regardless of current coordinator. Review queued names the owning coordinator for every action; one successful submission covers all queued boards.
 
 ### FYI persistence, notice and retries
 
@@ -40,43 +55,31 @@ Snapshot the full set of queued actions when submitting, disable duplicate concu
 
 Close only after every submitted action across every batch succeeds, regardless of untouched open items. A failure in a later coordinator cannot undo earlier commits; display their confirmed results and retry only unacknowledged/failed work. A transport failure stays unresolved until an idempotent retry confirms it. On browser/PWA close refusal show `Actions sent — you can close this tab`, counts of accepted answers, comments and dismissals, and a same-origin Return to Argus link. Stop polling and fence late results after completion.
 
-Poll mixed-item reads every 20 seconds while visible, with the existing refresh banner rather than replacing edits. Persist drafts by role/item/revision, including FYI action and ID; keep the existing conflict behavior of retaining note text but clearing selection/action. The Copy answers control becomes Copy responses and includes decisions and FYIs with coordinator labels. An expired phone session offers Return to Argus to relaunch; a TUI session retains the press-`o` instruction. Neither page reads or copies the PWA's device credential. New session context must supersede any old stored session, and credentials remain sessionStorage-only.
+Poll navigation metadata and mixed-item reads every 20 seconds while visible, with the existing refresh banner rather than replacing edits. Visibility revocation is enforced immediately by the server even before accepted refresh. Persist drafts by role/item/revision, including FYI action and ID; keep the existing conflict behavior of retaining note text but clearing selection/action. The Copy answers control becomes Copy responses and includes decisions and FYIs with coordinator labels. An expired phone session offers Return to Argus to relaunch; a TUI session retains the press-`o` instruction. Neither page reads or copies the PWA's device credential. New session context must supersede any old stored session, and credentials remain sessionStorage-only.
 
 ### PWA entry, parity and cache
 
 Add a global `Decide` entry alongside Tasks, Projects, + New and Settings; verify the narrow phone navigation can accommodate it without overflow. Its badge is the sum of open decisions and FYIs across eligible coordinators (not unread counts). `GET /api/hera/board/decision-counts` is master/device-only and returns totals plus per-role counts. Refresh on app entry/foreground and the existing visible polling cadence; no new push dependency. Keep entry available at zero so Aaron can see an empty page. A failed badge fetch shows unavailable rather than a misleading zero; a failed launch stays in the PWA with retry feedback.
 
-Frontend evaluation: TUI retains its one-board launch and gains FYI-only launch/focus; web receives global entry and mixed-action UI; macOS is explicitly excluded at Aaron's direction, superseding a follow-up for this work. Update the README Reference endpoints and launch description. No key binding is added, removed or rebound. Preserve the service worker's network-only `/decide` behavior and exclusion from shell assets; API responses containing data or credentials are not cached. Bump `SW_VERSION` when changing the PWA/decide shell assets in the implementation PR, using the then-current version rather than pinning today's value.
+Frontend evaluation: TUI launches the common page with its coordinator preselected, including empty/FYI-only boards; web receives the same rail/drawer page and mixed-action UI; macOS is explicitly excluded at Aaron's direction, superseding a follow-up for this work. Update the README Reference endpoints and launch description. No key binding is added, removed or rebound. Preserve the service worker's network-only `/decide` behavior and exclusion from shell assets; API responses containing data or credentials are not cached. Bump `SW_VERSION` when changing the PWA/decide shell assets in the implementation PR, using the then-current version rather than pinning today's value.
 
 ## Risks / trade-offs
 
-- A bounded multi-role session can affect more boards than a TUI session → immutable explicit role set, per-request eligibility checks, eight-hour cap and board-only endpoint allowlist.
-- A newly created coordinator is absent from an existing phone session → reopening from the PWA takes a fresh snapshot; refresh never widens access.
+- Both launches can affect all currently rail-visible boards → explicit rail-board auth class, shared canonical visibility checks on every request, eight-hour cap and strict board-only endpoint allowlist. This intentionally replaces the old one-board TUI authorization scope.
+- Visibility can change while answers are queued → accepted refresh reconciles nav without overwriting notes; inaccessible drafts stay marked unavailable; their writes are refused clearly while other board batches proceed, and overall success stays blocked until those submitted failures are handled.
 - Several role batches can partly commit → preserve per-action results and retry IDs; never report full success or close on a missing result.
 - Durable comment receipts add storage → comments are bounded to 4 KiB, receipts share board-history retention and provide retry/truncation recovery.
 - PWA navigation can be refused offline or closing can fail → explicit launch errors and sent confirmation/return link; do not cache board data as an offline substitute.
 
 ## Migration plan
 
-After Aaron approves, implement with failing tests first. Add receipt persistence and API/session contracts before page/PWA wiring. Existing role launch and answers payloads keep working; no legacy data migration or compatibility layer is needed. Daemon restart clears tickets/sessions as today, but receipts and comments survive. Roll back UI/API together if needed; preserved receipts are durable data. Archive this change with the implementation in the same PR before merge, not in this spec-only delivery.
+After Aaron approves, implement with failing tests first. Add receipt persistence and API/session contracts before page/PWA wiring. Existing role launch and answers payloads keep working, with role launch now selecting rather than restricting a board; no legacy data migration or compatibility layer is needed. Daemon restart clears tickets/sessions as today, but receipts and comments survive. Roll back UI/API together if needed; preserved receipts are durable data. Archive this change with the implementation in the same PR before merge, not in this spec-only delivery.
 
-## Open questions
+## Approval status and remaining question
 
-### Question 1 of 3: Should phone users see all coordinators on one page?
+The layout question is settled: Aaron selected the shared coordinator rail with a responsive phone drawer. The earlier grouped-stream and two-entry-mode proposals are superseded.
 
-- **Option A:** One page grouped by coordinator gives one place to act, but can be long.
-- **Option B:** A coordinator picker keeps pages smaller, but requires repeated navigation.
-- **Recommendation:** Use one grouped page with global Decisions/FYIs tabs and per-group counts, because Aaron is not tied to one coordinator on his phone.
-
-### Question 2 of 3: Which boards should an opened phone page be allowed to affect?
-
-- **Option A:** A fixed set of eligible coordinator role IDs gives a stable permission boundary, but new coordinators require reopening.
-- **Option B:** All present and future coordinators avoids reopening, but silently widens an already-issued credential.
-- **Option C:** One session per coordinator narrows each credential, but complicates recovery and grouped submission.
-- **Recommendation:** Use one eight-hour session holding a fixed role-ID set; it supports grouped actions without wildcard permissions.
-
-### Question 3 of 3: Where should the phone launch entry live?
-
-- **Option A:** A global Decide entry makes pending work visible from every main view, but needs careful phone-width layout.
-- **Option B:** A button inside Projects saves top-level space, but hides pending work when Aaron is viewing Tasks.
-- **Recommendation:** Add a global Decide entry with the total open-count badge, because the queue should be reachable without first choosing a project.
+- **Session scope decision (coordinator-approved):** Both launches use the explicit rail-board session class, replacing the old one-coordinator snapshot. TUI role is only the starting selection. Every read/write rechecks current visibility; hidden/archived-board writes fail clearly while other authorized board submissions continue. No broader API authorization is granted.
+- **Web entry recommendation:** Keep the global Decide entry and total open-count badge so the phone can reach the queue without first choosing a project.
+- **Presentation simplification:** Reuse canonical rail ordering and nesting without reproducing kanban group headings/fold controls; this is a named Non-goal, not a difference in coordinator membership or traversal order.
+- **Implementation approval:** The layout decision authorizes these spec and mockup revisions; implementation still awaits Aaron’s approval.

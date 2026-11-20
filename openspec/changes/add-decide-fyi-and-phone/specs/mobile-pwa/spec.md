@@ -9,12 +9,12 @@ Activating Decide SHALL request an aggregate launch ticket using the existing cr
 #### Scenario: Phone-only launch
 
 - **WHEN** Aaron taps Decide in the authenticated installed PWA with open items on two coordinators
-- **THEN** one grouped page opens with Decisions/FYIs counts without pressing `o` or choosing a coordinator
+- **THEN** the shared rail/drawer page opens with the first non-empty coordinator in rail order selected, without pressing `o` or choosing a coordinator first
 
 #### Scenario: FYI-only count
 
 - **WHEN** only three read, open FYIs exist
-- **THEN** the entry badge shows 3 and launches with FYIs selected
+- **THEN** the entry badge shows 3 and launches the first non-empty board with FYIs selected
 
 #### Scenario: Empty queue and failed counts
 

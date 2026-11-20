@@ -2,53 +2,75 @@
 
 ### Requirement: Scoped launch and session
 
-The page SHALL read a launch ticket from the URL fragment, remove the fragment from the address bar and history entry with `history.replaceState` before any network request, exchange the ticket once for a decision session, and keep the session in `sessionStorage`. A new ticket SHALL supersede any previously stored session context. Sessions SHALL contain one role ID for TUI launches or an immutable explicit set of coordinator role IDs for PWA launches. The page SHALL send the session only to permitted decision/answer, mixed-item read and FYI action endpoints for those roles. It SHALL NOT read the PWA device credential. When the session is missing, expired or rejected it SHALL keep drafts, offer Copy responses and show relaunch guidance: Return to Argus for a PWA launch and press the board's decide key again for a TUI launch. Neither ticket nor session SHALL appear in any URL query string, `localStorage`, daemon log or `uxlog` line.
+The page SHALL read a launch ticket from the URL fragment, remove it from address bar/history with history.replaceState before any network request, exchange it once for a decision session and store the session only in sessionStorage. A new ticket SHALL supersede old stored context. TUI and phone SHALL receive the same rail-board session class: eight-hour absolute lifetime and access limited to board navigation and permitted board read/answer/FYI action endpoints for currently rail-visible coordinators. A TUI role URL parameter SHALL choose initial selection, never restrict or grant authorization. The server SHALL recheck current rail visibility on every request; hidden, archived, nuked and non-coordinator targets SHALL be denied. The page SHALL NOT read the PWA device credential. On expired/missing/rejected sessions it SHALL preserve drafts and Copy responses, offering Return to Argus for phone launches or press-o relaunch guidance for TUI launches. Neither ticket nor session SHALL appear in query strings, localStorage or logs.
 
 #### Scenario: Fragment removed
 
-- **WHEN** the page loads with `#t=<ticket>`
-- **THEN** the fragment is removed before exchange and neither the address bar nor the history entry holds the ticket
+- **WHEN** the page opens with a launch fragment
+- **THEN** it removes the fragment before exchange and neither address bar nor history entry retains it
 
-#### Scenario: Expired phone session
+#### Scenario: TUI preselection is not a permission boundary
 
-- **WHEN** a PWA-launched session is rejected with 401
-- **THEN** drafts and Copy responses remain available and Return to Argus lets the user relaunch without a TUI keypress
+- **WHEN** o opens coordinator 12 and the user selects another visible coordinator
+- **THEN** the same session may read and answer that visible board but no general API routes
 
-#### Scenario: Reload
+#### Scenario: Visibility revoked
 
-- **WHEN** the user reloads within the session lifetime without a new ticket
-- **THEN** the page reuses that session and its drafts without widening its role set
+- **WHEN** a selected coordinator becomes hidden or archived after page load
+- **THEN** further board requests are denied, queued drafts are kept marked unavailable and cannot be silently omitted from submit
+
+#### Scenario: Expired session and reload
+
+- **WHEN** the page reloads within its session lifetime
+- **THEN** it reuses the stored session and drafts; if rejected, drafts and Copy responses remain with relaunch guidance
 
 ### Requirement: Round contents and layout
 
-The page SHALL expose Decisions and FYIs tabs, each labeled with its open count, grouping cards by coordinator within the selected tab. A TUI session SHALL show one coordinator; a phone session SHALL show every eligible coordinator in its session scope. Groups SHALL be identified by orchestrator, coordinator name and role ID, ordered by role ID, and show both kind counts; cards SHALL be ordered by item ID. Open counts SHALL count open items, not unread items. Resolved items SHALL NOT appear on initial load. Both tabs SHALL remain visible at zero. Decisions SHALL be selected initially unless only FYIs are open. A valid `focus` item ID SHALL select its kind's tab, scroll to and highlight the card without hiding other cards.
+The page SHALL be one shared two-pane view: a desktop left coordinator nav and one selected coordinator’s board in the main pane. The nav SHALL mirror the Hera rail’s visible coordinator membership, canonical parent nesting and traversal order, excluding archived, hidden or nuked coordinators/orchestrators and all plain workers. Only sub-coordinators SHALL appear as children. Rail-induced pinned/kanban ordering SHALL be preserved; kanban section headings/fold controls are an intentional presentation non-goal. Every visible coordinator SHALL remain listed when empty, shown greyed out with no count labels and still selectable. Non-empty rows SHALL show small open decision and FYI counts, with accessible kind labels. The selection indicator SHALL remain distinct on greyed rows. Item counts SHALL NOT reorder or remove coordinators.
 
-A structured decision SHALL render its subject as question, body as situation, selectable option cards with label, summary, Upside and Downside rows, Recommended pill/reason, dashed Something else card and optional note. A plain decision SHALL show subject, body and required note. The Decisions tab SHALL retain the sticky `N of M decided` tally and one jump segment per decision, and the take-recommendations button when undecided cards have recommendations; that button SHALL only select recommended undecided decisions. FYIs SHALL render subject/body with the same safe text/link renderer, comment field and exclusive Comment, Dismiss, or Comment and dismiss pending action. Merely typing a comment SHALL NOT queue it. Comment actions SHALL require non-whitespace notes. Tab switching SHALL retain drafts. Submit actions SHALL require at least one queued action and valid required notes on all queued cards, including hidden tabs.
+The main pane SHALL expose Decisions and FYIs tabs showing the selected board’s open counts, never aggregate tab counts. Open cards SHALL be ordered by item ID and resolved items omitted on initial load. An empty selected coordinator SHALL show `Nothing open for <name>` in both tabs. Both tabs SHALL stay available with zero counts. TUI launch SHALL select the requested visible coordinator even when empty; phone launch SHALL select the first non-empty coordinator in nav order, or the first row if all are empty. With no visible coordinators the page SHALL show a whole-page empty state. Initial tab SHALL be Decisions unless only FYIs are open; a valid focus SHALL select the item’s tab and scroll/highlight it. Subsequent coordinator changes SHALL preserve the user-selected tab and all drafts/queued actions.
 
-#### Scenario: Mixed round
+A structured decision SHALL render its subject as question, body as situation, selectable option cards with label, summary, Upside and Downside rows, Recommended pill/reason, dashed Something else card and optional note. A plain decision SHALL show subject, body and required note. The Decisions tab SHALL retain the sticky `N of M decided` tally and jump segments, and a take-recommendations button selecting only recommended undecided decisions on the selected board. FYIs SHALL render subject/body with the same safe text/link renderer, comment field and exclusive Comment, Dismiss, or Comment and dismiss pending action. Typing alone SHALL NOT queue an FYI action. Comment actions SHALL require non-whitespace notes. One persistent Review queued and one Submit actions control SHALL cover all queued actions across boards and tabs. Submission SHALL require at least one queued action and valid required notes for every queued card, including hidden tabs and unselected boards.
 
-- **WHEN** two coordinators have three open decisions and two open FYIs in total
-- **THEN** the tabs show Decisions (3) and FYIs (2), with each coordinator's cards grouped and kind counts shown
+#### Scenario: Membership mirrors the rail
+
+- **WHEN** Hera shows visible coordinators, a hidden coordinator, an archived coordinator and plain workers
+- **THEN** the page lists exactly the visible coordinators in the rail’s order and no hidden/archived coordinator or worker
+
+#### Scenario: Nested sub-coordinator
+
+- **WHEN** a visible coordinator owns a sub-coordinator plus plain workers
+- **THEN** the sub-coordinator is indented beneath its canonical parent and workers are absent
+
+#### Scenario: Greyed empty row
+
+- **WHEN** a coordinator has no open decisions or FYIs, including after its last item is dismissed
+- **THEN** its nav row stays in place, greyed with no counts and still selectable, and either tab shows `Nothing open for <name>`
+
+#### Scenario: Entry selection
+
+- **WHEN** TUI o targets an empty visible coordinator while another coordinator has open items
+- **THEN** that empty coordinator is selected; a phone launch instead selects the first non-empty coordinator in rail order
+
+#### Scenario: Selected-board counts
+
+- **WHEN** the selected board has two decisions and one FYI, and another has three FYIs
+- **THEN** tabs show Decisions (2) and FYIs (1), while each nav row shows only its own kind counts
 
 #### Scenario: Something else needs a note
 
-- **WHEN** Something else is selected with an empty note
-- **THEN** its card shows a required-note hint and submission is disabled even if the user switches tabs
-
-#### Scenario: Take the recommendation
-
-- **WHEN** three undecided decisions include two recommendations
-- **THEN** the shortcut selects only those two decisions and does not queue any FYI action
+- **WHEN** Something else is selected with an empty note and the user changes coordinator
+- **THEN** the draft is kept and global submission stays disabled until the note is supplied or the action is cleared
 
 #### Scenario: Focused FYI
 
-- **WHEN** a TUI launch focuses an open FYI
-- **THEN** FYIs is selected and that card is highlighted without hiding other open items
+- **WHEN** TUI launch focuses an open FYI
+- **THEN** its coordinator and FYIs tab are selected and the card is highlighted
 
-#### Scenario: Empty and FYI-only boards
+#### Scenario: Empty roster
 
-- **WHEN** no decisions and two FYIs are open
-- **THEN** FYIs is initially selected, Decisions (0) stays accessible, and an entirely empty session shows both zero-count tabs and an empty state
+- **WHEN** no coordinator is visible under rail rules
+- **THEN** the page shows a no-coordinators empty state without inventing a selectable board
 
 ### Requirement: Partial submit and per-item results
 
@@ -73,6 +95,11 @@ Submit SHALL snapshot only explicitly queued answers and FYI actions across all 
 
 - **WHEN** a comment succeeds for one coordinator and another coordinator's answer fails
 - **THEN** the page stays open, shows the comment as sent on the still-open FYI and retries only failed or unconfirmed work
+
+#### Scenario: One queued board becomes hidden or archived
+
+- **WHEN** one coordinator becomes hidden or archived while its answers and another coordinator’s answers are queued
+- **THEN** writes to the unavailable board are refused with a clear message and its drafts are kept, the other coordinator’s valid actions still submit, and the page stays open showing partial results
 
 #### Scenario: Comment response lost
 
@@ -110,12 +137,12 @@ When an answer submission resolves at least one decision, the system SHALL write
 
 ### Requirement: Live change awareness and drafts
 
-While visible and unfinished the page SHALL poll mixed-item endpoints for its scoped coordinators every 20 seconds. Changes SHALL produce a Refresh banner without replacing or reordering editing cards. Polling SHALL NOT widen session scope. Drafts SHALL persist in `localStorage` keyed by role, item ID and item revision, containing decision choice/note or FYI pending action/note/action ID; no credentials SHALL be stored there. Explicit refresh after a coordinator revision SHALL discard stale drafts; conflict results SHALL retain note text as described in partial results. Unrevised drafts SHALL survive reload, tab changes and session expiry. While unfinished, Copy responses SHALL copy or expose selectable plain text for all queued decisions/FYIs across tabs, labeled by coordinator and action.
+While visible and unfinished the page SHALL poll scoped navigation metadata and mixed-item endpoints every 20 seconds. Changes SHALL produce a Refresh banner without replacing editing cards or drafts. Accepted refresh SHALL reconcile the visible rail tree using the canonical visibility/order policy; server-side visibility revocation SHALL take effect even before refresh. Drafts for removed/hidden coordinators SHALL remain marked unavailable in Review queued. A submit SHALL refuse writes to those boards with a clear hidden/archived/unavailable message while still submitting queued actions for other authorized coordinators. Refused batches SHALL retain drafts and prevent overall success/close, never silently drop the actions. Selection SHALL stay on the same role if still visible, otherwise move to the first non-empty remaining row (or first row when all empty). Drafts SHALL persist in `localStorage` keyed by role, item ID and item revision, containing decision choice/note or FYI pending action/note/action ID; no credentials SHALL be stored there. Explicit refresh after a coordinator revision SHALL discard stale drafts; conflict results SHALL retain note text as described in partial results. Unrevised drafts SHALL survive reload, tab changes and session expiry. While unfinished, Copy responses SHALL copy or expose selectable plain text for all queued decisions/FYIs across tabs, labeled by coordinator and action.
 
 #### Scenario: New item arrives
 
 - **WHEN** an existing scoped coordinator adds a decision or FYI
-- **THEN** polling offers Refresh without changing edits or adding new role scope
+- **THEN** polling offers Refresh without changing edits; a newly visible coordinator appears in canonical rail order only after accepted refresh
 
 #### Scenario: Revised item discards its draft
 
@@ -180,3 +207,41 @@ Dismiss SHALL resolve an FYI by human without coordinator notice. Comment SHALL 
 
 - **WHEN** Aaron submits Comment and dismiss with a note
 - **THEN** feedback and human resolution commit atomically and one FYI comment summary is queued
+
+### Requirement: Rail keyboard navigation and text editing exemption
+
+Outside editable/form controls, Cmd+Up/Down SHALL select the previous/next coordinator in depth-first nav order, including greyed rows and nested sub-coordinators, clamping at the ends. Cmd+Left SHALL select Decisions and Cmd+Right SHALL select FYIs. Ctrl+Up/Down/Left/Right SHALL be equivalent desktop aliases. Additional Alt/Shift modifiers and active IME composition SHALL not trigger navigation. Events originating in input, textarea, select, contenteditable or textbox-role controls or their descendants SHALL retain native editing behavior with no interception or prevented default. Handled navigation SHALL prevent default browser scrolling/history actions. Coordinator/tab changes SHALL preserve all drafts and queued actions.
+
+#### Scenario: Traverse empty and nested boards
+
+- **WHEN** Cmd+Down advances from a parent to its empty sub-coordinator and then the next coordinator
+- **THEN** each row is selected in rail order, including the greyed sub-coordinator, without losing drafts
+
+#### Scenario: Cross-platform tab shortcuts
+
+- **WHEN** Ctrl+Right is pressed outside editable controls, followed by Ctrl+Left
+- **THEN** FYIs then Decisions are selected just as with Cmd+Right/Left
+
+#### Scenario: Text field exemption
+
+- **WHEN** a note box, input, contenteditable descendant or other exempt form control has focus and any Cmd/Ctrl arrow chord is pressed
+- **THEN** selection and tab remain unchanged and the event retains native text-editing behavior
+
+### Requirement: Phone coordinator drawer
+
+At phone width the left rail SHALL collapse into a top coordinator trigger and modal drawer containing the same ordered/nested coordinator tree, greyed selectable empty rows and labeled kind counts. Choosing a row SHALL select its board and close the drawer without losing drafts. Close/Escape SHALL dismiss the drawer; focus SHALL be trapped while open and restored to the trigger on close. A visible Decisions/FYIs tab bar SHALL always work; horizontal swipes on non-interactive main-pane background SHALL switch to the adjacent tab without intercepting text editing, option interactions or vertical scrolling. Phone operation SHALL require no keyboard shortcuts.
+
+#### Scenario: Phone tree matches desktop
+
+- **WHEN** the page is viewed at 390px and the coordinator trigger is tapped
+- **THEN** the drawer shows the same nested/greyed/count-bearing rows as desktop without horizontal overflow
+
+#### Scenario: Drawer selection keeps queued answers
+
+- **WHEN** an answer is queued, another coordinator is selected in the drawer and the user returns
+- **THEN** the first answer and note remain queued and Review queued shows both boards’ responses
+
+#### Scenario: Touch navigation preserves editing
+
+- **WHEN** the user swipes horizontally on board background versus inside a note or vertically to scroll
+- **THEN** only the horizontal background gesture switches tabs and editing/vertical gestures remain native
