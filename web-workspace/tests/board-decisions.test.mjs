@@ -193,3 +193,55 @@ test('markup renderer treats hostile HTML as text',()=>{
  const tags=[];const walk=n=>{tags.push(n.tag);n.children?.filter(c=>typeof c!=='string').forEach(walk);};walk(node);
  assert.ok(tags.includes('strong'));assert.ok(tags.includes('code'));assert.ok(tags.includes('ul'));assert.ok(tags.includes('ol'));assert.ok(!tags.includes('img'));
 });
+
+test('action and todo completions validate Done/Dropped, never need a note and never carry annotations',()=>{
+ assert.equal(logic.valid({kind:'action'},{action:'done',note:''}),true);
+ assert.equal(logic.valid({kind:'action'},{action:'dropped',note:''}),false);
+ assert.equal(logic.valid({kind:'todo'},{action:'dropped',note:'later'}),true);
+ assert.equal(logic.valid({kind:'todo'},{action:'done',note:''}),true);
+ assert.equal(logic.valid({kind:'todo'},{action:'',note:'x'}),false);
+ assert.equal(logic.valid({kind:'todo'},{action:'done',note:'x'.repeat(4097)}),false);
+ assert.equal(logic.valid({kind:'action'},{action:'done',note:'',annotations:[{type:'DELETION',comment:''}]}),false);
+ assert.equal(logic.valid({kind:'action'},{action:'done',note:'',stale:{note:'old'}}),false);
+});
+
+test('completion kinds batch separately per role and post to fyi-actions with matching receipts',()=>{
+ const records=[{role:1,item:{id:1,kind:'action'},draft:{action:'done'}},{role:1,item:{id:2,kind:'todo'},draft:{action:'dropped'}},{role:1,item:{id:3,kind:'fyi'},draft:{action:'dismiss'}}];
+ assert.deepEqual(Array.from(logic.batches(records),g=>g.kind),['action','todo','fyi']);
+ assert.equal(logic.endpoint('decision'),'/answers');
+ for(const kind of ['fyi','action','todo'])assert.equal(logic.endpoint(kind),'/fyi-actions');
+ const sent={action_id:'a1',item_id:4,action:'done'};
+ assert.equal(logic.accepted('action',sent,{action_id:'a1',item_id:4,outcome:'resolved'}),true);
+ assert.equal(logic.accepted('action',sent,{action_id:'a1',item_id:4,outcome:'already_resolved'}),true);
+ assert.equal(logic.accepted('action',sent,{action_id:'zz',item_id:4,outcome:'resolved'}),false);
+ assert.equal(logic.accepted('todo',{...sent,action:'dropped'},{action_id:'a1',item_id:4,outcome:'conflict'}),false);
+ assert.equal(logic.accepted('action',sent,null),false);
+});
+
+test('shared priority order puts blocking first and pending items and todos last, ascending id inside bands',()=>{
+ const items=[
+  {id:1,kind:'todo'},{id:2,kind:'decision'},{id:3,kind:'action',blocking:false,trigger_pending:true},
+  {id:4,kind:'action',blocking:true},{id:5,kind:'fyi'},{id:6,kind:'action',blocking:false},{id:0+7,kind:'action',blocking:true},
+  {id:8,kind:'todo',trigger_pending:true}];
+ assert.deepEqual(Array.from(logic.order(items),i=>i.id),[4,7,2,5,6,1,3,8]);
+ assert.equal(items[0].id,1,'order must not mutate its input');
+});
+
+test('tabs expose all four kinds and swipes move to the adjacent tab without wrapping',()=>{
+ assert.deepEqual(Array.from(logic.TABS),['decision','fyi','action','todo']);
+ assert.equal(logic.adjacent('decision',-70),'fyi');
+ assert.equal(logic.adjacent('fyi',-70),'action');
+ assert.equal(logic.adjacent('action',-70),'todo');
+ assert.equal(logic.adjacent('todo',-70),'todo');
+ assert.equal(logic.adjacent('todo',70),'action');
+ assert.equal(logic.adjacent('decision',70),'decision');
+ const event={key:'ArrowRight',metaKey:true,target:{}};
+ assert.equal(logic.navigate(event,[{role_id:1}],1,'todo').tab,'fyi','existing keyboard shortcut stays Decisions/FYIs only');
+});
+
+test('Decide page renders new kinds without innerHTML, executes nothing and offers copy for commands',()=>{
+ assert.equal(html.includes('innerHTML'),false);
+ assert.match(html,/pre\.textContent=i\.command/);
+ assert.match(html,/Mark done\. The coordinator is notified\./);
+ assert.doesNotMatch(html,/eval\(|new Function/);
+});
