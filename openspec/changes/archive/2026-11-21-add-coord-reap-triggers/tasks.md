@@ -23,5 +23,5 @@
 ## 5. Docs and close-out
 
 - [x] 5.1 Gotchas: nudge invariants (dry-run reuse, task_meta record cleared on archive, poke-not-inline, sender label) in `context/knowledge/gotchas/orchestration.md` + index row
-- [ ] 5.2 `make pre-pr` green
-- [ ] 5.3 Archive the change (`openspec archive add-coord-reap-triggers --yes`), `openspec validate --all --strict`, commit, open PR via iris
+- [x] 5.2 `make pre-pr` green
+- [x] 5.3 Archive the change (`openspec archive add-coord-reap-triggers --yes`), `openspec validate --all --strict`, commit, open PR via iris
