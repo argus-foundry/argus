@@ -36,11 +36,14 @@ func TestSortBoardItemsBands(t *testing.T) {
 
 func TestBoardAttentionExcludesQuiet(t *testing.T) {
 	for _, i := range kindItems() {
-		quiet := i.Kind == "todo" || i.TriggerPending
-		testutil.Equal(t, heramodel.BoardAttention(i), !quiet)
+		t.Run(i.Subject, func(t *testing.T) {
+			quiet := i.Kind == "todo" || i.TriggerPending
+			testutil.Equal(t, heramodel.BoardAttention(i), !quiet)
+		})
 	}
 	read := &db.HeraBoardItem{Kind: "action", Blocking: true, Read: true}
 	testutil.False(t, heramodel.BoardAttention(read))
+	testutil.False(t, heramodel.BoardAttention(&db.HeraBoardItem{Kind: "action", Blocking: true, Resolved: true}))
 }
 
 func TestBoardRenderKindsAndMetadata(t *testing.T) {
