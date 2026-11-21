@@ -1126,6 +1126,10 @@ func (a *App) buildUI() {
 			}()
 		}
 		a.heraPage.OnBoardDismiss = func(roleID, itemID int64) { go a.mutateHeraBoard(d, roleID, itemID, time.Time{}, true) }
+		a.heraPage.OnBoardComplete = func(item *db.HeraBoardItem, outcome string) {
+			go a.completeHeraBoardItem(d, item, outcome)
+		}
+		a.heraPage.OnBoardCopy = a.copyBoardCommand
 		a.heraPage.OnApprovalDecision = func(item *db.HeraBoardItem, approve bool) { a.confirmResidentApproval(d, item, approve) }
 		// Persist + restore the rail's fold/selection state across restarts
 		// (BUG-002). Local-only: remote mode (apistore) has no config table seam,

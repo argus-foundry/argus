@@ -307,7 +307,7 @@ func (a *App) readResidentBoardUnread() (int, error) {
 				return 0, err
 			}
 			for _, item := range items {
-				if !item.Read {
+				if heramodel.BoardAttention(item) {
 					unread++
 				}
 			}
