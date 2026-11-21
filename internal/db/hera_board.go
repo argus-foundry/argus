@@ -41,6 +41,12 @@ type HeraBoardItem struct {
 	// consumed, denied, stale, expired, withdrawn, superseded); empty for an
 	// ordinary item.
 	ApprovalState string `json:"approval_state,omitempty"`
+	// Action/todo metadata (add-board-action-todo-kinds). The store is owned
+	// by the board-kinds change; these mirror its wire shape so clients compile.
+	Blocking       bool   `json:"blocking"`
+	Trigger        string `json:"trigger"`
+	TriggerPending bool   `json:"trigger_pending"`
+	Command        string `json:"command"`
 }
 
 const boardColumns = `id, role_id, kind, subject, body, created_at, updated_at, is_read, resolved, resolved_by, resolution_note, structured, resolution_choice, COALESCE((SELECT a.state FROM resident_approvals a WHERE a.board_id=hera_board_items.id),'')`

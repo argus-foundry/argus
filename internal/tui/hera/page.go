@@ -213,6 +213,8 @@ type HeraPage struct {
 	OnBoardDecide      func(roleID, focusItemID int64)
 	OnBoardRead        func(roleID, itemID int64, updatedAt time.Time)
 	OnBoardDismiss     func(roleID, itemID int64)
+	OnBoardComplete    func(item *db.HeraBoardItem, outcome string)
+	OnBoardCopy        func(item *db.HeraBoardItem)
 	OnApprovalDecision func(item *db.HeraBoardItem, approve bool)
 
 	// planOrchID is the orchestrator ID whose plan is currently projected into the

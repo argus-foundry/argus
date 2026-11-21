@@ -1296,9 +1296,10 @@ func BuildModel(r HeraReader, needsInput map[string]bool, sessionIdle map[string
 					if berr != nil {
 						uxlog.Log("[board] snapshot failed role=%d: %v", role.ID, berr)
 					} else {
+						SortBoardItems(items)
 						rv.BoardItems = items
 						for _, item := range items {
-							if !item.Read {
+							if BoardAttention(item) {
 								rv.BoardUnread++
 							}
 						}
