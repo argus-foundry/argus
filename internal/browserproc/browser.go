@@ -29,6 +29,20 @@ type Process struct {
 	Root                   bool
 }
 
+// PartialInspectionError means process enumeration succeeded, but these
+// candidates could not be inspected. Returned processes remain verified.
+// Other scan errors invalidate the entire result.
+type PartialInspectionError struct {
+	PIDs   []int
+	causes []error
+}
+
+func (e *PartialInspectionError) Error() string {
+	return fmt.Sprintf("browser inspection incomplete: %d candidates unavailable", len(e.PIDs))
+}
+
+func (e *PartialInspectionError) Unwrap() []error { return e.causes }
+
 var output = func(name string, args ...string) ([]byte, error) {
 	// Lifecycle tests must never inspect or signal real user browsers.
 	if strings.HasSuffix(os.Args[0], ".test") {
@@ -184,14 +198,20 @@ func Scan(root string) ([]Process, error) {
 	}
 	groups := map[int]Process{}
 	var found []Process
+	partial := &PartialInspectionError{}
+	skip := func(p Process, err error) {
+		log("cwd unavailable", p, nil)
+		partial.PIDs = append(partial.PIDs, p.PID)
+		partial.causes = append(partial.causes, err)
+	}
 	for _, p := range all {
 		if !browserExe(p.Command) || strings.Contains(p.Command, " --type=") || !strings.Contains(p.Command, " --remote-debugging-pipe") {
 			continue
 		}
 		p.CWD, err = cwd(p.PID)
 		if err != nil {
-			log("cwd unavailable", p, err)
-			return nil, fmt.Errorf("browser pid %d cwd: %w", p.PID, err)
+			skip(p, err)
+			continue
 		}
 		p = identify(p, root)
 		if p.Root {
@@ -207,11 +227,18 @@ func Scan(root string) ([]Process, error) {
 			continue
 		}
 		p.CWD, err = cwd(p.PID)
-		if err != nil || p.CWD != leader.CWD {
+		if err != nil {
+			skip(p, err)
+			continue
+		}
+		if p.CWD != leader.CWD {
 			continue
 		}
 		p.Worktree = leader.Worktree
 		found = append(found, p)
+	}
+	if len(partial.PIDs) > 0 {
+		return found, partial
 	}
 	return found, nil
 }
@@ -220,8 +247,12 @@ func Scan(root string) ([]Process, error) {
 func Capture(worktree, root string) []Process {
 	procs, err := Scan(root)
 	if err != nil {
-		log("scan unavailable", Process{Worktree: worktree}, err)
-		return nil
+		var partial *PartialInspectionError
+		if !errors.As(err, &partial) {
+			log("scan unavailable", Process{Worktree: worktree}, err)
+			return nil
+		}
+		log("scan incomplete", Process{Worktree: worktree}, err)
 	}
 	var found []Process
 	for _, p := range procs {

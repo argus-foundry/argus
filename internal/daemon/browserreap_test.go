@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"errors"
+	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -70,6 +72,47 @@ func TestBrowserReaperGraceResets(t *testing.T) {
 	testutil.Equal(t, stopped, 0)
 	r.tick()
 	testutil.Equal(t, stopped, 1)
+}
+
+func TestBrowserReaperPartialGrace(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		t.Run(fmt.Sprint(shared), func(t *testing.T) {
+			r := newBrowserReaper(func() ([]string, error) { return nil, nil }, &fakeDSTasks{}, dsRoot)
+			wt := dsRoot + "/p/t"
+			other := wt
+			if !shared {
+				other += "-other"
+			}
+			failed := false
+			r.scan = func(string) ([]browserproc.Process, error) {
+				p := []browserproc.Process{{PID: 20, Root: true, Worktree: wt}}
+				if failed {
+					return p, &browserproc.PartialInspectionError{PIDs: []int{30}}
+				}
+				return append(p, browserproc.Process{PID: 30, Root: true, Worktree: other}), nil
+			}
+			var stopped []int
+			r.stop = func(ps []browserproc.Process, _ browserproc.Options) {
+				for _, p := range ps {
+					stopped = append(stopped, p.PID)
+				}
+			}
+			for range 5 {
+				r.tick()
+			}
+			failed = true
+			r.tick()
+			testutil.DeepEqual(t, stopped, []int{20})
+			failed = false
+			for range 5 {
+				r.tick()
+			}
+			testutil.DeepEqual(t, stopped, []int{20})
+			r.tick()
+			sort.Ints(stopped)
+			testutil.DeepEqual(t, stopped, []int{20, 20, 30})
+		})
+	}
 }
 
 func TestBrowserReaperLoop(t *testing.T) {

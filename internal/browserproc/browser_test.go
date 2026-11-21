@@ -204,6 +204,39 @@ func TestCaptureInspectionUnavailable(t *testing.T) {
 	testutil.Equal(t, len(Capture(testWT, testRoot)), 0)
 }
 
+func TestScanPartialInspection(t *testing.T) {
+	for _, failed := range []int{20, 21} {
+		t.Run(fmt.Sprint(failed), func(t *testing.T) {
+			procs, _ := fakeInspection(t)
+			(*procs)[30] = Process{PID: 30, PPID: 1, PGID: 30, Command: chrome + chromeArgs, CWD: testWT}
+			prior := output
+			denied := errors.New("denied")
+			output = func(name string, args ...string) ([]byte, error) {
+				if (name == "lsof" && args[3] == fmt.Sprint(failed)) || (name == "readlink" && args[0] == fmt.Sprintf("/proc/%d/cwd", failed)) {
+					return nil, denied
+				}
+				return prior(name, args...)
+			}
+			found, err := Scan(testRoot)
+			var partial *PartialInspectionError
+			testutil.Equal(t, errors.As(err, &partial), true)
+			testutil.ErrorIs(t, err, denied)
+			testutil.DeepEqual(t, partial.PIDs, []int{failed})
+			var ids []int
+			for _, p := range found {
+				ids = append(ids, p.PID)
+			}
+			sort.Ints(ids)
+			want := []int{20, 30}
+			if failed == 20 {
+				want = []int{30}
+			}
+			testutil.DeepEqual(t, ids, want)
+			testutil.Equal(t, len(Capture(testWT, testRoot)), len(want))
+		})
+	}
+}
+
 func TestDefaultWait(t *testing.T) {
 	c := make(chan struct{})
 	close(c)

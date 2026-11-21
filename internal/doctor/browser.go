@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,7 +13,9 @@ import (
 func RenderBrowserOrphans(procs []browserproc.Process, err error) string {
 	var b strings.Builder
 	b.WriteString("\nOrphaned Argus Playwright browsers: ")
-	if err != nil {
+	var partial *browserproc.PartialInspectionError
+	incomplete := errors.As(err, &partial)
+	if err != nil && !incomplete {
 		return b.String() + "UNKNOWN (process inspection unavailable)\n"
 	}
 	var orphans []browserproc.Process
@@ -22,7 +25,13 @@ func RenderBrowserOrphans(procs []browserproc.Process, err error) string {
 		}
 	}
 	if len(orphans) == 0 {
+		if incomplete {
+			return b.String() + "PARTIAL (process inspection incomplete; no verified orphans)\n"
+		}
 		return b.String() + "NONE FOUND\n"
+	}
+	if incomplete {
+		b.WriteString("PARTIAL (process inspection incomplete); ")
 	}
 	fmt.Fprintf(&b, "FOUND (%d)\n", len(orphans))
 	for _, p := range orphans {

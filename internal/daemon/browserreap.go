@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"time"
@@ -12,7 +14,8 @@ import (
 )
 
 // browserReaper is process-driven: a missing task row or exited session must
-// not hide a detached browser. Failed reads reset grace and never signal.
+// not hide a detached browser. Whole-scan failures reset all grace; candidate
+// inspection failures reset only that captured process's evidence.
 type browserReaper struct {
 	running func() ([]string, error)
 	tasks   devStackReapTasks
@@ -70,27 +73,32 @@ func (r *browserReaper) tick() {
 	if err == nil {
 		procs, err = r.scan(r.root)
 	}
-	if err != nil {
+	var partial *browserproc.PartialInspectionError
+	if err != nil && !errors.As(err, &partial) {
 		r.armed = map[string]int{}
 		slog.Warn("browser reaper: inspection failed, skipping tick", "err", err)
 		uxlog.Log("[browsercleanup] sweep inspection failed: %v", err)
 		return
 	}
+	if partial != nil {
+		slog.Warn("browser reaper: partial inspection", "skipped", len(partial.PIDs))
+		uxlog.Log("[browsercleanup] sweep partial inspection skipped=%d", len(partial.PIDs))
+	}
 	slog.Debug("browser reaper: scan complete", "processes", len(procs))
 	uxlog.Log("[browsercleanup] sweep scan processes=%d", len(procs))
+	next := map[string]int{}
 	byWT := map[string][]browserproc.Process{}
 	for _, p := range procs {
-		byWT[p.Worktree] = append(byWT[p.Worktree], p)
+		if !r.eligible(p.Worktree, rows, live) {
+			continue
+		}
+		key := browserGraceKey(p)
+		next[key] = r.armed[key] + 1
+		if next[key] >= 6 {
+			byWT[p.Worktree] = append(byWT[p.Worktree], p)
+		}
 	}
-	next := map[string]int{}
 	for wt, ps := range byWT {
-		if !r.eligible(wt, rows, live) {
-			continue
-		}
-		next[wt] = r.armed[wt] + 1
-		if next[wt] < 6 {
-			continue
-		}
 		select {
 		case <-r.cancel:
 			return
@@ -103,9 +111,15 @@ func (r *browserReaper) tick() {
 		slog.Info("browser reaper: stopping finished or missing task browsers", "worktree", wt, "processes", len(ps))
 		uxlog.Log("[browsercleanup] sweep worktree=%s processes=%d", wt, len(ps))
 		r.stop(ps, browserproc.Options{Cancel: r.cancel, Proceed: proceed})
-		delete(next, wt)
+		for _, p := range ps {
+			delete(next, browserGraceKey(p))
+		}
 	}
 	r.armed = next
+}
+
+func browserGraceKey(p browserproc.Process) string {
+	return fmt.Sprintf("%d:%d:%t:%q:%q:%q", p.PID, p.PGID, p.Root, p.Command, p.CWD, p.Worktree)
 }
 
 func (d *Daemon) runBrowserReaper() {
