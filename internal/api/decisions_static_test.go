@@ -19,7 +19,7 @@ func TestDecisionStaticAssets(t *testing.T) {
 	testutil.NoError(t, err)
 	source := string(sw)
 	testutil.Contains(t, source, "url.pathname === '/decide'")
-	testutil.Contains(t, source, "argus-shell-v99")
+	testutil.Contains(t, source, "argus-shell-v100")
 	shell := source[strings.Index(source, "const SHELL_ASSETS"):strings.Index(source, "];")]
 	testutil.Equal(t, strings.Contains(shell, "/decide"), false)
 }
