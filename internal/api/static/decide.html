@@ -224,7 +224,7 @@ body .page-layout{grid-template-columns:200px minmax(0,1fr) 290px;max-width:1540
 <body>
 <header class="bar"><div class="wrap bar-in"><strong>Argus / Decide</strong><span class="tally" id="tally" aria-live="polite">Loading boards…</span><label class="theme">Theme <select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header>
 <button class="btn phone-trigger" id="drawer-trigger">Coordinators ▾</button>
-<div class="page-layout"><aside id="rail"><h2 class="rail-heading">Coordinators</h2><p class="rail-help">⌘ / Ctrl ↑ ↓ to move</p><nav id="desktop-nav" aria-label="Coordinators"></nav></aside><div class="board-column"><div class="wrap"><p id="status" role="status"></p><p id="updates" hidden><span id="changes">Boards changed.</span> <button class="btn" id="refresh">Refresh</button></p><div id="receipts" aria-live="polite"></div><main id="main" tabindex="-1"></main></div></div><aside id="annotation-panel" aria-label="Item annotations"></aside></div>
+<div class="page-layout"><aside id="rail"><h2 class="rail-heading">Coordinators</h2><p class="rail-help">⌘ / Ctrl ↑ ↓ to move</p><nav id="desktop-nav" aria-label="Coordinators"></nav></aside><div class="board-column"><div class="wrap"><p id="status" role="status"></p><p id="updates" hidden><span id="changes">Boards changed.</span> <button class="btn" id="refresh">Refresh</button></p><main id="main" tabindex="-1"></main></div></div><aside id="annotation-panel" aria-label="Item annotations"></aside></div>
 <footer class="queue" id="queue"><div class="wrap queue-inner"><div class="actions"><button class="btn" id="review" disabled>Review queued</button><button class="btn primary" id="submit" disabled>Submit</button><button class="btn" id="submit-close" disabled>Submit &amp; close</button><button class="btn" id="copy">Copy responses</button></div><p id="queued-description"></p><p id="confirmed" aria-live="polite"></p><p id="summary" aria-live="polite"></p><textarea id="copy-fallback" readonly hidden aria-label="Responses to copy"></textarea></div></footer>
 <dialog id="drawer"><div class="drawer-head"><h2>Coordinators</h2><button class="btn" id="drawer-close">Close</button></div><nav id="phone-nav" aria-label="Choose coordinator"></nav></dialog>
 <div id="selection-toolbar" role="toolbar" aria-label="Annotate selected text" hidden></div><dialog id="annotation-sheet" aria-labelledby="sheet-title"><div class="sheet-head"><h2 id="sheet-title">Annotations</h2><button class="btn" id="sheet-close">Close</button></div><div id="sheet-content"></div></dialog>
@@ -608,7 +608,7 @@ globalThis.BoardDecisions = (() => {
           if(L.accepted(group.kind,p,result)){
             if(group.kind==='decision'&&p.action!=='comment')acceptedCounts.answers++;else{if(p.action!=='dismiss'&&result.outcome!=='already_resolved')acceptedCounts.comments++;if(group.kind==='fyi'&&p.action!=='comment')acceptedCounts.dismissals++;}
             if(!(p.action==='comment')){const row=rowFor(r.role);if(row){if(group.kind==='fyi')row.fyis=Math.max(0,row.fyis-1);else row.decisions=Math.max(0,row.decisions-1);}}
-            r.draft=draft();r.status=p.action==='comment'?'Comment sent · still open':'Accepted';r.closed=p.action!=='comment';const receipt=el('p','receipt',`${labelFor(r.role)} · #${r.item.id}: ${r.status}`);$('receipts').append(receipt);
+            r.draft=draft();r.status=p.action==='comment'?'Comment sent · still open':'Accepted';r.closed=p.action!=='comment';
           }else{
             failed=true;r.status=result?.outcome||'Result unconfirmed. Retry to confirm.';
             if(result&&['conflict','invalid','not_found','already_resolved'].includes(result.outcome)){
@@ -624,7 +624,7 @@ globalThis.BoardDecisions = (() => {
     }
     if(!failed&&!closeAfter){
       screen='browse';
-      try{const next=await snapshot();busy=false;message('Actions sent. You can keep reviewing.');reconcile(next);}
+      try{const next=await snapshot();busy=false;message('Actions sent. You can keep reviewing.');const sent=$('status').textContent;setTimeout(()=>{if($('status').textContent===sent)$('status').textContent='';},4000);reconcile(next);}
       catch(e){busy=false;message('Actions sent. Board refresh failed: '+e.message);render();}return;
     }
     busy=false;
