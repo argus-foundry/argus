@@ -39,5 +39,8 @@
 
 - [ ] 6.1 After approval, run isolated disposable smoke jobs: default executable, sequential jobs, idle headed expiry, active/resumed operations, attached exclusion and every cleanup trigger; never use personal profiles.
 - [ ] 6.2 Run focused/race/coverage checks, hera-review plus test-adversary, fix findings, and pass full make pre-pr.
+
+  Validation note (2026-11-21): scanner spec and quality/test-adversary reviews passed. Supervisor stream surface was bumped 20 → 21 with red/green digest and compatibility tests; spawn surface is unchanged. Build, vet, goimports, lint and vulnerability gates passed. The unrestricted full race/coverage run timed out across broad packages (including Hera, MCP and TUI); a final corrected retry with `GOFLAGS=-p=3` was stopped when host load averages were 288.74 / 297.07 / 287.09. The complete gate remains unpassed, coverage floor and workspace tests remain unverified by this run, and implementation commits are intentionally not pushed or presented as a ready PR. Retry on a quieter host with the same checks. Log: `/tmp/argus-headless-browser-pre-pr.log`.
+
 - [ ] 6.3 Validate OpenSpec, archive deltas into base specs on this branch before merge, commit, push through iris, and obtain green PR CI.
 - [ ] 6.4 Obtain production deployment confirmation; verify adapter install, effective configuration, both running daemon/supervisor versions and fresh Claude/Codex launches; report any unrestarted/unmanaged old sessions explicitly.
