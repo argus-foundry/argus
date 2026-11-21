@@ -748,7 +748,7 @@ func (p *HeraPage) JumpToNextNeedsInput() bool {
 		p.showBoard = true
 		p.focus.SetRegion(FocusAgent)
 		for n, item := range p.board.items {
-			if !item.Read {
+			if heramodel.BoardAttention(item) {
 				p.board.cursor = n
 				break
 			}
