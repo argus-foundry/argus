@@ -103,6 +103,9 @@ func boardWorkOutcome(kind, outcome string) bool {
 
 func writeBoardWorkNotice(tx *sql.Tx, roleID int64, i *HeraBoardItem, outcome, note string) error {
 	tldr := fmt.Sprintf("Aaron (board) %s %s #%d", outcome, i.Kind, i.ID)
+	if i.ResolvedBy == "agent" {
+		tldr = fmt.Sprintf("Coordinator %s board %s #%d", outcome, i.Kind, i.ID)
+	}
 	body := tldr + ": " + i.Subject
 	if note != "" {
 		body += "\n\n" + note
@@ -127,9 +130,13 @@ func (d *DB) ResolveHeraBoardWorkItem(roleID, id int64, outcome, note string) er
 			return ErrHeraBoardInvalid
 		}
 		if i.Resolved {
+			if i.ResolutionChoice != outcome {
+				return ErrHeraBoardResolved
+			}
 			return nil
 		}
 		i.UpdatedAt = nextBoardRevision(i.UpdatedAt)
+		i.ResolvedBy = "agent"
 		_, err = tx.Exec(`UPDATE hera_board_items SET resolved=1,resolved_by='agent',resolution_choice=?,resolution_note=?,updated_at=? WHERE id=?`, outcome, note, formatTime(i.UpdatedAt), id)
 		if err != nil {
 			return err

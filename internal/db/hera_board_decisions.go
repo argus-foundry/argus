@@ -265,7 +265,7 @@ func (d *DB) answerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]He
 			}
 			if kind == "decision" {
 				open = append(open, fmt.Sprintf("#%d", id))
-			} else {
+			} else if kind == "fyi" {
 				openFYIs = append(openFYIs, fmt.Sprintf("#%d", id))
 			}
 		}

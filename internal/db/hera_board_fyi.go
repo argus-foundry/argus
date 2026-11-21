@@ -180,7 +180,9 @@ func (d *DB) FYIHeraBoardItems(roleID int64, actions []HeraBoardFYIAction) ([]He
 			case i.Kind == "fyi" && a.Action != "dismiss" && strings.TrimSpace(a.Note) == "" && len(a.Annotations) == 0:
 			case i.Kind == "fyi" && a.Action == "dismiss" && len(a.Annotations) > 0:
 			case i.Resolved:
-				if a.Action != "comment" && len(a.Annotations) == 0 {
+				if i.Kind != "fyi" && i.ResolutionChoice != a.Action {
+					r.Item = i
+				} else if a.Action != "comment" && len(a.Annotations) == 0 {
 					r.Outcome = "already_resolved"
 				}
 			case !i.UpdatedAt.Equal(a.ExpectedUpdatedAt):

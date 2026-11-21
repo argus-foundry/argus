@@ -439,6 +439,7 @@ func (d *DB) resolveHeraBoardItem(roleID, id int64, by, note, expected string) (
 	}
 	if work {
 		i.UpdatedAt = parseTime(now)
+		i.ResolvedBy = by
 		if err = writeBoardWorkNotice(tx, roleID, i, choice, note); err != nil {
 			return false, err
 		}

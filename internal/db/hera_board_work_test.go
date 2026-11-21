@@ -1,6 +1,8 @@
 package db
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,4 +119,79 @@ func TestBoardWorkCompletionConflictAndRollback(t *testing.T) {
 	testutil.Equal(t, len(items), 1)
 	_, err = d.HeraBoardFYIReceipt(c.ID, a.ActionID)
 	testutil.ErrorIs(t, err, ErrHeraBoardNotFound)
+}
+
+func TestBoardWorkTerminalOutcomeAndReceipts(t *testing.T) {
+	d := heraTestDB(t)
+	c := mkRole(t, d, mkOrch(t, d, "work").ID, "coord", HeraKindCoordinator)
+	i, err := d.PostHeraBoardItem(c.ID, "todo", "team work", "body")
+	testutil.NoError(t, err)
+	a := HeraBoardFYIAction{ActionID: "first", ItemID: i.ID, ExpectedUpdatedAt: i.UpdatedAt, Action: "done"}
+	result, err := d.FYIHeraBoardItems(c.ID, []HeraBoardFYIAction{a})
+	testutil.NoError(t, err)
+	testutil.Equal(t, result[0].Outcome, "resolved")
+	a.Action = "dropped"
+	for _, id := range []string{"first", "different"} {
+		t.Run(id, func(t *testing.T) {
+			a.ActionID = id
+			result, err = d.FYIHeraBoardItems(c.ID, []HeraBoardFYIAction{a})
+			testutil.NoError(t, err)
+			testutil.Equal(t, result[0].Outcome, "invalid")
+		})
+	}
+	testutil.ErrorIs(t, d.ResolveHeraBoardWorkItem(c.ID, i.ID, "dropped", ""), ErrHeraBoardResolved)
+	testutil.NoError(t, d.ResolveHeraBoardWorkItem(c.ID, i.ID, "done", ""))
+	messages, err := d.HeraInbox(c.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(messages), 1)
+}
+
+func TestBoardWorkValidationLimitsAndClearing(t *testing.T) {
+	d := heraTestDB(t)
+	c := mkRole(t, d, mkOrch(t, d, "work").ID, "coord", HeraKindCoordinator)
+	for _, tc := range []struct {
+		name string
+		p    HeraBoardMetadataPatch
+	}{
+		{"long trigger", HeraBoardMetadataPatch{Blocking: boardBool(false), Trigger: boardText(strings.Repeat("é", 513))}},
+		{"long command", HeraBoardMetadataPatch{Blocking: boardBool(false), Command: boardText(strings.Repeat("é", 8193))}},
+		{"invalid trigger utf8", HeraBoardMetadataPatch{Blocking: boardBool(false), Trigger: boardText("\xff")}},
+		{"invalid command utf8", HeraBoardMetadataPatch{Blocking: boardBool(false), Command: boardText("\xff")}},
+		{"blank trigger", HeraBoardMetadataPatch{Blocking: boardBool(false), Trigger: boardText("  ")}},
+		{"todo command", HeraBoardMetadataPatch{Command: boardText("step")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kind := "action"
+			if tc.name == "todo command" {
+				kind = "todo"
+			}
+			_, err := d.PostHeraBoardItemWithMetadata(c.ID, kind, "step", "body", tc.p)
+			testutil.ErrorIs(t, err, ErrHeraBoardInvalid)
+		})
+	}
+	i, err := d.PostHeraBoardItemWithMetadata(c.ID, "action", "step", "body", HeraBoardMetadataPatch{Blocking: boardBool(false), Trigger: boardText("after release"), Command: boardText("step")})
+	testutil.NoError(t, err)
+	i, err = d.UpdateHeraBoardItemWithMetadata(c.ID, i.ID, i.Kind, i.Subject, i.Body, HeraBoardMetadataPatch{Trigger: boardText(""), TriggerPending: boardBool(false), Command: boardText("")})
+	testutil.NoError(t, err)
+	testutil.Equal(t, i.Trigger, "")
+	testutil.Equal(t, i.Command, "")
+	testutil.Equal(t, i.TriggerPending, false)
+}
+
+func TestBoardWorkNotMisclassifiedInDecisionSummary(t *testing.T) {
+	d := heraTestDB(t)
+	c := mkRole(t, d, mkOrch(t, d, "work").ID, "coord", HeraKindCoordinator)
+	decision, err := d.PostHeraBoardItem(c.ID, "decision", "choose", "body", decisionFixture())
+	testutil.NoError(t, err)
+	todo, err := d.PostHeraBoardItem(c.ID, "todo", "future", "body")
+	testutil.NoError(t, err)
+	fyi, err := d.PostHeraBoardItem(c.ID, "fyi", "note", "body")
+	testutil.NoError(t, err)
+	_, err = d.AnswerHeraBoardItems(c.ID, []HeraBoardAnswer{{ItemID: decision.ID, ExpectedUpdatedAt: decision.UpdatedAt, Choice: "retry"}})
+	testutil.NoError(t, err)
+	messages, err := d.HeraInbox(c.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(messages), 1)
+	testutil.Contains(t, messages[0].Body, fmt.Sprintf("Still open FYIs: #%d", fyi.ID))
+	testutil.Equal(t, strings.Contains(messages[0].Body, fmt.Sprintf("#%d", todo.ID)), false)
 }

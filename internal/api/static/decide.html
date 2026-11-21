@@ -419,7 +419,7 @@ globalThis.BoardDecisions = (() => {
   }
   function renderPanel(){
     const r=records[activeItem]?.role===selected&&!records[activeItem].closed&&!records[activeItem].unavailable&&records[activeItem].item.kind===tab?records[activeItem]:Object.values(records).find(r=>r.role===selected&&!r.closed&&!r.unavailable&&r.item.kind===tab);
-    $('annotation-panel').hidden=screen!=='browse';
+    $('annotation-panel').hidden=screen!=='browse'||L.isCompletion(tab);
     for(const target of [$('annotation-panel'),$('sheet-content')]){
       target.replaceChildren();if(!r){target.append(el('p','subtle','Select an item to see its annotations.'));continue;}
       activeItem=key(r.role,r.item.id);const head=el('div','annotation-panel-head');head.append(el('h2','','Annotations'),el('span','subtle',`#${r.item.id} · ${anns(r).length} / 20`));target.append(head,el('p','subtle',r.item.subject),el('p','annotation-help','Select text → Comment or Delete. Activate an annotation to find its highlight.'));

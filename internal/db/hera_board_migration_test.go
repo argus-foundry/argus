@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/testutil"
@@ -81,4 +82,36 @@ UPDATE sqlite_sequence SET seq=9000 WHERE name='hera_board_items';`)
 		testutil.Equal(t, count, 1)
 		testutil.NoError(t, d.Close())
 	}
+}
+
+func TestBoardKindsMigrationIntegrityFailureRollsBack(t *testing.T) {
+	d := heraTestDB(t)
+	ctx := context.Background()
+	c, err := d.conn.Conn(ctx)
+	testutil.NoError(t, err)
+	_, err = c.ExecContext(ctx, `PRAGMA foreign_keys=OFF;
+DROP TABLE hera_board_items;
+CREATE TABLE hera_board_items (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, role_id INTEGER REFERENCES hera_roles(id),
+ kind TEXT CHECK(kind IN ('decision','fyi')), subject TEXT,body TEXT,created_at TEXT,updated_at TEXT,
+ is_read INTEGER DEFAULT 0,resolved INTEGER DEFAULT 0,resolved_by TEXT DEFAULT '',resolution_note TEXT DEFAULT '',
+ structured TEXT DEFAULT '',resolution_choice TEXT DEFAULT '',blocking INTEGER DEFAULT 0,
+ trigger TEXT DEFAULT '',trigger_pending INTEGER DEFAULT 0,command TEXT DEFAULT '');
+INSERT INTO hera_board_items(role_id,kind,subject) VALUES(-1,'fyi','orphan');
+PRAGMA foreign_keys=ON;`)
+	testutil.NoError(t, err)
+	testutil.NoError(t, c.Close())
+	err = d.migrateBoardKinds()
+	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "foreign key integrity")
+	var ddl string
+	testutil.NoError(t, d.conn.QueryRow(`SELECT sql FROM sqlite_master WHERE name='hera_board_items'`).Scan(&ddl))
+	testutil.Equal(t, strings.Contains(ddl, "'action'"), false)
+	var count, fk int
+	testutil.NoError(t, d.conn.QueryRow(`SELECT COUNT(*) FROM hera_board_items WHERE subject='orphan'`).Scan(&count))
+	testutil.Equal(t, count, 1)
+	testutil.NoError(t, d.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name='hera_board_items_new'`).Scan(&count))
+	testutil.Equal(t, count, 0)
+	testutil.NoError(t, d.conn.QueryRow(`PRAGMA foreign_keys`).Scan(&fk))
+	testutil.Equal(t, fk, 1)
 }

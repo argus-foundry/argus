@@ -17,7 +17,11 @@ func (d *DB) migrateBoardKinds() (result error) {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() {
+		if closeErr := c.Close(); result == nil {
+			result = closeErr
+		}
+	}()
 	var ddl string
 	if err = c.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='hera_board_items'`).Scan(&ddl); err != nil {
 		return err
