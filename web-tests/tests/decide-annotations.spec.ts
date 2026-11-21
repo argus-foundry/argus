@@ -32,7 +32,7 @@ test('cross-node comment, overlapping delete, independent removal and phone shee
 });
 test('annotation-only Submit keeps page and decision open, clears drafts and shows receipt',async({page})=>{
  const sends=await setup(page);await select(page,0,20);await page.locator('#selection-toolbar').getByRole('button',{name:'Delete',exact:true}).click();
- await page.getByRole('button',{name:'Submit',exact:true}).click();await expect(page.locator('#receipts')).toContainText('Comment sent');await expect(page.locator('#decision-11')).toBeVisible();await expect(page.locator('#tally')).toContainText('0 queued');
+ await page.getByRole('button',{name:'Submit',exact:true}).click();await expect(page.locator('#status')).toContainText('Actions sent');await expect(page.locator('.receipt')).toHaveCount(0);await expect(page.locator('#decision-11')).toBeVisible();await expect(page.locator('#tally')).toContainText('0 queued');
  expect(sends[0].action).toBe('comment');expect(sends[0].choice).toBe('');expect(sends[0].annotations[0].type).toBe('DELETION');expect(sends[0].annotations[0].selected_text_hash).toBe(createHash('sha256').update('Hello bold and plain').digest('hex'));expect(await page.evaluate(()=>(globalThis as any).attemptedClose)).toBeUndefined();
  await page.locator('input[value="a"]').check();await page.getByRole('button',{name:'Submit',exact:true}).click();await expect(page.locator('#decision-11')).toHaveCount(0);await expect(page.getByRole('tab',{name:'Decisions, 0 open'})).toBeVisible();
 });
@@ -42,7 +42,7 @@ test('Submit & close shares annotated payload path and confirms all accepted act
 
 test('cross-paragraph range, keyboard fallback, option isolation and native links',async({page})=>{
  const sends=await setup(page);await page.locator('[data-field="body"]').focus();await page.keyboard.press('Enter');await expect(page.locator('#selection-toolbar button').first()).toBeFocused();await page.locator('#selection-toolbar').getByRole('button',{name:'Delete',exact:true}).click();
- await page.getByRole('button',{name:'Submit',exact:true}).click();await expect(page.locator('#receipts')).toContainText('Comment sent');
+ await page.getByRole('button',{name:'Submit',exact:true}).click();await expect(page.locator('#status')).toContainText('Actions sent');await expect(page.locator('.receipt')).toHaveCount(0);
  expect(sends[0].annotations[0].selected_text_hash).toBe(createHash('sha256').update('Hello bold and plain text.\nFirst bullet\nNested detail https://example.com').digest('hex'));
  await expect(page.locator('#note-11')).toBeEnabled();
  await page.locator('[data-field="options.a.summary"]').evaluate(field=>{const r=document.createRange();r.selectNodeContents(field);getSelection()!.removeAllRanges();getSelection()!.addRange(r);field.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));});await expect(page.locator('#selection-toolbar')).toBeVisible();await page.locator('#selection-toolbar').getByRole('button',{name:'Delete',exact:true}).click();await expect(page.locator('input:checked')).toHaveCount(0);
@@ -102,7 +102,7 @@ test('FYI annotations convert dismiss visibly and plain decision comments retain
 
 test('Submit keeps edits disabled until its accepted refresh completes',async({page})=>{
  await setup(page);let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);await page.route('**/decision-navigation',async route=>{await gate;return route.fulfill({json:{roles:[{role_id:1,orchestrator:'Test',coordinator:'coord',decisions:1,fyis:0}]}});});
- await select(page,0,5);await page.locator('#selection-toolbar').getByRole('button',{name:'Delete',exact:true}).click();await page.locator('#submit').click();await expect(page.locator('#receipts')).toContainText('Comment sent');await expect(page.locator('#note-11')).toBeDisabled();await expect(page.locator('#submit-close')).toBeDisabled();release();await expect(page.locator('#note-11')).toBeEnabled();await expect(page.locator('#tally')).toContainText('0 queued');
+ await select(page,0,5);await page.locator('#selection-toolbar').getByRole('button',{name:'Delete',exact:true}).click();await page.locator('#submit').click();await expect(page.locator('#note-11')).toBeDisabled();await expect(page.locator('#submit-close')).toBeDisabled();release();await expect(page.locator('#note-11')).toBeEnabled();await expect(page.locator('#status')).toContainText('Actions sent');await expect(page.locator('.receipt')).toHaveCount(0);await expect(page.locator('#tally')).toContainText('0 queued');
 });
 
 test('long selections retain full ranges and hashes while previews stop at 512 UTF-8 bytes',async({page})=>{
