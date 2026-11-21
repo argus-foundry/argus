@@ -203,6 +203,13 @@ type Daemon struct {
 	// polls for coordinators with a pending recycle request and restarts
 	// each once its session goes idle.
 	heraRecycleWatcher *hera.RecycleWatcher
+	// heraReapNudger tells coordinators which roles became archivable
+	// (add-coord-reap-triggers); started when hera enabled, poked by the PR
+	// poller and the MCP hera_status(done)/hera_accept paths. Nil-safe Poke.
+	heraReapNudger *hera.ReapNudger
+	// heraReapPoke is heraReapNudger.Poke (a seam so poller tests can count
+	// pokes); nil when hera is disabled.
+	heraReapPoke func()
 	graduation         *graduationWatcher
 
 	// taskRecycler is the one task_recycle runner (nil until MCP wiring); the
@@ -1019,6 +1026,12 @@ func (d *Daemon) pollPRStatesOnce(ctx context.Context) {
 							Source: model.PRSourceAutomatic,
 						})
 						uxlog.Log("[pr] poll: %s changed state=%s lifecycle=%s", t.ID, res.State, lifecycle)
+						// A PR-state change can make a hera role archivable
+						// (merged, or open with CI settled); the watcher
+						// re-checks after its debounce.
+						if d.heraReapPoke != nil {
+							d.heraReapPoke()
+						}
 					}
 					if _, handedOff := handoffs[t.ID]; handedOff && t.Archived {
 						// The board item from SettleHandoff replaces the merge notices:
@@ -1809,6 +1822,11 @@ func (d *Daemon) Serve(sockPath string) error {
 		// meaning when hera is off.
 		d.heraRecycleWatcher = hera.NewRecycleWatcher(d.db, d.heraRecycleRunner())
 		go d.heraRecycleWatcher.Start()
+
+		ar, ag, ah := d.heraArchiver()
+		d.heraReapNudger = hera.NewReapNudger(d.db, ar, ag, ah, d.heraNotifyService().Deliver)
+		d.heraReapPoke = d.heraReapNudger.Poke
+		go d.heraReapNudger.Start()
 		d.graduation = newGraduationWatcher(d.db, d.runner, d.cfgFn, d.notifier)
 		go d.graduation.start()
 	}
@@ -1877,6 +1895,7 @@ func (d *Daemon) Serve(sockPath string) error {
 			ar, ag, ah := d.heraArchiver()
 			mcpSrv.SetHeraArchiver(ar, ag)
 			mcpSrv.SetHeraHandoff(ah)
+			mcpSrv.SetHeraReapPoke(d.heraReapNudger.Poke)
 			mcpSrv.SetHeraGraduationPreflight(d.graduation.preflight)
 		}
 		mcpSrv.SetArtifactManager(d.db)
@@ -2190,6 +2209,9 @@ func (d *Daemon) cleanup() {
 	}
 
 	// Stop the hera recycle_coord self-service watcher if running.
+	if d.heraReapNudger != nil {
+		d.heraReapNudger.Stop()
+	}
 	if d.heraRecycleWatcher != nil {
 		d.heraRecycleWatcher.Stop()
 	}

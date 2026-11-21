@@ -262,6 +262,9 @@ type Server struct {
 	heraRevive         HeraReviver        // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
 	// heraGraduationPreflight is set via SetHeraGraduationPreflight.
 	heraGraduationPreflight func(*model.Task) error
+	// heraReapPoke asks the daemon's reap nudge watcher for a debounced sweep
+	// (add-coord-reap-triggers); nil = no watcher.
+	heraReapPoke func()
 	profileCfg              ConfigStore  // optional; set via SetProfileResolver
 	apiGetMu                sync.RWMutex // guards apiGet (set after the listener is serving)
 	apiGet                  APIGetter    // optional; set via SetAPIGetter (argus_api_get)
@@ -3232,3 +3235,16 @@ func (s *Server) SetHeraArchiver(r hera.ArchiveRunner, g hera.GitCheck) {
 // SetHeraHandoff wires the handed-off archive check (add-hera-handoff-archive).
 // nil disables handed-off archives and the task_archive handoff path.
 func (s *Server) SetHeraHandoff(h hera.HandoffCheck) { s.heraHandoffCheck = h }
+
+// SetHeraReapPoke wires the reap nudge watcher's Poke (add-coord-reap-triggers).
+// hera_status(done) and hera_accept call it; nil disables the poke.
+func (s *Server) SetHeraReapPoke(poke func()) { s.heraReapPoke = poke }
+
+// pokeHeraReap is the nil-safe poke call site.
+func (s *Server) pokeHeraReap(why string) {
+	if s.heraReapPoke == nil {
+		return
+	}
+	slog.Info("[hera] reap-nudge: poke", "why", why)
+	s.heraReapPoke()
+}
