@@ -180,6 +180,15 @@ test('FYI-only initial selection and explicit focus select FYIs; required commen
  await page.getByRole('button',{name:'Review queued',exact:true}).click();await expect(page.locator('#main')).toContainText('Required note missing');
 });
 
+test('deep-linked item marker stays inside its card and clear of the tab hint',async({page},testInfo)=>{
+ await rail(page);
+ await page.goto(origin+'/decide?role=1&focus=11#t=launch');const card=page.locator('#decision-11');await expect(card).toHaveClass(/focused/);
+ const box=(await card.boundingBox())!,style=await card.evaluate(e=>{const c=getComputedStyle(e);return {outline:c.outlineStyle,offset:c.outlineOffset,shadow:c.boxShadow}});
+ expect(style.outline==='none'||parseFloat(style.offset)<=0).toBe(true);expect(style.shadow).not.toBe('none');
+ const help=page.locator('.tabs-help');if(await help.isVisible()){const h=(await help.boundingBox())!;expect(h.y+h.height).toBeLessThanOrEqual(box.y);}
+ await page.screenshot({path:testInfo.outputPath('decide-deeplink-focus.png')});
+});
+
 test('visibility refusal cannot unlock a previously uncertain comment before reconciliation',async({page})=>{
  const sends=await rail(page,{failFYI:true});await page.goto(origin+'/decide#t=launch');await expect(page.locator('#decision-11')).toBeVisible();
  await page.locator('#main').focus();await page.keyboard.press('Control+ArrowDown');await page.keyboard.press('Control+ArrowRight');
