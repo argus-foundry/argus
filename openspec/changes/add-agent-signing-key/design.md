@@ -84,6 +84,32 @@ Git invokes `gpg.ssh.program` with `ssh-keygen` arguments, not through a shell, 
 - When resolving the private key, the daemon derives its public key and compares it with `<ref>/public key`. A mismatch is a named error.
 - `argus doctor` gains an advisory "agent signing key" line: `OFF` (policy is not `agent-key`), `OK` (both halves resolve and match), or `BROKEN: <cause>`. It is advisory only and never changes doctor's exit code, like the other advisory checks.
 
+## Interfaces (contract shared by tests and implementation)
+
+Stage 1 writes tests against these names, and later stages implement them. Signatures may gain parameters only if the test is updated in the same commit.
+
+- `internal/config`:
+  - `GitConfig{AgentCommitSigning string \`toml:"agent_commit_signing"\`; AgentSigningKey string \`toml:"agent_signing_key"\`}`
+  - Constants `GitSigningInherit = "inherit"`, `GitSigningUnsigned = "unsigned"`, `GitSigningAgentKey = "agent-key"`
+  - `Validate()` errors mention `inherit, unsigned or agent-key`, and mention `git.agent_signing_key` for a bad or missing key
+- `internal/gitsign` (new, pure Go, no argus deps beyond config/uxlog):
+  - `func Sign(signer ssh.Signer, namespace string, data []byte) ([]byte, error)`: armored `-----BEGIN SSH SIGNATURE-----`, sha512, `ErrNamespace` unless namespace == "git"
+  - `func PublicKeyRef(ref string) string` → `ref + "/public key"`; `func PrivateKeyRef(ref string) string` → `ref + "/private key?ssh-format=openssh"`
+  - `type Resolver func(source string) (string, bool)`
+  - `type KeyHolder struct{...}`; `func NewKeyHolder(resolve Resolver, ref string) *KeyHolder`; `func (h *KeyHolder) Signer() (ssh.Signer, error)`: lazy, success-only memo, checks the public half and returns `ErrUnresolved` / `ErrMismatch` (wrapped with cause text)
+  - `type Status struct{ State string /* "OFF"|"OK"|"BROKEN" */; Cause string }`; `func Check(policy, ref string, resolve Resolver) Status`
+- `internal/agent`:
+  - `type AgentSigningEnv struct{ PublicKey, Program string }`
+  - `func agentGitPolicy(env []string, policy string, sign AgentSigningEnv) ([]string, error)`: for `agent-key`, appends `commit.gpgsign=true`, `gpg.format=ssh`, `user.signingkey=key::<PublicKey>`, `gpg.ssh.program=<Program>` (same COUNT/PARAMETERS mechanics as `unsigned`). An empty PublicKey still sets Program, so commits fail loudly in the helper.
+- `internal/api`:
+  - `type GitSignFunc func(ctx context.Context, taskID, namespace string, data []byte) ([]byte, error)`; `func (s *Server) SetGitSigner(f GitSignFunc)`
+  - `POST /api/git/sign` takes JSON `{"namespace","data" (base64 std),"task_id"}` and returns 200 `{"signature": "<armored>"}`, 400 `{"error"}` for a bad namespace or body, or 503 `{"error"}` for an unset signer or key error. Standard bearer auth, like `/api/artifacts/publish`.
+- `cmd/argus` (`git_sign.go`):
+  - `func gitSignCommand(args []string, env gitSignEnv, stdout, stderr io.Writer) int`
+  - `gitSignEnv{daemon func() (baseURL, token string, err error); http *http.Client; sshKeygen func(args []string, stdout, stderr io.Writer) int; retryFor time.Duration; sleep func(time.Duration); taskID string}`
+  - `main.go`: `if len(os.Args) > 1 && os.Args[1] == "-Y" { os.Exit(gitSignCommand(os.Args[1:], realGitSignEnv(), os.Stdout, os.Stderr)) }` before any other dispatch
+- `internal/doctor`: an `AgentSigningKey gitsign.Status` field on whatever report struct carries the other advisory checks, rendered as `agent signing key: OFF|OK|BROKEN: <cause>`
+
 ## Risks / Trade-offs
 
 - [Any process that can reach the daemon, including any agent, can request a `git`-namespace signature] → The same trust boundary as `argus artifact` and the master token today. The key itself never leaves the daemon, signatures are limited to the `git` namespace, and every signature is logged with its task. A stolen signature is worth far less than a stolen key.
