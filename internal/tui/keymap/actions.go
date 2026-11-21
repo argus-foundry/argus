@@ -161,6 +161,8 @@ const (
 	ActBoardDismiss    Action = "hera_board.dismiss"
 	ActBoardDown       Action = "hera_board.down"
 	ActBoardUp         Action = "hera_board.up"
+	ActBoardDone       Action = "hera_board.done"
+	ActBoardCopy       Action = "hera_board.copy"
 )
 
 // defaultSpecs is THE source of truth for argus's built-in bindings, mirroring
@@ -216,7 +218,7 @@ var defaultSpecs = map[Context]map[Action]string{
 		ActHeraAdopt: "J", ActHeraNewCoord: "n", ActHeraClear: "c",
 		ActHeraCleanup: "C", ActHeraInbox: "i", ActHeraMoveAccount: ">",
 	},
-	CtxHeraBoard: {ActBoardDecide: "o", ActBoardToggle: "p", ActBoardReply: "r", ActBoardDismiss: "x", ActBoardDown: "j", ActBoardUp: "k"},
+	CtxHeraBoard: {ActBoardDecide: "o", ActBoardToggle: "p", ActBoardReply: "r", ActBoardDismiss: "x", ActBoardDown: "j", ActBoardUp: "k", ActBoardDone: "d", ActBoardCopy: "c"},
 }
 
 // actionLabels are the human-readable descriptions used in the help overlay.
@@ -270,9 +272,11 @@ var actionLabels = map[Action]string{
 	ActBoardDecide:     "open Decide board in browser",
 	ActBoardToggle:     "toggle plan / human board",
 	ActBoardReply:      "compose reply / approve exact resident call",
-	ActBoardDismiss:    "dismiss item / deny resident call",
+	ActBoardDismiss:    "dismiss FYI / drop todo / deny call",
 	ActBoardDown:       "next board item",
 	ActBoardUp:         "previous board item",
+	ActBoardDone:       "mark action / todo done",
+	ActBoardCopy:       "copy action command / step",
 }
 
 // HelpRow is one rendered help line: the key chord and its action label.
@@ -343,7 +347,7 @@ var contextOrder = map[Context][]Action{
 	CtxHeraRail: {ActHeraSpawn, ActHeraNewCoord, ActHeraRename, ActHeraArchive, ActHeraPin,
 		ActHeraStatAdv, ActHeraStatRev, ActHeraKanbanAdv, ActHeraKanbanRev, ActHeraAdopt, ActHeraClear,
 		ActHeraCleanup, ActHeraInbox, ActHeraMoveAccount, ActHeraDelete},
-	CtxHeraBoard: {ActBoardDecide, ActBoardToggle, ActBoardReply, ActBoardDismiss, ActBoardDown, ActBoardUp},
+	CtxHeraBoard: {ActBoardDecide, ActBoardToggle, ActBoardReply, ActBoardDismiss, ActBoardDone, ActBoardCopy, ActBoardDown, ActBoardUp},
 }
 
 // ResidentAccess classifies a Projects-rail action for the resident tab.

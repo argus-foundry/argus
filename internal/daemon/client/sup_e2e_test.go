@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,14 +173,24 @@ func TestSupInnerAmbiguous(t *testing.T) {
 
 func waitFile(t *testing.T, path string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
+	// Every caller supplies a test-owned Unix socket. Bind creates its file
+	// before listen completes, so Stat alone races a following Connect.
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+		if err == nil {
+			testutil.NoError(t, conn.Close())
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-deadline.C:
+			t.Fatalf("socket %s did not accept connections", path)
+		case <-tick.C:
+		}
 	}
-	t.Fatalf("file %s did not appear", path)
 }
 
 func waitStatus(t *testing.T, database *db.DB, taskID string, want model.Status) {

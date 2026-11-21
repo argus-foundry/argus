@@ -418,6 +418,12 @@
 
 - **An omitted board-update `options` parameter preserves structured options and recommendation.** Only an explicit empty array clears the structure; structure changes mark unread and advance the revision so stale browser answers conflict.
 
+- **Rebuilding `hera_board_items` requires foreign keys OFF on the same pinned connection before BEGIN, then an integrity check and enforcement restored after commit/rollback.** Never rename the parent first (SQLite rewrites child targets), and preserve IDs, AUTOINCREMENT high-water mark, indexes/triggers and approval/receipt records; DROP with enforcement ON can silently cascade child deletion.
+
+- **Pending triggers and every board `todo` are quiet even when unread; triggering requires an explicit coordinator update, never parsing trigger prose.** Reuse the shared attention predicate in badge, landing, resident auto-show and jump paths; normal sub-coordinator archive must refuse open actions/todos in both its fast and transactional checks.
+
+- **Board `todo` is independent of Things 3 `internal/todo` and `todo_*` tools.** Do not introduce backend calls or infer completion from reads; action Done and board todo Done/Dropped use revision-checked durable receipts plus an atomic coordinator notice, and stored commands are copyable data only.
+
 ## Project rename
 
 - **`DB.RenameProject` rewrites every project reference in one transaction, including the key inside the `accounts.projects` config JSON.** A new reference column or JSON-keyed map keyed by project name must be added there or a rename silently orphans it.

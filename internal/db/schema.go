@@ -747,7 +747,7 @@ func (d *DB) createHeraTables() error {
 		CREATE TABLE IF NOT EXISTS hera_board_items (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			role_id INTEGER NOT NULL REFERENCES hera_roles(id) ON DELETE CASCADE,
-			kind TEXT NOT NULL CHECK(kind IN ('decision','fyi')),
+			kind TEXT NOT NULL CHECK(kind IN ('decision','fyi','action','todo')),
 			subject TEXT NOT NULL,
 			body TEXT NOT NULL,
 			created_at TEXT NOT NULL,
@@ -863,6 +863,17 @@ func (d *DB) createHeraTables() error {
 	}
 	d.conn.Exec(`ALTER TABLE hera_board_items ADD COLUMN structured TEXT NOT NULL DEFAULT ''`)        //nolint:errcheck
 	d.conn.Exec(`ALTER TABLE hera_board_items ADD COLUMN resolution_choice TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
+	for _, def := range []string{
+		"blocking INTEGER NOT NULL DEFAULT 0",
+		"trigger TEXT NOT NULL DEFAULT ''",
+		"trigger_pending INTEGER NOT NULL DEFAULT 0",
+		"command TEXT NOT NULL DEFAULT ''",
+	} {
+		d.conn.Exec(`ALTER TABLE hera_board_items ADD COLUMN ` + def) //nolint:errcheck
+	}
+	if err := d.migrateBoardKinds(); err != nil {
+		return err
+	}
 	// fix-resident-approval-flow: call_key matches identical call content
 	// across launches/sessions (supersede); decided_at/closed_at/superseded_by
 	// let a decide attempt name the item's real state. Idempotent.

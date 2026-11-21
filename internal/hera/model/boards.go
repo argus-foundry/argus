@@ -11,6 +11,9 @@ type BoardCoordinator struct {
 	Coordinator  string `json:"coordinator"`
 	Decisions    int    `json:"decisions"`
 	FYIs         int    `json:"fyis"`
+	Actions      int    `json:"actions"`
+	Todos        int    `json:"todos"`
+	ReadyActions int    `json:"ready_actions"`
 }
 
 // BoardNavigation shares the rail's canonical parent and section ordering.

@@ -212,7 +212,7 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 body{font-size:14px;line-height:1.45}h1{font-size:1.4rem;line-height:1.2}h2{font-size:1.1rem;line-height:1.25}.confirmation h1{font-size:1.4rem}
 .wrap{max-width:60rem}.page-layout{max-width:1540px;grid-template-columns:228px minmax(0,1fr)}.board-column>.wrap{max-width:60rem;padding-inline:20px}.mock-control{max-width:1540px;padding-block:6px;gap:6px}.mock-control .btn{font-size:12px;padding:4px 10px}.bar-in{padding-block:6px}.theme{font-size:12px}.theme select{padding:5px;border-radius:4px}.tally{font-size:12px}.lede{padding-block:14px 10px;gap:6px}.intro{max-width:none}.mock-scope{font:11px/1.4 var(--mono)}
 .decision{gap:10px;padding-block:17px}.count{gap:7px;font:11px/1.4 var(--mono)}.state{font:11px/1.4 var(--mono);padding:1px 5px;border-radius:3px}.situation{gap:6px;max-width:none}.situation ul,.situation ol{padding-left:20px;margin-block:6px}.situation p{margin:0}.pill{font:10px/1.4 var(--mono);padding:1px 5px;border-radius:3px}.options{gap:6px}.opt{padding:8px 10px;gap:8px;border-radius:4px;min-height:40px;box-sizing:border-box}.opt input{width:16px;height:16px;margin-top:2px}.opt-body{gap:3px}.opt-head{gap:4px 8px}.opt-label{font-size:14px}.trade{font-size:12px;line-height:1.4;gap:6px;grid-template-columns:4.25rem minmax(0,1fr)}.trade .k{font:10px/1.4 var(--mono);padding-top:1px}.why{margin-top:2px;padding-top:5px;font-size:12px}.note{gap:4px}.note label{font-size:12px}.note textarea{font-size:14px;min-height:3.5rem;padding:7px 9px;border-radius:4px}.hint{font-size:12px}.subtle{font-size:12px}.actions{gap:6px}.btn{font-size:13px;font-weight:500;padding:6px 10px;border-radius:4px;min-height:32px}.fyi-actions{gap:6px}.fyi-actions .btn{font-size:12px;padding:6px 10px}.clear{font-size:12px;padding:4px 0}.queue{padding-block:8px;box-shadow:none}.queue-inner{gap:6px;max-width:72rem}.queue p{font-size:12px}.queue .actions{gap:6px}.tabs{margin-block:12px 0;gap:6px}.tabs .btn{font:12px/1.4 var(--mono);display:flex;justify-content:center;align-items:center;gap:8px;padding:6px 10px}.tabs-help{font:10px/1.4 var(--mono);margin-top:5px}
-.count-badge{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 4px;box-sizing:border-box;border:1px solid transparent;border-radius:3px;background:var(--accent);color:var(--on-accent);font:600 12px/1 var(--mono);font-variant-numeric:tabular-nums}.count-badge.fyi{background:var(--fyi-badge);color:var(--on-fyi-badge)}.count-badge.zero{background:transparent;color:var(--muted);border-color:var(--line)}
+.count-badge{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 4px;box-sizing:border-box;border:1px solid transparent;border-radius:3px;background:var(--accent);color:var(--on-accent);font:600 12px/1 var(--mono);font-variant-numeric:tabular-nums}.count-badge.fyi{background:var(--fyi-badge);color:var(--on-fyi-badge)}.count-badge.action{background:var(--warn);color:var(--bg)}.count-badge.todo{background:var(--muted);color:var(--bg)}.count-badge.zero{background:transparent;color:var(--muted);border-color:var(--line)}
 #rail{padding:12px 7px;top:44px}.rail-heading{font:500 12px/1.4 var(--mono);padding-inline:8px}.rail-help{font:10px/1.4 var(--mono);padding-inline:8px;margin-block:5px 12px}.rail-row{font-size:13px;line-height:18px;padding:5px 8px;min-height:30px;box-sizing:border-box;margin:1px 0;gap:6px;border-radius:4px}.rail-row.nested{padding-left:20px}.rail-row[aria-current="true"]{box-shadow:inset 2px 0 var(--accent)}.row-counts{display:inline-flex;gap:3px;align-items:center}.row-counts .count-badge{min-width:18px;height:18px;font-size:10px;padding:0 3px}.rail-row .queued-dot{width:4px;height:4px}dialog{border-radius:4px;padding:12px}.drawer-head{margin-bottom:12px}.drawer-head h2{font:500 13px var(--mono)}.receipt{padding-block:10px;gap:4px}.confirmation{padding-block:24px;gap:12px}
 @media(max-width:700px){.page-layout{display:block}.board-column>.wrap{padding-inline:12px}.wrap{padding-inline:12px}.phone-trigger{width:calc(100% - 24px);margin:10px 12px 0;font-size:13px}.btn,.theme select,.rail-row,.clear{min-height:40px}.rail-row{padding-block:10px}.mock-control .btn{min-height:32px}.note textarea{font-size:16px}.queue .btn{min-height:40px;padding:7px 10px}.queue{padding-bottom:max(8px,env(safe-area-inset-bottom,0px))}.opt{min-height:40px}.lede{padding-top:14px}.tabs .btn{min-height:40px}.fyi-actions .btn{min-height:40px}.theme select{min-height:40px}.trade{grid-template-columns:4.25rem minmax(0,1fr)}}
 
@@ -220,6 +220,7 @@ body .page-layout{grid-template-columns:200px minmax(0,1fr) 290px;max-width:1540
 @media(max-width:1000px) and (min-width:851px){body .page-layout{grid-template-columns:175px minmax(0,1fr) 260px}.board-column>.wrap{padding-inline:12px}}
 @media(max-width:850px){body .page-layout{display:block}#rail,#annotation-panel{display:none!important}.phone-trigger{display:block;width:calc(100% - 24px);margin:10px 12px 0}.board-column>.wrap{padding-inline:12px}.annotation-trigger,#selection-toolbar .btn,.annotation-card .clear{min-height:40px}.annotation-composer textarea{font-size:16px}.annotation-composer .btn{min-height:40px}.annotation-panel-head h2{font-size:14px}.annotation-card p{font-size:14px}.annotation-card blockquote{font-size:12px}.range-highlight{padding:2px 0}}
 
+.tabs{flex-wrap:wrap}.tabs .btn{flex:1 1 6.5rem;min-width:0}.decision.blocking{border-left:4px solid var(--warn);padding-left:12px}.decision.deferred{opacity:.88}.pill.blocking{background:var(--warn);color:var(--bg);font-weight:600}.pill.deferred{border:1px solid var(--line);color:var(--muted)}.meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.command{display:grid;gap:6px}.command pre{margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:4px;background:var(--surface);font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}.command .btn{justify-self:start}
 </style></head>
 <body>
 <header class="bar"><div class="wrap bar-in"><strong>Argus / Decide</strong><span class="tally" id="tally" aria-live="polite">Loading boards…</span><label class="theme">Theme <select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header>
@@ -236,6 +237,7 @@ globalThis.BoardDecisions = (() => {
     const a=draft.annotations||[];if(!Array.isArray(a))return false;
     if(draft.stale||a.length>20||a.some(v=>!v||!['COMMENT','DELETION'].includes(v.type)||typeof v.comment!=='string'||new TextEncoder().encode(v.comment).length>4096||(v.type==='COMMENT'&&!v.comment.trim())))return false;
     if(item.kind==='decision'&&!draft.choice&&draft.action==='comment')return !!draft.note.trim()||!!a.length;
+    if(item.kind==='action'||item.kind==='todo')return !a.length&&(item.kind==='todo'?['done','dropped']:['done']).includes(draft.action);
     if(item.kind==='fyi')return ['comment','dismiss','comment_and_dismiss'].includes(draft.action)&&(draft.action==='dismiss'?!a.length:(!!draft.note.trim()||!!a.length));
     if (draft.choice === 'other') return !!draft.note.trim();
     return !!item.structured?.options.some(option => option.id === draft.choice);
@@ -309,6 +311,14 @@ globalThis.BoardDecisions = (() => {
     return [...groups.values()].flatMap(group=>{const out=[];for(let n=0;n<group.length;n+=16)out.push({role:group[0].role,kind:group[0].item.kind,records:group.slice(n,n+16)});return out;});
   }
   function accepted(kind,sent,result){return !!result&&sent.item_id===result.item_id&&(!sent.action_id||sent.action_id===result.action_id)&&(sent.action==='comment'?result.outcome==='commented':sent.annotations?.length?result.outcome==='resolved':['resolved','already_resolved'].includes(result.outcome));}
+  const TABS=['decision','fyi','action','todo'];
+  const isCompletion=kind=>kind==='action'||kind==='todo';
+  // Everything except decisions posts to the batched fyi-actions path (action_id + done/dropped).
+  const endpoint=kind=>kind==='decision'?'/answers':'/fyi-actions';
+  // Bands: 0 blocking actions, 1 decisions/FYIs/ready non-blocking actions, 2 pending items and todos. Ascending id inside a band.
+  function band(item){if(item.kind==='todo'||item.trigger_pending)return 2;return item.kind==='action'&&item.blocking?0:1;}
+  function order(items){return [...items].sort((a,b)=>band(a)-band(b)||a.id-b.id);}
+  function adjacent(tab,dx){const at=TABS.indexOf(tab);return TABS[Math.max(0,Math.min(TABS.length-1,(at<0?0:at)+(dx<0?1:-1)))];}
   function editable(target){return !!target?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]');}
   function navigate(e,rows,role,tab){
     if(e.isComposing||e.altKey||e.shiftKey||!(e.metaKey||e.ctrlKey)||editable(e.target)||!rows.length)return null;
@@ -316,7 +326,7 @@ globalThis.BoardDecisions = (() => {
     if(e.key==='ArrowLeft'||e.key==='ArrowRight')return {role,tab:e.key==='ArrowLeft'?'decision':'fyi'};
     return null;
   }
-  return {draftKey,valid,payload,outcome,markup,inline,finish,batches,accepted,editable,navigate};
+  return {draftKey,valid,payload,outcome,markup,inline,finish,batches,accepted,editable,navigate,TABS,isCompletion,endpoint,band,order,adjacent};
 })();
 </script>
 <script>
@@ -329,7 +339,7 @@ globalThis.BoardDecisions = (() => {
   const storage={read(key){try{return JSON.parse(localStorage.getItem(key));}catch{return null;}},save(key,value){try{localStorage.setItem(key,JSON.stringify(value));}catch{if(!finished)$('summary').textContent='Draft storage unavailable. Copy responses before leaving.';}}};
   const sessionKey='board-decision-session',draftKey='board-responses';
   let session='',rows=[],records={},selected=0,tab='decision',screen='browse',pending=null,busy=false,expired=false,finished=false,generation=0,polling=false,acceptedSnapshot='';
-  const acceptedCounts={answers:0,comments:0,dismissals:0};
+  const acceptedCounts={answers:0,comments:0,dismissals:0,completions:0};
   const key=(role,id)=>`${role}:${id}`,base=role=>`/api/hera/roles/${role}/board`;
   const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
   const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.onclick=fn;return b;};
@@ -409,7 +419,7 @@ globalThis.BoardDecisions = (() => {
   }
   function renderPanel(){
     const r=records[activeItem]?.role===selected&&!records[activeItem].closed&&!records[activeItem].unavailable&&records[activeItem].item.kind===tab?records[activeItem]:Object.values(records).find(r=>r.role===selected&&!r.closed&&!r.unavailable&&r.item.kind===tab);
-    $('annotation-panel').hidden=screen!=='browse';
+    $('annotation-panel').hidden=screen!=='browse'||L.isCompletion(tab);
     for(const target of [$('annotation-panel'),$('sheet-content')]){
       target.replaceChildren();if(!r){target.append(el('p','subtle','Select an item to see its annotations.'));continue;}
       activeItem=key(r.role,r.item.id);const head=el('div','annotation-panel-head');head.append(el('h2','','Annotations'),el('span','subtle',`#${r.item.id} · ${anns(r).length} / 20`));target.append(head,el('p','subtle',r.item.subject),el('p','annotation-help','Select text → Comment or Delete. Activate an annotation to find its highlight.'));
@@ -469,7 +479,7 @@ globalThis.BoardDecisions = (() => {
     if(finished)return;
     const q=queued(),invalid=q.some(r=>!L.valid(r.item,r.draft));
     $('tally').textContent=`${q.length} queued · ${new Set(q.map(r=>r.role)).size} boards`;
-    $('confirmed').textContent=Object.values(acceptedCounts).some(n=>n>0)?`Confirmed: ${acceptedCounts.answers} answers · ${acceptedCounts.comments} comments · ${acceptedCounts.dismissals} dismissals`:'';
+    $('confirmed').textContent=Object.values(acceptedCounts).some(n=>n>0)?`Confirmed: ${acceptedCounts.answers} answers · ${acceptedCounts.comments} comments · ${acceptedCounts.dismissals} dismissals · ${acceptedCounts.completions} completions`:'';
     $('submit').disabled=busy||expired||!q.length||invalid;
     $('review').disabled=busy||!q.length;
     $('submit-close').disabled=$('submit').disabled;
@@ -477,17 +487,20 @@ globalThis.BoardDecisions = (() => {
     $('submit-close').textContent=busy?'Sending…':'Submit & close';
     $('queued-description').textContent=invalid?'Add required notes before submitting.':q.length?`${q.length} actions across ${new Set(q.map(r=>r.role)).size} coordinators. Unselected items stay open.`:'Only selected actions are submitted. Everything else stays open.';
   }
+  const total=row=>(row.decisions||0)+(row.fyis||0)+(row.actions||0)+(row.todos||0);
+  const countOf=(row,kind)=>row[{decision:'decisions',fyi:'fyis',action:'actions',todo:'todos'}[kind]]||0;
+  const TAB_LABEL={decision:'Decisions',fyi:'FYIs',action:'Actions',todo:'Todos'},KIND_LABEL={decision:'Decision',fyi:'FYI',action:'Action',todo:'Todo'};
   function badge(kind,n){const b=el('span',`count-badge ${kind}${!n?' zero':''}`,String(n));b.setAttribute('aria-hidden','true');return b;}
   function drawNav(){
     for(const id of ['desktop-nav','phone-nav']){
       const nav=$(id);nav.replaceChildren();
       for(const row of rows){
-        const n=row.decisions+row.fyis,b=button('',()=>{visit(row.role_id);if($('drawer').open)closeDrawer();},`rail-row${!n?' empty':''}`);
+        const n=total(row),b=button('',()=>{visit(row.role_id);if($('drawer').open)closeDrawer();},`rail-row${!n?' empty':''}`);
         let depth=0,parent=row.parent_role_id,seen=new Set();while(parent&&!seen.has(parent)){seen.add(parent);depth++;parent=rowFor(parent)?.parent_role_id;}
-        b.style.paddingLeft=`${10+depth*16}px`;b.dataset.role=row.role_id;b.setAttribute('aria-current',String(selected===row.role_id));b.setAttribute('aria-label',`${row.orchestrator} / ${row.coordinator}, ${row.decisions} decisions, ${row.fyis} FYIs`);
+        b.style.paddingLeft=`${10+depth*16}px`;b.dataset.role=row.role_id;b.setAttribute('aria-current',String(selected===row.role_id));b.setAttribute('aria-label',`${row.orchestrator} / ${row.coordinator}, ${row.decisions} decisions, ${row.fyis} FYIs, ${row.actions||0} actions, ${row.todos||0} todos`);
         if(depth)b.append(el('span','row-branch','↳'));
         b.append(el('span','row-name',row.orchestrator));
-        if(n){const counts=el('span','row-counts');counts.append(badge('decision',row.decisions),badge('fyi',row.fyis));b.append(counts);}
+        if(n){const counts=el('span','row-counts');counts.append(badge('decision',row.decisions),badge('fyi',row.fyis));if(row.actions)counts.append(badge('action',row.actions));if(row.todos)counts.append(badge('todo',row.todos));b.append(counts);}
         if(queued().some(r=>r.role===row.role_id))b.append(el('span','queued-dot'));
         nav.append(b);
       }
@@ -496,9 +509,19 @@ globalThis.BoardDecisions = (() => {
   }
   function visit(role){if(busy)return;selected=role;screen='browse';render();window.scrollTo(0,0);}
   function renderCard(main,r){
-    const i=r.item,d=r.draft,card=el('section','decision');card.id=`decision-${i.id}`;
-    const count=el('p','count',`${i.kind==='fyi'?'FYI':'Decision'} #${i.id}`),state=el('span','state',r.status||((d.choice||d.action)?'Queued':'Open'));
-    count.append(state,button('Annotations '+anns(r).length,()=>openPanel(key(r.role,i.id)),'annotation-trigger'));card.append(count,fmt('h2','',i.subject));const body=el('div','situation');body.append(selectable(r,'body',L.markup(i.body,document)));card.append(body);
+    const i=r.item,d=r.draft,done=L.isCompletion(i.kind),card=el('section',`decision${i.blocking?' blocking':''}${i.trigger_pending?' deferred':''}`);card.id=`decision-${i.id}`;
+    const count=el('p','count',`${KIND_LABEL[i.kind]||'Decision'} #${i.id}`),state=el('span','state',r.status||((d.choice||d.action)?'Queued':'Open'));
+    count.append(state);if(!done)count.append(button('Annotations '+anns(r).length,()=>openPanel(key(r.role,i.id)),'annotation-trigger'));card.append(count,fmt('h2','',i.subject));const body=el('div','situation');body.append(done?L.markup(i.body,document):selectable(r,'body',L.markup(i.body,document)));card.append(body);
+    if(done){
+      const meta=el('div','meta');if(i.blocking)meta.append(el('span','pill blocking','Blocking'));
+      if(i.trigger_pending)meta.append(el('span','pill deferred','Deferred'),el('span','subtle',`Waiting for: ${i.trigger}`));else if(i.trigger)meta.append(el('span','pill deferred','Ready'),el('span','subtle',`Trigger: ${i.trigger}`));
+      if(meta.children.length)card.append(meta);
+      if(i.command){
+        const cmd=el('div','command'),pre=el('pre');pre.textContent=i.command;pre.tabIndex=0;pre.setAttribute('aria-label','Step to run (not executed by this page)');
+        const copy=button('Copy',async()=>{try{await navigator.clipboard.writeText(i.command);copy.textContent='Copied';setTimeout(()=>{copy.textContent='Copy';},1500);}catch{$('copy-fallback').hidden=false;$('copy-fallback').value=i.command;$('copy-fallback').select();}});copy.setAttribute('aria-label',`Copy step for ${KIND_LABEL[i.kind]} #${i.id}`);
+        cmd.append(el('p','subtle',i.kind==='action'?'Step':'Command'),pre,copy);card.append(cmd);
+      }
+    }
     card.onpointerdown=e=>{if(!e.target.closest('button,input,textarea')){activeItem=key(r.role,i.id);renderPanel();}};
     const locked=busy||expired||!!d.sent;
     const changed=()=>{r.status='';persist();hint.hidden=L.valid(i,d)||!(d.action||d.choice);state.textContent=(d.action||d.choice)?'Queued':'Open';drawNav();update();};
@@ -514,9 +537,16 @@ globalThis.BoardDecisions = (() => {
       }
       card.append(options);
     }
-    const note=el('div','note'),label=el('label','',i.kind==='decision'&&!i.structured?'General comment / your answer (required)':'General comment'+(i.structured?' (required for Something else)':'')),text=el('textarea');text.id=`note-${i.id}`;label.htmlFor=text.id;text.value=d.note;text.disabled=locked;text.maxLength=4096;text.oninput=()=>{d.note=text.value;if(i.kind==='decision'&&!i.structured&&d.action!=='comment')d.choice=d.note.trim()?'other':'';changed();};note.append(label,text);card.append(note);
-    const hint=el('p','hint','Add a note to send this response (up to 4 KiB).');hint.hidden=L.valid(i,d)||!(i.kind==='fyi'?d.action:d.choice);hint.setAttribute('role','alert');card.append(hint);
+    const note=el('div','note'),label=el('label','',done?'Note (optional)':i.kind==='decision'&&!i.structured?'General comment / your answer (required)':'General comment'+(i.structured?' (required for Something else)':'')),text=el('textarea');text.id=`note-${i.id}`;label.htmlFor=text.id;text.value=d.note;text.disabled=locked;text.maxLength=4096;text.oninput=()=>{d.note=text.value;if(i.kind==='decision'&&!i.structured&&d.action!=='comment')d.choice=d.note.trim()?'other':'';changed();};note.append(label,text);card.append(note);
+    const hint=el('p','hint','Add a note to send this response (up to 4 KiB).');hint.hidden=L.valid(i,d)||!(i.kind==='decision'?d.choice:d.action);hint.setAttribute('role','alert');card.append(hint);
     if(i.kind==='decision'&&!i.structured&&d.action==='comment'){const answer=button('Use general comment as answer',()=>{d.choice='other';d.action='';delete d.implicit;persist();render();});answer.disabled=locked;card.append(answer);}
+    if(done){
+      const actions=el('div','fyi-actions');
+      for(const [action,name]of (i.kind==='todo'?[['done','Done'],['dropped','Dropped']]:[['done','Done']])){
+        const b=button(name,()=>{d.action=d.action===action?'':action;delete d.action_id;persist();render();});b.disabled=locked;b.setAttribute('aria-pressed',String(d.action===action));actions.append(b);
+      }
+      card.append(actions,el('p','subtle',d.action==='done'?'Mark done. The coordinator is notified.':d.action==='dropped'?'Drop this todo. The coordinator is notified.':'Nothing is run or sent until you choose and submit.'));
+    }
     if(i.kind==='fyi'){
       const actions=el('div','fyi-actions');
       for(const [action,name]of [['comment','Comment'],['dismiss','Dismiss'],['comment_and_dismiss','Comment and dismiss']]){
@@ -533,7 +563,7 @@ globalThis.BoardDecisions = (() => {
     const heading=el('section','lede');heading.append(el('h1','','Queued responses'));main.append(heading);
     main.append(button('← Keep reviewing boards',()=>{screen='browse';render();}));
     for(const r of Object.values(records).filter(r=>queued().includes(r)||r.status?.startsWith('Item changed.'))){
-      const i=r.item,d=r.draft,row=el('section','receipt');row.append(el('strong','',labelFor(r.role)),el('p','',`#${i.id} ${i.subject}`),el('p','subtle',i.kind==='fyi'?d.action:!d.choice&&d.action==='comment'?'Feedback only · decision stays open':i.structured?.options.find(o=>o.id===d.choice)?.label||'Something else'));
+      const i=r.item,d=r.draft,done=L.isCompletion(i.kind),row=el('section','receipt');row.append(el('strong','',labelFor(r.role)),el('p','',`#${i.id} ${i.subject}`),el('p','subtle',i.kind==='fyi'?d.action:done?(d.action==='dropped'?'Dropped':'Done'):!d.choice&&d.action==='comment'?'Feedback only · decision stays open':i.structured?.options.find(o=>o.id===d.choice)?.label||'Something else'));
       if(d.note&&d.action!=='dismiss')row.append(el('p','subtle',d.note));
       for(const a of anns(r)){const entry=el('div','annotation-card');entry.append(el('strong','',a.type==='DELETION'?'Delete suggestion':'Comment'),el('blockquote','',a.quote));if(a.comment)entry.append(el('p','',a.comment));row.append(entry);}
       if(r.unavailable||!rowFor(r.role))row.append(el('p','hint','Unavailable: coordinator is hidden, archived or removed. Other boards can still submit.'));
@@ -552,9 +582,9 @@ globalThis.BoardDecisions = (() => {
       else {
         lede.append(el('h1','',row.orchestrator),el('p','subtle',`${row.coordinator} · Choose responses to queue. Everything else stays open.`));
         const tabs=el('div','tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Board items');
-        for(const [kind,label,n]of [['decision','Decisions',row.decisions],['fyi','FYIs',row.fyis]]){const b=button('',()=>{tab=kind;render();});b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===kind));b.setAttribute('aria-label',`${label}, ${n} open`);b.append(el('span','',label),badge(kind,n));tabs.append(b);}main.append(tabs,el('p','tabs-help','⌘ / Ctrl ← Decisions · → FYIs'));
-        const visible=Object.values(records).filter(r=>r.role===selected&&!r.closed&&!r.unavailable&&r.item.kind===tab);
-        if(!visible.length){const empty=el('section','decision');empty.append(el('h2','',row.decisions+row.fyis?`No open ${tab==='fyi'?'FYIs':'decisions'}`:`Nothing open for ${row.orchestrator}`));main.append(empty);}
+        for(const kind of L.TABS){const label=TAB_LABEL[kind],n=countOf(row,kind);const b=button('',()=>{tab=kind;render();});b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===kind));b.setAttribute('aria-label',`${label}, ${n} open`);b.append(el('span','',label),badge(kind,n));tabs.append(b);}main.append(tabs,el('p','tabs-help','⌘ / Ctrl ← Decisions · → FYIs · Actions and Todos via tabs or swipe'));
+        const byItem=new Map(Object.values(records).filter(r=>r.role===selected&&!r.closed&&!r.unavailable&&r.item.kind===tab).map(r=>[r.item,r])),visible=L.order([...byItem.keys()]).map(item=>byItem.get(item));
+        if(!visible.length){const empty=el('section','decision');empty.append(el('h2','',total(row)?`No open ${TAB_LABEL[tab].toLowerCase()}`:`Nothing open for ${row.orchestrator}`));main.append(empty);}
         if(tab==='decision'&&visible.some(r=>r.item.structured?.recommended&&!r.draft.choice)){const b=button('Take the recommendations',()=>{for(const r of visible)if(!r.draft.choice&&r.item.structured?.recommended&&!r.draft.sent)r.draft.choice=r.item.structured.recommended;persist();render();});b.disabled=busy;main.append(b);}
         for(const r of visible)renderCard(main,r);
       }
@@ -572,7 +602,7 @@ globalThis.BoardDecisions = (() => {
       if(!r.draft.sent)r.item=current.item;r.closed=false;
     }
     for(const [k,b]of latest){if(!records[k])records[k]={role:b.role,coordinator:b.coordinator,orchestrator:b.orchestrator,item:b.item,draft:draft()};}
-    if(!rowFor(selected))selected=rows.find(r=>r.decisions+r.fyis)?.role_id||rows[0]?.role_id||0;
+    if(!rowFor(selected))selected=rows.find(total)?.role_id||rows[0]?.role_id||0;
     persist();pending=null;$('updates').hidden=true;render();
   }
   async function snapshot(){
@@ -581,10 +611,10 @@ globalThis.BoardDecisions = (() => {
     return {rows:nav.roles,boards,unavailable};
   }
   function sent(){
-    finished=true;generation++;clearInterval(timer);storage.save('board-response-counts',{answers:0,comments:0,dismissals:0});
+    finished=true;generation++;clearInterval(timer);storage.save('board-response-counts',{answers:0,comments:0,dismissals:0,completions:0});
     try{window.close();}catch{}
     if(window.closed)return;
-    const main=el('main','wrap');main.tabIndex=-1;const section=el('section','confirmation');section.append(el('h1','','Actions sent — you can close this tab'),el('p','intro',`${acceptedCounts.answers} answers · ${acceptedCounts.comments} comments · ${acceptedCounts.dismissals} dismissals`),returnLink());main.append(section);document.body.replaceChildren(main);main.focus();
+    const main=el('main','wrap');main.tabIndex=-1;const section=el('section','confirmation');section.append(el('h1','','Actions sent — you can close this tab'),el('p','intro',`${acceptedCounts.answers} answers · ${acceptedCounts.comments} comments · ${acceptedCounts.dismissals} dismissals · ${acceptedCounts.completions} completions`),returnLink());main.append(section);document.body.replaceChildren(main);main.focus();
   }
   async function submit(closeAfter=false){
     if(busy||expired||finished)return;
@@ -596,19 +626,19 @@ globalThis.BoardDecisions = (() => {
       const payload=group.records.map(r=>{
         const d=r.draft;if(d.sent)return d.sent;
         const p={item_id:r.item.id,expected_updated_at:r.item.updated_at,note:d.note};
-        if(group.kind==='fyi'){d.action_id=d.action_id||Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');p.action_id=d.action_id;p.action=d.action;if(d.action==='dismiss')p.note=''; }else{p.choice=d.choice;p.action=d.choice?'answer':'comment';}
+        if(group.kind!=='decision'){d.action_id=d.action_id||Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');p.action_id=d.action_id;p.action=d.action;if(d.action==='dismiss')p.note=''; }else{p.choice=d.choice;p.action=d.choice?'answer':'comment';}
         if(anns(r).length){p.annotations=anns(r).map(({annotation_id,type,start_path,end_path,start_offset,end_offset,selected_text_hash,prefix,suffix,comment})=>({annotation_id,type,start_path,end_path,start_offset,end_offset,selected_text_hash,prefix,suffix,comment}));}
         if(!p.action_id&&(p.annotations?.length||p.action==='comment')){d.action_id=d.action_id||'action-'+crypto.getRandomValues(new Uint32Array(4)).join('-');p.action_id=d.action_id;}
         d.sent=p;return p;
       });persist();
       try{
-        const response=await api(base(group.role)+(group.kind==='fyi'?'/fyi-actions':'/answers'),'POST',group.kind==='fyi'?{actions:payload}:{answers:payload});
+        const response=await api(base(group.role)+L.endpoint(group.kind),'POST',group.kind==='decision'?{answers:payload}:{actions:payload});
         for(let n=0;n<group.records.length;n++){
           const r=group.records[n],p=payload[n];const matches=Array.isArray(response.results)&&response.results.length===payload.length?response.results.filter(v=>v.item_id===p.item_id&&(!p.action_id||v.action_id===p.action_id)):[];const result=matches.length===1?matches[0]:null;
           if(L.accepted(group.kind,p,result)){
-            if(group.kind==='decision'&&p.action!=='comment')acceptedCounts.answers++;else{if(p.action!=='dismiss'&&result.outcome!=='already_resolved')acceptedCounts.comments++;if(group.kind==='fyi'&&p.action!=='comment')acceptedCounts.dismissals++;}
-            if(!(p.action==='comment')){const row=rowFor(r.role);if(row){if(group.kind==='fyi')row.fyis=Math.max(0,row.fyis-1);else row.decisions=Math.max(0,row.decisions-1);}}
-            r.draft=draft();r.status=p.action==='comment'?'Comment sent · still open':'Accepted';r.closed=p.action!=='comment';const receipt=el('p','receipt',`${labelFor(r.role)} · #${r.item.id}: ${r.status}`);$('receipts').append(receipt);
+            if(L.isCompletion(group.kind))acceptedCounts.completions++;else if(group.kind==='decision'&&p.action!=='comment')acceptedCounts.answers++;else{if(p.action!=='dismiss'&&result.outcome!=='already_resolved')acceptedCounts.comments++;if(group.kind==='fyi'&&p.action!=='comment')acceptedCounts.dismissals++;}
+            if(!(p.action==='comment')){const row=rowFor(r.role);if(row){const field={fyi:'fyis',action:'actions',todo:'todos',decision:'decisions'}[group.kind];row[field]=Math.max(0,(row[field]||0)-1);}}
+            r.draft=draft();r.status=p.action==='comment'?'Comment sent · still open':p.action==='dropped'?'Dropped':p.action==='done'?'Done':'Accepted';r.closed=p.action!=='comment';const receipt=el('p','receipt',`${labelFor(r.role)} · #${r.item.id}: ${r.status}`);$('receipts').append(receipt);
           }else{
             failed=true;r.status=result?.outcome||'Result unconfirmed. Retry to confirm.';
             if(result&&['conflict','invalid','not_found','already_resolved'].includes(result.outcome)){
@@ -636,7 +666,7 @@ globalThis.BoardDecisions = (() => {
   $('drawer').addEventListener('keydown',e=>{if(e.key!=='Tab')return;const nodes=[...$('drawer').querySelectorAll('button')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}});
   document.addEventListener('keydown',e=>{if(busy||finished||$('drawer').open||sheet.open||composer||getSelection()?.toString())return;const next=L.navigate(e,rows,selected,tab);if(!next)return;e.preventDefault();selected=next.role;tab=next.tab;screen='browse';render();$('main').focus({preventScroll:true});});
   let touch=null;$('main').addEventListener('touchstart',e=>{touch=e.touches.length===1&&!L.editable(e.target)&&!e.target.closest('button,a,label,input,textarea,select,[data-field],mark,[role="button"],[role="tab"]')?{x:e.touches[0].clientX,y:e.touches[0].clientY}:null;},{passive:true});
-  $('main').addEventListener('touchend',e=>{const start=touch;touch=null;if(!start||!e.changedTouches.length||busy||screen!=='browse'||getSelection()?.toString())return;const dx=e.changedTouches[0].clientX-start.x,dy=e.changedTouches[0].clientY-start.y;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5){tab=dx<0?'fyi':'decision';render();}},{passive:true});
+  $('main').addEventListener('touchend',e=>{const start=touch;touch=null;if(!start||!e.changedTouches.length||busy||screen!=='browse'||getSelection()?.toString())return;const dx=e.changedTouches[0].clientX-start.x,dy=e.changedTouches[0].clientY-start.y;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5){tab=L.adjacent(tab,dx);render();}},{passive:true});
   $('theme').value=document.documentElement.dataset.theme||'system';$('theme').onchange=()=>BoardDecisionTheme.set($('theme').value);
   $('review').onclick=()=>{screen='review';render();};$('submit').onclick=()=>submit(false);$('submit-close').onclick=()=>submit(true);$('refresh').onclick=()=>{if(pending&&!busy)reconcile(pending);};
   $('copy').onclick=async()=>{
@@ -659,7 +689,7 @@ globalThis.BoardDecisions = (() => {
     if(!session){expire();render();return;}
     const epoch=generation,next=await snapshot();if(finished||epoch!==generation)return;
     reconcile(next);const initial=Object.values(records).find(r=>r.role===selected&&r.item.id===focus&&!r.closed);
-    const counts=rowFor(selected);tab=initial?.item.kind||(!counts?.decisions&&counts?.fyis?'fyi':'decision');render();
+    const counts=rowFor(selected);tab=initial?.item.kind||(counts&&L.TABS.find(k=>countOf(counts,k)))||'decision';render();
     if(initial){const n=document.getElementById(`decision-${focus}`);n?.classList.add('focused');n?.scrollIntoView();}
   }catch(e){if(!finished){message(e.message);render();}}
 })();
