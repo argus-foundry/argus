@@ -115,6 +115,51 @@ func TestBrowserReaperPartialGrace(t *testing.T) {
 	}
 }
 
+func TestBrowserReaperChangedIdentityResetsGrace(t *testing.T) {
+	wt := dsRoot + "/p/t"
+	for _, tc := range []struct {
+		name   string
+		change func(*browserproc.Process)
+	}{
+		{"PID", func(p *browserproc.Process) { p.PID = 21 }},
+		{"command", func(p *browserproc.Process) { p.Command += " --new-profile" }},
+		{"cwd", func(p *browserproc.Process) { p.CWD += "/nested" }},
+		{"PGID", func(p *browserproc.Process) { p.PGID = 21 }},
+		{"worktree", func(p *browserproc.Process) { p.Worktree += "-other" }},
+		{"root", func(p *browserproc.Process) { p.Root = false }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newBrowserReaper(func() ([]string, error) { return nil, nil }, &fakeDSTasks{}, dsRoot)
+			candidate := browserproc.Process{PID: 20, PGID: 20, Root: true, Command: "/cache/chrome --remote-debugging-pipe", CWD: wt, Worktree: wt}
+			healthy := candidate
+			healthy.PID, healthy.PGID = 30, 30
+			r.scan = func(string) ([]browserproc.Process, error) {
+				return []browserproc.Process{candidate, healthy}, nil
+			}
+			var stopped []browserproc.Process
+			r.stop = func(ps []browserproc.Process, _ browserproc.Options) {
+				stopped = append(stopped, ps...)
+			}
+			for range 5 {
+				r.tick()
+			}
+			testutil.Equal(t, len(stopped), 0)
+			tc.change(&candidate)
+			r.tick()
+			// The unchanged browser reaches its sixth tick, even when the
+			// changed candidate still claims the same worktree.
+			testutil.DeepEqual(t, stopped, []browserproc.Process{healthy})
+			for range 4 {
+				r.tick()
+			}
+			testutil.DeepEqual(t, stopped, []browserproc.Process{healthy})
+			r.tick()
+			// The changed identity needs six observations of its own.
+			testutil.DeepEqual(t, stopped, []browserproc.Process{healthy, candidate})
+		})
+	}
+}
+
 func TestBrowserReaperLoop(t *testing.T) {
 	r := newBrowserReaper(func() ([]string, error) { return nil, nil }, &fakeDSTasks{}, dsRoot)
 	done := make(chan struct{})
