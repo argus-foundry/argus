@@ -1298,7 +1298,7 @@ func BuildModel(r HeraReader, needsInput map[string]bool, sessionIdle map[string
 					} else {
 						rv.BoardItems = items
 						for _, item := range items {
-							if !item.Read {
+							if item.AttentionUnread() {
 								rv.BoardUnread++
 							}
 						}

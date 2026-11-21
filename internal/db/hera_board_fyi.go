@@ -56,8 +56,11 @@ type HeraBoardFYIActionReceipt struct {
 }
 
 type HeraBoardKindCounts struct {
-	Decisions int `json:"decisions"`
-	FYIs      int `json:"fyis"`
+	Decisions    int `json:"decisions"`
+	FYIs         int `json:"fyis"`
+	Actions      int `json:"actions"`
+	Todos        int `json:"todos"`
+	ReadyActions int `json:"ready_actions"`
 }
 
 // HeraBoardOpenCounts reads all open kind counts in a single SQL snapshot.
@@ -65,7 +68,7 @@ type HeraBoardKindCounts struct {
 func (d *DB) HeraBoardOpenCounts() (map[int64]HeraBoardKindCounts, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, err := d.conn.Query(`SELECT role_id,SUM(kind='decision'),SUM(kind='fyi') FROM hera_board_items WHERE resolved=0 GROUP BY role_id`)
+	rows, err := d.conn.Query(`SELECT role_id,SUM(kind='decision'),SUM(kind='fyi'),SUM(kind='action'),SUM(kind='todo'),SUM(kind='action' AND trigger_pending=0) FROM hera_board_items WHERE resolved=0 GROUP BY role_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +77,7 @@ func (d *DB) HeraBoardOpenCounts() (map[int64]HeraBoardKindCounts, error) {
 	for rows.Next() {
 		var id int64
 		var c HeraBoardKindCounts
-		if err := rows.Scan(&id, &c.Decisions, &c.FYIs); err != nil {
+		if err := rows.Scan(&id, &c.Decisions, &c.FYIs, &c.Actions, &c.Todos, &c.ReadyActions); err != nil {
 			return nil, err
 		}
 		counts[id] = c
@@ -169,12 +172,13 @@ func (d *DB) FYIHeraBoardItems(roleID int64, actions []HeraBoardFYIAction) ([]He
 			case err != nil:
 				return err
 			case i.ResidentApproval:
-			case i.Kind != "fyi":
+			case i.Kind != "fyi" && i.Kind != "action" && i.Kind != "todo":
 				r.Outcome = "not_found"
 			case a.ExpectedUpdatedAt.IsZero():
-			case a.Action != "dismiss" && a.Action != "comment" && a.Action != "comment_and_dismiss":
-			case a.Action != "dismiss" && strings.TrimSpace(a.Note) == "" && len(a.Annotations) == 0:
-			case a.Action == "dismiss" && len(a.Annotations) > 0:
+			case i.Kind != "fyi" && (!boardWorkOutcome(i.Kind, a.Action) || len(a.Annotations) > 0 || a.Choice != ""):
+			case i.Kind == "fyi" && a.Action != "dismiss" && a.Action != "comment" && a.Action != "comment_and_dismiss":
+			case i.Kind == "fyi" && a.Action != "dismiss" && strings.TrimSpace(a.Note) == "" && len(a.Annotations) == 0:
+			case i.Kind == "fyi" && a.Action == "dismiss" && len(a.Annotations) > 0:
 			case i.Resolved:
 				if a.Action != "comment" && len(a.Annotations) == 0 {
 					r.Outcome = "already_resolved"
@@ -195,11 +199,15 @@ func (d *DB) FYIHeraBoardItems(roleID int64, actions []HeraBoardFYIAction) ([]He
 					if !now.After(i.UpdatedAt) {
 						now = i.UpdatedAt.Add(time.Nanosecond)
 					}
-					_, err = tx.Exec(`UPDATE hera_board_items SET resolved=1,resolved_by='human',resolution_choice='',resolution_note=?,updated_at=? WHERE role_id=? AND id=?`, a.Note, formatTime(now), roleID, a.ItemID)
+					choice := ""
+					if i.Kind != "fyi" {
+						choice = a.Action
+					}
+					_, err = tx.Exec(`UPDATE hera_board_items SET resolved=1,resolved_by='human',resolution_choice=?,resolution_note=?,updated_at=? WHERE role_id=? AND id=?`, choice, a.Note, formatTime(now), roleID, a.ItemID)
 					if err != nil {
 						return err
 					}
-					i.Resolved, i.ResolvedBy, i.ResolutionChoice, i.ResolutionNote, i.UpdatedAt = true, "human", "", a.Note, now
+					i.Resolved, i.ResolvedBy, i.ResolutionChoice, i.ResolutionNote, i.UpdatedAt = true, "human", choice, a.Note, now
 					r.Outcome = "resolved"
 					resolved = append(resolved, i.ID)
 				}
@@ -213,7 +221,11 @@ func (d *DB) FYIHeraBoardItems(roleID int64, actions []HeraBoardFYIAction) ([]He
 				if err != nil {
 					return err
 				}
-				if a.Action != "dismiss" {
+				if i.Kind != "fyi" {
+					if err = writeBoardWorkNotice(tx, roleID, i, a.Action, a.Note); err != nil {
+						return err
+					}
+				} else if a.Action != "dismiss" {
 					comments = append(comments, receipt)
 				}
 			}
@@ -253,7 +265,7 @@ func writeFYISummary(tx *sql.Tx, roleID int64, comments []*HeraBoardFYIActionRec
 		}
 		if kind == "decision" {
 			decisions = append(decisions, fmt.Sprintf("#%d", id))
-		} else {
+		} else if kind == "fyi" {
 			fyis = append(fyis, fmt.Sprintf("#%d", id))
 		}
 	}

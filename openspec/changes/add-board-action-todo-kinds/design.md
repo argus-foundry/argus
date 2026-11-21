@@ -73,4 +73,4 @@ Archive this change into base specs in the same PR after implementation and vali
 
 ## Open questions
 
-The coordinator must approve this proposed field shape, readiness/attention policy, priority bands and completion/notice semantics before implementation. Both new kind names are already approved.
+None. Coordinator message 31597 relayed Aaron's approval of this contract as written before implementation. Both new kind names were already approved.

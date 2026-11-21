@@ -2,7 +2,7 @@
 
 - [x] 1.1 Inspect supplied example rows read-only, current board specs, store, MCP and frontend coverage.
 - [x] 1.2 Write proposal, design and delta specs using spec-writer instructions.
-- [ ] 1.3 Send the coordinator field/order/outcome choices, report blocked and wait for explicit approval before implementation.
+- [x] 1.3 Send the coordinator field/order/outcome choices, report blocked and wait for explicit approval before implementation (coord message 31597 relayed Aaron's approval).
 
 ## 2. Store and migration
 
