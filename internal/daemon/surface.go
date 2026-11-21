@@ -361,7 +361,9 @@ const (
 	// v19: resident PTY startup output best-effort logs fallback notices once
 	// to the supervisor log within 64 KiB/60s, preserving ANSI/UTF-8 boundaries.
 	// v20: full session stops also snapshot and clean detached task browsers.
-	SupervisorStreamSurface = 20
+	// v21: full stops retain independently verified browser snapshots when
+	// another root or helper cannot be inspected during the same scan.
+	SupervisorStreamSurface = 21
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -618,9 +620,7 @@ var SupervisorStreamPaths = []string{
 // message prints the computed digest to paste back here.
 const (
 	SpawnSurfaceDigest = "afaabd1231de8da81bafc7ce0b64c53871c01d79125c127e6d14ede65e595eb1"
-	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
-	// changed daemon-side comments; neither changes supervisor stream behavior.
-	StreamSurfaceDigest = "6db616d49b2aae4049a1e16f5eeb7c4b16aa724b7451c2faab7c0302ef5fd83d"
+	StreamSurfaceDigest = "7d6feacc9dc466e257436fb78aeeb1099e101d2124022d0d903338a7fe283050"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,
