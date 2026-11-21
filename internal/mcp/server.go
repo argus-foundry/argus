@@ -265,12 +265,12 @@ type Server struct {
 	// heraReapPoke asks the daemon's reap nudge watcher for a debounced sweep
 	// (add-coord-reap-triggers); nil = no watcher.
 	heraReapPoke func()
-	profileCfg              ConfigStore  // optional; set via SetProfileResolver
-	apiGetMu                sync.RWMutex // guards apiGet (set after the listener is serving)
-	apiGet                  APIGetter    // optional; set via SetAPIGetter (argus_api_get)
-	voiceMu                 sync.RWMutex // guards voice (set after the listener is serving)
-	voice                   *voice.Router
-	voiceToken              string // guarded by voiceMu
+	profileCfg   ConfigStore  // optional; set via SetProfileResolver
+	apiGetMu     sync.RWMutex // guards apiGet (set after the listener is serving)
+	apiGet       APIGetter    // optional; set via SetAPIGetter (argus_api_get)
+	voiceMu      sync.RWMutex // guards voice (set after the listener is serving)
+	voice        *voice.Router
+	voiceToken   string // guarded by voiceMu
 	// accountMover backs task_move_account; set via SetAccountMover.
 	accountMover accountMoverSlot
 	createMu     sync.Mutex

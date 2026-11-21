@@ -210,7 +210,7 @@ type Daemon struct {
 	// heraReapPoke is heraReapNudger.Poke (a seam so poller tests can count
 	// pokes); nil when hera is disabled.
 	heraReapPoke func()
-	graduation         *graduationWatcher
+	graduation   *graduationWatcher
 
 	// taskRecycler is the one task_recycle runner (nil until MCP wiring); the
 	// resident manager consults it so its restart never races a recycle.
