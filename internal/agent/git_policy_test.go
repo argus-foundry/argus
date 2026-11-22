@@ -30,7 +30,7 @@ func TestAgentGitPolicy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			original := append([]string(nil), tc.env...)
-			got, err := agentGitPolicy(tc.env, tc.policy)
+			got, err := agentGitPolicy(tc.env, tc.policy, AgentSigningEnv{})
 			testutil.DeepEqual(t, tc.env, original)
 			if tc.wantErr {
 				testutil.Contains(t, err.Error(), "GIT_CONFIG_COUNT")
@@ -128,7 +128,7 @@ func TestUnsignedCommitSkipsSigner(t *testing.T) {
 	_, err = os.Stat(marker)
 	testutil.NoError(t, err)
 	testutil.NoError(t, os.Remove(marker))
-	env, err := agentGitPolicy(os.Environ(), "unsigned")
+	env, err := agentGitPolicy(os.Environ(), "unsigned", AgentSigningEnv{})
 	testutil.NoError(t, err)
 	out, err := run(env, "commit", "--allow-empty", "-m", "unsigned")
 	if err != nil {
