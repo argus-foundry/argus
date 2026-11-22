@@ -23,5 +23,5 @@
 ## 5. Verification and docs
 
 - [x] 5.1 Add a gotcha bullet (orchestration.md) on deriving the coordinator orientation at recycle time and the `[argus] ` marker on recycle seeds; update the index row
-- [ ] 5.2 Run `make pre-pr` clean
+- [x] 5.2 Run `make pre-pr` clean
 - [x] 5.3 Review (hera-review), archive the change into base specs, validate with `openspec validate --all --strict`
