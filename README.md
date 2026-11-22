@@ -1204,9 +1204,21 @@ Every option below is overridable. A ⚠️ marks options that are **read but no
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `agent_commit_signing` | string | `"inherit"` | `inherit` preserves Git signing settings; opt-in `unsigned` sets `commit.gpgsign=false` only in agent process trees, so ordinary commits do not wait for a signing prompt. Restart or recycle sessions to pick up changes. Explicit `git commit -S` or `git -c` options still win. |
+| `agent_commit_signing` | string | `"inherit"` | `inherit` preserves Git signing settings; opt-in `unsigned` sets `commit.gpgsign=false` only in agent process trees, so ordinary commits do not wait for a signing prompt; opt-in `agent-key` signs every agent commit with a dedicated agent SSH key that the daemon holds in memory (no prompt, verified on GitHub). Restart or recycle sessions to pick up changes. Explicit `git commit -S` or `git -c` options still win. |
+| `agent_signing_key` | string | `""` | Required with `agent-key`: an `op://` reference to a 1Password SSH Key item, e.g. `"op://claude/Argus agent signing key"`. Resolved through `[secrets.op]`; agents receive only the public key, and a missing or mismatched key fails the commit loudly instead of committing unsigned. |
 
 To opt in, add `[git]` with `agent_commit_signing = "unsigned"` to `~/.argus/config.toml`. Unsigned feature commits have no individual signature; a GitHub squash-merge signature attests the merge. Confirm repository rules permit unsigned feature commits. The setting follows the session across branch switches and leaves global/shared Git configuration unchanged. An upgraded supervisor is required; restart a stale supervisor before restarting/recycling sessions. This is config.toml-only for TUI, web, and macOS launches; Settings controls are the named follow-up `agent-git-policy-settings-controls`.
+
+To sign agent commits with an agent key (`agent-key`):
+
+1. In 1Password, create an SSH Key item in the `claude` vault (New Item → SSH Key → Generate, Ed25519), e.g. "Argus agent signing key". The `[secrets.op]` service account must be able to read it.
+2. On GitHub, add its public key as a **Signing Key** (Settings → SSH and GPG keys → New SSH key → Key type: Signing Key).
+3. Restart the session-supervisor FIRST (`argus session-supervisor stop`; the daemon restarts it). A stale supervisor rejects the new value and then ignores all of config.toml.
+4. Set `agent_commit_signing = "agent-key"` and `agent_signing_key = "op://claude/<item>"` under `[git]`.
+5. Run `argus doctor` and expect `Git agent signing key: OK`. `BROKEN: <cause>` names what failed.
+6. Restart or recycle agent sessions.
+
+Signing runs in the daemon: Git calls `argus -Y sign`, which asks the daemon over its REST API and retries for 30 seconds across a daemon restart before failing the commit. Roll back by setting the policy to `unsigned` or `inherit` and restarting or recycling sessions.
 
 #### `[backends.<name>]`
 

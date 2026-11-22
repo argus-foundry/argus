@@ -41,9 +41,9 @@ All tests use synthetic Ed25519 keys generated in-test and a stubbed secret reso
 
 **Depends on:** Stage 3
 
-- [ ] 5.1 Add the advisory agent-signing-key line to `argus doctor`
-- [ ] 5.2 README Reference: `[git]` table rows for `agent-key` and `agent_signing_key`, plus setup steps (1Password SSH Key item in `claude`, GitHub Signing Key registration, `argus doctor`, restart or recycle sessions)
-- [ ] 5.3 Gotcha bullets in `context/knowledge/gotchas/misc.md` (`gpg.ssh.program` is exec'd without a shell, hence the `-Y` dispatch; `?ssh-format=openssh` is required for the private key; spawn-surface re-record; signing depends on the daemon)
+- [x] 5.1 Add the advisory agent-signing-key line to `argus doctor`
+- [x] 5.2 README Reference: `[git]` table rows for `agent-key` and `agent_signing_key`, plus setup steps (1Password SSH Key item in `claude`, GitHub Signing Key registration, `argus doctor`, restart or recycle sessions)
+- [x] 5.3 Gotcha bullets in `context/knowledge/gotchas/misc.md` (`gpg.ssh.program` is exec'd without a shell, hence the `-Y` dispatch; `?ssh-format=openssh` is required for the private key; spawn-surface re-record; signing depends on the daemon)
 
 ## 6. Verify, smoke test, archive
 
