@@ -31,6 +31,12 @@ import (
 )
 
 func main() {
+	// Git execs gpg.ssh.program with ssh-keygen's argv and no shell, so the
+	// agent signing helper is reached as `argus -Y ...`. Dispatch it before
+	// anything else: no uxlog.Init, DB open, or stray output.
+	if len(os.Args) > 1 && os.Args[1] == "-Y" {
+		os.Exit(gitSignCommand(os.Args[1:], realGitSignEnv(), os.Stdout, os.Stderr))
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "daemon":

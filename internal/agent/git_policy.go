@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/gitsign"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
@@ -85,11 +86,6 @@ func gitConfigParameter(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// agentSigningPublicKeyRef mirrors gitsign.PublicKeyRef (not imported here to
-// keep the agent package free of the signing implementation): the public
-// field of the configured 1Password SSH Key item.
-func agentSigningPublicKeyRef(ref string) string { return ref + "/public key" }
-
 // resolveAgentSigningPublicKey resolves a secret source (always the agent
 // key's "/public key" field) for agentSigningEnvFor. A test seam; production
 // is the per-backend secret path (op:// via the service-account bootstrap,
@@ -125,7 +121,7 @@ func agentSigningEnvFor(cfg config.Config, taskID string) AgentSigningEnv {
 	} else {
 		sign.Program = exe
 	}
-	pub, ok := resolveAgentSigningPublicKey(cfg, agentSigningPublicKeyRef(strings.TrimSpace(cfg.Git.AgentSigningKey)))
+	pub, ok := resolveAgentSigningPublicKey(cfg, gitsign.PublicKeyRef(strings.TrimSpace(cfg.Git.AgentSigningKey)))
 	pub = strings.TrimSpace(pub)
 	if !ok || pub == "" {
 		uxlog.Log("[agent-git] task %q: agent signing public key did not resolve; commits will fail in the signing helper", taskID)

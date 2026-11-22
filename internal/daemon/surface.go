@@ -532,6 +532,7 @@ var SupervisorSpawnPaths = []string{
 	"internal/backendtier/choice.go",                                 // account-aware tier choice
 	"internal/agent/git_policy.go",                                   // child-only Git signing policy
 	"internal/config/git.go",                                         // Git policy schema and validation
+	"internal/gitsign/keyholder.go",                                  // PublicKeyRef: the agent key's public-field reference
 	"internal/agent/backends.go",                                     // backend family registry BuildCmd dispatches on
 	"internal/agent/codextrust.go",                                   // process-scoped Codex worktree trust flag
 	"internal/config/agenttrust.go",                                  // shared trust switch/default used by launches
@@ -627,7 +628,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest = "7f37be2f5926ba647c75641160d8f44c6ee5688dcaa76e9ff0783cef8a82572d"
+	SpawnSurfaceDigest = "c7b90b0291a1e94f7c65550e347bd79e9ed667c93ee14ccd7ea2cd4021dbfa87"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
 	StreamSurfaceDigest = "6db616d49b2aae4049a1e16f5eeb7c4b16aa724b7451c2faab7c0302ef5fd83d"

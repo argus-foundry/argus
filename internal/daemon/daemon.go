@@ -1838,6 +1838,9 @@ func (d *Daemon) Serve(sockPath string) error {
 			})
 			apiSrv.SetMCPRegistry(pluginRegistry)
 			apiSrv.SetArtifactPublisher(artifactPublisher)
+			// Always wired: the policy is read live per request (see
+			// newGitSigner), so an agent-key toggle needs no restart.
+			apiSrv.SetGitSigner(newGitSigner(d.cfgFn, agent.Resolve))
 			apiSrv.SetNotifier(d.notifier)
 			apiSrv.SetArchiveGuard(d.heraArchiver())
 			apiSrv.SetFocusTracker(d.focusTracker)

@@ -19,6 +19,7 @@ import (
 	dclient "github.com/argus-foundry/argus/internal/daemon/client"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/doctor"
+	"github.com/argus-foundry/argus/internal/gitsign"
 	"github.com/argus-foundry/argus/internal/hostsleep"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/profiles"
@@ -44,6 +45,7 @@ func runDoctor() {
 	fmt.Print(renderClaudeAccounts(gatherAccountsConfig(), claudeaccount.AuthStatus))
 	fmt.Print(doctor.RenderProfileLibrary(gatherProfileLibraryStatus()))
 	fmt.Print(doctor.RenderSecretsBootstrap(gatherSecretsBootstrapStatus()))
+	fmt.Print(doctor.RenderAgentSigningKey(gatherAgentSigningKeyStatus()))
 	fmt.Print(doctor.RenderDevStackOrphans(gatherDevStackOrphans()))
 	fmt.Print(doctor.RenderBrowserOrphans(browserproc.Scan(filepath.Join(db.DataDir(), "worktrees"))))
 	fmt.Print(doctor.RenderFinishedStacks(gatherFinishedStacks()))
@@ -326,6 +328,23 @@ func secretsBootstrapStatusFor(cfg config.Config) doctor.SecretsBootstrapStatus 
 	default:
 		return doctor.DiagnoseSecretsBootstrap(false, false)
 	}
+}
+
+// gatherAgentSigningKeyStatus loads config.toml from disk and checks the
+// agent signing key (add-agent-signing-key D6) through the same op:// resolver
+// the daemon signs with. Advisory only: never affects runDoctor's exit code.
+func gatherAgentSigningKeyStatus() gitsign.Status {
+	cfg := config.DefaultConfig()
+	cfg = config.NewFileLoader(filepath.Join(db.DataDir(), config.FileName)).Apply(cfg)
+	return agentSigningKeyStatusFor(cfg, gitsign.Resolver(agent.ResolverFor(cfg.Secrets)))
+}
+
+// agentSigningKeyStatusFor reports OFF / OK / BROKEN for cfg's agent signing
+// key. Takes an explicit cfg and resolver (like secretsBootstrapStatusFor) so
+// tests never touch real 1Password or ~/.argus/config.toml. OFF resolves
+// nothing.
+func agentSigningKeyStatusFor(cfg config.Config, resolve gitsign.Resolver) gitsign.Status {
+	return gitsign.Check(cfg.Git.AgentCommitSigning, strings.TrimSpace(cfg.Git.AgentSigningKey), resolve)
 }
 
 // gatherHostSleep checks sleep posture against the effective api.enabled (read-only DB, then config.toml).
