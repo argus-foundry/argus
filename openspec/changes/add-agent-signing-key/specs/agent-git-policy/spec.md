@@ -52,7 +52,12 @@ When the policy is `agent-key`, the daemon SHALL resolve the private key from `<
 
 ### Requirement: Git-only signing service
 
-The daemon SHALL expose `POST /api/git/sign`, authenticated like other daemon REST routes, which accepts a namespace, data, and task ID and returns an armored SSHSIG signature produced in process with the agent key. The service MUST refuse any namespace other than `git`. It MUST answer with a named error when the policy is not `agent-key` or the key is unavailable. It SHALL log each request with task ID and outcome, and MUST NOT log the data or key material.
+The daemon SHALL expose `POST /api/git/sign`, which accepts a namespace, data, and task ID and returns an armored SSHSIG signature produced in process with the agent key. The service MUST refuse any namespace other than `git`. It MUST answer with a named error when the policy is not `agent-key` or the key is unavailable. It SHALL log each request with task ID and outcome, and MUST NOT log the data or key material. The route MUST accept only loopback callers presenting the daemon's master token. Per-device tokens and non-loopback callers, such as Tailscale peers, MUST be refused.
+
+#### Scenario: Remote device token refused
+
+- **WHEN** a request arrives from a non-loopback address, or carries a per-device token instead of the master token
+- **THEN** the service refuses it and produces no signature
 
 #### Scenario: Git signature produced
 
@@ -71,7 +76,17 @@ The daemon SHALL expose `POST /api/git/sign`, authenticated like other daemon RE
 
 ### Requirement: ssh-keygen-compatible signing helper
 
-When invoked with `-Y` as its first argument, the argus executable SHALL act as Git's `gpg.ssh.program`. For `-Y sign`, it SHALL read the data file, request a signature from the daemon, and write it to `<data file>.sig`, exiting zero on success. For every other `-Y` operation, it SHALL execute the system `ssh-keygen` with the same arguments.
+When invoked with `-Y` as its first argument, the argus executable SHALL act as Git's `gpg.ssh.program`. For `-Y sign`, it SHALL read the data file and request a signature from the daemon. It MUST verify that the returned signature is a valid `git`-namespace SSHSIG over that data made by the public key Git passed with `-f`, and it SHALL write it to `<data file>.sig` only when that check passes, exiting zero. For every other `-Y` operation, it SHALL execute the system `ssh-keygen` with the same arguments. Every daemon call the helper makes, including discovery, MUST be bounded by a timeout.
+
+#### Scenario: Signature from a different key rejected
+
+- **WHEN** the daemon returns a signature made by a key other than the session's configured public key (for example, after the key was rotated and the daemon has not reloaded)
+- **THEN** the helper fails the commit with a named key-mismatch cause and writes no `.sig`
+
+#### Scenario: Wedged daemon
+
+- **WHEN** the daemon accepts the connection but never answers discovery or signing
+- **THEN** the helper times out and fails the commit with a named cause instead of hanging
 
 #### Scenario: Commit signed through the helper
 
@@ -104,12 +119,17 @@ A signing failure MUST fail the commit. The helper SHALL retry connection failur
 
 ### Requirement: Agent signing key doctor check
 
-`argus doctor` SHALL report the agent signing key as `OFF` when the policy is not `agent-key`, `OK` when both key halves resolve and match, or `BROKEN: <cause>` otherwise. The check SHALL be advisory and MUST NOT change doctor's exit code, and it MUST NOT print key material.
+`argus doctor` SHALL report the agent signing key as `OFF` when the policy is not `agent-key`, `OK` when both key halves resolve and match and `api.enabled` is true, or `BROKEN: <cause>` otherwise. A disabled REST API SHALL be reported as `BROKEN: api.enabled is false`, because the helper reaches the daemon only over REST. The missing prerequisite MUST NOT be made a configuration validation error, because a validation failure discards the whole config.toml overlay. The check SHALL be advisory and MUST NOT change doctor's exit code, and it MUST NOT print key material.
 
 #### Scenario: Healthy key
 
 - **WHEN** the policy is `agent-key` and both halves resolve and match
 - **THEN** doctor reports `OK` and its exit code is unaffected
+
+#### Scenario: REST API disabled
+
+- **WHEN** the policy is `agent-key` and `api.enabled` is false
+- **THEN** doctor reports `BROKEN: api.enabled is false`, and an agent commit fails immediately with that cause instead of retrying for 30 seconds
 
 #### Scenario: Broken key
 
