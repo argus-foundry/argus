@@ -108,7 +108,15 @@ Stage 1 writes tests against these names, and later stages implement them. Signa
   - `func gitSignCommand(args []string, env gitSignEnv, stdout, stderr io.Writer) int`
   - `gitSignEnv{daemon func() (baseURL, token string, err error); http *http.Client; sshKeygen func(args []string, stdout, stderr io.Writer) int; retryFor time.Duration; sleep func(time.Duration); taskID string}`
   - `main.go`: `if len(os.Args) > 1 && os.Args[1] == "-Y" { os.Exit(gitSignCommand(os.Args[1:], realGitSignEnv(), os.Stdout, os.Stderr)) }` before any other dispatch
-- `internal/doctor`: an `AgentSigningKey gitsign.Status` field on whatever report struct carries the other advisory checks, rendered as `agent signing key: OFF|OK|BROKEN: <cause>`
+- `internal/doctor`: `func RenderAgentSigningKey(s gitsign.Status) string` renders `agent signing key: OFF|OK|BROKEN: <cause>`, one render function per advisory check like the others. `cmd/argus`: `func agentSigningKeyStatusFor(cfg config.Config, resolve gitsign.Resolver) gitsign.Status`, mirroring `secretsBootstrapStatusFor`.
+
+Stage 1 clarifications (adopted):
+
+- The helper's retry budget is the sum of injected `sleep` durations, not wall-clock time. Never read `time.Now` for the budget.
+- A daemon-discovery failure (the socket→port lookup during a bounce) is retried like a connection failure. Any HTTP response is final.
+- The daemon never calls `uxlog.Init`, so a `uxlog` line alone is lost in production. Stage 3 must also write the sign log to the sink the daemon actually writes to (find it; do not invent one), while keeping the `uxlog` call the tests capture.
+- Stage 2 adds a `BuildCmd`-level test proving no private key material reaches the launched command, through a public-key resolve seam it introduces.
+- Accepted: a stray `agent_signing_key` with a non-`agent-key` policy is ignored; a blank key counts as missing; `-Y sign` without a data-file argument is a local error; an inherited `GIT_CONFIG_PARAMETERS` gets one extended copy with all four entries.
 
 ## Risks / Trade-offs
 

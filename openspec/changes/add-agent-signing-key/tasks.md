@@ -4,13 +4,13 @@ All tests use synthetic Ed25519 keys generated in-test and a stubbed secret reso
 
 ## 1. Failing tests
 
-- [ ] 1.1 `internal/config`: validation tests for `agent-key` (accepted with an `op://` key; rejected when the key is missing or non-`op://`; the invalid-value message names all three values)
-- [ ] 1.2 `internal/agent`: `agentGitPolicy` tests for `agent-key` (four GIT_CONFIG entries appended after existing entries, `GIT_CONFIG_PARAMETERS` appended when inherited, no private key material in the env, `inherit`/`unsigned` output unchanged)
-- [ ] 1.3 Signing service tests: SSHSIG output verifies with the real `ssh-keygen -Y verify` (skip if `ssh-keygen` is absent); non-`git` namespace refused; mismatched halves refused; failed resolution retried on the next request; log lines carry task ID and outcome and no data
-- [ ] 1.4 `POST /api/git/sign` route tests: auth required, policy-off answers a named error, success path
-- [ ] 1.5 Helper tests (`cmd/argus`): `-Y sign` writes `<file>.sig` from a fake daemon; non-sign `-Y` passes through to a stub `ssh-keygen`; connection retry succeeds inside 30s; an error response is final with a non-zero exit and a "report to your coordinator" message; never produces an unsigned outcome
-- [ ] 1.6 Doctor tests: `OFF` / `OK` / `BROKEN: <cause>`, exit code unaffected, no key material printed
-- [ ] 1.7 Confirm every test above fails before implementation (Prove-It)
+- [x] 1.1 `internal/config`: validation tests for `agent-key` (accepted with an `op://` key; rejected when the key is missing or non-`op://`; the invalid-value message names all three values)
+- [x] 1.2 `internal/agent`: `agentGitPolicy` tests for `agent-key` (four GIT_CONFIG entries appended after existing entries, `GIT_CONFIG_PARAMETERS` appended when inherited, no private key material in the env, `inherit`/`unsigned` output unchanged)
+- [x] 1.3 Signing service tests: SSHSIG output verifies with the real `ssh-keygen -Y verify` (skip if `ssh-keygen` is absent); non-`git` namespace refused; mismatched halves refused; failed resolution retried on the next request; log lines carry task ID and outcome and no data
+- [x] 1.4 `POST /api/git/sign` route tests: auth required, policy-off answers a named error, success path
+- [x] 1.5 Helper tests (`cmd/argus`): `-Y sign` writes `<file>.sig` from a fake daemon; non-sign `-Y` passes through to a stub `ssh-keygen`; connection retry succeeds inside 30s; an error response is final with a non-zero exit and a "report to your coordinator" message; never produces an unsigned outcome
+- [x] 1.6 Doctor tests: `OFF` / `OK` / `BROKEN: <cause>`, exit code unaffected, no key material printed
+- [x] 1.7 Confirm every test above fails before implementation (Prove-It)
 
 ## 2. Config and session environment
 
