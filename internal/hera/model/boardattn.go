@@ -22,10 +22,10 @@ func BoardAttention(i *db.HeraBoardItem) bool { return i.AttentionUnread() }
 type BoardLevel int
 
 const (
-	BoardLevelNone BoardLevel = iota // nothing demanding attention (quiet items never count)
-	BoardLevelInfo                   // only FYIs
-	BoardLevelWarn                   // an open decision or a ready non-blocking action
-	BoardLevelCritical               // an open blocking action
+	BoardLevelNone     BoardLevel = iota // nothing demanding attention (quiet items never count)
+	BoardLevelInfo                       // only FYIs
+	BoardLevelWarn                       // an open decision or a ready non-blocking action
+	BoardLevelCritical                   // an open blocking action
 )
 
 // BoardItemLevel grades one item through the shared attention predicate, so a
