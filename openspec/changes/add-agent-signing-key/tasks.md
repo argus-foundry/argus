@@ -16,10 +16,10 @@ All tests use synthetic Ed25519 keys generated in-test and a stubbed secret reso
 
 **Depends on:** Stage 1
 
-- [ ] 2.1 Add `agent-key` and `AgentSigningKey` to `config.GitConfig` with validation
-- [ ] 2.2 Extend `agentGitPolicy` to take the resolved public key and the argus executable path, and emit the four entries
-- [ ] 2.3 In `BuildCmd`, resolve `<ref>/public key` through `resolveBackendEnvSource`; on failure still point `gpg.ssh.program` at the helper so commits fail loudly; extend the `[agent-git]` log line
-- [ ] 2.4 Re-record the supervisor spawn-surface digest (`gotchas/ci-gates.md` recipe)
+- [x] 2.1 Add `agent-key` and `AgentSigningKey` to `config.GitConfig` with validation
+- [x] 2.2 Extend `agentGitPolicy` to take the resolved public key and the argus executable path, and emit the four entries
+- [x] 2.3 In `BuildCmd`, resolve `<ref>/public key` through `resolveBackendEnvSource`; on failure still point `gpg.ssh.program` at the helper so commits fail loudly; extend the `[agent-git]` log line
+- [x] 2.4 Re-record the supervisor spawn-surface digest (`gotchas/ci-gates.md` recipe)
 
 ## 3. Daemon signing service
 

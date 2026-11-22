@@ -73,7 +73,7 @@ func TestAgentGitPolicy_AgentKey(t *testing.T) {
 			testutil.NoError(t, err)
 			testutil.DeepEqual(t, tc.env, original)
 			// Existing entries keep order; the four entries come after them.
-			testutil.DeepEqual(t, got[:len(tc.env)], tc.env)
+			testutil.DeepEqual(t, append([]string(nil), got[:len(tc.env)]...), tc.env) // nil-preserving copy
 			testutil.DeepEqual(t, got[len(tc.env):], wantEntries(tc.n, pub))
 			testutil.Equal(t, gitConfigGet(t, got, "commit.gpgsign"), "true")
 			testutil.Equal(t, gitConfigGet(t, got, "gpg.format"), "ssh")

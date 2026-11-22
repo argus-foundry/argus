@@ -294,7 +294,11 @@ const (
 	// recovery guidance in the Hera builtin skill (add-decide-fyi-and-phone).
 	// 57: coordinator spawn/reclaim and the materialized Hera skill require
 	// addressing typed annotations and recovering full decision/FYI receipts.
-	SupervisorSpawnSurface = 57
+	// 58: git.agent_commit_signing = "agent-key" exports commit.gpgsign=true,
+	// gpg.format=ssh, the agent key's public half and gpg.ssh.program=<argus>
+	// (add-agent-signing-key). A stale supervisor rejects the policy as
+	// invalid and refuses to launch until restarted.
+	SupervisorSpawnSurface = 58
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -621,7 +625,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest = "33303b497c736ce7a553ebf8c4f6cf35fc76003638d63bcb9666d6bb715dfb2a"
+	SpawnSurfaceDigest = "04f7f1a0881aaafaeb637938c68baeee80e8666e1b8367e1d46ad5b8d91cb79a"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
 	StreamSurfaceDigest = "6db616d49b2aae4049a1e16f5eeb7c4b16aa724b7451c2faab7c0302ef5fd83d"
