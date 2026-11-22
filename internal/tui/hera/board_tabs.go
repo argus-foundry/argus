@@ -87,7 +87,10 @@ func (b *boardView) drawTabs(screen tcell.Screen, x, y, width int) {
 	length := func() int {
 		n := 3 * (len(labels) - 1)
 		for i, label := range labels {
-			n += len(label) + len(fmt.Sprintf(" %d ", counts[i]))
+			n += len(label) + len(fmt.Sprintf(" %d", counts[i]))
+			if i == b.tab || counts[i] > 0 {
+				n += 2 // selected outer padding or count-box padding
+			}
 		}
 		return n
 	}
@@ -100,7 +103,7 @@ func (b *boardView) drawTabs(screen tcell.Screen, x, y, width int) {
 		style tcell.Style
 	}
 	var cells []cell
-	selectedStart, selectedEnd := 0, 0
+	var starts, ends [5]int
 	appendText := func(text string, style tcell.Style) {
 		for _, r := range text {
 			cells = append(cells, cell{r, style})
@@ -110,26 +113,35 @@ func (b *boardView) drawTabs(screen tcell.Screen, x, y, width int) {
 		if i > 0 {
 			appendText(" · ", theme.StyleDimmed)
 		}
-		style := theme.StyleNormal
+		starts[i] = len(cells)
+		badge := theme.StyleNormal.Foreground(theme.ColorBoardBadgeInk).Background(colors[i]).Bold(true)
 		if i == b.tab {
-			selectedStart = len(cells)
-			style = theme.StyleTitle
+			appendText(fmt.Sprintf(" %s %d ", label, counts[i]), badge)
+		} else {
+			appendText(label+" ", theme.StyleNormal)
+			if counts[i] == 0 {
+				appendText("0", theme.StyleDimmed)
+			} else {
+				appendText(fmt.Sprintf(" %d ", counts[i]), badge)
+			}
 		}
-		appendText(label, style)
-		badge := theme.StyleDimmed
-		if counts[i] > 0 {
-			badge = theme.StyleNormal.Foreground(theme.ColorBoardBadgeInk).Background(colors[i]).Bold(true)
-		}
-		appendText(fmt.Sprintf(" %d ", counts[i]), badge)
-		if i == b.tab {
-			selectedEnd = len(cells)
-		}
+		ends[i] = len(cells)
 	}
-	start := 0
-	if len(cells) > width && selectedEnd > width {
-		start = min(selectedStart, selectedEnd-width)
+	// Keep whole neighboring tabs so the window has no orphan separators.
+	first, last := b.tab, b.tab
+	for first > 0 && ends[last]-starts[first-1] <= width {
+		first--
 	}
-	for n := start; n < len(cells) && n-start < width; n++ {
+	for last < len(labels)-1 && ends[last+1]-starts[first] <= width {
+		last++
+	}
+	start, end := starts[first], ends[last]
+	// When even the abbreviated selection cannot fit, show its label first
+	// rather than spending the only visible cell on the leading padding.
+	if end-start > width {
+		start++
+	}
+	for n := start; n < end && n-start < width; n++ {
 		screen.SetContent(x+n-start, y, cells[n].r, nil, cells[n].style)
 	}
 }

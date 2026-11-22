@@ -10,7 +10,6 @@ import (
 	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/argus-foundry/argus/internal/tui/theme"
 	"github.com/gdamore/tcell/v2"
-	"github.com/mattn/go-runewidth"
 )
 
 func tabOrch(id int64, items []*db.HeraBoardItem) *heramodel.OrchView {
@@ -74,48 +73,155 @@ func TestBoardTabsFilterAndCursor(t *testing.T) {
 	testutil.Equal(t, p.board.tab, 4)
 }
 
+func boardTabRow(sim tcell.SimulationScreen, x, y, width int) string {
+	var row strings.Builder
+	for dx := range width {
+		r, _, _ := sim.Get(x+dx, y)
+		if r == "" {
+			r = " "
+		}
+		row.WriteString(r)
+	}
+	return row.String()
+}
+
 func TestBoardTabStripStylesAndBounds(t *testing.T) {
-	for _, width := range []int{1, 4, 12, 32, 80} {
-		t.Run(fmt.Sprint(width), func(t *testing.T) {
-			sim := tcell.NewSimulationScreen("")
-			testutil.NoError(t, sim.Init())
-			defer sim.Fini()
-			sim.SetSize(100, 4)
-			b := newBoardView()
-			b.allItems = kindItems()
-			b.tab = 4
-			b.drawTabs(sim, 3, 1, width)
-			var row strings.Builder
-			for x := 0; x < 100; x++ {
-				r, _, _ := sim.Get(x, 1)
-				if x < 3 || x >= 3+width {
-					testutil.True(t, r == " " || r == "")
-				} else {
-					row.WriteString(r)
+	colors := [5]tcell.Color{theme.ColorBoardDecision, theme.ColorBoardFYI, theme.ColorBoardAction, theme.ColorBoardTodo, theme.ColorBoardDecision}
+	for _, background := range []tcell.Color{tcell.ColorBlack, tcell.ColorWhite} {
+		t.Run(fmt.Sprint(background), func(t *testing.T) {
+			for tab, label := range boardTabLabels {
+				for _, count := range []int{0, 1, 12} {
+					t.Run(fmt.Sprintf("%s/%d", label, count), func(t *testing.T) {
+						sim := tcell.NewSimulationScreen("")
+						testutil.NoError(t, sim.Init())
+						defer sim.Fini()
+						sim.SetSize(100, 3)
+						sim.SetStyle(tcell.StyleDefault.Background(background))
+						sim.Clear()
+						b := newBoardView()
+						for kind := range 4 {
+							for range count {
+								b.allItems = append(b.allItems, &db.HeraBoardItem{Kind: boardTabKinds[kind]})
+							}
+						}
+						b.tab = tab
+						b.drawTabs(sim, 3, 1, 90)
+						row := boardTabRow(sim, 3, 1, 90)
+						selectedCount := count
+						if tab == 4 {
+							selectedCount *= 4
+						}
+						pill := fmt.Sprintf(" %s %d ", label, selectedCount)
+						pos := strings.Index(row, pill)
+						testutil.True(t, pos >= 0)
+						if pos < 0 {
+							return
+						}
+						pos = len([]rune(row[:pos]))
+						for dx := range len(pill) {
+							_, style, _ := sim.Get(3+pos+dx, 1)
+							fg, bg, _ := style.Decompose()
+							testutil.Equal(t, fg, theme.ColorBoardBadgeInk)
+							testutil.Equal(t, bg, colors[tab])
+						}
+						for other, otherLabel := range boardTabLabels {
+							if other == tab {
+								continue
+							}
+							otherCount := count
+							if other == 4 {
+								otherCount *= 4
+							}
+							text := fmt.Sprintf("%s  %d ", otherLabel, otherCount)
+							if count == 0 {
+								text = otherLabel + " 0"
+							}
+							start := strings.Index(row, text)
+							testutil.True(t, start >= 0)
+							if start < 0 {
+								continue
+							}
+							start = len([]rune(row[:start]))
+							// The label and its separating space stay outside the count fill.
+							for dx := 0; dx <= len(otherLabel); dx++ {
+								_, style, _ := sim.Get(3+start+dx, 1)
+								testutil.Equal(t, style, theme.StyleNormal)
+							}
+							for dx := len(otherLabel) + 1; dx < len(text); dx++ {
+								_, style, _ := sim.Get(3+start+dx, 1)
+								if count == 0 {
+									testutil.Equal(t, style, theme.StyleDimmed)
+								} else {
+									fg, bg, _ := style.Decompose()
+									testutil.Equal(t, fg, theme.ColorBoardBadgeInk)
+									testutil.Equal(t, bg, colors[other])
+								}
+							}
+						}
+						testutil.Equal(t, strings.Count(row, " · "), 4)
+						if count == 0 {
+							var tabs []string
+							for n, name := range boardTabLabels {
+								text := name + " 0"
+								if n == tab {
+									text = " " + text + " "
+								}
+								tabs = append(tabs, text)
+							}
+							testutil.Equal(t, strings.TrimRight(row, " "), strings.TrimRight(strings.Join(tabs, " · "), " "))
+						}
+					})
 				}
-			}
-			if width == 80 {
-				testutil.Contains(t, row.String(), "Decisions 1 ")
-				testutil.Contains(t, row.String(), "All 6 ")
-				_, style, _ := sim.Get(3+10, 1)
-				_, bg, _ := style.Decompose()
-				testutil.Equal(t, bg, theme.ColorBoardDecision)
-			}
-			if width >= 4 {
-				testutil.Contains(t, row.String(), "All")
 			}
 		})
 	}
-	sim := tcell.NewSimulationScreen("")
-	testutil.NoError(t, sim.Init())
-	defer sim.Fini()
-	sim.SetSize(90, 3)
-	b := newBoardView()
-	b.drawTabs(sim, 0, 0, 90)
-	_, style, _ := sim.Get(10, 0)
-	fg, bg, _ := style.Decompose()
-	testutil.Equal(t, fg, theme.ColorDimmed)
-	testutil.Equal(t, bg, tcell.ColorDefault)
+	for tab, label := range boardTabLabels {
+		for width := 0; width <= 85; width++ {
+			t.Run(fmt.Sprintf("bounds/%s/%d", label, width), func(t *testing.T) {
+				sim := tcell.NewSimulationScreen("")
+				testutil.NoError(t, sim.Init())
+				defer sim.Fini()
+				sim.SetSize(100, 3)
+				b := newBoardView()
+				b.allItems = kindItems()
+				b.tab = tab
+				b.drawTabs(sim, 3, 1, width)
+				for x := range 100 {
+					if x < 3 || x >= 3+width {
+						r, _, _ := sim.Get(x, 1)
+						testutil.True(t, r == " " || r == "")
+					}
+				}
+				if width == 0 {
+					return
+				}
+				row := boardTabRow(sim, 3, 1, width)
+				testutil.True(t, !strings.HasPrefix(strings.TrimSpace(row), "·"))
+				testutil.True(t, !strings.HasSuffix(strings.TrimSpace(row), "·"))
+				selectedText := label[:1]
+				if width >= 7 {
+					visibleLabel := label
+					// This fixture's full strip occupies 60 cells, including padding.
+					if width < 60 && tab != 4 {
+						visibleLabel = label[:1]
+					}
+					selectedText = fmt.Sprintf(" %s %d ", visibleLabel, [5]int{1, 1, 3, 1, 6}[tab])
+				}
+				pos := strings.Index(row, selectedText)
+				testutil.True(t, pos >= 0)
+				if pos < 0 {
+					return
+				}
+				pos = len([]rune(row[:pos]))
+				for dx := range len(selectedText) {
+					_, style, _ := sim.Get(3+pos+dx, 1)
+					fg, bg, _ := style.Decompose()
+					testutil.Equal(t, fg, theme.ColorBoardBadgeInk)
+					testutil.Equal(t, bg, colors[tab])
+				}
+			})
+		}
+	}
 }
 
 func TestBoardTabCapture(t *testing.T) {
@@ -129,39 +235,48 @@ func TestBoardTabCapture(t *testing.T) {
 			b.allItems = append(b.allItems, &db.HeraBoardItem{Kind: boardTabKinds[kind]})
 		}
 	}
-	b.tab = 0
-	b.drawTabs(sim, 0, 0, 90)
-	_, selectedStyle, _ := sim.Get(0, 0)
-	testutil.Equal(t, selectedStyle, theme.StyleTitle)
-	var row strings.Builder
-	for x := 0; x < 90; x++ {
-		r, _, _ := sim.Get(x, 0)
-		row.WriteString(r)
-	}
-	t.Log(strings.TrimSpace(row.String()))
-	t.Log("Selected Decisions label: accent cyan/bold. Badges: decision/All #93a5ff blue, FYI #67e8f9 teal, action #f0a868 orange, todo #9aa5b8 slate; ink #10141b. Zero: dim, no fill.")
-	for n, label := range boardTabLabels {
-		pos := runewidth.StringWidth(row.String()[:strings.Index(row.String(), label)]) + len(label)
-		for dx := 0; dx < 3; dx++ {
-			_, style, _ := sim.Get(pos+dx, 0)
-			fg, bg, attr := style.Decompose()
-			testutil.Equal(t, fg, theme.ColorBoardBadgeInk)
-			testutil.Equal(t, bg, [5]tcell.Color{theme.ColorBoardDecision, theme.ColorBoardFYI, theme.ColorBoardAction, theme.ColorBoardTodo, theme.ColorBoardDecision}[n])
-			testutil.True(t, attr&tcell.AttrBold != 0)
-		}
-	}
-	testutil.Contains(t, row.String(), "Decisions 4  · FYIs 3  · Actions 2  · Todos 6  · All 15 ")
-	for _, width := range []int{10, 24, 40} {
+	t.Log("SimulationScreen: [text] below denotes the actual continuous filled cells; brackets are capture annotations.")
+	t.Logf("Fill palette: Decisions/All %s; FYIs %s; Actions %s; Todos %s; ink %s.", theme.ColorBoardDecision, theme.ColorBoardFYI, theme.ColorBoardAction, theme.ColorBoardTodo, theme.ColorBoardBadgeInk)
+	capture := func(width int) string {
 		sim.Clear()
-		b.tab = 4
-		b.drawTabs(sim, 0, 1, width)
-		row.Reset()
-		for x := 0; x < width; x++ {
-			r, _, _ := sim.Get(x, 1)
-			row.WriteString(r)
+		b.drawTabs(sim, 0, 0, width)
+		var out strings.Builder
+		filled := false
+		for x := range width {
+			r, style, _ := sim.Get(x, 0)
+			_, bg, _ := style.Decompose()
+			nowFilled := bg != tcell.ColorDefault
+			if nowFilled != filled {
+				if nowFilled {
+					out.WriteString("[")
+				} else {
+					out.WriteString("]")
+				}
+				filled = nowFilled
+			}
+			out.WriteString(r)
 		}
-		t.Logf("Width %d, All selected: %s", width, row.String())
+		if filled {
+			out.WriteString("]")
+		}
+		return strings.TrimRight(out.String(), " ")
 	}
+	for tab, label := range boardTabLabels {
+		t.Run(label, func(t *testing.T) {
+			b.tab = tab
+			for _, width := range []int{90, 40, 24, 10, 4, 1} {
+				t.Logf("Width %d, %s selected: %s", width, label, capture(width))
+			}
+		})
+	}
+	b.allItems = nil
+	b.tab = 4
+	t.Logf("Empty board: %s", capture(90))
+	for range 4 {
+		b.allItems = append(b.allItems, &db.HeraBoardItem{Kind: "fyi"})
+	}
+	b.tab = 1
+	t.Logf("Live feedback example: %s", capture(90))
 }
 
 func TestBoardTabsRefreshAndFilteredActions(t *testing.T) {
