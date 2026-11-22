@@ -207,6 +207,7 @@ type HeraPage struct {
 	plan               *planview.Widget // embedded plan-DAG graph
 	board              *boardView
 	boardOrchID        int64
+	boardTabs          map[int64]int
 	showBoard          bool
 	boardAuto          bool
 	boardHeight        int
@@ -747,6 +748,15 @@ func (p *HeraPage) JumpToNextNeedsInput() bool {
 		// selected; ordinary refresh must continue preserving the plan view.
 		p.showBoard = true
 		p.focus.SetRegion(FocusAgent)
+		// A remembered filter must not conceal the target of an explicit
+		// attention jump. Broaden only when this tab has no attention item.
+		visibleAttention := false
+		for _, item := range p.board.items {
+			visibleAttention = visibleAttention || heramodel.BoardAttention(item)
+		}
+		if !visibleAttention {
+			p.changeBoardTab(4)
+		}
 		for n, item := range p.board.items {
 			if heramodel.BoardAttention(item) {
 				p.board.cursor = n

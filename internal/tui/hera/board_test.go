@@ -16,6 +16,7 @@ import (
 	"github.com/argus-foundry/argus/internal/tui/theme"
 	"github.com/argus-foundry/argus/internal/tui/widget"
 	"github.com/gdamore/tcell/v2"
+	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
 )
 
@@ -28,7 +29,8 @@ func drawBoardRows(t *testing.T, b *boardView, width, height int) (tcell.Simulat
 	b.draw(sim, 0, 0, width, height, " Board ", true, keymap.DefaultKeymap())
 	sim.Show()
 	var rows []string
-	for y := 1; y < height-2; y++ {
+	// Return only item rows: row 1 is now the fixed tab strip.
+	for y := 2; y < height-2; y++ {
 		var row strings.Builder
 		for x := 1; x < width-1; {
 			r, _, width := sim.Get(x, y)
@@ -138,7 +140,7 @@ func TestBoardHeaderWrappingAndEllipsis(t *testing.T) {
 			if expanded {
 				testutil.Equal(t, rows[0], "▾ [fyi] #1 one two three •")
 				testutil.Equal(t, rows[1], "           four five six")
-				_, style, _ := sim.Get(12, 2)
+				_, style, _ := sim.Get(12, 3)
 				_, _, attrs := style.Decompose()
 				testutil.Equal(t, attrs&tcell.AttrBold != 0, true)
 				testutil.Equal(t, attrs&tcell.AttrReverse != 0, false)
@@ -146,7 +148,7 @@ func TestBoardHeaderWrappingAndEllipsis(t *testing.T) {
 				testutil.Equal(t, rows[0], "▸ [fyi] #1 one two thre… •")
 				testutil.Equal(t, rows[1], "")
 			}
-			_, style, _ := sim.Get(1, 1)
+			_, style, _ := sim.Get(1, 2)
 			_, _, attrs := style.Decompose()
 			testutil.Equal(t, attrs&tcell.AttrBold != 0, true)
 			testutil.Equal(t, attrs&tcell.AttrReverse != 0, true)
@@ -163,7 +165,7 @@ func TestBoardBoldAcrossWraps(t *testing.T) {
 		bold bool
 	}{{3, 2, true}, {3, 3, true}, {11, 3, false}} {
 		t.Run(fmt.Sprintf("%d,%d", tc.x, tc.y), func(t *testing.T) {
-			_, style, _ := sim.Get(tc.x, tc.y)
+			_, style, _ := sim.Get(tc.x, tc.y+1)
 			_, _, attrs := style.Decompose()
 			testutil.Equal(t, attrs&tcell.AttrBold != 0, tc.bold)
 		})
@@ -179,7 +181,7 @@ func TestBoardStyledBulletAndCombiningRunes(t *testing.T) {
 		bold bool
 	}{{5, 2, true}, {5, 3, false}, {3, 4, true}, {5, 6, true}, {5, 7, true}} {
 		t.Run(fmt.Sprintf("%d,%d", tc.x, tc.y), func(t *testing.T) {
-			_, style, _ := sim.Get(tc.x, tc.y)
+			_, style, _ := sim.Get(tc.x, tc.y+1)
 			_, _, attrs := style.Decompose()
 			testutil.Equal(t, attrs&tcell.AttrBold != 0, tc.bold)
 		})
@@ -190,7 +192,7 @@ func TestBoardBoldAcrossExplicitNewline(t *testing.T) {
 	b := &boardView{items: []*db.HeraBoardItem{{ID: 1, Kind: "fyi", Subject: "S", Body: "**one\ntwo** plain", Read: true}}, expandedID: 1}
 	sim, rows := drawBoardRows(t, b, 28, 10)
 	testutil.DeepEqual(t, rows[1:3], []string{"  one", "  two plain"})
-	_, style, _ := sim.Get(3, 3)
+	_, style, _ := sim.Get(3, 4)
 	_, _, attrs := style.Decompose()
 	testutil.Equal(t, attrs&tcell.AttrBold != 0, true)
 }
@@ -341,7 +343,7 @@ func TestBoardRenderingScrollAndBold(t *testing.T) {
 	b.draw(sim, 0, 0, 60, 10, " Board ", true, keymap.DefaultKeymap())
 	sim.Show()
 	testutil.Contains(t, simScreenText(sim), "Header")
-	_, style, _ := sim.Get(2, 1)
+	_, style, _ := sim.Get(2, 2)
 	_, _, attrs := style.Decompose()
 	testutil.Equal(t, attrs&tcell.AttrBold != 0, true)
 	b.expandedID = 1
@@ -378,7 +380,7 @@ func TestBoardNavigationReadAndDismiss(t *testing.T) {
 	testutil.Equal(t, p.board.selected().ID, int64(1))
 	p.boardHeight = 10
 	p.handleBoardKey(tcell.NewEventKey(tcell.KeyPgDn, 0, 0), nil)
-	testutil.Equal(t, p.board.offset, 7)
+	testutil.Equal(t, p.board.offset, 6)
 	p.handleBoardKey(tcell.NewEventKey(tcell.KeyPgUp, 0, 0), nil)
 	testutil.Equal(t, p.board.offset, 0)
 	p.board.items = nil
@@ -395,7 +397,7 @@ func TestBoardScrollClamp(t *testing.T) {
 	}{
 		{"above top", -3, 8, 0, false},
 		{"within body", 3, 8, 3, false},
-		{"below bottom", 100, 8, 16, false},
+		{"below bottom", 100, 8, 17, false},
 		{"all content fits", 100, 30, 0, false},
 		{"empty after refresh", 100, 8, 0, true},
 		{"no content viewport", 100, 3, 0, false},
@@ -492,9 +494,9 @@ func TestBoardHintRendering(t *testing.T) {
 		{"unfocused empty", false, true, 100, 6, nil, "⌘→ open board · p plan"},
 		{"focused empty", true, true, 100, 6, nil, "j/k move · ⏎ expand · r reply · x dismiss/drop · d done · c copy · o decide · p plan · ctrl+q back"},
 		{"focused scrolling", true, false, 100, 6, nil, "j/k move · ⏎ expand · r reply · x dismiss/drop · d done · c copy · o decide · p plan · ctrl+q back"},
-		{"narrow", true, false, 12, 6, nil, "j/k move ·"},
-		{"one column", true, false, 3, 6, nil, "j"},
-		{"wide key clipped", true, false, 3, 6, map[string]string{"down": "界"}, ""},
+		{"narrow", true, false, 12, 6, nil, "←/→ tabs ·"},
+		{"one column", true, false, 3, 6, nil, "←"},
+		{"wide key clipped", true, false, 3, 6, map[string]string{"down": "界"}, "←"},
 		{"literal bracket key", true, false, 100, 6, map[string]string{"reply": "["}, "j/k move · ⏎ expand · [ reply · x dismiss/drop · d done · c copy · o decide · p plan · ctrl+q back"},
 		{"one interior row", false, false, 100, 3, nil, "⌘→ open board · p plan"},
 		{"rebound focused", true, false, 100, 6, map[string]string{"down": "n", "up": "u", "reply": "a", "dismiss": "z", "toggle": "b"}, "n/u move · ⏎ expand · a reply · z dismiss/drop · d done · c copy · o decide · b plan · ctrl+q back"},
@@ -525,7 +527,11 @@ func TestBoardHintRendering(t *testing.T) {
 					testutil.Equal(t, style, theme.StyleDimmed)
 				}
 			}
-			testutil.Equal(t, strings.TrimRight(row.String(), " "), tc.want)
+			want := tc.want
+			if tc.focused && tc.width > 12 {
+				want = runewidth.Truncate("←/→ tabs · "+tc.want, tc.width-2, "")
+			}
+			testutil.Equal(t, strings.TrimRight(row.String(), " "), strings.TrimRight(want, " "))
 			r, _, _ := sim.Get(2+tc.width-1, tc.height-1)
 			testutil.Equal(t, r, "│")
 			r, _, _ = sim.Get(2+tc.width, tc.height-1)
