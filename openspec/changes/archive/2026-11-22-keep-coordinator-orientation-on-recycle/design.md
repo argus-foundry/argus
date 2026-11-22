@@ -27,6 +27,7 @@ Skills, routing text, the plugin dir, MCP config and `ARGUS_TASK_ID` are re-appl
 - Rewriting the orientation text or the hera skill.
 - Re-delivering orientation to a coordinator's *running* session (only spawn, the tool result and recycle).
 - Changing the first-spawn prompts (TUI form, gater, graduation).
+- A coordinator that calls the plain `task_recycle` tool still gets the plain-task seed: no orientation, board or plan state. This gap was there before this change. The `argus-recycle` skill steers hera roles to `hera_status(request_recycle=true)`, but nothing in code enforces that. **Named follow-up:** route `task_recycle` for a hera-bound caller to the hera seed.
 
 ## Decisions
 
@@ -83,7 +84,7 @@ The double-recycle bug is real. `lastexchange.Extract` treats any non-meta user 
 
 ### D5. `hera_new_orchestrator` keeps the original prompt
 
-When `prompt` is empty, the coordinator role's `Prompt` falls back to the calling task's `Prompt`. That way the recycle seed's "Original prompt" section shows what the session was doing before it promoted itself, instead of nothing. It costs nothing extra and needs no schema change. If the task was itself recycled before promoting, its prompt is that earlier seed, which is still accurate background.
+When `prompt` is empty, the coordinator role's `Prompt` falls back to the calling task's `Prompt`. That way the recycle seed's "Original prompt" section shows what the session was doing before it promoted itself, instead of nothing. It costs nothing extra and needs no schema change. If the task was itself recycled before promoting, its prompt is that earlier seed, which is still accurate background. For a worker that promotes itself, that prompt includes its worker orientation and possibly its check-in text. It appears only under the "Original prompt (background only)" label, and the standing orientation section above it is what applies now.
 
 ## Risks / Trade-offs
 

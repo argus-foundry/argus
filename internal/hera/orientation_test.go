@@ -219,3 +219,18 @@ func TestBuildRecycleSeedPrompt_MarkedAsArgusInjected(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildRecycleSeedPrompt_OrientationFailureNeverBlocksSeed pins the
+// fail-open scenario end-to-end: an unresolvable orchestrator omits the
+// orientation section but still yields a usable seed.
+func TestBuildRecycleSeedPrompt_OrientationFailureNeverBlocksSeed(t *testing.T) {
+	d := openOrientationDB(t)
+	_, coord := seedBridgedSubCoord(t, d, db.HeraNodeKindSubCoord, "kid")
+	prompt, err := BuildRecycleSeedPrompt(failingOrientationStore{DB: d, failOrch: true}, coord.ID, "")
+	testutil.NoError(t, err)
+	if strings.Contains(prompt, orientationHeading) {
+		t.Fatal("orientation section must be omitted when the orchestrator lookup fails")
+	}
+	testutil.Contains(t, prompt, "## Original prompt")
+	testutil.Contains(t, prompt, "deliver phase two")
+}
