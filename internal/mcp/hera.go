@@ -748,6 +748,14 @@ func (s *Server) toolHeraNewOrchestrator(id interface{}, args json.RawMessage) *
 		}
 	}
 
+	// An omitted prompt keeps the caller's own task prompt as the role mission,
+	// so a later recycle seed's "Original prompt" section is not blank
+	// (keep-coordinator-orientation-on-recycle D5).
+	rolePrompt := p.Prompt
+	if rolePrompt == "" {
+		rolePrompt = task.Prompt
+	}
+
 	role, binding, err := s.heraStore.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
 		OrchestratorID: orch.ID,
 		Name:           p.CoordinatorRoleName,
@@ -756,7 +764,7 @@ func (s *Server) toolHeraNewOrchestrator(id interface{}, args json.RawMessage) *
 		// downstream spawn/adopt can default a worker's project without a
 		// task lookup. Historical rows may be empty; consumers tolerate that.
 		ArgusProject: task.Project,
-		Prompt:       p.Prompt,
+		Prompt:       rolePrompt,
 	}, task.ID, task.Worktree)
 	if err != nil {
 		return toolError(id, fmt.Sprintf("create coordinator role: %v", err))
@@ -775,6 +783,12 @@ func (s *Server) toolHeraNewOrchestrator(id interface{}, args json.RawMessage) *
 	fmt.Fprintf(&b, "- **kind**: coordinator\n")
 	fmt.Fprintf(&b, "- **binding_id**: %d\n", binding.ID)
 	fmt.Fprintf(&b, "- **argus_task_id**: %s\n", task.ID)
+	// Deliver the coordinator rules now: this path has no spawn prompt to carry
+	// them. The same text returns on every recycle (keep-coordinator-
+	// orientation-on-recycle D3).
+	if orientation := hera.CoordinatorOrientation(s.heraStore, role, task.ID); orientation != "" {
+		fmt.Fprintf(&b, "\n## Coordinator orientation\n\n%s\n", orientation)
+	}
 	return toolResult(id, b.String())
 }
 

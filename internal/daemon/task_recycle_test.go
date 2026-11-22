@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/lastexchange"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -44,6 +46,21 @@ func TestBuildTaskRecycleSeedPrompt(t *testing.T) {
 	if strings.Index(got, "did X, next do Y") > strings.Index(got, "original mission text") {
 		t.Fatal("handoff note must appear before the original prompt")
 	}
+}
+
+// TestBuildTaskRecycleSeedPrompt_MarkedAsArgusInjected pins
+// keep-coordinator-orientation-on-recycle D4: a second recycle with no human
+// turn in between must not quote this seed as the user's last message.
+func TestBuildTaskRecycleSeedPrompt_MarkedAsArgusInjected(t *testing.T) {
+	seed := buildTaskRecycleSeedPrompt("original mission text", "did X", "")
+	testutil.Equal(t, strings.HasPrefix(seed, lastexchange.SystemTurnPrefix), true)
+
+	line, err := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": seed}})
+	testutil.NoError(t, err)
+	ex, err := lastexchange.Extract(strings.NewReader(string(line) + "\n" +
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"resuming"}]}}` + "\n"))
+	testutil.NoError(t, err)
+	testutil.Equal(t, ex.Human, "")
 }
 
 func TestResidentRecycleSeedOrder(t *testing.T) {
