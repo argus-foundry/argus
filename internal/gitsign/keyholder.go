@@ -2,6 +2,7 @@ package gitsign
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -27,13 +28,24 @@ func PrivateKeyRef(ref string) string { return ref + "/private key?ssh-format=op
 // KeyHolder resolves the agent signing key on first use and keeps the parsed
 // signer in memory for the life of the process. Only success is memoized: a
 // failed resolve is retried on the next call, so a 1Password recovery needs
-// no restart.
+// no restart. Resolves are single-flight: callers arriving while an attempt
+// is running share its result (success or failure) instead of queueing
+// behind the lock and each re-running a slow `op read`.
 type KeyHolder struct {
 	resolve Resolver
 	ref     string
 
-	mu     sync.Mutex
-	signer ssh.Signer
+	mu       sync.Mutex
+	signer   ssh.Signer
+	inflight *resolveAttempt
+}
+
+// resolveAttempt is one in-flight resolve; done closes when s/err are set.
+type resolveAttempt struct {
+	done    chan struct{}
+	s       ssh.Signer
+	err     error
+	waiters int // callers sharing this attempt besides its starter (tests)
 }
 
 // NewKeyHolder returns a holder that resolves ref's key halves through resolve.
@@ -46,16 +58,31 @@ func NewKeyHolder(resolve Resolver, ref string) *KeyHolder {
 // material.
 func (h *KeyHolder) Signer() (ssh.Signer, error) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.signer != nil {
-		return h.signer, nil
+		s := h.signer
+		h.mu.Unlock()
+		return s, nil
 	}
-	s, err := loadSigner(h.resolve, h.ref)
-	if err != nil {
-		return nil, err
+	if a := h.inflight; a != nil {
+		a.waiters++
+		h.mu.Unlock()
+		<-a.done
+		return a.s, a.err
 	}
-	h.signer = s
-	return s, nil
+	a := &resolveAttempt{done: make(chan struct{})}
+	h.inflight = a
+	h.mu.Unlock()
+
+	a.s, a.err = loadSigner(h.resolve, h.ref)
+
+	h.mu.Lock()
+	if a.err == nil {
+		h.signer = a.s
+	}
+	h.inflight = nil
+	h.mu.Unlock()
+	close(a.done)
+	return a.s, a.err
 }
 
 // loadSigner resolves and parses both halves and checks they match.
@@ -79,6 +106,9 @@ func loadSigner(resolve Resolver, ref string) (ssh.Signer, error) {
 	// echo the input, but the cause here is fixed text to be certain.
 	signer, err := ssh.ParsePrivateKey([]byte(priv))
 	if err != nil {
+		if pme := new(ssh.PassphraseMissingError); errors.As(err, &pme) {
+			return nil, fmt.Errorf("%w: %s is passphrase-protected", ErrUnresolved, privRef)
+		}
 		return nil, fmt.Errorf("%w: %s is not an OpenSSH private key", ErrUnresolved, privRef)
 	}
 	want, _, _, _, err := ssh.ParseAuthorizedKey([]byte(pub))
