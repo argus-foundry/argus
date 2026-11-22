@@ -75,7 +75,8 @@ Git invokes `gpg.ssh.program` with `ssh-keygen` arguments, not through a shell, 
 - It refuses any namespace other than `git` (HTTP 400).
 - It returns HTTP 503 with a named cause when the policy is not `agent-key`, or the key is unresolved or mismatched.
 - It logs `[agent-git] sign task=<id> ok|err=<cause>` for every request, never data or key material.
-- The key is resolved lazily on first request and memoized for the life of the process, with success-only memoization like the secrets resolver. A failed resolve is retried on the next request, so a later 1Password recovery needs no daemon restart.
+- The key is resolved lazily on first request and memoized for the life of the process, with success-only memoization like the secrets resolver. A failed resolve is retried on the next request, so a later 1Password recovery needs no daemon restart. Concurrent first requests share one resolve attempt (single-flight), so a 1Password outage doesn't queue a full timeout per waiting agent.
+- The daemon always wires the signer, and on every request reads the policy and key reference from the live config (config.toml live-reload). It keeps one `KeyHolder` per reference. Turning `agent-key` on or off therefore needs no daemon restart, and while the policy is off the route answers the same named 503 as an unset signer. (This revises the first draft, which wired the signer only at startup.)
 
 *Alternative considered:* host signing in the session-supervisor, which is longer-lived. Rejected: the REST surface, tokens, and the artifact-CLI discovery path all live in the daemon, and the helper's 30-second retry covers daemon bounces.
 
