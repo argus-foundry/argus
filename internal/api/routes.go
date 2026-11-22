@@ -177,6 +177,9 @@ func (s *Server) routes() *http.ServeMux {
 	// `argus artifact publish` and any REST client). Authenticated like the
 	// rest of /api/*; see internal/api/artifacts_publish.go.
 	mux.HandleFunc("POST /api/artifacts/publish", s.handlePublishArtifact)
+	// Sign an agent commit with the agent signing key (the `argus -Y sign`
+	// helper). Authenticated like the rest of /api/*; see internal/api/git_sign.go.
+	mux.HandleFunc("POST /api/git/sign", s.handleGitSign)
 	mux.HandleFunc("GET /api/push/vapid-public-key", s.handleVapidPublicKey)
 	mux.HandleFunc("POST /api/push/subscribe", s.handlePushSubscribe)
 	mux.HandleFunc("DELETE /api/push/subscribe/{id}", s.handlePushUnsubscribe)

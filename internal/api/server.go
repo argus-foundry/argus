@@ -83,6 +83,9 @@ type Server struct {
 	// artifactPublisher backs POST /api/artifacts/publish; optional, set by
 	// SetArtifactPublisher before ListenAndServe.
 	artifactPublisher ArtifactPublisher
+	// gitSigner backs POST /api/git/sign; optional, set by SetGitSigner
+	// before ListenAndServe (add-agent-signing-key).
+	gitSigner GitSignFunc
 
 	// eventBus broadcasts model.Events to attached SSE subscribers. Server
 	// implements events.Sink (see Emit) so the daemon can wire the global

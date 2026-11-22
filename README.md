@@ -988,6 +988,7 @@ Every authenticated token has the same permissions **except** a small master-onl
 | `GET`  | `/api/tasks/{id}/artifacts`               | List artifacts the agent registered via `artifact_register` (name, title, type, size)                                |
 | `GET`  | `/api/tasks/{id}/artifacts/{filename...}` | Serve one artifact's raw bytes (`filename` may be a nested `folder/x.png`; `?thumb=1` returns a ≤320px JPEG thumbnail for images/video, 404 if none). Scoped to the registered manifest set (no path traversal); HTML served in a sandbox. |
 | `POST` | `/api/artifacts/publish`                  | Publish an HTML page to claude.ai as a configured account (what `argus artifact publish` calls). Multipart form: `account` (required), `title`, `update` (existing artifact link), `file` (the page, ≤16 MiB). `200` with `{"status":"published","url":…}` or `{"status":"unavailable","available_accounts":[…]}`; `400` invalid page / no `[artifact_tokens]` entry; `502` endpoint failure (incl. an expired token). |
+| `POST` | `/api/git/sign`                           | Sign an agent commit with the agent signing key (what the `argus -Y sign` Git signing helper calls when `[git] agent_commit_signing = "agent-key"`). JSON `{"namespace":"git","data":<base64>,"task_id":…}`. `200` with `{"signature":<armored SSHSIG>}`; `400` bad body or any namespace other than `git`; `503` signing not configured or the key is unresolved or mismatched (named cause in `error`). Logs task and outcome only. |
 
 #### Maintenance
 

@@ -25,14 +25,15 @@ All tests use synthetic Ed25519 keys generated in-test and a stubbed secret reso
 
 **Depends on:** Stage 1
 
-- [ ] 3.1 Add the in-process SSHSIG signer (`golang.org/x/crypto/ssh`, sha512, armored output)
-- [ ] 3.2 Add the daemon key holder: lazy success-only memoized resolve of `?ssh-format=openssh` private key, public-half match check, named errors
-- [ ] 3.3 Wire `POST /api/git/sign` in `internal/api/routes.go` with the daemon's existing auth, the `git`-only namespace guard, and `[agent-git] sign task=… ok|err=…` logging
+- [x] 3.1 Add the in-process SSHSIG signer (`golang.org/x/crypto/ssh`, sha512, armored output)
+- [x] 3.2 Add the daemon key holder: lazy success-only memoized resolve of `?ssh-format=openssh` private key, public-half match check, named errors
+- [x] 3.3 Wire `POST /api/git/sign` in `internal/api/routes.go` with the daemon's existing auth, the `git`-only namespace guard, and `[agent-git] sign task=… ok|err=…` logging
 
 ## 4. Signing helper
 
 **Depends on:** Stage 3
 
+- [ ] 4.0 Wire the signer into the daemon (moved from Stage 3; needs Stage 2's config field): when `[git] agent_commit_signing = "agent-key"`, build a `gitsign.KeyHolder` from `agent_signing_key` with the daemon's secret resolver and call `Server.SetGitSigner` at startup
 - [ ] 4.1 Dispatch `os.Args[1] == "-Y"` in `cmd/argus/main.go` to the helper before any other startup work
 - [ ] 4.2 Implement `-Y sign` (daemon discovery and token reuse from `artifact.go`, 30s connection retry, `.sig` write, fail-loud message) and the `ssh-keygen` passthrough
 
