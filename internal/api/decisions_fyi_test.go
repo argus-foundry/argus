@@ -134,3 +134,37 @@ func TestRailBoardNestedVisibilityOnEveryWrite(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(items), 1)
 }
+
+func TestClosedBoardFeedbackHTTPContext(t *testing.T) {
+	for _, kind := range []string{"fyi", "decision"} {
+		t.Run(kind, func(t *testing.T) {
+			s, d, c, _, _ := boardRESTFixture(t)
+			closed, err := d.PostHeraBoardItem(c.ID, kind, "Closed during review", "body")
+			testutil.NoError(t, err)
+			fresh, err := d.PostHeraBoardItem(c.ID, kind, "Still open", "body")
+			testutil.NoError(t, err)
+			testutil.NoError(t, d.ResolveHeraBoardItem(c.ID, closed.ID, "agent", "done"))
+			session, _, err := s.decisions.mint(c.ID, true)
+			testutil.NoError(t, err)
+			field, endpoint := "actions", "fyi-actions"
+			if kind == "decision" {
+				field, endpoint = "answers", "answers"
+			}
+			body := fmt.Sprintf(`{%q:[{"action_id":"closed","item_id":%d,"expected_updated_at":%q,"action":"comment","note":"Keep this"},{"action_id":"fresh","item_id":%d,"expected_updated_at":%q,"action":"comment","note":"Accept this"}]}`, field, closed.ID, ts(closed.UpdatedAt), fresh.ID, ts(fresh.UpdatedAt))
+			w := decideCall(t, s, "POST", fmt.Sprintf("/api/hera/roles/%d/board/%s", c.ID, endpoint), body, session)
+			testutil.Equal(t, w.Code, 200)
+			var response struct{ Results []db.HeraBoardFYIResult }
+			testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+			testutil.Equal(t, len(response.Results), 2)
+			testutil.Equal(t, response.Results[0].Outcome, "invalid")
+			testutil.Equal(t, response.Results[0].ItemID, closed.ID)
+			testutil.NotNil(t, response.Results[0].Item)
+			if response.Results[0].Item != nil {
+				testutil.Equal(t, response.Results[0].Item.Resolved, true)
+			}
+			testutil.Equal(t, response.Results[1].Outcome, "commented")
+			testutil.Equal(t, response.Results[1].ItemID, fresh.ID)
+			testutil.Equal(t, len(mustMsgs(t, d, c.ID)), 1)
+		})
+	}
+}

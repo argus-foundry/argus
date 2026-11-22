@@ -232,6 +232,12 @@ body .page-layout{grid-template-columns:200px minmax(0,1fr) 290px;max-width:1540
 <script id="decision-logic">
 globalThis.BoardDecisions = (() => {
   function draftKey(role,item) { return `board-decision:${role}:${item.id}:${item.updated_at}`; }
+  function noteError(item,draft) {
+    if(typeof draft?.note!=='string'||new TextEncoder().encode(draft.note).length>4096)return 'Required note missing or too long. Edit this response.';
+    const required=item.kind==='decision'?(draft.choice==='other'||(!draft.choice&&draft.action==='comment')):item.kind==='fyi'&&['comment','comment_and_dismiss'].includes(draft.action);
+    if(required&&!draft.note.trim()&&(draft.choice==='other'||!(draft.annotations||[]).length))return 'Required note missing or too long. Edit this response.';
+    return '';
+  }
   function valid(item,draft) {
     if (!draft || typeof draft.note!=='string' || new TextEncoder().encode(draft.note).length>4096) return false;
     const a=draft.annotations||[];if(!Array.isArray(a))return false;
@@ -326,7 +332,7 @@ globalThis.BoardDecisions = (() => {
     if(e.key==='ArrowLeft'||e.key==='ArrowRight')return {role,tab:e.key==='ArrowLeft'?'decision':'fyi'};
     return null;
   }
-  return {draftKey,valid,payload,outcome,markup,inline,finish,batches,accepted,editable,navigate,TABS,isCompletion,endpoint,band,order,adjacent};
+  return {draftKey,valid,noteError,payload,outcome,markup,inline,finish,batches,accepted,editable,navigate,TABS,isCompletion,endpoint,band,order,adjacent};
 })();
 </script>
 <script>
@@ -524,7 +530,7 @@ globalThis.BoardDecisions = (() => {
     }
     card.onpointerdown=e=>{if(!e.target.closest('button,input,textarea')){activeItem=key(r.role,i.id);renderPanel();}};
     const locked=busy||expired||!!d.sent;
-    const changed=()=>{r.status='';persist();hint.hidden=L.valid(i,d)||!(d.action||d.choice);state.textContent=(d.action||d.choice)?'Queued':'Open';drawNav();update();};
+    const changed=()=>{r.status='';persist();hint.hidden=!L.noteError(i,d);state.textContent=(d.action||d.choice)?'Queued':'Open';drawNav();update();};
     if(i.kind==='decision'&&i.structured){
       const options=el('fieldset','options');options.setAttribute('aria-label',i.subject);
       for(const o of [...i.structured.options,{id:'other',label:'Something else'}]){
@@ -538,7 +544,7 @@ globalThis.BoardDecisions = (() => {
       card.append(options);
     }
     const note=el('div','note'),label=el('label','',done?'Note (optional)':i.kind==='decision'&&!i.structured?'General comment / your answer (required)':'General comment'+(i.structured?' (required for Something else)':'')),text=el('textarea');text.id=`note-${i.id}`;label.htmlFor=text.id;text.value=d.note;text.disabled=locked;text.maxLength=4096;text.oninput=()=>{d.note=text.value;if(i.kind==='decision'&&!i.structured&&d.action!=='comment')d.choice=d.note.trim()?'other':'';changed();};note.append(label,text);card.append(note);
-    const hint=el('p','hint','Add a note to send this response (up to 4 KiB).');hint.hidden=L.valid(i,d)||!(i.kind==='decision'?d.choice:d.action);hint.setAttribute('role','alert');card.append(hint);
+    const hint=el('p','hint','Add a note to send this response (up to 4 KiB).');hint.hidden=!L.noteError(i,d);hint.setAttribute('role','alert');card.append(hint);
     if(i.kind==='decision'&&!i.structured&&d.action==='comment'){const answer=button('Use general comment as answer',()=>{d.choice='other';d.action='';delete d.implicit;persist();render();});answer.disabled=locked;card.append(answer);}
     if(done){
       const actions=el('div','fyi-actions');
@@ -568,8 +574,8 @@ globalThis.BoardDecisions = (() => {
       for(const a of anns(r)){const entry=el('div','annotation-card');entry.append(el('strong','',a.type==='DELETION'?'Delete suggestion':'Comment'),el('blockquote','',a.quote));if(a.comment)entry.append(el('p','',a.comment));row.append(entry);}
       if(r.unavailable||!rowFor(r.role))row.append(el('p','hint','Unavailable: coordinator is hidden, archived or removed. Other boards can still submit.'));
       if(r.status)row.append(el('p','hint',r.status));
-      if(!L.valid(i,d))row.append(el('p','hint','Required note missing or too long. Edit this response.'));
-      if(rowFor(r.role)&&!r.unavailable)row.append(button('Edit on board',()=>{selected=r.role;tab=i.kind;screen='browse';render();document.getElementById(`decision-${i.id}`)?.scrollIntoView();},'clear'));
+      if(L.noteError(i,d))row.append(el('p','hint',L.noteError(i,d)));
+      if(rowFor(r.role)&&!r.unavailable&&!r.closed)row.append(button('Edit on board',()=>{selected=r.role;tab=i.kind;screen='browse';render();document.getElementById(`decision-${i.id}`)?.scrollIntoView();},'clear'));
       const clear=button('Clear queued response',()=>{r.draft=draft();persist();render();},'clear');clear.disabled=busy||!!d.sent;row.append(clear);main.append(row);
     }
   }
@@ -644,6 +650,7 @@ globalThis.BoardDecisions = (() => {
             if(result&&['conflict','invalid','not_found','already_resolved'].includes(result.outcome)){
               const note=r.draft.note,stale=anns(r).length?{revision:r.item.updated_at,note,annotations:anns(r)}:undefined;r.draft={...r.draft,sent:undefined,action_id:undefined};
               if(result.outcome==='conflict'){r.item=result.item;r.draft={...draft(),note,...(stale?{stale}:{})};r.status='Item changed. Note and annotations kept; review the stale draft and choose your response again.';}
+              else if(result.outcome==='invalid'&&result.item?.resolved){r.item=result.item;r.closed=true;r.status='Already resolved — your response was not saved. Copy or clear this queued response.';}
             }
           }
         }

@@ -184,6 +184,9 @@ func (d *DB) FYIHeraBoardItems(roleID int64, actions []HeraBoardFYIAction) ([]He
 					r.Item = i
 				} else if a.Action != "comment" && len(a.Annotations) == 0 {
 					r.Outcome = "already_resolved"
+				} else {
+					r.Item = i
+					uxlog.Log("[board] FYI closed feedback rejected role=%d action=%s item=%d", roleID, a.ActionID, a.ItemID)
 				}
 			case !i.UpdatedAt.Equal(a.ExpectedUpdatedAt):
 				r.Outcome, r.Item = "conflict", i

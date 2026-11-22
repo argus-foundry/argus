@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -162,6 +163,28 @@ func main() {
 	// Test-only reset: stops all sessions, deletes all tasks, re-seeds the
 	// echo-bash task. Bound under the same auth as the rest of the API.
 	resetMux := http.NewServeMux()
+	if os.Getenv("ARGUS_TEST_DECIDE_FIXTURE") == "1" {
+		resetMux.HandleFunc("POST /test/board-revise", func(w http.ResponseWriter, r *http.Request) {
+			var p struct {
+				RoleID  int64  `json:"role_id"`
+				ItemID  int64  `json:"item_id"`
+				Kind    string `json:"kind"`
+				Subject string `json:"subject"`
+				Body    string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			i, err := d.UpdateHeraBoardItem(p.RoleID, p.ItemID, p.Kind, p.Subject, p.Body)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(i)
+		})
+	}
 	resetMux.HandleFunc("POST /test/reset", func(w http.ResponseWriter, r *http.Request) {
 		runner.StopAll()
 		// Wait for cleanup so the new task ID doesn't collide.
@@ -228,6 +251,11 @@ func main() {
 // to render and a live role to drill into. Idempotent across /test/reset: any
 // prior demo-orch (and its now-stale roles) is dropped first via the cascade.
 func seedHera(d *db.DB, task *model.Task) error {
+	if existing, err := d.HeraOrchestratorByName("demo-child"); err == nil && existing != nil {
+		if err := d.DeleteHeraOrchestrator(existing.ID); err != nil {
+			return err
+		}
+	}
 	if existing, err := d.HeraOrchestratorByName("demo-orch"); err == nil && existing != nil {
 		if err := d.DeleteHeraOrchestrator(existing.ID); err != nil {
 			return err
@@ -256,6 +284,24 @@ func seedHera(d *db.DB, task *model.Task) error {
 		})
 		if err != nil {
 			return err
+		}
+		child, err := d.CreateHeraOrchestrator("demo-child", "")
+		if err != nil {
+			return err
+		}
+		second, err := d.CreateHeraRole(db.CreateHeraRoleInput{OrchestratorID: child.ID, Name: "second", Kind: db.HeraKindCoordinator})
+		if err != nil {
+			return err
+		}
+		if err := d.CreateHeraOrchLink(orch.ID, child.ID, role.ID); err != nil {
+			return err
+		}
+		for _, c := range []*db.HeraRole{role, second} {
+			for _, subject := range []string{"Unchanged FYI", "Changed FYI"} {
+				if _, err := d.PostHeraBoardItem(c.ID, "fyi", subject, "Review this context"); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return d.UpsertHeraRoleStatus(role.ID, db.HeraStatusWorking)
