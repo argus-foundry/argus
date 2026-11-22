@@ -8142,7 +8142,7 @@ async function refreshDecideCounts(){
   if(document.hidden||decideCountLoading)return;
   decideCountLoading=true;
   const badge=document.getElementById('decide-count');
-  try{const response=await api('/api/hera/board/decision-counts',{cache:'no-store'});if(!response.ok)throw Error();const data=await response.json();if(!Number.isInteger(data.total)||data.total<0)throw Error();badge.textContent=String(data.total);badge.title=data.total+' open decisions and FYIs';}
+  try{const response=await api('/api/hera/board/decision-counts',{cache:'no-store'});if(!response.ok)throw Error();const data=await response.json();if(!Number.isInteger(data.total)||data.total<0)throw Error();badge.textContent=String(data.total);badge.title=data.total+' open items needing a response';}
   catch{badge.textContent='?';badge.title='Board counts unavailable';}
   finally{decideCountLoading=false;}
 }

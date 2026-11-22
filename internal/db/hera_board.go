@@ -23,6 +23,10 @@ var (
 
 // HeraBoardItem is a curated human attention item, owned by a durable role.
 type HeraBoardItem struct {
+	Blocking         bool                `json:"blocking"`
+	Trigger          string              `json:"trigger"`
+	TriggerPending   bool                `json:"trigger_pending"`
+	Command          string              `json:"command"`
 	Structured       *HeraBoardStructure `json:"structured"`
 	ResolutionChoice string              `json:"resolution_choice"`
 	ID               int64               `json:"id"`
@@ -43,16 +47,16 @@ type HeraBoardItem struct {
 	ApprovalState string `json:"approval_state,omitempty"`
 }
 
-const boardColumns = `id, role_id, kind, subject, body, created_at, updated_at, is_read, resolved, resolved_by, resolution_note, structured, resolution_choice, COALESCE((SELECT a.state FROM resident_approvals a WHERE a.board_id=hera_board_items.id),'')`
+const boardColumns = `id, role_id, kind, subject, body, created_at, updated_at, is_read, resolved, resolved_by, resolution_note, structured, resolution_choice, COALESCE((SELECT a.state FROM resident_approvals a WHERE a.board_id=hera_board_items.id),''), blocking, trigger, trigger_pending, command`
 
 func validBoardContent(kind, subject, body string) bool {
-	return (kind == "decision" || kind == "fyi") && strings.TrimSpace(subject) != "" && len(subject) <= 240 && !strings.ContainsFunc(subject, unicode.IsControl) && len(body) <= 64*1024
+	return (kind == "decision" || kind == "fyi" || kind == "action" || kind == "todo") && strings.TrimSpace(subject) != "" && len(subject) <= 240 && !strings.ContainsFunc(subject, unicode.IsControl) && len(body) <= 64*1024
 }
 
 func scanBoard(s rowScanner) (*HeraBoardItem, error) {
 	var i HeraBoardItem
 	var created, updated, structured string
-	err := s.Scan(&i.ID, &i.RoleID, &i.Kind, &i.Subject, &i.Body, &created, &updated, &i.Read, &i.Resolved, &i.ResolvedBy, &i.ResolutionNote, &structured, &i.ResolutionChoice, &i.ApprovalState)
+	err := s.Scan(&i.ID, &i.RoleID, &i.Kind, &i.Subject, &i.Body, &created, &updated, &i.Read, &i.Resolved, &i.ResolvedBy, &i.ResolutionNote, &structured, &i.ResolutionChoice, &i.ApprovalState, &i.Blocking, &i.Trigger, &i.TriggerPending, &i.Command)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrHeraBoardNotFound
 	}
@@ -71,14 +75,14 @@ func scanBoard(s rowScanner) (*HeraBoardItem, error) {
 }
 
 func (d *DB) PostHeraBoardItem(roleID int64, kind, subject, body string, structure ...*HeraBoardStructure) (*HeraBoardItem, error) {
-	i, err := d.postHeraBoardItem(roleID, kind, subject, body, structure...)
+	i, err := d.postHeraBoardItem(roleID, kind, subject, body, HeraBoardMetadataPatch{}, structure...)
 	if err == nil {
 		d.emitBoardChanged(roleID, i.ID, "posted")
 	}
 	return i, err
 }
 
-func (d *DB) postHeraBoardItem(roleID int64, kind, subject, body string, structure ...*HeraBoardStructure) (*HeraBoardItem, error) {
+func (d *DB) postHeraBoardItem(roleID int64, kind, subject, body string, patch HeraBoardMetadataPatch, structure ...*HeraBoardStructure) (*HeraBoardItem, error) {
 	if !validBoardContent(kind, subject, body) {
 		return nil, ErrHeraBoardInvalid
 	}
@@ -86,11 +90,15 @@ func (d *DB) postHeraBoardItem(roleID int64, kind, subject, body string, structu
 	if err != nil {
 		return nil, err
 	}
+	m, err := boardMetadata(kind, nil, patch)
+	if err != nil {
+		return nil, err
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := formatTime(time.Now())
-	res, err := d.conn.Exec(`INSERT INTO hera_board_items(role_id,kind,subject,body,structured,created_at,updated_at)
- SELECT id,?,?,?,?,?,? FROM hera_roles WHERE id=? AND kind='coordinator' AND archived_at IS NULL`, kind, subject, body, raw, now, now, roleID)
+	res, err := d.conn.Exec(`INSERT INTO hera_board_items(role_id,kind,subject,body,structured,created_at,updated_at,blocking,trigger,trigger_pending,command)
+ SELECT id,?,?,?,?,?,?,?,?,?,? FROM hera_roles WHERE id=? AND kind='coordinator' AND archived_at IS NULL`, kind, subject, body, raw, now, now, m.Blocking, m.Trigger, m.TriggerPending, m.Command, roleID)
 	if err != nil {
 		return nil, err
 	}
@@ -144,14 +152,14 @@ func (d *DB) PostOrRefreshHeraBoardItem(roleID int64, kind, subject, body string
 }
 
 func (d *DB) UpdateHeraBoardItem(roleID, id int64, kind, subject, body string, structure ...*HeraBoardStructure) (*HeraBoardItem, error) {
-	i, changed, err := d.updateHeraBoardItem(roleID, id, kind, subject, body, structure...)
+	i, changed, err := d.updateHeraBoardItem(roleID, id, kind, subject, body, HeraBoardMetadataPatch{}, structure...)
 	if err == nil && changed {
 		d.emitBoardChanged(roleID, id, "updated")
 	}
 	return i, err
 }
 
-func (d *DB) updateHeraBoardItem(roleID, id int64, kind, subject, body string, structure ...*HeraBoardStructure) (*HeraBoardItem, bool, error) {
+func (d *DB) updateHeraBoardItem(roleID, id int64, kind, subject, body string, patch HeraBoardMetadataPatch, structure ...*HeraBoardStructure) (*HeraBoardItem, bool, error) {
 	if !validBoardContent(kind, subject, body) {
 		return nil, false, ErrHeraBoardInvalid
 	}
@@ -162,6 +170,9 @@ func (d *DB) updateHeraBoardItem(roleID, id int64, kind, subject, body string, s
 		return nil, false, err
 	}
 	next := before.Structured
+	if kind != before.Kind {
+		next = nil
+	}
 	if len(structure) > 0 {
 		next = structure[0]
 	}
@@ -170,11 +181,15 @@ func (d *DB) updateHeraBoardItem(roleID, id int64, kind, subject, body string, s
 		return nil, false, err
 	}
 	old, _ := encodeBoardStructure(before.Kind, before.Structured)
-	changed := before.Kind != kind || before.Subject != subject || before.Body != body || old != raw
+	m, err := boardMetadata(kind, before, patch)
+	if err != nil {
+		return nil, false, err
+	}
+	changed := before.Kind != kind || before.Subject != subject || before.Body != body || old != raw || m.Blocking != before.Blocking || m.Trigger != before.Trigger || m.TriggerPending != before.TriggerPending || m.Command != before.Command
 	if before.ResidentApproval {
 		return nil, false, ErrResidentApproval
 	}
-	res, err := d.conn.Exec(`UPDATE hera_board_items SET is_read=CASE WHEN ? THEN 0 ELSE is_read END, updated_at=CASE WHEN ? THEN ? ELSE updated_at END, kind=?,subject=?,body=?,structured=? WHERE role_id=? AND id=? AND resolved=0`, changed, changed, formatTime(time.Now()), kind, subject, body, raw, roleID, id)
+	res, err := d.conn.Exec(`UPDATE hera_board_items SET is_read=CASE WHEN ? THEN 0 ELSE is_read END, updated_at=CASE WHEN ? THEN ? ELSE updated_at END, kind=?,subject=?,body=?,structured=?,blocking=?,trigger=?,trigger_pending=?,command=? WHERE role_id=? AND id=? AND resolved=0`, changed, changed, formatTime(nextBoardRevision(before.UpdatedAt)), kind, subject, body, raw, m.Blocking, m.Trigger, m.TriggerPending, m.Command, roleID, id)
 	if err != nil {
 		return nil, false, err
 	}
@@ -193,7 +208,7 @@ func (d *DB) updateHeraBoardItem(roleID, id int64, kind, subject, body string, s
 func (d *DB) ListHeraBoardItems(roleID int64, includeResolved bool) ([]*HeraBoardItem, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, err := d.conn.Query(`SELECT `+boardColumns+` FROM hera_board_items WHERE role_id=? AND (? OR resolved=0) ORDER BY id`, roleID, includeResolved)
+	rows, err := d.conn.Query(`SELECT `+boardColumns+` FROM hera_board_items WHERE role_id=? AND (? OR resolved=0) ORDER BY CASE WHEN resolved=0 AND kind='action' AND blocking=1 THEN 0 WHEN trigger_pending=1 OR kind='todo' THEN 2 ELSE 1 END,id`, roleID, includeResolved)
 	if err != nil {
 		return nil, err
 	}
@@ -405,14 +420,29 @@ func (d *DB) resolveHeraBoardItem(roleID, id int64, by, note, expected string) (
 		}
 		return false, ErrHeraBoardResolved
 	}
+	work := i.Kind == "action" || i.Kind == "todo"
+	if work && by != "agent" {
+		return false, ErrHeraBoardInvalid
+	}
 	if expected != "" && formatTime(i.UpdatedAt) != expected {
 		uxlog.Log("[board] dismiss conflict role=%d item=%d", roleID, id)
 		return false, ErrHeraBoardConflict
 	}
 	now := formatTime(time.Now())
-	_, err = tx.Exec(`UPDATE hera_board_items SET resolved=1,resolved_by=?,resolution_note=?,updated_at=? WHERE id=?`, by, note, now, id)
+	choice := ""
+	if work {
+		choice = "done"
+	}
+	_, err = tx.Exec(`UPDATE hera_board_items SET resolved=1,resolved_by=?,resolution_note=?,updated_at=?,resolution_choice=? WHERE id=?`, by, note, now, choice, id)
 	if err != nil {
 		return false, err
+	}
+	if work {
+		i.UpdatedAt = parseTime(now)
+		i.ResolvedBy = by
+		if err = writeBoardWorkNotice(tx, roleID, i, choice, note); err != nil {
+			return false, err
+		}
 	}
 	if by == "human" && i.Kind == "decision" {
 		body := fmt.Sprintf("Aaron dropped board decision #%d: %s. Do not act on a stale assumption. Follow up on the board if needed.", id, i.Subject)
@@ -464,8 +494,8 @@ func (d *DB) HeraBoardUnread(roleID int64) (int, string, error) {
 	var count int
 	var subject string
 	err := d.conn.QueryRow(`SELECT COUNT(*), COALESCE((SELECT subject FROM hera_board_items
- WHERE role_id=? AND resolved=0 AND is_read=0 ORDER BY updated_at DESC,id DESC LIMIT 1),'')
- FROM hera_board_items WHERE role_id=? AND resolved=0 AND is_read=0`, roleID, roleID).Scan(&count, &subject)
+ WHERE role_id=? AND resolved=0 AND is_read=0 AND trigger_pending=0 AND kind!='todo' ORDER BY CASE WHEN kind='action' AND blocking=1 THEN 0 ELSE 1 END,updated_at DESC,id DESC LIMIT 1),'')
+ FROM hera_board_items WHERE role_id=? AND resolved=0 AND is_read=0 AND trigger_pending=0 AND kind!='todo'`, roleID, roleID).Scan(&count, &subject)
 	if err != nil && strings.Contains(err.Error(), "no such table: hera_board_items") {
 		uxlog.Log("[board] band summary skipped: board table absent")
 		return 0, "", nil

@@ -88,7 +88,7 @@ func (p *HeraPage) updateBoard(o *heramodel.OrchView) {
 	// plan must survive ordinary refreshes of the same open reminders.
 	if p.residentMode && p.boardAuto && !p.showBoard && c != nil {
 		for _, item := range c.BoardItems {
-			if item.Read {
+			if !heramodel.BoardAttention(item) {
 				continue
 			}
 			known := false
@@ -107,6 +107,9 @@ func (p *HeraPage) updateBoard(o *heramodel.OrchView) {
 	}
 	p.board.items = nil
 	if c != nil {
+		// The model already sorts; sorting again keeps injected/remote models
+		// in the shared order (blocking, ordinary, quiet) at no cost.
+		heramodel.SortBoardItems(c.BoardItems)
 		p.board.items = c.BoardItems
 	}
 	expandedPresent := false
@@ -147,7 +150,7 @@ func (p *HeraPage) boardTitle() string {
 	}
 	unread := 0
 	for _, i := range p.board.items {
-		if !i.Read {
+		if heramodel.BoardAttention(i) {
 			unread++
 		}
 	}
@@ -162,15 +165,18 @@ func boardHint(keys *keymap.Keymap, focused bool) string {
 	if !focused {
 		return "⌘→ open board · " + label(keymap.ActBoardToggle) + " plan"
 	}
-	return fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s dismiss · %s decide · %s plan · ctrl+q back",
+	return fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s dismiss/drop · %s done · %s copy · %s decide · %s plan · ctrl+q back",
 		label(keymap.ActBoardDown), label(keymap.ActBoardUp), label(keymap.ActBoardReply),
-		label(keymap.ActBoardDismiss), label(keymap.ActBoardDecide), label(keymap.ActBoardToggle))
+		label(keymap.ActBoardDismiss), label(keymap.ActBoardDone), label(keymap.ActBoardCopy),
+		label(keymap.ActBoardDecide), label(keymap.ActBoardToggle))
 }
 
 type boardLine struct {
 	text           string
 	bold, selected bool
 	boldRunes      []bool
+	// tone colors a header: "blocking" stands out, "quiet" dims deferred work.
+	tone string
 }
 
 // boardBold removes only paired, nonempty bold markers. Other syntax stays literal.
@@ -278,7 +284,14 @@ func (l boardLine) draw(screen tcell.Screen, x, y, width int, focused bool) {
 		if col+w > width {
 			break
 		}
-		style := theme.StyleNormal.Bold(l.bold || (index < len(l.boldRunes) && l.boldRunes[index])).Reverse(l.selected && focused)
+		base := theme.StyleNormal
+		switch l.tone {
+		case boardToneBlocking:
+			base = theme.StyleNeedsInput
+		case boardToneQuiet:
+			base = theme.StyleDimmed
+		}
+		style := base.Bold(l.bold || (index < len(l.boldRunes) && l.boldRunes[index])).Reverse(l.selected && focused)
 		if w > 0 {
 			screen.SetContent(x+col, y, runes[0], runes[1:], style)
 		}
@@ -363,8 +376,9 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 				unread = "•"
 			}
 		}
-		prefix := boardText(fmt.Sprintf("%s [%s] #%d ", marker, i.Kind, i.ID))
+		prefix := boardText(fmt.Sprintf("%s [%s] #%d ", marker, boardKindLabel(i), i.ID))
 		subject := boardText(i.Subject)
+		tone := boardTone(i)
 		if b.expandedID == i.ID {
 			// Leave room for a wide subject rune even in very narrow panels.
 			prefix = runewidth.Truncate(prefix, max(0, inner.W-runewidth.StringWidth(unread)-2), "")
@@ -372,7 +386,7 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 			markerOnly := unread != "" && inner.W-runewidth.StringWidth(unread) < 2
 			wrapWidth := max(1, inner.W-len(indent)-runewidth.StringWidth(unread))
 			if markerOnly {
-				lines = append(lines, boardLine{text: unread, bold: true, selected: selected})
+				lines = append(lines, boardLine{text: unread, bold: true, selected: selected, tone: tone})
 				wrapWidth = inner.W
 			}
 			for n, wrapped := range widget.WrapPreservingLines(subject, wrapWidth) {
@@ -380,19 +394,20 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 				if n == 0 && !markerOnly {
 					header = prefix + wrapped + unread
 				}
-				lines = append(lines, boardLine{text: header, bold: true, selected: selected && n == 0 && !markerOnly})
+				lines = append(lines, boardLine{text: header, bold: true, selected: selected && n == 0 && !markerOnly, tone: tone})
 			}
 			if i.ResidentApproval {
 				lines = append(lines, approvalBodyLines(i.Body, inner.W)...)
 			} else {
 				lines = append(lines, boardBodyLines(boardItemBody(i), inner.W)...)
+				lines = append(lines, boardMetaLines(i, inner.W)...)
 			}
 		} else {
 			header := runewidth.Truncate(prefix+subject, max(0, inner.W-runewidth.StringWidth(unread)), "…") + unread
 			if inner.W <= runewidth.StringWidth(unread) {
 				header = unread
 			}
-			lines = append(lines, boardLine{text: header, bold: true, selected: selected})
+			lines = append(lines, boardLine{text: header, bold: true, selected: selected, tone: tone})
 		}
 	}
 	if len(lines) == 0 {
@@ -491,11 +506,21 @@ func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Pri
 				p.replyToBoard(i)
 			}
 		case act == keymap.ActBoardDismiss:
-			if i.ResidentApproval {
+			switch {
+			case i.ResidentApproval:
 				p.decideBoardApproval(i, false)
-			} else if p.OnBoardDismiss != nil {
+			case i.Kind == "todo":
+				p.completeBoardItem(i, "dropped")
+			case i.Kind == "action":
+				uxlog.Log("[board] drop skipped item=%d: actions complete with done", i.ID)
+				p.info("An action can only be marked done")
+			case p.OnBoardDismiss != nil:
 				p.OnBoardDismiss(i.RoleID, i.ID)
 			}
+		case act == keymap.ActBoardDone:
+			p.completeBoardItem(i, "done")
+		case act == keymap.ActBoardCopy:
+			p.copyBoardCommand(i)
 		}
 	}
 }
@@ -582,4 +607,87 @@ func boardItemBody(i *db.HeraBoardItem) string {
 		fmt.Fprintf(&b, "\n**Recommendation:** %s", i.Structured.Reason)
 	}
 	return b.String()
+}
+
+const (
+	boardToneBlocking = "blocking"
+	boardToneQuiet    = "quiet"
+)
+
+// boardKindLabel names the item's kind, marking blocking actions and deferred
+// (trigger-pending) work so the state is readable without expanding the row.
+func boardKindLabel(i *db.HeraBoardItem) string {
+	switch {
+	case i.Kind == "action" && i.Blocking:
+		return "action BLOCKING"
+	case (i.Kind == "action" || i.Kind == "todo") && i.TriggerPending:
+		return i.Kind + " deferred"
+	}
+	return i.Kind
+}
+
+func boardTone(i *db.HeraBoardItem) string {
+	switch {
+	case i.Kind == "action" && i.Blocking:
+		return boardToneBlocking
+	case heramodel.BoardQuiet(i):
+		return boardToneQuiet
+	}
+	return ""
+}
+
+// boardMetaLines renders trigger/readiness and the exact step for action and
+// todo items. The command is literal data (never Markdown-parsed) so the text
+// shown is the text Copy puts on the clipboard.
+func boardMetaLines(i *db.HeraBoardItem, width int) []boardLine {
+	if i.Kind != "action" && i.Kind != "todo" {
+		return nil
+	}
+	var lines []boardLine
+	if t := strings.TrimSpace(i.Trigger); t != "" {
+		state := "ready"
+		if i.TriggerPending {
+			state = "deferred"
+		}
+		lines = append(lines, boardBodyLines(fmt.Sprintf("**Trigger (%s):** %s", state, t), width)...)
+	}
+	if i.Command != "" {
+		lines = append(lines, boardLine{text: "  Step:", bold: true})
+		lines = append(lines, approvalBodyLines(i.Command, width)...)
+	}
+	return lines
+}
+
+func (p *HeraPage) info(msg string) {
+	if p.OnInfo != nil {
+		p.OnInfo(msg)
+	}
+}
+
+// completeBoardItem requests Done (action/todo) or Dropped (todo) for the
+// selected item at its visible revision. Pending items stay completable: Aaron
+// may finish deferred work early.
+func (p *HeraPage) completeBoardItem(i *db.HeraBoardItem, outcome string) {
+	if (i.Kind != "action" && i.Kind != "todo") || i.Resolved {
+		uxlog.Log("[board] complete skipped item=%d kind=%s: not an open action/todo", i.ID, i.Kind)
+		p.info("Done applies to open actions and todos")
+		return
+	}
+	if p.OnBoardComplete == nil {
+		uxlog.Log("[board] complete skipped item=%d: no handler (remote)", i.ID)
+		return
+	}
+	p.OnBoardComplete(i, outcome)
+}
+
+func (p *HeraPage) copyBoardCommand(i *db.HeraBoardItem) {
+	if i.Kind != "action" || i.Command == "" {
+		uxlog.Log("[board] copy skipped item=%d kind=%s: no step", i.ID, i.Kind)
+		p.info("Nothing to copy: this item has no command or step")
+		return
+	}
+	if p.OnBoardCopy == nil {
+		return
+	}
+	p.OnBoardCopy(i)
 }

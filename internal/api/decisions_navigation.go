@@ -23,6 +23,9 @@ func (s *Server) decisionNavigation() ([]heramodel.BoardCoordinator, error) {
 	for n := range rows {
 		rows[n].Decisions = counts[rows[n].RoleID].Decisions
 		rows[n].FYIs = counts[rows[n].RoleID].FYIs
+		rows[n].Actions = counts[rows[n].RoleID].Actions
+		rows[n].Todos = counts[rows[n].RoleID].Todos
+		rows[n].ReadyActions = counts[rows[n].RoleID].ReadyActions
 	}
 	return rows, nil
 }
@@ -72,14 +75,18 @@ func (s *Server) handleDecisionCounts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "boards unavailable", nil)
 		return
 	}
-	decisions, fyis := 0, 0
+	decisions, fyis, actions, todos := 0, 0, 0, 0
+	readyActions := 0
 	for _, row := range rows {
 		decisions += row.Decisions
 		fyis += row.FYIs
+		actions += row.Actions
+		todos += row.Todos
+		readyActions += row.ReadyActions
 	}
 	uxlog.Log("[decide] counts roles=%d decisions=%d fyis=%d", len(rows), decisions, fyis)
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, 200, map[string]any{"roles": rows, "decisions": decisions, "fyis": fyis, "total": decisions + fyis})
+	writeJSON(w, 200, map[string]any{"roles": rows, "decisions": decisions, "fyis": fyis, "actions": actions, "todos": todos, "ready_actions": readyActions, "total": decisions + fyis + readyActions})
 }
 
 // decisionSessionRoute is deliberately an exact method/path allowlist. Internal
@@ -120,15 +127,20 @@ func (s *Server) handleDecideItems(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "board unavailable", nil)
 		return
 	}
-	decisions, fyis := 0, 0
+	decisions, fyis, actions, todos := 0, 0, 0, 0
 	for _, item := range items {
-		if item.Kind == "decision" {
+		switch item.Kind {
+		case "decision":
 			decisions++
-		} else {
+		case "fyi":
 			fyis++
+		case "action":
+			actions++
+		case "todo":
+			todos++
 		}
 	}
 	uxlog.Log("[decide] mixed read role=%d decisions=%d fyis=%d", role, decisions, fyis)
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, 200, map[string]any{"role_id": role, "orchestrator": orch.Name, "coordinator": coord.Name, "decisions": decisions, "fyis": fyis, "items": items})
+	writeJSON(w, 200, map[string]any{"role_id": role, "orchestrator": orch.Name, "coordinator": coord.Name, "decisions": decisions, "fyis": fyis, "actions": actions, "todos": todos, "items": items})
 }
