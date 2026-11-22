@@ -14,7 +14,7 @@
 //
 // Reserved/structural keys are NOT routed through the keymap and cannot be
 // rebound: Esc/Enter/Tab/Backtab, Ctrl+C / Ctrl+Q (failsafe), plain navigation
-// keys (arrows + pgup/pgdn/home/end), and per-context structural runes (diff q,
+// keys (except Left/Right in the board), and per-context structural runes (diff q,
 // settings h/l) listed in reservedContextKeys. Agent-context bindings must carry
 // a modifier so plain typing still reaches the agent PTY.
 package keymap
@@ -198,10 +198,9 @@ func (m *Keymap) Bindings(ctx Context) map[Action]Binding {
 	return m.fwd[ctx]
 }
 
-// eventBinding canonicalizes an event for Matches and the reverse lookup. Modifier
-// bits are dropped: only mod-less bindings (runes, ctrl-letters, plain named
-// keys) live in the rev map; modified arrows are matched loosely via the arrows
-// slice, so a cmd+up / shift+up event misses the map here and falls to the scan.
+// eventBinding canonicalizes an event for Matches and the reverse lookup.
+// Navigation modifiers must survive so a plain board arrow cannot capture
+// modified pane navigation. Modified bindings still use the loose-match scan.
 func eventBinding(ev *tcell.EventKey) Binding {
 	if ev.Key() == tcell.KeyRune {
 		// CSI-u / modifyOtherKeys leave ctrl+punctuation as rune+ModCtrl,
@@ -210,6 +209,9 @@ func eventBinding(ev *tcell.EventKey) Binding {
 			return Binding{Key: tcell.KeyCtrlBackslash}
 		}
 		return Binding{Key: tcell.KeyRune, Rune: ev.Rune()}
+	}
+	if isModifiable(ev.Key()) {
+		return Binding{Key: ev.Key(), Mods: ev.Modifiers()}
 	}
 	return Binding{Key: ev.Key()}
 }
@@ -236,11 +238,10 @@ func bindingAllowed(ctx Context, act Action, b Binding) (string, bool) {
 			return "binds an unmodified key; global.resident needs a modifier (e.g. ctrl+\\) so it cannot steal typing", false
 		}
 	}
-	// Plain (unmodified) navigation keys are reserved in every context: the
-	// fast-path reverse lookup strips modifiers (eventBinding), so a plain
-	// binding here would also capture the cmd/shift-modified variant of the same
-	// key — e.g. a plain `pgdn` binding would swallow `shift+pgdn` scrollback.
-	if isModifiable(b.Key) && b.Mods == 0 {
+	// Structural navigation remains reserved, except board Left/Right which
+	// are dispatched through Resolve. eventBinding preserves their modifiers.
+	boardArrow := ctx == CtxHeraBoard && (b.Key == tcell.KeyLeft || b.Key == tcell.KeyRight)
+	if isModifiable(b.Key) && b.Mods == 0 && !boardArrow {
 		return "binds a plain navigation key (reserved)", false
 	}
 	switch b.Key {

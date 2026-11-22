@@ -290,6 +290,7 @@ When a **worker** is selected the details region shows its live agent terminal. 
 | Key (coordinator board) | Action |
 | --- | --- |
 | `p` | Toggle plan / board (rail or details focused) |
+| `←` / `→` | Previous / next board kind tab (clamped): Decisions, FYIs, Actions, Todos, All. Counts include all open items; selection is remembered per coordinator for this TUI session. Rebind with `[keybindings.hera_board] tab_prev` / `tab_next` |
 | `o` | Open the common Decide rail page with this coordinator preselected, including empty and FYI-only boards; select body/option text for Copy, Delete suggestion or Comment. Review queued sends with Submit (continue) or Submit & close; requires the local REST API. Rebind with `[keybindings.hera_board] decide`. |
 | `Cmd+→` | Follow the focus ladder into the right details / board pane |
 | `↑` / `↓` / `j` / `k` | Select previous / next item |

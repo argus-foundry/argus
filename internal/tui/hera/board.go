@@ -20,6 +20,8 @@ import (
 )
 
 type boardView struct {
+	allItems     []*db.HeraBoardItem
+	tab          int
 	items        []*db.HeraBoardItem
 	cursor       int
 	offset       int
@@ -28,7 +30,7 @@ type boardView struct {
 	rect         widget.InnerRect
 }
 
-func newBoardView() *boardView { return &boardView{} }
+func newBoardView() *boardView { return &boardView{tab: 4} }
 
 func (p *HeraPage) SetBoardAuto(enabled bool) {
 	p.boardAuto = enabled
@@ -92,7 +94,7 @@ func (p *HeraPage) updateBoard(o *heramodel.OrchView) {
 				continue
 			}
 			known := false
-			for _, old := range p.board.items {
+			for _, old := range p.board.sourceItems() {
 				if old.ID == item.ID && !old.Read && old.UpdatedAt.Equal(item.UpdatedAt) {
 					known = true
 					break
@@ -105,27 +107,38 @@ func (p *HeraPage) updateBoard(o *heramodel.OrchView) {
 			}
 		}
 	}
-	p.board.items = nil
+	p.board.allItems = []*db.HeraBoardItem{}
 	if c != nil {
 		// The model already sorts; sorting again keeps injected/remote models
 		// in the shared order (blocking, ordinary, quiet) at no cost.
 		heramodel.SortBoardItems(c.BoardItems)
-		p.board.items = c.BoardItems
-	}
-	expandedPresent := false
-	for n, i := range p.board.items {
-		if i.ID == selected {
-			p.board.cursor = n
-		}
-		if i.ID == p.board.expandedID {
-			expandedPresent = true
+		for _, item := range c.BoardItems {
+			if !item.Resolved {
+				p.board.allItems = append(p.board.allItems, item)
+			}
 		}
 	}
-	if !expandedPresent && p.board.expandedID != 0 {
-		uxlog.Log("[board] expansion cleared orch=%d item=%d: no longer open", o.ID, p.board.expandedID)
-		p.board.expandedID = 0
+	if p.boardTabs == nil {
+		p.boardTabs = make(map[int64]int)
 	}
-	p.board.cursor = max(0, min(p.board.cursor, len(p.board.items)-1))
+	if tab, ok := p.boardTabs[o.ID]; ok {
+		p.board.tab = tab
+	} else {
+		p.board.tab = 4
+		counts := p.board.counts()
+		for n, count := range counts[:4] {
+			if count > 0 {
+				p.board.tab = n
+				break
+			}
+		}
+		p.boardTabs[o.ID] = p.board.tab
+	}
+	expandedID := p.board.expandedID
+	p.board.filter(selected)
+	if expandedID != 0 && p.board.expandedID == 0 {
+		uxlog.Log("[board] expansion cleared orch=%d item=%d: no longer visible", o.ID, expandedID)
+	}
 }
 
 func (b *boardView) selected() *db.HeraBoardItem {
@@ -149,7 +162,7 @@ func (p *HeraPage) boardTitle() string {
 		return " Plan "
 	}
 	unread := 0
-	for _, i := range p.board.items {
+	for _, i := range p.board.sourceItems() {
 		if heramodel.BoardAttention(i) {
 			unread++
 		}
@@ -160,12 +173,18 @@ func (p *HeraPage) boardTitle() string {
 func boardHint(keys *keymap.Keymap, focused bool) string {
 	label := func(act keymap.Action) string {
 		binding, _ := keys.BindingFor(keymap.CtxHeraBoard, act)
+		if binding.String() == "left" {
+			return "←"
+		}
+		if binding.String() == "right" {
+			return "→"
+		}
 		return binding.String()
 	}
 	if !focused {
 		return "⌘→ open board · " + label(keymap.ActBoardToggle) + " plan"
 	}
-	return fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s dismiss/drop · %s done · %s copy · %s decide · %s plan · ctrl+q back",
+	return label(keymap.ActBoardTabPrev) + "/" + label(keymap.ActBoardTabNext) + " tabs · " + fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s dismiss/drop · %s done · %s copy · %s decide · %s plan · ctrl+q back",
 		label(keymap.ActBoardDown), label(keymap.ActBoardUp), label(keymap.ActBoardReply),
 		label(keymap.ActBoardDismiss), label(keymap.ActBoardDone), label(keymap.ActBoardCopy),
 		label(keymap.ActBoardDecide), label(keymap.ActBoardToggle))
@@ -358,6 +377,13 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 		b.offset = 0
 		return
 	}
+	b.drawTabs(screen, inner.X, inner.Y, inner.W)
+	inner.Y++
+	inner.H--
+	if inner.H == 0 {
+		b.offset = 0
+		return
+	}
 	var lines []boardLine
 	selectedStart := 0
 	for n, i := range b.items {
@@ -452,6 +478,10 @@ func (b *boardView) handleMouse(action tview.MouseAction, event *tcell.EventMous
 func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Primitive)) {
 	act, _ := p.keys().Resolve(keymap.CtxHeraBoard, event)
 	switch {
+	case act == keymap.ActBoardTabPrev:
+		p.changeBoardTab(p.board.tab - 1)
+	case act == keymap.ActBoardTabNext:
+		p.changeBoardTab(p.board.tab + 1)
 	case act == keymap.ActBoardDecide:
 		if p.IsRemote() {
 			return
@@ -479,9 +509,9 @@ func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Pri
 		p.board.cursor = max(0, p.board.cursor-1)
 		p.board.followCursor = true
 	case event.Key() == tcell.KeyPgDn:
-		p.board.offset += max(1, p.boardHeight-3)
+		p.board.offset += max(1, p.boardHeight-4)
 	case event.Key() == tcell.KeyPgUp:
-		p.board.offset = max(0, p.board.offset-max(1, p.boardHeight-3))
+		p.board.offset = max(0, p.board.offset-max(1, p.boardHeight-4))
 	default:
 		i := p.board.selected()
 		if i == nil {

@@ -53,7 +53,7 @@ func TestSmoke_CoordinatorBoard(t *testing.T) {
 		testutil.Equal(t, app.tapp.GetFocus() == app.heraPage, true)
 		w, h := sim.Size()
 		testutil.Contains(t, screenText(sim, w, h), "Choose rollout")
-		testutil.Contains(t, screenText(sim, w, h), "j/k move · ⏎ expand · r reply · x dismiss/drop · d done · c copy · o decide · p plan · ctrl+q back")
+		testutil.Contains(t, screenText(sim, w, h), "←/→ tabs · j/k move · ⏎ expand · r reply · x dismiss/drop · d done · c copy · o decide · p plan")
 	})
 	var decideRole, decideFocus int64
 	readUI(t, app.tapp, func() {
@@ -81,7 +81,7 @@ func TestSmoke_CoordinatorBoard(t *testing.T) {
 	syncUI(t, app.tapp)
 	readUI(t, app.tapp, func() {
 		w, h := sim.Size()
-		testutil.Contains(t, screenText(sim, w, h), "j/k move · ⏎ expand · a reply · x dismiss/drop · d done · c copy · o decide · p plan · ctrl+q back")
+		testutil.Contains(t, screenText(sim, w, h), "←/→ tabs · j/k move · ⏎ expand · a reply · x dismiss/drop · d done · c copy · o decide · p plan")
 	})
 	sim.InjectKey(tcell.KeyEnter, 0, 0)
 	syncUI(t, app.tapp)
@@ -115,6 +115,8 @@ func TestSmoke_CoordinatorBoard(t *testing.T) {
 	_, err = d.PostHeraBoardItem(role.ID, "fyi", "Second accordion item", "Second accordion body")
 	testutil.NoError(t, err)
 	readUI(t, app.tapp, func() { app.heraPage.Refresh() })
+	// The remembered Decisions tab stays selected after refresh; switch to FYIs.
+	sim.InjectKey(tcell.KeyRight, 0, 0)
 	sim.InjectKey(tcell.KeyEnter, 0, 0)
 	syncUI(t, app.tapp)
 	readUI(t, app.tapp, func() {
