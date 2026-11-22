@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -90,14 +91,18 @@ func TestAgentSigningEnvFor_ExecutableError(t *testing.T) {
 	t.Cleanup(func() { resolveAgentSigningPublicKey, argusExecutable = prevResolve, prevExe })
 	resolveAgentSigningPublicKey = func(config.Config, string) (string, bool) { return " ssh-ed25519 AAAA ", true }
 	argusExecutable = func() (string, error) { return "", errors.New("no exe") }
+	logText := captureUXLog(t)
 	got := agentSigningEnvFor(config.Config{Git: config.GitConfig{AgentSigningKey: testAgentKeyRef}}, "t")
-	testutil.Equal(t, got, AgentSigningEnv{PublicKey: "ssh-ed25519 AAAA", Program: "argus"})
+	// An unresolvable, self-describing program fails every commit loudly
+	// rather than running whatever argus happens to be on PATH.
+	testutil.Equal(t, got, AgentSigningEnv{PublicKey: "ssh-ed25519 AAAA", Program: "argus-signing-helper-unavailable"})
+	testutil.Contains(t, logText(), `task "t": cannot locate argus executable for gpg.ssh.program: no exe`)
 }
 
 func TestArgusExecutable_Absolute(t *testing.T) {
 	exe, err := argusExecutable()
 	testutil.NoError(t, err)
-	testutil.Equal(t, strings.HasPrefix(exe, "/"), true)
+	testutil.Equal(t, filepath.IsAbs(exe), true)
 }
 
 // inherit and unsigned never consult the agent key (even with a stray key
@@ -126,9 +131,10 @@ func TestBuildCmd_NonAgentKeyPoliciesUnchanged(t *testing.T) {
 				}
 				return env
 			}
-			testutil.DeepEqual(t, build(testAgentKeyRef), build(""))
+			withKey := build(testAgentKeyRef)
+			testutil.DeepEqual(t, withKey, build(""))
 			testutil.Equal(t, len(*sources), 0)
-			for _, e := range build(testAgentKeyRef) {
+			for _, e := range withKey {
 				testutil.False(t, strings.Contains(e, "gpg.ssh.program"))
 			}
 		})

@@ -96,18 +96,22 @@ func agentSigningPublicKeyRef(ref string) string { return ref + "/public key" }
 // success-only memoized).
 var resolveAgentSigningPublicKey = resolveBackendEnvSource
 
-// argusExecutable returns the absolute, symlink-resolved path of the running
-// argus binary, which Git invokes as gpg.ssh.program. A test seam.
+// argusExecutable returns the absolute path of the running argus binary,
+// which Git invokes as gpg.ssh.program. Symlinks are deliberately NOT
+// resolved: a symlink-resolved, version-pinned target can vanish on upgrade,
+// while the invoked path keeps pointing at the installed argus. A test seam.
 var argusExecutable = func() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
-	}
 	return filepath.Abs(exe)
 }
+
+// unavailableSigningHelper is gpg.ssh.program when the argus executable cannot
+// be located. It never resolves on PATH, so every commit fails loudly with a
+// self-describing name instead of running a possibly stale argus from PATH.
+const unavailableSigningHelper = "argus-signing-helper-unavailable"
 
 // agentSigningEnvFor builds the agent-key signing env for one spawn. Failures
 // never abort the spawn: Program is still set so commits fail loudly inside
@@ -117,7 +121,7 @@ func agentSigningEnvFor(cfg config.Config, taskID string) AgentSigningEnv {
 	var sign AgentSigningEnv
 	if exe, err := argusExecutable(); err != nil {
 		uxlog.Log("[agent-git] task %q: cannot locate argus executable for gpg.ssh.program: %v", taskID, err)
-		sign.Program = "argus"
+		sign.Program = unavailableSigningHelper
 	} else {
 		sign.Program = exe
 	}

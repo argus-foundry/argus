@@ -18,6 +18,7 @@ func TestAgentCommitSigningConfig(t *testing.T) {
 		{"agent-key with op ref", "[git]\nagent_commit_signing = 'agent-key'\nagent_signing_key = 'op://claude/Argus agent signing key'", "agent-key", "op://claude/Argus agent signing key", nil},
 		{"invalid", "[git]\nagent_commit_signing = 'off'", "inherit", "", []string{"git.agent_commit_signing", "inherit, unsigned or agent-key"}},
 		{"agent-key missing key", "[git]\nagent_commit_signing = 'agent-key'", "inherit", "", []string{"git.agent_signing_key"}},
+		{"agent-key empty op ref", "[git]\nagent_commit_signing = 'agent-key'\nagent_signing_key = 'op://'", "inherit", "", []string{"git.agent_signing_key"}},
 		{"agent-key non-op key", "[git]\nagent_commit_signing = 'agent-key'\nagent_signing_key = 'env://SIGNING_KEY'", "inherit", "", []string{"git.agent_signing_key"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -62,6 +63,7 @@ func TestGitConfigValidate(t *testing.T) {
 		{"agent-key empty key", GitConfig{AgentCommitSigning: GitSigningAgentKey}, []string{"git.agent_signing_key"}},
 		{"agent-key blank key", GitConfig{AgentCommitSigning: GitSigningAgentKey, AgentSigningKey: "   "}, []string{"git.agent_signing_key"}},
 		{"agent-key env ref", GitConfig{AgentCommitSigning: GitSigningAgentKey, AgentSigningKey: "env://K"}, []string{"git.agent_signing_key"}},
+		{"agent-key bare scheme", GitConfig{AgentCommitSigning: GitSigningAgentKey, AgentSigningKey: "op://"}, []string{"git.agent_signing_key"}},
 		{"agent-key bare path", GitConfig{AgentCommitSigning: GitSigningAgentKey, AgentSigningKey: "claude/Argus agent signing key"}, []string{"git.agent_signing_key"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
