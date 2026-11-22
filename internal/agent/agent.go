@@ -1604,16 +1604,24 @@ func BuildCmd(task *model.Task, cfg config.Config, resume bool, identity ...Resi
 		}
 	}
 
-	cmd.Env, err = agentGitPolicy(cmd.Env, cfg.Git.AgentCommitSigning)
+	var sign AgentSigningEnv
+	if cfg.Git.AgentCommitSigning == config.GitSigningAgentKey {
+		sign = agentSigningEnvFor(cfg, task.ID)
+	}
+	cmd.Env, err = agentGitPolicy(cmd.Env, cfg.Git.AgentCommitSigning, sign)
 	if err != nil {
 		uxlog.Log("[agent-git] task %q: signing policy failed: %v", task.ID, err)
 		return nil, nil, err
 	}
 	policy := cfg.Git.AgentCommitSigning
 	if policy == "" {
-		policy = "inherit"
+		policy = config.GitSigningInherit
 	}
-	uxlog.Log("[agent-git] task %q: commit signing policy=%s", task.ID, policy)
+	if policy == config.GitSigningAgentKey {
+		uxlog.Log("[agent-git] task %q: commit signing policy=%s public_key_resolved=%t", task.ID, policy, sign.PublicKey != "")
+	} else {
+		uxlog.Log("[agent-git] task %q: commit signing policy=%s", task.ID, policy)
+	}
 
 	if isOpencode {
 		uxlog.Log("[opencode] auto approval enabled for task %q (injected=%t)", task.ID, injectLaunchFlag)

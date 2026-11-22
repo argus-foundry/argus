@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
@@ -73,7 +74,7 @@ func TestAgentGitPolicy_AgentKey(t *testing.T) {
 			testutil.NoError(t, err)
 			testutil.DeepEqual(t, tc.env, original)
 			// Existing entries keep order; the four entries come after them.
-			testutil.DeepEqual(t, got[:len(tc.env)], tc.env)
+			testutil.DeepEqual(t, append([]string(nil), got[:len(tc.env)]...), tc.env) // normalize empty to nil for go-cmp
 			testutil.DeepEqual(t, got[len(tc.env):], wantEntries(tc.n, pub))
 			testutil.Equal(t, gitConfigGet(t, got, "commit.gpgsign"), "true")
 			testutil.Equal(t, gitConfigGet(t, got, "gpg.format"), "ssh")
@@ -130,6 +131,16 @@ func TestAgentGitPolicy_AgentKeyBadCount(t *testing.T) {
 		t.Fatal("agent-key with an invalid GIT_CONFIG_COUNT: want error, got nil")
 	}
 	testutil.Contains(t, err.Error(), "GIT_CONFIG_COUNT")
+	// The four appended entries must not overflow the new COUNT.
+	sign := AgentSigningEnv{PublicKey: pub, Program: "/x/argus"}
+	_, err = agentGitPolicy([]string{"GIT_CONFIG_COUNT=" + strconv.Itoa(math.MaxInt-3)}, "agent-key", sign)
+	if err == nil {
+		t.Fatal("agent-key with GIT_CONFIG_COUNT=MaxInt-3: want overflow error, got nil")
+	}
+	testutil.Contains(t, err.Error(), "GIT_CONFIG_COUNT")
+	got, err := agentGitPolicy([]string{"GIT_CONFIG_COUNT=" + strconv.Itoa(math.MaxInt-4)}, "agent-key", sign)
+	testutil.NoError(t, err)
+	testutil.Contains(t, strings.Join(got, "\n"), "GIT_CONFIG_COUNT="+strconv.Itoa(math.MaxInt)+"\n")
 }
 
 // inherit and unsigned ignore the signing env entirely: output is identical

@@ -42,6 +42,7 @@
 ## Backend credential env mapping (env_vars)
 
 - **`[git] agent_commit_signing = "unsigned"` is a child-process policy, not a branch rule; restart/recycle sessions after changing it and upgrade/restart a stale supervisor.** Apply after backend environment mappings, preserve indexed Git config, and also append to inherited `GIT_CONFIG_PARAMETERS` because Git parses it last; explicit `-S`/`-c` still wins, and no global/shared Git configuration is edited.
+- **Restart the session-supervisor BEFORE setting `agent_commit_signing = "agent-key"` — a stale supervisor fails validation and silently ignores all of config.toml.** Its `FileLoader.Apply` only logs a warning and returns the base config, so sessions launch with inherit (personal-key signing prompts) and every other config.toml override is dropped too, not just the Git policy.
 
 - **Agent fixture commits must ignore developer system/global/command-scope Git config before the first Git operation, independently of the production signing policy.** Normal agent `TestMain` installs isolation before tests start (also clears inherited Codex home overrides so fixture HOME wins); preserve its fake-daemon helper dispatch and use synthetic signers for policy tests.
 
