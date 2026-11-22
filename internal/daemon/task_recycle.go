@@ -260,6 +260,9 @@ func (r *taskRecycleRunner) restart(taskID string, buildSeed func(*model.Task) s
 // background rather than a current instruction to restart from.
 func buildTaskRecycleSeedPrompt(originalPrompt, handoffNote, lastExchange string) string {
 	var b strings.Builder
+	// Marked as Argus-injected so a second recycle with no human turn in
+	// between never quotes this seed back as the user's last message.
+	b.WriteString(lastexchange.SystemTurnPrefix)
 	b.WriteString("You are a fresh session recycled from a prior session on this same task, started to reset an oversized context window. ")
 	b.WriteString("Below is the handoff note your prior session left, followed by the task's ORIGINAL prompt. ")
 	b.WriteString("The handoff note supersedes the original prompt — read it FIRST and act on it; no tool call is needed to obtain it.\n")
