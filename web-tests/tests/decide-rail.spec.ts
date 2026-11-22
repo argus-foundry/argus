@@ -201,3 +201,36 @@ test('visibility refusal cannot unlock a previously uncertain comment before rec
  hidden=false;await page.locator('#submit-close').click();await expect(page.locator('h1')).toHaveText('Actions sent — you can close this tab');
  expect(retries).toEqual([original,original]);
 });
+
+async function mixedBoard(page:Page,{decisions}:{decisions:number}){
+ const mixedFyi={...fyi,id:33,role_id:1};
+ await page.route('**/*',async route=>{
+  const path=new URL(route.request().url()).pathname;
+  if(path==='/decide')return route.fulfill({contentType:'text/html',body:shell});
+  if(path.endsWith('/decision-session'))return route.fulfill({json:{session:'mixed-session',initial_role_id:1}});
+  if(path.endsWith('/decision-navigation'))return route.fulfill({json:{roles:[{role_id:1,parent_role_id:null,orchestrator:'Parent',coordinator:'coord',decisions,fyis:1}]}});
+  if(path.endsWith('/decide-items'))return route.fulfill({json:{items:decisions?[decision,mixedFyi]:[mixedFyi],coordinator:'coord',orchestrator:'team'}});
+  throw Error('Unexpected '+path);
+ });
+}
+
+test('focused FYI still opens on Decisions when decisions are open, without highlight',async({page})=>{
+ await mixedBoard(page,{decisions:1});await page.goto(origin+'/decide?role=1&focus=33#t=launch');
+ await expect(page.locator('#decision-11')).toBeVisible();
+ await expect(page.getByRole('tab',{name:/^Decisions/})).toHaveAttribute('aria-selected','true');
+ await expect(page.locator('.focused')).toHaveCount(0);
+});
+
+test('focused FYI opens on FYIs and is highlighted when no decisions are open',async({page})=>{
+ await mixedBoard(page,{decisions:0});await page.goto(origin+'/decide?role=1&focus=33#t=launch');
+ await expect(page.locator('#decision-33')).toBeVisible();
+ await expect(page.getByRole('tab',{name:/^FYIs/})).toHaveAttribute('aria-selected','true');
+ await expect(page.locator('#decision-33')).toHaveClass(/focused/);
+});
+
+test('no focus with open decisions opens on Decisions',async({page})=>{
+ await mixedBoard(page,{decisions:1});await page.goto(origin+'/decide?role=1#t=launch');
+ await expect(page.locator('#decision-11')).toBeVisible();
+ await expect(page.getByRole('tab',{name:/^Decisions/})).toHaveAttribute('aria-selected','true');
+ await expect(page.locator('.focused')).toHaveCount(0);
+});

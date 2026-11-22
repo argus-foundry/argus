@@ -689,8 +689,8 @@ globalThis.BoardDecisions = (() => {
     if(!session){expire();render();return;}
     const epoch=generation,next=await snapshot();if(finished||epoch!==generation)return;
     reconcile(next);const initial=Object.values(records).find(r=>r.role===selected&&r.item.id===focus&&!r.closed);
-    const counts=rowFor(selected);tab=initial?.item.kind||(counts&&L.TABS.find(k=>countOf(counts,k)))||'decision';render();
-    if(initial){const n=document.getElementById(`decision-${focus}`);n?.classList.add('focused');n?.scrollIntoView();}
+    const counts=rowFor(selected);tab=(counts&&countOf(counts,'decision')?'decision':'')||initial?.item.kind||(counts&&L.TABS.find(k=>countOf(counts,k)))||'decision';render();
+    if(initial&&initial.item.kind===tab){const n=document.getElementById(`decision-${focus}`);n?.classList.add('focused');n?.scrollIntoView();}
   }catch(e){if(!finished){message(e.message);render();}}
 })();
 
