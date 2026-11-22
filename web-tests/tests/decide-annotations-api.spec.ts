@@ -1,5 +1,56 @@
 import {test,expect} from '@playwright/test';
 const headers={Authorization:'Bearer test-token'};
+
+test('real mixed submit accepts unchanged FYIs across two coordinators and retries changed FYIs',async({page,request})=>{
+ const control='http://127.0.0.1:'+(Number(process.env.ARGUS_DECIDE_TEST_PORT||17749)+10);
+ expect((await request.post(control+'/test/reset')).ok()).toBe(true);
+ await page.addInitScript(()=>{window.close=()=>{};});
+ const nav=await (await request.get('/api/hera/board/decision-navigation',{headers})).json();
+ expect(nav.roles).toHaveLength(2);
+ const boards=await Promise.all(nav.roles.map(async(row:any)=>({role:row.role_id,...await (await request.get('/api/hera/roles/'+row.role_id+'/board/decide-items',{headers})).json()})));
+ const link=await (await request.post('/api/hera/board/decision-link',{headers,data:{}})).json();
+ await page.goto('/decide#t='+link.ticket);
+ const posts:any[]=[];page.on('request',r=>{if(r.method()==='POST'&&r.url().endsWith('/fyi-actions'))posts.push(r.postDataJSON().actions);});
+ for(let n=0;n<boards.length;n++){
+  if(n){await page.locator('#main').focus();await page.keyboard.press('Control+ArrowDown');}
+  await page.getByRole('tab',{name:/^FYIs/}).click();
+  for(const item of boards[n].items.filter((i:any)=>i.kind==='fyi')){
+   await page.locator('#note-'+item.id).fill('Feedback '+item.id);
+   await page.locator('#decision-'+item.id).getByRole('button',{name:'Comment',exact:true}).click();
+  }
+ }
+ const changed=boards.map(b=>b.items.find((i:any)=>i.subject==='Changed FYI'));
+ for(let n=0;n<boards.length;n++){
+  const item=changed[n],response=await request.post(control+'/test/board-revise',{data:{role_id:boards[n].role,item_id:item.id,kind:item.kind,subject:item.subject,body:'New context during review'}});
+  expect(response.ok()).toBe(true);expect((await response.json()).updated_at).not.toBe(item.updated_at);
+ }
+ await page.locator('#submit').click();await expect(page.locator('.receipt')).toHaveCount(2);
+ await expect(page.locator('#confirmed')).toContainText('2 comments');
+ await expect(page.locator('#main')).not.toContainText('Required note missing or too long');
+ for(const id of changed.map(i=>i.id))await expect(page.locator('.receipt').filter({hasText:'#'+id+' '})).toContainText('Item changed.');
+ for(let n=0;n<boards.length;n++){
+  if(!n)await page.locator('.receipt').first().getByRole('button',{name:'Edit on board'}).click();
+  else {await page.locator('#main').focus();await page.keyboard.press('Control+ArrowDown');}
+  const item=changed[n];await expect(page.locator('#note-'+item.id)).toHaveValue('Feedback '+item.id);
+  await page.locator('#decision-'+item.id).getByRole('button',{name:'Comment',exact:true}).click();
+ }
+ await page.locator('#submit-close').click();await expect(page.locator('h1')).toHaveText('Actions sent — you can close this tab');
+ expect(posts).toHaveLength(4);
+ expect(posts.slice(2).flat().map(a=>a.item_id)).toEqual(changed.map(i=>i.id));
+ for(let n=0;n<boards.length;n++){
+  const original=posts[n].find((a:any)=>a.item_id===changed[n].id),retry=posts[n+2][0];
+  expect(retry.action_id).not.toBe(original.action_id);expect(retry.expected_updated_at).not.toBe(original.expected_updated_at);
+ }
+ await expect(page.locator('main')).toContainText('4 comments');
+ for(let n=0;n<boards.length;n++){
+  const base='/api/hera/roles/'+boards[n].role+'/board/fyi-actions/';
+  for(const action of [posts[n].find((a:any)=>a.item_id!==changed[n].id),posts[n+2][0]]){
+   const response=await request.get(base+action.action_id,{headers});expect(response.ok()).toBe(true);
+   const receipt=await response.json();expect(receipt.outcome).toBe('commented');expect(receipt.note).toBe('Feedback '+action.item_id);
+  }
+ }
+});
+
 test('real isolated API validates browser anchors, retains full receipts and leaves feedback-only decisions open',async({page,request})=>{
  const reset=await request.post('http://127.0.0.1:'+(Number(process.env.ARGUS_DECIDE_TEST_PORT||17749)+10)+'/test/reset');expect(reset.ok()).toBe(true);
  await page.addInitScript(()=>{window.close=()=>{};});

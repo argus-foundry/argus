@@ -160,3 +160,71 @@ func TestBoardFYIResidentApproval(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, results[0].Outcome, "invalid")
 }
+
+func TestBoardFYIPartialAcrossCoordinators(t *testing.T) {
+	d := heraTestDB(t)
+	for _, name := range []string{"first", "second"} {
+		t.Run(name, func(t *testing.T) {
+			o := mkOrch(t, d, name)
+			c := mkRole(t, d, o.ID, "coord", HeraKindCoordinator)
+			fresh, err := d.PostHeraBoardItem(c.ID, "fyi", "Unchanged", "body")
+			testutil.NoError(t, err)
+			stale, err := d.PostHeraBoardItem(c.ID, "fyi", "Changed", "body")
+			testutil.NoError(t, err)
+			actions := []HeraBoardFYIAction{
+				{ActionID: name + "-fresh", ItemID: fresh.ID, ExpectedUpdatedAt: fresh.UpdatedAt, Action: "comment", Note: "Keep this feedback"},
+				{ActionID: name + "-stale", ItemID: stale.ID, ExpectedUpdatedAt: stale.UpdatedAt, Action: "comment", Note: "Keep this note too"},
+			}
+			updated, err := d.UpdateHeraBoardItem(c.ID, stale.ID, "fyi", stale.Subject, "changed body")
+			testutil.NoError(t, err)
+			results, err := d.FYIHeraBoardItems(c.ID, actions)
+			testutil.NoError(t, err)
+			testutil.Equal(t, results[0].Outcome, "commented")
+			testutil.Equal(t, results[1].Outcome, "conflict")
+			testutil.Equal(t, results[1].Item.UpdatedAt, updated.UpdatedAt)
+			// An uncertain whole-batch retry replays the successful sibling.
+			replayed, err := d.FYIHeraBoardItems(c.ID, actions)
+			testutil.NoError(t, err)
+			testutil.DeepEqual(t, replayed, results)
+			actions[1].ActionID += "-retry"
+			actions[1].ExpectedUpdatedAt = updated.UpdatedAt
+			retry, err := d.FYIHeraBoardItems(c.ID, actions[1:])
+			testutil.NoError(t, err)
+			testutil.Equal(t, retry[0].Outcome, "commented")
+			messages, err := d.HeraInbox(c.ID)
+			testutil.NoError(t, err)
+			testutil.Equal(t, len(messages), 2)
+		})
+	}
+}
+
+func TestBoardClosedFeedbackContext(t *testing.T) {
+	for _, kind := range []string{"fyi", "decision"} {
+		t.Run(kind, func(t *testing.T) {
+			d, c, i := fyiFixture(t)
+			var err error
+			if kind == "decision" {
+				i, err = d.UpdateHeraBoardItem(c.ID, i.ID, kind, i.Subject, i.Body)
+				testutil.NoError(t, err)
+			}
+			testutil.NoError(t, d.ResolveHeraBoardItem(c.ID, i.ID, "agent", "done"))
+			if kind == "fyi" {
+				r, err := d.FYIHeraBoardItems(c.ID, []HeraBoardFYIAction{{ActionID: "closed", ItemID: i.ID, ExpectedUpdatedAt: i.UpdatedAt, Action: "comment", Note: "Feedback"}})
+				testutil.NoError(t, err)
+				testutil.Equal(t, r[0].Outcome, "invalid")
+				testutil.NotNil(t, r[0].Item)
+				if r[0].Item != nil {
+					testutil.Equal(t, r[0].Item.Resolved, true)
+				}
+			} else {
+				r, err := d.AnswerHeraBoardItems(c.ID, []HeraBoardAnswer{{ActionID: "closed", ItemID: i.ID, ExpectedUpdatedAt: i.UpdatedAt, Action: "comment", Note: "Feedback"}})
+				testutil.NoError(t, err)
+				testutil.Equal(t, r[0].Outcome, "invalid")
+				testutil.NotNil(t, r[0].Item)
+				if r[0].Item != nil {
+					testutil.Equal(t, r[0].Item.Resolved, true)
+				}
+			}
+		})
+	}
+}

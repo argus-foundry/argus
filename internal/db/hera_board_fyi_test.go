@@ -112,7 +112,7 @@ func TestBoardFYIOutcomes(t *testing.T) {
 			results, err := d.FYIHeraBoardItems(role, []HeraBoardFYIAction{a})
 			testutil.NoError(t, err)
 			testutil.Equal(t, results[0].Outcome, tc.want)
-			if tc.want == "conflict" {
+			if tc.want == "conflict" || tc.name == "closed comment" {
 				testutil.Equal(t, results[0].Item.Body, "Body")
 			} else {
 				testutil.Nil(t, results[0].Item)
