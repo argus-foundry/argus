@@ -17,6 +17,39 @@ func BoardQuiet(i *db.HeraBoardItem) bool {
 // unread count (unread and not quiet).
 func BoardAttention(i *db.HeraBoardItem) bool { return i.AttentionUnread() }
 
+// BoardLevel is the urgency of a coordinator's open board attention, ordered so
+// the maximum over its items is the most urgent.
+type BoardLevel int
+
+const (
+	BoardLevelNone BoardLevel = iota // nothing demanding attention (quiet items never count)
+	BoardLevelInfo                   // only FYIs
+	BoardLevelWarn                   // an open decision or a ready non-blocking action
+	BoardLevelCritical               // an open blocking action
+)
+
+// BoardItemLevel grades one item through the shared attention predicate, so a
+// quiet item (todo, trigger-pending action) or a read/resolved one is None.
+func BoardItemLevel(i *db.HeraBoardItem) BoardLevel {
+	if !BoardAttention(i) {
+		return BoardLevelNone
+	}
+	switch {
+	case i.Kind == "fyi":
+		return BoardLevelInfo
+	case i.Kind == "action" && i.Blocking:
+		return BoardLevelCritical
+	}
+	return BoardLevelWarn
+}
+
+// BoardJumpable reports whether an item makes its coordinator a ctrl+g jump
+// target: an attention item that is a decision or FYI. Actions never do, even
+// blocking ones (the jump hotkey is deliberately unchanged by board kinds).
+func BoardJumpable(i *db.HeraBoardItem) bool {
+	return BoardAttention(i) && (i.Kind == "decision" || i.Kind == "fyi")
+}
+
 func boardBand(i *db.HeraBoardItem) int {
 	switch {
 	case i.Kind == "action" && i.Blocking && !i.Resolved:

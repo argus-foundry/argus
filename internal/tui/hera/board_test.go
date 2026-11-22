@@ -552,7 +552,7 @@ func TestRailBoardMailboxStyle(t *testing.T) {
 					r.boardAuto = true
 					m := twoOrchModel()
 					if unread {
-						m.Active[0].Roles[0].BoardUnread = 1
+						m.Active[0].Roles[0].BoardUnread, m.Active[0].Roles[0].BoardJump, m.Active[0].Roles[0].BoardLevel = 1, 1, heramodel.BoardLevelWarn
 					}
 					r.SetModel(m)
 					sim := tcell.NewSimulationScreen("UTF-8")

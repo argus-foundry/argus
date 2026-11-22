@@ -58,13 +58,24 @@ func (p *HeraPage) BoardActions() []keymap.Action {
 	}
 }
 
-func (r *Rail) coordMarker(orchID int64) rune {
-	if r.boardAuto {
-		if o := r.model.OrchByID(orchID); o != nil {
-			if c := o.CoordRole(); c != nil && c.BoardUnread > 0 {
-				return '\U000f01ee'
-			} // nf-md-email
+// coordBoardLevel is the envelope urgency for a coordinator row. Quiet items
+// (todos, trigger-pending actions) never raise it, so those rows keep the
+// ordinary coordinator glyph.
+func (r *Rail) coordBoardLevel(orchID int64) heramodel.BoardLevel {
+	if !r.boardAuto {
+		return heramodel.BoardLevelNone
+	}
+	if o := r.model.OrchByID(orchID); o != nil {
+		if c := o.CoordRole(); c != nil {
+			return c.BoardLevel
 		}
+	}
+	return heramodel.BoardLevelNone
+}
+
+func (r *Rail) coordMarker(orchID int64) rune {
+	if r.coordBoardLevel(orchID) != heramodel.BoardLevelNone {
+		return '\U000f01ee' // nf-md-email
 	}
 	return heraIconCoord
 }

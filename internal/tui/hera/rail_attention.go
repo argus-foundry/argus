@@ -20,7 +20,7 @@ func (r *Rail) unreadBoardOrch(row railRow) *heramodel.OrchView {
 		o = r.model.OrchByID(row.collOrchID)
 	}
 	if o != nil {
-		if c := o.CoordRole(); c != nil && c.BoardUnread > 0 {
+		if c := o.CoordRole(); c != nil && c.BoardJump > 0 {
 			return o
 		}
 	}
@@ -56,7 +56,7 @@ func (r *Rail) eachUnreadBoard(m heramodel.Model, visit func(*heramodel.OrchView
 	for _, section := range [][]heramodel.OrchView{m.Pinned, m.Active, m.Archived} {
 		for i := range section {
 			o := &section[i]
-			if c := o.CoordRole(); c != nil && c.BoardUnread > 0 {
+			if c := o.CoordRole(); c != nil && c.BoardJump > 0 {
 				visit(o)
 			}
 		}

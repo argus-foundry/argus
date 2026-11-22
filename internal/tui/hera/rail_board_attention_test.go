@@ -38,7 +38,7 @@ func TestBoardAttentionJump(t *testing.T) {
 			if tc.unbound {
 				board.Roles[0].Live = false
 			}
-			board.Roles[0].BoardUnread = 2
+			board.Roles[0].BoardUnread, board.Roles[0].BoardJump = 2, 2
 			board.Roles[0].BoardItems = []*db.HeraBoardItem{
 				{ID: 1, Subject: "Already read", Read: true},
 				{ID: 2, Subject: "Choose a release"},
@@ -108,10 +108,10 @@ func TestBoardAttentionJump(t *testing.T) {
 func TestBoardAttentionMixedCycleAndPopup(t *testing.T) {
 	parent := coordOf(1, "parent", 10, "tc",
 		heramodel.RoleView{RoleID: 11, OrchID: 1, Name: "worker", Kind: db.HeraKindWorker, Live: true, TaskID: "tw", NeedsInput: true})
-	parent.Roles[0].BoardUnread = 2
+	parent.Roles[0].BoardUnread, parent.Roles[0].BoardJump = 2, 2
 	parent.Roles[0].NeedsInput = true
 	other := coordOf(2, "other", 20, "to")
-	other.Roles[0].BoardUnread = 1
+	other.Roles[0].BoardUnread, other.Roles[0].BoardJump = 1, 1
 	m := heramodel.Model{Active: []heramodel.OrchView{parent, other}}
 	m.RollupNeedsInput()
 	p := NewHeraPage(memDB(t))
@@ -140,6 +140,7 @@ func TestBoardAttentionExcursionIdentity(t *testing.T) {
 			model := func(first, second int) heramodel.Model {
 				a, b := coordOf(1, "a", 10, "ta"), coordOf(2, "b", 20, "tb")
 				a.Roles[0].BoardUnread, b.Roles[0].BoardUnread = first, second
+				a.Roles[0].BoardJump, b.Roles[0].BoardJump = first, second
 				return heramodel.Model{Active: []heramodel.OrchView{a, b}}
 			}
 			p := NewHeraPage(memDB(t))
