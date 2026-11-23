@@ -38,6 +38,20 @@ func TestBoardApprovalRequiresReviewAndExplicitAction(t *testing.T) {
 	testutil.Contains(t, simScreenText(sim), `\u202e`)
 }
 
+func TestBoardClearApprovalReviewsBeforeDeny(t *testing.T) {
+	p := NewHeraPage(nil)
+	p.board.items = []*db.HeraBoardItem{{ID: 4, Kind: "action", ResidentApproval: true}}
+	p.OnBoardComplete = func(*db.HeraBoardItem, string) { t.Fatal("approval used generic completion") }
+	p.OnBoardDismiss = func(int64, int64) { t.Fatal("approval used generic dismissal") }
+	var decisions []bool
+	p.OnApprovalDecision = func(_ *db.HeraBoardItem, approve bool) { decisions = append(decisions, approve) }
+	p.handleBoardKey(tcell.NewEventKey(tcell.KeyRune, 'x', 0), nil)
+	testutil.Equal(t, len(decisions), 0)
+	testutil.Equal(t, p.board.expandedID, int64(4))
+	p.handleBoardKey(tcell.NewEventKey(tcell.KeyRune, 'x', 0), nil)
+	testutil.DeepEqual(t, decisions, []bool{false})
+}
+
 func TestBoardApprovalDecidedItemExplainsInsteadOfDeciding(t *testing.T) {
 	p := NewHeraPage(nil)
 	p.board.items = []*db.HeraBoardItem{{ID: 574, ResidentApproval: true, ApprovalState: db.ApprovalApproved, ResolutionNote: "approved 17:07; good until 18:07", Body: "Tool: Bash"}}

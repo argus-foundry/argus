@@ -25,7 +25,7 @@ The system SHALL store stable numeric-id items owned by coordinator role, with d
 
 ### Requirement: Human board interaction
 
-The TUI SHALL render collapsed entries with bold kind/id/subject headers, support j/k and arrows, Enter expansion marking read, r reply and x dismissal. Reply SHALL focus the coordinator and paste the subject/id followed by two newlines with user input origin, without submitting. Decision dismissal SHALL durably notify its coordinator; resolution SHALL record the human as resolver.
+The TUI SHALL render collapsed entries with bold kind/id/subject headers, support j/k and arrows, Enter expansion marking read, r reply and universal x clearing as defined by Action and board todo controls. Reply SHALL focus the coordinator and paste the subject/id followed by two newlines with user input origin, without submitting. Decision dismissal SHALL durably notify its coordinator; resolution SHALL record the human as resolver.
 
 Collapsed headers SHALL truncate with a trailing ellipsis when necessary, reserving space for the unread ` •` marker. Expanded headers SHALL show the full subject wrapped at word boundaries with continuation lines aligned under the subject's first character; all header lines SHALL be bold and only the selected first line SHALL be reverse-selected. The unread marker SHALL remain visible on the first header line. Indentation SHALL shrink in panes too narrow for the prefix.
 
@@ -110,7 +110,7 @@ The board tool description, builtin Hera skill and coordinator spawn/reclaim ori
 
 ### Requirement: Focus-aware board hint row
 
-The TUI SHALL reserve the bottom interior row of every visible board for a single muted hint, including empty boards. Unfocused boards SHALL show `⌘→ open board · p plan`; focused boards SHALL show `j/k move · ⏎ expand · r reply · x dismiss · o decide · p plan · ctrl+q back` with default bindings. Rebindable labels SHALL come from the active keymap; structural focus, Enter and back labels SHALL reflect the actual fixed keys. Items SHALL scroll above the hint. Narrow panes SHALL clip the hint to available cells without wrapping, overflow or item overlap.
+The TUI SHALL reserve the bottom interior row of every visible board for a single muted hint, including empty boards. Unfocused boards SHALL show `⌘→ open board · p plan`; focused boards SHALL show `←/→ tabs · j/k move · ⏎ expand · r reply · x clear · c copy · o decide · p plan · ctrl+q back` with default bindings. Rebindable labels SHALL come from the active keymap; structural focus, Enter and back labels SHALL reflect the actual fixed keys. Items SHALL scroll above the hint. Narrow panes SHALL clip the hint to available cells without wrapping, overflow or item overlap.
 
 #### Scenario: Unfocused and empty board
 
@@ -120,7 +120,7 @@ The TUI SHALL reserve the bottom interior row of every visible board for a singl
 #### Scenario: Focused board with many items
 
 - **WHEN** focus enters a board whose items exceed its height
-- **THEN** the bottom interior row shows movement, expand, reply, dismiss, decide, plan and Ctrl+Q back hints while the selected item scrolls above it
+- **THEN** the bottom interior row shows movement, expand, reply, clear, copy, decide, plan and Ctrl+Q back hints while the selected item scrolls above it
 
 #### Scenario: Rebound action
 
@@ -421,11 +421,11 @@ An action SHALL resolve as `done` with optional note. A board todo SHALL resolve
 
 ### Requirement: Action and board todo controls
 
-The TUI and SPA board SHALL label all four kinds and show action blocking state, trigger/readiness and exact copyable step. The TUI SHALL provide a rebindable one-key Done (default d) for action/todo and Dropped (existing x) for board todo; x SHALL NOT silently dismiss an action. A copy action SHALL copy the exact command/step. Optional completion notes SHALL be available in the browser completion UI. Keymap help and Reference documentation SHALL describe the new controls. Coordinator orientation, board tools and builtin Hera/remind-me guidance SHALL distinguish human steps, future team work, choices and FYIs, including explicit trigger updates and the Things naming distinction. New operations SHALL log success, failure and skipped/stale work without command contents.
+The TUI and SPA board SHALL label all four kinds and show action blocking state, trigger/readiness and exact copyable step. The TUI SHALL provide a rebindable universal clear action (hera_board.dismiss, default x): dismiss FYIs and decisions, resolve actions and board todos as done, and retain the resident approval review-and-deny flow. No separate hera_board.done action or default d binding SHALL exist. Dropping a board todo SHALL remain available on the web Decide page. A copy action SHALL copy the exact command/step. Optional completion notes SHALL be available in the browser completion UI. Keymap help and Reference documentation SHALL describe the new controls. Coordinator orientation, board tools and builtin Hera/remind-me guidance SHALL distinguish human steps, future team work, choices and FYIs, including explicit trigger updates and the Things naming distinction. New operations SHALL log success, failure and skipped/stale work without command contents.
 
 #### Scenario: One-key done
 
-- **WHEN** Aaron presses d on the selected action or board todo
+- **WHEN** Aaron presses x on the selected action or board todo
 - **THEN** the exact visible revision resolves done without requiring a note and the coordinator receives its durable completion notice
 
 #### Scenario: Copy human step
@@ -437,3 +437,23 @@ The TUI and SPA board SHALL label all four kinds and show action blocking state,
 
 - **WHEN** a coordinator captures future team work or a deferred command Aaron must run
 - **THEN** guidance selects board todo for the former and deferred action for the latter, with typed trigger data
+
+#### Scenario: Clear informational and decision items
+
+- **WHEN** Aaron presses x on a selected FYI or decision
+- **THEN** existing dismissal semantics remain, including silent FYI dismissal and the durable decision notice
+
+#### Scenario: Deny resident call
+
+- **WHEN** Aaron presses x on a resident approval call
+- **THEN** the existing review and explicit denial flow remains and generic dismissal/completion is not invoked
+
+#### Scenario: Separate done key removed
+
+- **WHEN** Aaron presses d with default bindings on any board item
+- **THEN** no board completion or dismissal occurs
+
+#### Scenario: Browser todo dropping retained
+
+- **WHEN** Aaron needs to drop rather than complete a todo
+- **THEN** web Decide still offers Dropped while TUI x records done

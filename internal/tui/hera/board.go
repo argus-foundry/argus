@@ -184,9 +184,9 @@ func boardHint(keys *keymap.Keymap, focused bool) string {
 	if !focused {
 		return "⌘→ open board · " + label(keymap.ActBoardToggle) + " plan"
 	}
-	return label(keymap.ActBoardTabPrev) + "/" + label(keymap.ActBoardTabNext) + " tabs · " + fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s dismiss/drop · %s done · %s copy · %s decide · %s plan · ctrl+q back",
+	return label(keymap.ActBoardTabPrev) + "/" + label(keymap.ActBoardTabNext) + " tabs · " + fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s clear · %s copy · %s decide · %s plan · ctrl+q back",
 		label(keymap.ActBoardDown), label(keymap.ActBoardUp), label(keymap.ActBoardReply),
-		label(keymap.ActBoardDismiss), label(keymap.ActBoardDone), label(keymap.ActBoardCopy),
+		label(keymap.ActBoardDismiss), label(keymap.ActBoardCopy),
 		label(keymap.ActBoardDecide), label(keymap.ActBoardToggle))
 }
 
@@ -539,16 +539,14 @@ func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Pri
 			switch {
 			case i.ResidentApproval:
 				p.decideBoardApproval(i, false)
-			case i.Kind == "todo":
-				p.completeBoardItem(i, "dropped")
-			case i.Kind == "action":
-				uxlog.Log("[board] drop skipped item=%d: actions complete with done", i.ID)
-				p.info("An action can only be marked done")
+			case i.Kind == "todo" || i.Kind == "action":
+				p.completeBoardItem(i, "done")
 			case p.OnBoardDismiss != nil:
+				uxlog.Log("[board] clear role=%d item=%d kind=%s outcome=dismiss", i.RoleID, i.ID, i.Kind)
 				p.OnBoardDismiss(i.RoleID, i.ID)
+			default:
+				uxlog.Log("[board] clear skipped item=%d kind=%s: no dismiss handler", i.ID, i.Kind)
 			}
-		case act == keymap.ActBoardDone:
-			p.completeBoardItem(i, "done")
 		case act == keymap.ActBoardCopy:
 			p.copyBoardCommand(i)
 		}
@@ -575,6 +573,7 @@ func (p *HeraPage) decideBoardApproval(i *db.HeraBoardItem, approve bool) {
 		return
 	}
 	if p.OnApprovalDecision != nil {
+		uxlog.Log("[board] approval requested role=%d item=%d approve=%v", i.RoleID, i.ID, approve)
 		p.OnApprovalDecision(i, approve)
 	}
 }
@@ -694,8 +693,8 @@ func (p *HeraPage) info(msg string) {
 	}
 }
 
-// completeBoardItem requests Done (action/todo) or Dropped (todo) for the
-// selected item at its visible revision. Pending items stay completable: Aaron
+// completeBoardItem requests Done for the selected action/todo at its
+// visible revision. Pending items stay completable: Aaron
 // may finish deferred work early.
 func (p *HeraPage) completeBoardItem(i *db.HeraBoardItem, outcome string) {
 	if (i.Kind != "action" && i.Kind != "todo") || i.Resolved {
@@ -707,6 +706,7 @@ func (p *HeraPage) completeBoardItem(i *db.HeraBoardItem, outcome string) {
 		uxlog.Log("[board] complete skipped item=%d: no handler (remote)", i.ID)
 		return
 	}
+	uxlog.Log("[board] clear role=%d item=%d kind=%s outcome=%s", i.RoleID, i.ID, i.Kind, outcome)
 	p.OnBoardComplete(i, outcome)
 }
 

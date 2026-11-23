@@ -290,8 +290,11 @@ func TestBoardTabsRefreshAndFilteredActions(t *testing.T) {
 	p.changeBoardTab(2)
 	var copied, completed int64
 	p.OnBoardCopy = func(i *db.HeraBoardItem) { copied = i.ID }
-	p.OnBoardComplete = func(i *db.HeraBoardItem, _ string) { completed = i.ID }
-	for _, r := range []rune{'c', 'd'} {
+	p.OnBoardComplete = func(i *db.HeraBoardItem, outcome string) {
+		completed = i.ID
+		testutil.Equal(t, outcome, "done")
+	}
+	for _, r := range []rune{'c', 'x'} {
 		p.handleBoardKey(tcell.NewEventKey(tcell.KeyRune, r, 0), nil)
 	}
 	testutil.Equal(t, copied, int64(3))

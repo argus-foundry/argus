@@ -63,25 +63,30 @@ func TestBoardRenderKindsAndMetadata(t *testing.T) {
 	testutil.Contains(t, strings.Join(rows, "\n"), "Trigger (deferred): after 1.42 ships")
 }
 
-func TestBoardDoneDropCopyKeys(t *testing.T) {
+func TestBoardClearCopyKeys(t *testing.T) {
 	press := func(p *HeraPage, r rune) { p.handleBoardKey(tcell.NewEventKey(tcell.KeyRune, r, 0), nil) }
 	type call struct {
 		ID      int64
 		Outcome string
 	}
 	for _, tc := range []struct {
-		name string
-		item *db.HeraBoardItem
-		key  rune
-		want *call
-		info string
+		name    string
+		item    *db.HeraBoardItem
+		key     rune
+		want    *call
+		info    string
+		dismiss bool
 	}{
-		{"done action", &db.HeraBoardItem{ID: 3, Kind: "action"}, 'd', &call{3, "done"}, ""},
-		{"done todo", &db.HeraBoardItem{ID: 2, Kind: "todo"}, 'd', &call{2, "done"}, ""},
-		{"drop todo", &db.HeraBoardItem{ID: 2, Kind: "todo"}, 'x', &call{2, "dropped"}, ""},
-		{"x on action refused", &db.HeraBoardItem{ID: 3, Kind: "action"}, 'x', nil, "only be marked done"},
-		{"done on decision refused", &db.HeraBoardItem{ID: 1, Kind: "decision"}, 'd', nil, "open actions and todos"},
-		{"done on resolved refused", &db.HeraBoardItem{ID: 1, Kind: "todo", Resolved: true}, 'd', nil, "open actions and todos"},
+		{"clear action", &db.HeraBoardItem{ID: 3, Kind: "action"}, 'x', &call{3, "done"}, "", false},
+		{"clear todo", &db.HeraBoardItem{ID: 2, Kind: "todo"}, 'x', &call{2, "done"}, "", false},
+		{"clear deferred action", &db.HeraBoardItem{ID: 3, Kind: "action", TriggerPending: true}, 'x', &call{3, "done"}, "", false},
+		{"clear decision", &db.HeraBoardItem{ID: 1, Kind: "decision"}, 'x', nil, "", true},
+		{"clear fyi", &db.HeraBoardItem{ID: 5, Kind: "fyi"}, 'x', nil, "", true},
+		{"clear resolved refused", &db.HeraBoardItem{ID: 1, Kind: "todo", Resolved: true}, 'x', nil, "open actions and todos", false},
+		{"d on action inert", &db.HeraBoardItem{ID: 3, Kind: "action"}, 'd', nil, "", false},
+		{"d on todo inert", &db.HeraBoardItem{ID: 2, Kind: "todo"}, 'd', nil, "", false},
+		{"d on decision inert", &db.HeraBoardItem{ID: 1, Kind: "decision"}, 'd', nil, "", false},
+		{"d on fyi inert", &db.HeraBoardItem{ID: 5, Kind: "fyi"}, 'd', nil, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := NewHeraPage(memDB(t))
@@ -89,14 +94,23 @@ func TestBoardDoneDropCopyKeys(t *testing.T) {
 			var got *call
 			dismissed := false
 			info := ""
-			p.OnBoardComplete = func(i *db.HeraBoardItem, o string) { got = &call{i.ID, o} }
-			p.OnBoardDismiss = func(_, _ int64) { dismissed = true }
+			p.OnBoardComplete = func(i *db.HeraBoardItem, o string) {
+				testutil.Equal(t, i, tc.item)
+				got = &call{i.ID, o}
+			}
+			p.OnBoardDismiss = func(role, id int64) {
+				testutil.Equal(t, role, tc.item.RoleID)
+				testutil.Equal(t, id, tc.item.ID)
+				dismissed = true
+			}
 			p.OnInfo = func(m string) { info = m }
 			press(p, tc.key)
 			testutil.DeepEqual(t, got, tc.want)
-			testutil.False(t, dismissed)
+			testutil.Equal(t, dismissed, tc.dismiss)
 			if tc.info != "" {
 				testutil.Contains(t, info, tc.info)
+			} else {
+				testutil.Equal(t, info, "")
 			}
 		})
 	}
