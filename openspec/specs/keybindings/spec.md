@@ -31,6 +31,11 @@ The system SHALL read user overrides from `[keybindings.<context>]` tables in co
 - **WHEN** the user edits a `[keybindings.<context>]` entry while argus is running
 - **THEN** the new binding takes effect without a restart (the keymap rebuilds when the config changes)
 
+#### Scenario: Retired board done override
+
+- **WHEN** config.toml retains hera_board.done with any keyspec, including an invalid one
+- **THEN** loading and keymap building succeed without warnings, the retired override is ignored and default x still resolves to hera_board.dismiss
+
 ### Requirement: Keyspec grammar
 
 The system SHALL parse keyspec strings of the form `modifier*('+')base`, where modifiers are `ctrl`/`control`, `cmd`/`opt`/`alt`, and `shift`, and base is either a single printable rune or a named key (`enter`, `return`, `esc`, `escape`, `tab`, `backtab`, `space`, `up`, `down`, `left`, `right`, `home`, `end`, `pgup`, `pgdn`, `backspace`, `delete`). `ctrl+<letter>` SHALL map to the corresponding control key; `cmd`/`opt`/`alt`+arrow SHALL map to the arrow key with the Ctrl+Alt convention; `shift`+arrow SHALL map to the arrow key with Shift.
@@ -71,6 +76,11 @@ The system SHALL generate the help overlay's argus sections from the keymap so t
 
 - **WHEN** the task-list `new` action is rebound to `x`
 - **THEN** the help overlay's Task List section shows `x` for "new task"
+
+#### Scenario: Universal board clear help
+
+- **WHEN** generated help displays board actions
+- **THEN** it describes clear as dismissing FYIs, completing actions/todos and denying calls using the active dismiss binding, without a separate done row
 
 ### Requirement: File-action hotkeys remain available while viewing a diff
 

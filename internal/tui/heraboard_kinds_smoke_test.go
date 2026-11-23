@@ -32,7 +32,7 @@ func (s boardCompletionSink) Emit(e model.Event) {
 	}
 }
 
-func TestSmoke_BoardActionDoneAndCopy(t *testing.T) {
+func TestSmoke_BoardActionClearAndCopy(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	d := testDB(t)
 	o, err := d.CreateHeraOrchestrator("kinds", "")
@@ -65,12 +65,12 @@ func TestSmoke_BoardActionDoneAndCopy(t *testing.T) {
 	completed := make(chan int64, 1)
 	previous := events.SetSink(boardCompletionSink{completed: completed})
 	defer events.SetSink(previous)
-	app.tapp.QueueEvent(tcell.NewEventKey(tcell.KeyRune, 'd', 0))
+	app.tapp.QueueEvent(tcell.NewEventKey(tcell.KeyRune, 'x', 0))
 	select {
 	case id := <-completed:
 		testutil.Equal(t, id, act.ID)
 	case <-time.After(uiTimeout):
-		t.Fatal("done key did not resolve action")
+		t.Fatal("clear key did not resolve action")
 	}
 	syncUI(t, app.tapp)
 	items, err := d.ListHeraBoardItems(c.ID, true)

@@ -297,8 +297,7 @@ When a **worker** is selected the details region shows its live agent terminal. 
 | `Enter` | Expand / collapse; expanding marks the item read |
 | `PgUp` / `PgDn` | Scroll expanded text |
 | `r` | Compose a coordinator reply without submitting; on a resident approval item, review the expanded exact call and confirm **Approve once** (the agent then has 60 minutes to run it); a decided or lapsed item shows its state instead |
-| `x` | Dismiss item as human; on a **todo**, mark it **Dropped**; on an **action**, refused (actions complete with `d`); on a resident approval item, confirm **Deny**. Decisions leave a durable coordinator inbox notice |
-| `d` | Mark the selected **action** or **todo** **Done** at the revision on screen (no note; a stale revision reports a conflict and nothing changes). Rebind with `[keybindings.hera_board] done` |
+| `x` | Clear the selected item: dismiss an **FYI** or **decision**, mark an **action** or **todo** **Done** at the revision on screen (no note; stale revisions report a conflict), or confirm **Deny** on a resident approval call. Decisions and completed work leave durable coordinator notices. Todo **Dropped** remains available on web Decide. Rebind with `[keybindings.hera_board] dismiss` |
 | `c` | Copy the selected action's exact command / human step to the clipboard; nothing is executed. Rebind with `[keybindings.hera_board] copy` |
 
 Board rows label all four kinds. Blocking actions show `[action BLOCKING]` in the attention color and sort first; trigger-pending actions and todos show `deferred`/`todo`, render dimmed and sort last, and never count toward the unread badge, board auto-landing or `ctrl+g`. Expanding an item shows its trigger and readiness and the literal step.

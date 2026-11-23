@@ -161,7 +161,6 @@ const (
 	ActBoardDismiss    Action = "hera_board.dismiss"
 	ActBoardDown       Action = "hera_board.down"
 	ActBoardUp         Action = "hera_board.up"
-	ActBoardDone       Action = "hera_board.done"
 	ActBoardCopy       Action = "hera_board.copy"
 	ActBoardTabPrev    Action = "hera_board.tab_prev"
 	ActBoardTabNext    Action = "hera_board.tab_next"
@@ -220,7 +219,7 @@ var defaultSpecs = map[Context]map[Action]string{
 		ActHeraAdopt: "J", ActHeraNewCoord: "n", ActHeraClear: "c",
 		ActHeraCleanup: "C", ActHeraInbox: "i", ActHeraMoveAccount: ">",
 	},
-	CtxHeraBoard: {ActBoardDecide: "o", ActBoardToggle: "p", ActBoardReply: "r", ActBoardDismiss: "x", ActBoardDown: "j", ActBoardUp: "k", ActBoardDone: "d", ActBoardCopy: "c", ActBoardTabPrev: "left", ActBoardTabNext: "right"},
+	CtxHeraBoard: {ActBoardDecide: "o", ActBoardToggle: "p", ActBoardReply: "r", ActBoardDismiss: "x", ActBoardDown: "j", ActBoardUp: "k", ActBoardCopy: "c", ActBoardTabPrev: "left", ActBoardTabNext: "right"},
 }
 
 // actionLabels are the human-readable descriptions used in the help overlay.
@@ -274,10 +273,9 @@ var actionLabels = map[Action]string{
 	ActBoardDecide:     "open Decide board in browser",
 	ActBoardToggle:     "toggle plan / human board",
 	ActBoardReply:      "compose reply / approve exact resident call",
-	ActBoardDismiss:    "dismiss FYI / drop todo / deny call",
+	ActBoardDismiss:    "clear (dismiss FYI · done action/todo · deny call)",
 	ActBoardDown:       "next board item",
 	ActBoardUp:         "previous board item",
-	ActBoardDone:       "mark action / todo done",
 	ActBoardCopy:       "copy action command / step",
 	ActBoardTabPrev:    "previous board kind tab",
 	ActBoardTabNext:    "next board kind tab",
@@ -351,7 +349,7 @@ var contextOrder = map[Context][]Action{
 	CtxHeraRail: {ActHeraSpawn, ActHeraNewCoord, ActHeraRename, ActHeraArchive, ActHeraPin,
 		ActHeraStatAdv, ActHeraStatRev, ActHeraKanbanAdv, ActHeraKanbanRev, ActHeraAdopt, ActHeraClear,
 		ActHeraCleanup, ActHeraInbox, ActHeraMoveAccount, ActHeraDelete},
-	CtxHeraBoard: {ActBoardDecide, ActBoardToggle, ActBoardReply, ActBoardDismiss, ActBoardDone, ActBoardCopy, ActBoardTabPrev, ActBoardTabNext, ActBoardDown, ActBoardUp},
+	CtxHeraBoard: {ActBoardDecide, ActBoardToggle, ActBoardReply, ActBoardDismiss, ActBoardCopy, ActBoardTabPrev, ActBoardTabNext, ActBoardDown, ActBoardUp},
 }
 
 // ResidentAccess classifies a Projects-rail action for the resident tab.

@@ -3082,7 +3082,7 @@ The TUI coordinator board SHALL show a single-row Decisions, FYIs, Actions, Todo
 #### Scenario: Navigation and selection
 
 - **WHEN** the focused board receives the rebindable previous/next tab action (default Left/Right)
-- **THEN** the selected tab moves with clamped endpoints, logs a `[board] tab` change and filters all navigation, expansion, scrolling, reply, dismiss, complete and copy actions to visible items
+- **THEN** the selected tab moves with clamped endpoints, logs a `[board] tab` change and filters all navigation, expansion, scrolling, reply, clear and copy actions (clear dismisses FYIs/decisions, completes actions/todos as done, and retains resident-call denial) to visible items
 - **AND** the selected item is retained if visible, otherwise the first visible item is selected
 
 #### Scenario: Initial and remembered selection
