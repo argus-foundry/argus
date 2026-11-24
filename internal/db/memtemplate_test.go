@@ -284,4 +284,3 @@ func TestOpen_PathStillMigrates(t *testing.T) {
 		t.Fatalf("migrated file tables %v != template tables %v", tableNames(d), tableNames(mem))
 	}
 }
-
