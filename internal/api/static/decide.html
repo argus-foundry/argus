@@ -221,12 +221,13 @@ body .page-layout{grid-template-columns:200px minmax(0,1fr) 290px;max-width:1540
 @media(max-width:850px){body .page-layout{display:block}#rail,#annotation-panel{display:none!important}.phone-trigger{display:block;width:calc(100% - 24px);margin:10px 12px 0}.board-column>.wrap{padding-inline:12px}.annotation-trigger,#selection-toolbar .btn,.annotation-card .clear{min-height:40px}.annotation-composer textarea{font-size:16px}.annotation-composer .btn{min-height:40px}.annotation-panel-head h2{font-size:14px}.annotation-card p{font-size:14px}.annotation-card blockquote{font-size:12px}.range-highlight{padding:2px 0}}
 
 .tabs{flex-wrap:wrap}.tabs .btn{flex:1 1 6.5rem;min-width:0}.decision.blocking{border-left:4px solid var(--warn);padding-left:12px}.decision.deferred{opacity:.88}.pill.blocking{background:var(--warn);color:var(--bg);font-weight:600}.pill.deferred{border:1px solid var(--line);color:var(--muted)}.meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.command{display:grid;gap:6px}.command pre{margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:4px;background:var(--surface);font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}.command .btn{justify-self:start}
+.submit-note{padding:28px 0;border-bottom:1px solid var(--line)}.submit-note h2{margin:0 0 8px}.submit-note.compact{padding:14px 0;display:grid;gap:4px}.tab-attention{color:var(--warn)}.unsent-recovery{font-size:13px;border-top:1px solid var(--line);padding:12px 0;color:var(--muted)}.unsent-recovery summary{cursor:pointer}.recovery-body{padding:12px 0}.recovery-body pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;color:var(--ink)}.review-actions,.recovery-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start}.review-actions .btn,.recovery-actions .btn{font-size:13px;padding:8px 10px;justify-self:start}.review-group h2{font-size:1rem;margin-top:24px}.receipt{text-align:left}.receipt .hint{margin:4px 0}.item-status{margin:12px 0}
 </style></head>
 <body>
 <header class="bar"><div class="wrap bar-in"><strong>Argus / Decide</strong><span class="tally" id="tally" aria-live="polite">Loading boards…</span><label class="theme">Theme <select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header>
 <button class="btn phone-trigger" id="drawer-trigger">Coordinators ▾</button>
 <div class="page-layout"><aside id="rail"><h2 class="rail-heading">Coordinators</h2><p class="rail-help">⌘ / Ctrl ↑ ↓ to move</p><nav id="desktop-nav" aria-label="Coordinators"></nav></aside><div class="board-column"><div class="wrap"><p id="status" role="status"></p><p id="updates" hidden><span id="changes">Boards changed.</span> <button class="btn" id="refresh">Refresh</button></p><main id="main" tabindex="-1"></main></div></div><aside id="annotation-panel" aria-label="Item annotations"></aside></div>
-<footer class="queue" id="queue"><div class="wrap queue-inner"><div class="actions"><button class="btn" id="review" disabled>Review queued</button><button class="btn primary" id="submit" disabled>Submit</button><button class="btn" id="submit-close" disabled>Submit &amp; close</button><button class="btn" id="copy">Copy responses</button></div><p id="queued-description"></p><p id="confirmed" aria-live="polite"></p><p id="summary" aria-live="polite"></p><textarea id="copy-fallback" readonly hidden aria-label="Responses to copy"></textarea></div></footer>
+<footer class="queue" id="queue"><div class="wrap queue-inner"><div class="actions"><button class="btn" id="review" disabled>Review queued</button><button class="btn primary" id="submit" disabled>Submit</button><button class="btn" id="submit-close" disabled>Submit &amp; close</button><button class="btn" id="copy">Copy responses</button></div><p id="queued-description"></p><p id="summary" aria-live="polite"></p><textarea id="copy-fallback" readonly hidden aria-label="Responses to copy"></textarea></div></footer>
 <dialog id="drawer"><div class="drawer-head"><h2>Coordinators</h2><button class="btn" id="drawer-close">Close</button></div><nav id="phone-nav" aria-label="Choose coordinator"></nav></dialog>
 <div id="selection-toolbar" role="toolbar" aria-label="Annotate selected text" hidden></div><dialog id="annotation-sheet" aria-labelledby="sheet-title"><div class="sheet-head"><h2 id="sheet-title">Annotations</h2><button class="btn" id="sheet-close">Close</button></div><div id="sheet-content"></div></dialog>
 <script id="decision-logic">
@@ -346,11 +347,30 @@ globalThis.BoardDecisions = (() => {
   const sessionKey='board-decision-session',draftKey='board-responses';
   let session='',rows=[],records={},selected=0,tab='decision',screen='browse',pending=null,busy=false,expired=false,finished=false,generation=0,polling=false,acceptedSnapshot='';
   const acceptedCounts={answers:0,comments:0,dismissals:0,completions:0};
+  let submitNotice=null;
+  function clearNotice(){submitNotice=null;document.querySelector('.submit-note')?.remove();}
   const key=(role,id)=>`${role}:${id}`,base=role=>`/api/hera/roles/${role}/board`;
   const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
   const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.onclick=fn;return b;};
   const fmt=(tag,cls,text)=>{const n=el(tag,cls);L.inline(n,String(text||''),document);return n;};
-  const queued=()=>Object.values(records).filter(r=>r.draft.choice||r.draft.action);
+  const queued=()=>Object.values(records).filter(r=>r.draft.sent||!r.recovery&&(r.draft.choice||r.draft.action));
+  const attention=r=>!r.recovery&&!r.closed&&!r.unavailable&&r.attention;
+  function recover(r){
+    if(r.draft.sent)return; // An uncertain payload must be reconciled before edits/discard.
+    const d=r.draft,written=!!d.note.trim()||anns(r).length||d.stale?.note?.trim()||d.stale?.annotations?.length;
+    r.recovery=!!written;r.attention=false;r.status='';
+    r.draft=written?{...draft(),note:d.note,annotations:anns(r),...(d.stale?{stale:d.stale}:{})}:draft();
+  }
+  function recoveryText(r){const d=r.draft;return [labelFor(r.role),`#${r.item.id} ${r.item.subject}`,d.note,...anns(r).map(a=>`${a.type}: ${a.quote}\n${a.comment||''}`),d.stale?.note!==d.note?d.stale?.note:'',...(d.stale?.annotations||[]).map(a=>`${a.type}: ${a.quote}\n${a.comment||''}`)].filter(Boolean).join('\n\n');}
+  async function copyText(text){try{await navigator.clipboard.writeText(text);}catch{$('copy-fallback').hidden=false;$('copy-fallback').value=text;$('copy-fallback').select();}}
+  function renderRecovery(main){
+    for(const r of Object.values(records).filter(r=>r.recovery)){
+      const detail=el('details','unsent-recovery'),summary=el('summary','','1 unsent note, its item is '+(r.unavailable?'unavailable':'closed'));
+      const body=el('div','recovery-body');body.append(el('pre','',recoveryText(r)));
+      const actions=el('div','recovery-actions');actions.append(button('Copy unsent note',()=>copyText(recoveryText(r))),button('Discard unsent note',()=>{r.draft=draft();r.recovery=false;persist();render();}));
+      body.append(actions);detail.append(summary,body);main.append(detail);
+    }
+  }
   const rowFor=role=>rows.find(r=>r.role_id===role);
   const labelFor=role=>{const r=rowFor(role)||Object.values(records).find(r=>r.role===role);return r?`${r.orchestrator} / ${r.coordinator}`:`Coordinator ${role}`;};
   const draft=()=>({choice:'',action:'',note:'',annotations:[]});
@@ -411,7 +431,7 @@ globalThis.BoardDecisions = (() => {
     const existing=anns(r).findIndex(v=>v.annotation_id===a.annotation_id);r.draft.annotations=[...anns(r)];if(existing<0)r.draft.annotations.push(a);else r.draft.annotations[existing]=a;
     if(!r.draft.choice&&!r.draft.action){r.draft.action='comment';r.draft.implicit=true;}
     if(r.draft.action==='dismiss')r.draft.action='comment_and_dismiss';
-    activeAnnotation=a.annotation_id;activeItem=key(r.role,r.item.id);composer=null;annotationError=null;selectionDraft=null;toolbar.hidden=true;getSelection()?.removeAllRanges();persist();render();
+    clearNotice();r.attention=false;r.status='';activeAnnotation=a.annotation_id;activeItem=key(r.role,r.item.id);composer=null;annotationError=null;selectionDraft=null;toolbar.hidden=true;getSelection()?.removeAllRanges();persist();render();
   }
   function openPanel(id,focusComposer=false){
     activeItem=id;restoreFocus=document.activeElement;renderPanel();if(innerWidth<=850&&!sheet.open)sheet.showModal();
@@ -435,7 +455,7 @@ globalThis.BoardDecisions = (() => {
         const card=el('section','annotation-card'+(activeAnnotation===a.annotation_id?' selected':''));card.tabIndex=0;card.setAttribute('aria-label',`${a.type==='DELETION'?'Delete suggestion':'Comment'}: ${a.quote}`);
         card.append(el('strong',a.type==='DELETION'?'delete-label':'comment-label',a.type==='DELETION'?'Delete suggestion':'Comment'),el('blockquote','',a.quote));if(a.comment)card.append(el('p','',a.comment));
         const controls=el('div','actions');if(a.type==='COMMENT'){const b=button('Edit',()=>chooseAnnotation(r,a,true),'clear');b.disabled=locked;controls.append(b);}
-        const remove=button('Remove',()=>{r.draft.annotations=anns(r).filter(v=>v.annotation_id!==a.annotation_id);if(!anns(r).length&&r.draft.implicit){r.draft.action='';delete r.draft.implicit;}composer=null;persist();render();},'clear');remove.disabled=locked;controls.append(remove);card.append(controls);
+        const remove=button('Remove',()=>{clearNotice();r.draft.annotations=anns(r).filter(v=>v.annotation_id!==a.annotation_id);if(!anns(r).length&&r.draft.implicit){r.draft.action='';delete r.draft.implicit;}composer=null;persist();render();},'clear');remove.disabled=locked;controls.append(remove);card.append(controls);
         card.onclick=e=>{if(!e.target.closest('button'))chooseAnnotation(r,a);};card.onkeydown=e=>{if(e.target===card&&['Enter',' '].includes(e.key)){e.preventDefault();chooseAnnotation(r,a);}};target.append(card);
       }
       if(!anns(r).length)target.append(el('p','subtle','No annotations yet. Select a phrase to get started.'));
@@ -484,14 +504,14 @@ globalThis.BoardDecisions = (() => {
   function update(){
     if(finished)return;
     const q=queued(),invalid=q.some(r=>!L.valid(r.item,r.draft));
-    $('tally').textContent=`${q.length} queued · ${new Set(q.map(r=>r.role)).size} boards`;
-    $('confirmed').textContent=Object.values(acceptedCounts).some(n=>n>0)?`Confirmed: ${acceptedCounts.answers} answers · ${acceptedCounts.comments} comments · ${acceptedCounts.dismissals} dismissals · ${acceptedCounts.completions} completions`:'';
+    const boards=new Set(q.map(r=>r.role)).size;
+    $('tally').textContent=`${q.length} queued · ${boards} ${boards===1?'board':'boards'}`;
     $('submit').disabled=busy||expired||!q.length||invalid;
-    $('review').disabled=busy||!q.length;
+    $('review').disabled=busy;
     $('submit-close').disabled=$('submit').disabled;
     $('submit').textContent=busy?'Sending…':'Submit';
     $('submit-close').textContent=busy?'Sending…':'Submit & close';
-    $('queued-description').textContent=invalid?'Add required notes before submitting.':q.length?`${q.length} actions across ${new Set(q.map(r=>r.role)).size} coordinators. Unselected items stay open.`:'Only selected actions are submitted. Everything else stays open.';
+    $('queued-description').textContent=invalid?'Add required notes before submitting.':q.length?`${q.length} ${q.length===1?'action':'actions'} across ${boards} ${boards===1?'coordinator':'coordinators'}. Unselected items stay open.`:'Only selected actions are submitted. Everything else stays open.';
   }
   const total=row=>(row.decisions||0)+(row.fyis||0)+(row.actions||0)+(row.todos||0);
   const countOf=(row,kind)=>row[{decision:'decisions',fyi:'fyis',action:'actions',todo:'todos'}[kind]]||0;
@@ -507,17 +527,17 @@ globalThis.BoardDecisions = (() => {
         if(depth)b.append(el('span','row-branch','↳'));
         b.append(el('span','row-name',row.orchestrator));
         if(n){const counts=el('span','row-counts');counts.append(badge('decision',row.decisions),badge('fyi',row.fyis));if(row.actions)counts.append(badge('action',row.actions));if(row.todos)counts.append(badge('todo',row.todos));b.append(counts);}
-        if(queued().some(r=>r.role===row.role_id))b.append(el('span','queued-dot'));
+        if(queued().some(r=>r.role===row.role_id)||Object.values(records).some(r=>r.role===row.role_id&&attention(r))){const dot=el('span','queued-dot');dot.setAttribute('aria-label','Queued response or needs another look');b.append(dot);}
         nav.append(b);
       }
     }
     $('drawer-trigger').textContent=`${rowFor(selected)?.orchestrator||'Coordinators'} ▾`;
   }
-  function visit(role){if(busy)return;selected=role;screen='browse';render();window.scrollTo(0,0);}
+  function visit(role){if(busy)return;clearNotice();selected=role;screen='browse';render();window.scrollTo(0,0);}
   function renderCard(main,r){
     const i=r.item,d=r.draft,done=L.isCompletion(i.kind),card=el('section',`decision${i.blocking?' blocking':''}${i.trigger_pending?' deferred':''}`);card.id=`decision-${i.id}`;
-    const count=el('p','count',`${KIND_LABEL[i.kind]||'Decision'} #${i.id}`),state=el('span','state',r.status||((d.choice||d.action)?'Queued':'Open'));
-    count.append(state);if(!done)count.append(button('Annotations '+anns(r).length,()=>openPanel(key(r.role,i.id)),'annotation-trigger'));card.append(count,fmt('h2','',i.subject));const body=el('div','situation');body.append(done?L.markup(i.body,document):selectable(r,'body',L.markup(i.body,document)));card.append(body);
+    const count=el('p','count',`${KIND_LABEL[i.kind]||'Decision'} #${i.id}`),state=el('span','state',attention(r)?'Needs another look':r.status||((d.choice||d.action)?'Queued':'Open'));
+    count.append(state);if(!done)count.append(button('Annotations '+anns(r).length,()=>openPanel(key(r.role,i.id)),'annotation-trigger'));card.append(count,fmt('h2','',i.subject));const body=el('div','situation');body.append(done?L.markup(i.body,document):selectable(r,'body',L.markup(i.body,document)));card.append(body);if(attention(r))card.append(el('p','hint item-status',r.status));
     if(done){
       const meta=el('div','meta');if(i.blocking)meta.append(el('span','pill blocking','Blocking'));
       if(i.trigger_pending)meta.append(el('span','pill deferred','Deferred'),el('span','subtle',`Waiting for: ${i.trigger}`));else if(i.trigger)meta.append(el('span','pill deferred','Ready'),el('span','subtle',`Trigger: ${i.trigger}`));
@@ -530,7 +550,7 @@ globalThis.BoardDecisions = (() => {
     }
     card.onpointerdown=e=>{if(!e.target.closest('button,input,textarea')){activeItem=key(r.role,i.id);renderPanel();}};
     const locked=busy||expired||!!d.sent;
-    const changed=()=>{r.status='';persist();hint.hidden=!L.noteError(i,d);state.textContent=(d.action||d.choice)?'Queued':'Open';drawNav();update();};
+    const changed=()=>{clearNotice();r.status='';r.attention=false;card.querySelector('.item-status')?.remove();persist();hint.hidden=!L.noteError(i,d);state.textContent=(d.action||d.choice)?'Queued':'Open';drawNav();update();};
     if(i.kind==='decision'&&i.structured){
       const options=el('fieldset','options');options.setAttribute('aria-label',i.subject);
       for(const o of [...i.structured.options,{id:'other',label:'Something else'}]){
@@ -549,35 +569,39 @@ globalThis.BoardDecisions = (() => {
     if(done){
       const actions=el('div','fyi-actions');
       for(const [action,name]of (i.kind==='todo'?[['done','Done'],['dropped','Dropped']]:[['done','Done']])){
-        const b=button(name,()=>{d.action=d.action===action?'':action;delete d.action_id;persist();render();});b.disabled=locked;b.setAttribute('aria-pressed',String(d.action===action));actions.append(b);
+        const b=button(name,()=>{clearNotice();r.attention=false;r.status='';d.action=d.action===action?'':action;delete d.action_id;persist();render();});b.disabled=locked;b.setAttribute('aria-pressed',String(d.action===action));actions.append(b);
       }
       card.append(actions,el('p','subtle',d.action==='done'?'Mark done. The coordinator is notified.':d.action==='dropped'?'Drop this todo. The coordinator is notified.':'Nothing is run or sent until you choose and submit.'));
     }
     if(i.kind==='fyi'){
       const actions=el('div','fyi-actions');
       for(const [action,name]of [['comment','Comment'],['dismiss','Dismiss'],['comment_and_dismiss','Comment and dismiss']]){
-        const b=button(name,()=>{d.action=d.action===action?'':action;if(d.action==='dismiss'&&anns(r).length)d.action='comment_and_dismiss';delete d.implicit;delete d.action_id;persist();render();});b.disabled=locked;b.setAttribute('aria-pressed',String(d.action===action));actions.append(b);
+        const b=button(name,()=>{clearNotice();r.attention=false;r.status='';d.action=d.action===action?'':action;if(d.action==='dismiss'&&anns(r).length)d.action='comment_and_dismiss';delete d.implicit;delete d.action_id;persist();render();});b.disabled=locked;b.setAttribute('aria-pressed',String(d.action===action));actions.append(b);
       }
       card.append(actions,el('p','subtle',d.action==='dismiss'?'Dismiss silently. No coordinator message.':d.action==='comment'?'Send feedback. This FYI stays open.':d.action==='comment_and_dismiss'?'Send feedback and dismiss this FYI.':'Typing alone does not queue feedback. Choose an action.'));
     }
     if(d.stale){const recovery=el('section','annotation-card');recovery.append(el('strong','','Stale draft — review before sending'),el('p','',d.stale.note||''));for(const a of d.stale.annotations||[])recovery.append(el('blockquote','',a.quote),el('p','',a.comment));recovery.append(button('Remove stale draft',()=>{delete d.stale;persist();render();}),button('Copy stale draft',async()=>{const text=JSON.stringify(d.stale,null,2);try{await navigator.clipboard.writeText(text);}catch{$('copy-fallback').hidden=false;$('copy-fallback').value=text;$('copy-fallback').select();}}));card.append(recovery);}
-    if(d.sent)card.append(el('p','hint','Result unconfirmed. Retry this exact response before editing it.'));
+    if(d.sent&&!attention(r))card.append(el('p','hint','Result unconfirmed. Retry this exact response before editing it.'));
     if(d.choice||d.action){const clear=button('Clear queued response',()=>{r.draft=draft();persist();render();},'clear');clear.disabled=locked;card.append(clear);}
     main.append(card);
   }
   function renderReview(main){
     const heading=el('section','lede');heading.append(el('h1','','Queued responses'));main.append(heading);
     main.append(button('← Keep reviewing boards',()=>{screen='browse';render();}));
-    for(const r of Object.values(records).filter(r=>queued().includes(r)||r.status?.startsWith('Item changed.'))){
-      const i=r.item,d=r.draft,done=L.isCompletion(i.kind),row=el('section','receipt');row.append(el('strong','',labelFor(r.role)),el('p','',`#${i.id} ${i.subject}`),el('p','subtle',i.kind==='fyi'?d.action:done?(d.action==='dropped'?'Dropped':'Done'):!d.choice&&d.action==='comment'?'Feedback only · decision stays open':i.structured?.options.find(o=>o.id===d.choice)?.label||'Something else'));
-      if(d.note&&d.action!=='dismiss')row.append(el('p','subtle',d.note));
-      for(const a of anns(r)){const entry=el('div','annotation-card');entry.append(el('strong','',a.type==='DELETION'?'Delete suggestion':'Comment'),el('blockquote','',a.quote));if(a.comment)entry.append(el('p','',a.comment));row.append(entry);}
-      if(r.unavailable||!rowFor(r.role))row.append(el('p','hint','Unavailable: coordinator is hidden, archived or removed. Other boards can still submit.'));
-      if(r.status)row.append(el('p','hint',r.status));
-      if(L.noteError(i,d))row.append(el('p','hint',L.noteError(i,d)));
-      if(rowFor(r.role)&&!r.unavailable&&!r.closed)row.append(button('Edit on board',()=>{selected=r.role;tab=i.kind;screen='browse';render();document.getElementById(`decision-${i.id}`)?.scrollIntoView();},'clear'));
-      const clear=button('Clear queued response',()=>{r.draft=draft();persist();render();},'clear');clear.disabled=busy||!!d.sent;row.append(clear);main.append(row);
+    const groups=new Map();for(const r of queued()){if(!groups.has(r.role))groups.set(r.role,[]);groups.get(r.role).push(r);}
+    for(const [role,items]of groups){
+      const group=el('section','review-group');group.append(el('h2','',labelFor(role)));
+      for(const r of items){
+        const i=r.item,d=r.draft,row=el('section','receipt');row.append(el('strong','',`#${i.id} ${i.subject}`),el('p','subtle',d.choice?i.structured?.options.find(o=>o.id===d.choice)?.label||'Something else':({done:'Done',dropped:'Dropped',comment:'Comment',dismiss:'Dismiss',comment_and_dismiss:'Comment and dismiss'}[d.action]||d.action)));
+        if(d.note)row.append(el('p','',d.note));
+        for(const a of anns(r)){const entry=el('div','annotation-card');entry.append(el('strong','',a.type==='DELETION'?'Delete suggestion':'Comment'),el('blockquote','',a.quote));if(a.comment)entry.append(el('p','',a.comment));row.append(entry);}
+        const status=r.unavailable||!rowFor(role)?'Coordinator unavailable. Retry to confirm any uncertain response.':r.status||L.noteError(i,d);if(status)row.append(el('p','hint',status));
+        const actions=el('div','review-actions');
+        if(rowFor(role)&&!r.unavailable&&!r.closed)actions.append(button('Edit on board',()=>{clearNotice();selected=role;tab=i.kind;screen='browse';render();document.getElementById(`decision-${i.id}`)?.scrollIntoView();}));
+        const clear=button('Clear queued response',()=>{r.draft=draft();r.attention=false;r.status='';persist();render();});clear.disabled=busy||!!d.sent;actions.append(clear);row.append(actions);group.append(row);
+      }main.append(group);
     }
+    if(!groups.size)main.append(el('p','subtle','Nothing queued.'));
   }
   function render(){
     if(finished)return;toolbar.hidden=true;const main=$('main');main.replaceChildren();drawNav();
@@ -588,23 +612,28 @@ globalThis.BoardDecisions = (() => {
       else {
         lede.append(el('h1','',row.orchestrator),el('p','subtle',`${row.coordinator} · Choose responses to queue. Everything else stays open.`));
         const tabs=el('div','tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Board items');
-        for(const kind of L.TABS){const label=TAB_LABEL[kind],n=countOf(row,kind);const b=button('',()=>{tab=kind;render();});b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===kind));b.setAttribute('aria-label',`${label}, ${n} open`);b.append(el('span','',label),badge(kind,n));tabs.append(b);}main.append(tabs,el('p','tabs-help','⌘ / Ctrl ← Decisions · → FYIs · Actions and Todos via tabs or swipe'));
+        for(const kind of L.TABS){const label=TAB_LABEL[kind],n=countOf(row,kind);const b=button('',()=>{clearNotice();tab=kind;render();});b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===kind));b.setAttribute('aria-label',`${label}, ${n} open`);b.append(el('span','',label),badge(kind,n));if(Object.values(records).some(r=>r.role===selected&&r.item.kind===kind&&attention(r))){b.dataset.attention='true';b.append(el('span','tab-attention',' ·'));b.setAttribute('aria-label',`${label}, ${n} open, needs another look`);}tabs.append(b);}main.append(tabs,el('p','tabs-help','⌘ / Ctrl ← Decisions · → FYIs · Actions and Todos via tabs or swipe'));
         const byItem=new Map(Object.values(records).filter(r=>r.role===selected&&!r.closed&&!r.unavailable&&r.item.kind===tab).map(r=>[r.item,r])),visible=L.order([...byItem.keys()]).map(item=>byItem.get(item));
-        if(!visible.length){const empty=el('section','decision');empty.append(el('h2','',total(row)?`No open ${TAB_LABEL[tab].toLowerCase()}`:`Nothing open for ${row.orchestrator}`));main.append(empty);}
-        if(tab==='decision'&&visible.some(r=>r.item.structured?.recommended&&!r.draft.choice)){const b=button('Take the recommendations',()=>{for(const r of visible)if(!r.draft.choice&&r.item.structured?.recommended&&!r.draft.sent)r.draft.choice=r.item.structured.recommended;persist();render();});b.disabled=busy;main.append(b);}
+        if(submitNotice&&submitNotice.role===selected&&submitNotice.tab===tab){const note=el('section',`submit-note${visible.length?' compact':''}`);note.setAttribute('role','status');note.append(el(visible.length?'strong':'h2','',submitNotice.failed?(submitNotice.sent?'Responses sent to Argus':'Responses need another look'):'Answers sent to Argus'),el('p','subtle',submitNotice.failed?`${submitNotice.sent} sent · ${submitNotice.failed} needs another look`:'Your responses have been sent.'));main.append(note);}
+        if(!visible.length&&!submitNotice){const empty=el('section','decision');empty.append(el('h2','',total(row)?`No open ${TAB_LABEL[tab].toLowerCase()}`:`Nothing open for ${row.orchestrator}`));main.append(empty);}
+        if(tab==='decision'&&visible.some(r=>r.item.structured?.recommended&&!r.draft.choice)){const b=button('Take the recommendations',()=>{clearNotice();for(const r of visible)if(!r.draft.choice&&r.item.structured?.recommended&&!r.draft.sent){r.draft.choice=r.item.structured.recommended;r.attention=false;r.status='';}persist();render();});b.disabled=busy;main.append(b);}
         for(const r of visible)renderCard(main,r);
       }
     }
-    update();paintHighlights();renderPanel();
+    renderRecovery(main);update();paintHighlights();renderPanel();
   }
   function reconcile(next){
     rows=next.rows;acceptedSnapshot=JSON.stringify(next);
     const latest=new Map(next.boards.flatMap(b=>b.items.map(item=>[key(b.role,item.id),{...b,item}])));
     for(const r of Object.values(records)){
+      if(r.status?.startsWith('Item changed.')){r.attention=true;r.status='Item changed. Review this version and choose your response again.';}
+      if(r.status==='invalid'){r.attention=true;r.status='Could not save this response. Check it and try again.';}
       r.unavailable=!rowFor(r.role)||next.unavailable.includes(r.role);
       const current=latest.get(key(r.role,r.item.id));
-      if(!current){if(!r.unavailable&&!r.draft.sent){r.closed=true;if(r.draft.choice||r.draft.action)r.status='Item closed elsewhere. Clear this queued response or submit to confirm.';}continue;}
-      if(r.item.updated_at!==current.item.updated_at&&!r.draft.sent){r.draft={...draft(),note:r.draft.note,...(anns(r).length?{stale:{revision:r.item.updated_at,note:r.draft.note,annotations:anns(r)}}:r.draft.stale?{stale:r.draft.stale}:{})};r.status='Item changed. Note and annotations kept; review the stale draft and select your response again.';}
+      if(r.unavailable){recover(r);continue;}
+      if(!current){if(!r.draft.sent){r.closed=true;recover(r);}continue;}
+      if(r.recovery)continue;
+      if(r.item.updated_at!==current.item.updated_at&&!r.draft.sent){r.draft={...draft(),note:r.draft.note,...(anns(r).length?{stale:{revision:r.item.updated_at,note:r.draft.note,annotations:anns(r)}}:r.draft.stale?{stale:r.draft.stale}:{})};r.attention=true;r.status='Item changed. Your note is kept; choose your response again.';}
       if(!r.draft.sent)r.item=current.item;r.closed=false;
     }
     for(const [k,b]of latest){if(!records[k])records[k]={role:b.role,coordinator:b.coordinator,orchestrator:b.orchestrator,item:b.item,draft:draft()};}
@@ -626,7 +655,7 @@ globalThis.BoardDecisions = (() => {
     if(busy||expired||finished)return;
     const q=queued();if(!q.length||q.some(r=>!L.valid(r.item,r.draft)))return;
     busy=true;generation++;pending=null;$('updates').hidden=true;render();
-    let failed=false;
+    let failed=false;const roundRole=selected,roundTab=tab;let failureCount=0,roundConfirmed=0;
     for(const group of L.batches(q)){
       const previouslyUncertain=group.records.map(r=>!!r.draft.sent);
       const payload=group.records.map(r=>{
@@ -641,39 +670,42 @@ globalThis.BoardDecisions = (() => {
         const response=await api(base(group.role)+L.endpoint(group.kind),'POST',group.kind==='decision'?{answers:payload}:{actions:payload});
         for(let n=0;n<group.records.length;n++){
           const r=group.records[n],p=payload[n];const matches=Array.isArray(response.results)&&response.results.length===payload.length?response.results.filter(v=>v.item_id===p.item_id&&(!p.action_id||v.action_id===p.action_id)):[];const result=matches.length===1?matches[0]:null;
-          if(L.accepted(group.kind,p,result)){
+          if(L.accepted(group.kind,p,result)&&!(result.outcome==='already_resolved'&&(r.draft.note.trim()||anns(r).length||r.draft.stale))){
+            roundConfirmed++;
             if(L.isCompletion(group.kind))acceptedCounts.completions++;else if(group.kind==='decision'&&p.action!=='comment')acceptedCounts.answers++;else{if(p.action!=='dismiss'&&result.outcome!=='already_resolved')acceptedCounts.comments++;if(group.kind==='fyi'&&p.action!=='comment')acceptedCounts.dismissals++;}
             if(!(p.action==='comment')){const row=rowFor(r.role);if(row){const field={fyi:'fyis',action:'actions',todo:'todos',decision:'decisions'}[group.kind];row[field]=Math.max(0,(row[field]||0)-1);}}
-            r.draft=draft();r.status=p.action==='comment'?'Comment sent · still open':p.action==='dropped'?'Dropped':p.action==='done'?'Done':'Accepted';r.closed=p.action!=='comment';
+            r.draft=draft();r.attention=false;r.recovery=false;r.status=p.action==='comment'?'Comment sent · still open':p.action==='dropped'?'Dropped':p.action==='done'?'Done':'Accepted';r.closed=p.action!=='comment';
           }else{
-            failed=true;r.status=result?.outcome||'Result unconfirmed. Retry to confirm.';
+            failed=true;failureCount++;r.attention=true;r.status=result?.outcome==='invalid'?'Could not save this response. Check it and try again.':result?.outcome||'Result unconfirmed. Retry to confirm.';
             if(result&&['conflict','invalid','not_found','already_resolved'].includes(result.outcome)){
               const note=r.draft.note,stale=anns(r).length?{revision:r.item.updated_at,note,annotations:anns(r)}:undefined;r.draft={...r.draft,sent:undefined,action_id:undefined};
-              if(result.outcome==='conflict'){r.item=result.item;r.draft={...draft(),note,...(stale?{stale}:{})};r.status='Item changed. Note and annotations kept; review the stale draft and choose your response again.';}
-              else if(result.outcome==='invalid'&&result.item?.resolved){r.item=result.item;r.closed=true;r.status='Already resolved — your response was not saved. Copy or clear this queued response.';}
+              if(result.outcome==='conflict'){r.item=result.item;r.draft={...draft(),note,...(stale?{stale}:{})};r.status='Item changed. Your note is kept; choose your response again.';}
+              else if(result.outcome==='not_found'||result.outcome==='already_resolved'||result.item?.resolved){if(result.item)r.item=result.item;r.closed=true;recover(r);}
             }
           }
         }
       }catch(e){
-        failed=true;for(const [n,r] of group.records.entries()){r.status=e.message;if(e.unavailable)r.unavailable=true;if(e.definitive&&!previouslyUncertain[n]){delete r.draft.sent;delete r.draft.action_id;}}
+        failed=true;failureCount+=group.records.length;for(const [n,r] of group.records.entries()){r.status=e.message;r.attention=true;if(e.unavailable)r.unavailable=true;if(e.definitive&&!previouslyUncertain[n]){delete r.draft.sent;delete r.draft.action_id;if(e.unavailable)recover(r);}}
       }
       persist();
     }
-    if(!failed&&!closeAfter){
-      screen='browse';
-      try{const next=await snapshot();busy=false;message('Actions sent. You can keep reviewing.');const sent=$('status').textContent;setTimeout(()=>{if($('status').textContent===sent)$('status').textContent='';},4000);reconcile(next);}
-      catch(e){busy=false;message('Actions sent. Board refresh failed: '+e.message);render();}return;
-    }
+    if(!failed&&closeAfter){busy=false;sent();return;}
+    screen='browse';selected=roundRole;tab=roundTab;
+    let refreshError='';
+    try{const next=await snapshot();reconcile(next);}catch(e){refreshError='Board refresh failed: '+e.message;}
     busy=false;
-    if(!failed&&closeAfter){sent();return;}
-    screen='review';message((Object.values(acceptedCounts).some(n=>n>0)?'Some actions were accepted.':'No actions were confirmed.')+' Review the remaining responses and retry; accepted actions are cleared.');render();
+    submitNotice={role:roundRole,tab:roundTab,sent:roundConfirmed,failed:failureCount};
+    message(refreshError);render();window.scrollTo(0,0);
   }
   function closeDrawer(){$('drawer').close();$('drawer-trigger').focus();}
   $('drawer-trigger').onclick=()=>{$('drawer').showModal();};$('drawer-close').onclick=closeDrawer;$('drawer').addEventListener('cancel',e=>{e.preventDefault();closeDrawer();});
   $('drawer').addEventListener('keydown',e=>{if(e.key!=='Tab')return;const nodes=[...$('drawer').querySelectorAll('button')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}});
-  document.addEventListener('keydown',e=>{if(busy||finished||$('drawer').open||sheet.open||composer||getSelection()?.toString())return;const next=L.navigate(e,rows,selected,tab);if(!next)return;e.preventDefault();selected=next.role;tab=next.tab;screen='browse';render();$('main').focus({preventScroll:true});});
+  document.addEventListener('keydown',e=>{if(busy||finished||$('drawer').open||sheet.open||composer||getSelection()?.toString())return;const next=L.navigate(e,rows,selected,tab);if(!next)return;e.preventDefault();clearNotice();selected=next.role;tab=next.tab;screen='browse';render();$('main').focus({preventScroll:true});});
   let touch=null;$('main').addEventListener('touchstart',e=>{touch=e.touches.length===1&&!L.editable(e.target)&&!e.target.closest('button,a,label,input,textarea,select,[data-field],mark,[role="button"],[role="tab"]')?{x:e.touches[0].clientX,y:e.touches[0].clientY}:null;},{passive:true});
-  $('main').addEventListener('touchend',e=>{const start=touch;touch=null;if(!start||!e.changedTouches.length||busy||screen!=='browse'||getSelection()?.toString())return;const dx=e.changedTouches[0].clientX-start.x,dy=e.changedTouches[0].clientY-start.y;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5){tab=L.adjacent(tab,dx);render();}},{passive:true});
+  $('main').addEventListener('touchend',e=>{const start=touch;touch=null;if(!start||!e.changedTouches.length||busy||screen!=='browse'||getSelection()?.toString())return;const dx=e.changedTouches[0].clientX-start.x,dy=e.changedTouches[0].clientY-start.y;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5){clearNotice();tab=L.adjacent(tab,dx);render();}},{passive:true});
+  $('main').addEventListener('input',clearNotice);
+  $('main').addEventListener('change',clearNotice);
+  $('main').addEventListener('click',e=>{if(e.target.closest('.fyi-actions button,.options input,.clear,.annotation-card button')&&!busy)clearNotice();},true);
   $('theme').value=document.documentElement.dataset.theme||'system';$('theme').onchange=()=>BoardDecisionTheme.set($('theme').value);
   $('review').onclick=()=>{screen='review';render();};$('submit').onclick=()=>submit(false);$('submit-close').onclick=()=>submit(true);$('refresh').onclick=()=>{if(pending&&!busy)reconcile(pending);};
   $('copy').onclick=async()=>{

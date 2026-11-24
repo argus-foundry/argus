@@ -185,11 +185,14 @@ func (d *DB) updateHeraBoardItem(roleID, id int64, kind, subject, body string, p
 	if err != nil {
 		return nil, false, err
 	}
-	changed := before.Kind != kind || before.Subject != subject || before.Body != body || old != raw || m.Blocking != before.Blocking || m.Trigger != before.Trigger || m.TriggerPending != before.TriggerPending || m.Command != before.Command
+	// Readiness changes attention/order, but not the authored content Aaron
+	// reviewed. Keep frozen responses and receipt fingerprints valid across it.
+	revised := before.Kind != kind || before.Subject != subject || before.Body != body || old != raw || m.Blocking != before.Blocking || m.Trigger != before.Trigger || m.Command != before.Command
+	changed := revised || m.TriggerPending != before.TriggerPending
 	if before.ResidentApproval {
 		return nil, false, ErrResidentApproval
 	}
-	res, err := d.conn.Exec(`UPDATE hera_board_items SET is_read=CASE WHEN ? THEN 0 ELSE is_read END, updated_at=CASE WHEN ? THEN ? ELSE updated_at END, kind=?,subject=?,body=?,structured=?,blocking=?,trigger=?,trigger_pending=?,command=? WHERE role_id=? AND id=? AND resolved=0`, changed, changed, formatTime(nextBoardRevision(before.UpdatedAt)), kind, subject, body, raw, m.Blocking, m.Trigger, m.TriggerPending, m.Command, roleID, id)
+	res, err := d.conn.Exec(`UPDATE hera_board_items SET is_read=CASE WHEN ? THEN 0 ELSE is_read END, updated_at=CASE WHEN ? THEN ? ELSE updated_at END, kind=?,subject=?,body=?,structured=?,blocking=?,trigger=?,trigger_pending=?,command=? WHERE role_id=? AND id=? AND resolved=0`, changed, revised, formatTime(nextBoardRevision(before.UpdatedAt)), kind, subject, body, raw, m.Blocking, m.Trigger, m.TriggerPending, m.Command, roleID, id)
 	if err != nil {
 		return nil, false, err
 	}
@@ -200,7 +203,7 @@ func (d *DB) updateHeraBoardItem(roleID, id int64, kind, subject, body string, p
 	if n == 0 {
 		return nil, false, ErrHeraBoardNotFound
 	}
-	uxlog.Log("[board] updated role=%d item=%d", roleID, id)
+	uxlog.Log("[board] updated role=%d item=%d changed=%v revised=%v", roleID, id, changed, revised)
 	i, err := scanBoard(d.conn.QueryRow(`SELECT `+boardColumns+` FROM hera_board_items WHERE role_id=? AND id=?`, roleID, id))
 	return i, changed, err
 }

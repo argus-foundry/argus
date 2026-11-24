@@ -60,7 +60,7 @@ test('uncertain action completion stays frozen over reload and replays identical
  const state=await setupWork(page);state.setFailure(true);
  await page.getByRole('button',{name:'Done',exact:true}).click();
  await page.locator('#submit').click();
- await expect(page.locator('#main h1')).toHaveText('Queued responses');
+ await expect(page.locator('.submit-note')).toContainText('0 sent · 1 needs another look');
  expect(state.uncertain()).toBe(true);
  await page.reload();
  await expect(page.locator('#note-11')).toBeDisabled();

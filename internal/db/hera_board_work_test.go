@@ -12,6 +12,53 @@ import (
 func boardBool(v bool) *bool     { return &v }
 func boardText(v string) *string { return &v }
 
+func TestBoardWorkReadinessKeepsResponseRevision(t *testing.T) {
+	for _, kind := range []string{"action", "todo"} {
+		t.Run(kind, func(t *testing.T) {
+			d := heraTestDB(t)
+			c := mkRole(t, d, mkOrch(t, d, "revision").ID, "coord", HeraKindCoordinator)
+			_, err := d.CreateHeraBinding(CreateHeraBindingInput{RoleID: c.ID, ArgusTaskID: "revision-task", WorktreePath: "/wt"})
+			testutil.NoError(t, err)
+			patch := HeraBoardMetadataPatch{Trigger: boardText("after release")}
+			if kind == "action" {
+				patch.Blocking = boardBool(false)
+			}
+			i, err := d.PostHeraBoardItemWithMetadata(c.ID, kind, "step", "body", patch)
+			testutil.NoError(t, err)
+			testutil.NoError(t, d.ReadHeraBoardItem(c.ID, i.ID))
+			sink := sinkFor(t)
+			ready, err := d.UpdateHeraBoardItemWithMetadata(c.ID, i.ID, kind, i.Subject, i.Body, HeraBoardMetadataPatch{TriggerPending: boardBool(false)})
+			testutil.NoError(t, err)
+			testutil.Equal(t, ready.UpdatedAt.Equal(i.UpdatedAt), true)
+			testutil.Equal(t, ready.Read, false)
+			testutil.Equal(t, ready.TriggerPending, false)
+			evs := sink.board()
+			testutil.Equal(t, len(evs), 1)
+			testutil.Contains(t, string(evs[0].Payload), `"operation":"updated"`)
+			// Ordering and read acknowledgments must not invalidate the frozen Done.
+			_, err = d.ListHeraBoardItems(c.ID, false)
+			testutil.NoError(t, err)
+			a := HeraBoardFYIAction{ActionID: "done-before-ready", ItemID: i.ID, ExpectedUpdatedAt: i.UpdatedAt, Action: "done"}
+			results, err := d.FYIHeraBoardItems(c.ID, []HeraBoardFYIAction{a})
+			testutil.NoError(t, err)
+			testutil.Equal(t, results[0].Outcome, "resolved")
+			replay, err := d.FYIHeraBoardItems(c.ID, []HeraBoardFYIAction{a})
+			testutil.NoError(t, err)
+			testutil.DeepEqual(t, replay, results)
+			// A real authored edit still rejects a response to the earlier version.
+			fresh, err := d.PostHeraBoardItemWithMetadata(c.ID, kind, "another step", "body", patch)
+			testutil.NoError(t, err)
+			edited, err := d.UpdateHeraBoardItem(c.ID, fresh.ID, kind, fresh.Subject, "a different step")
+			testutil.NoError(t, err)
+			testutil.Equal(t, edited.UpdatedAt.After(fresh.UpdatedAt), true)
+			a = HeraBoardFYIAction{ActionID: "done-before-edit", ItemID: fresh.ID, ExpectedUpdatedAt: fresh.UpdatedAt, Action: "done"}
+			results, err = d.FYIHeraBoardItems(c.ID, []HeraBoardFYIAction{a})
+			testutil.NoError(t, err)
+			testutil.Equal(t, results[0].Outcome, "conflict")
+		})
+	}
+}
+
 func TestBoardWorkMetadataAndAttention(t *testing.T) {
 	d := heraTestDB(t)
 	c := mkRole(t, d, mkOrch(t, d, "work").ID, "coord", HeraKindCoordinator)
