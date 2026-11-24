@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
@@ -284,4 +285,48 @@ func TestOpen_PathStillMigrates(t *testing.T) {
 	if !reflect.DeepEqual(tableNames(d), tableNames(mem)) {
 		t.Fatalf("migrated file tables %v != template tables %v", tableNames(d), tableNames(mem))
 	}
+}
+
+func TestOpenInMemory_SecondConnectionErrorsLoudly(t *testing.T) {
+	d, err := OpenInMemory()
+	testutil.NoError(t, err)
+	defer func() { _ = d.Close() }()
+
+	// Hold the only connection; a query on another pooled connection must fail
+	// with the explicit error instead of reading a blank or empty DB.
+	held, err := d.conn.Conn(context.Background())
+	testutil.NoError(t, err)
+	defer func() { _ = held.Close() }()
+	var n int
+	err = d.conn.QueryRow(`SELECT COUNT(*) FROM config`).Scan(&n)
+	testutil.ErrorIs(t, err, errMemSecondConn)
+
+	// Open rows pin the connection too.
+	testutil.NoError(t, held.Close())
+	rows, err := d.conn.Query(`SELECT key FROM config`)
+	testutil.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	err = d.conn.QueryRow(`SELECT COUNT(*) FROM config`).Scan(&n)
+	testutil.ErrorIs(t, err, errMemSecondConn)
+}
+
+func TestOpenInMemory_SerialUseKeepsTheConnection(t *testing.T) {
+	d, err := OpenInMemory()
+	testutil.NoError(t, err)
+	defer func() { _ = d.Close() }()
+
+	// Many serial ops, a transaction, and idle gaps must all reuse the one
+	// pooled connection (no reconnect, so no errMemSecondConn).
+	for i := 0; i < 20; i++ {
+		_, err := d.conn.Exec(`INSERT INTO config (key, value) VALUES (?, 'v')`, fmt.Sprint("serial.", i))
+		testutil.NoError(t, err)
+	}
+	testutil.NoError(t, d.WithTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO config (key, value) VALUES ('serial.tx', 'v')`)
+		return err
+	}))
+	var n int
+	testutil.NoError(t, d.conn.QueryRow(`SELECT COUNT(*) FROM config WHERE key LIKE 'serial.%'`).Scan(&n))
+	testutil.Equal(t, n, 21)
+	testutil.Equal(t, d.conn.Stats().OpenConnections, 1)
 }

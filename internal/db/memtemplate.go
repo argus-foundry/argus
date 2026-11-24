@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -92,17 +93,39 @@ func cloneMem(src any) (driver.Conn, error) {
 	return bk.Commit()
 }
 
-type memConnector struct{}
+// memConnector hands out exactly one connection per OpenInMemory call. A real
+// :memory: pool that opened a second connection used to get a blank database
+// and fail with "no such table"; cloning the template for it would instead
+// hand back a migrated-but-empty DB that silently loses reads and writes. A
+// second Connect therefore fails loudly. (SetMaxOpenConns(1) is avoided: it
+// turns the same mistake into a deadlock.)
+type memConnector struct {
+	mu     sync.Mutex
+	handed bool
+}
 
-func (memConnector) Driver() driver.Driver { return &sqlite.Driver{} }
+func (*memConnector) Driver() driver.Driver { return &sqlite.Driver{} }
 
-// Connect returns a private in-memory clone of the template.
-func (memConnector) Connect(context.Context) (driver.Conn, error) {
+// errMemSecondConn is returned when the pool asks for a second connection.
+var errMemSecondConn = errors.New("in-memory DB supports a single connection; a second was requested")
+
+// Connect returns a private in-memory clone of the template, once.
+func (c *memConnector) Connect(context.Context) (driver.Conn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.handed {
+		return nil, errMemSecondConn
+	}
 	memTemplate.mu.Lock()
 	defer memTemplate.mu.Unlock()
 	t, err := memTemplateConn()
 	if err != nil {
 		return nil, err
 	}
-	return cloneMem(t)
+	conn, err := cloneMem(t)
+	if err != nil {
+		return nil, err
+	}
+	c.handed = true
+	return conn, nil
 }

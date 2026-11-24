@@ -89,7 +89,7 @@ func OpenInMemory() (*DB, error) {
 	// same behavior as production.
 	// Each connection is a clone of a once-built migrated template (see
 	// memtemplate.go); Open(path) still replays the real migrations.
-	conn := sql.OpenDB(memConnector{})
+	conn := sql.OpenDB(&memConnector{})
 	// Connect eagerly so a template build failure is returned here instead of
 	// surfacing from the first query.
 	if err := conn.Ping(); err != nil {
