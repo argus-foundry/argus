@@ -130,7 +130,6 @@ func TestFetchMergeCandidatesBatch_BadJSONReturnsError(t *testing.T) {
 }
 
 func TestFetchMergeCandidatesBatch_UnknownAliasIgnored(t *testing.T) {
-	t.Parallel()
 	const extraAlias = `{
   "data": {
     "rateLimit": {"cost": 2, "remaining": 4998},

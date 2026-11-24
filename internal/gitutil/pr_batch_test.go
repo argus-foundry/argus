@@ -175,7 +175,6 @@ func TestFetchPRStatesBatch_BadJSONReturnsError(t *testing.T) {
 
 // A well-formed envelope whose per-alias connection is malformed is an error.
 func TestFetchPRStatesBatch_BadAliasConnReturnsError(t *testing.T) {
-	t.Parallel()
 	const badAlias = `{
   "data": {
     "rateLimit": {"cost": 1, "remaining": 4999},
@@ -191,7 +190,6 @@ func TestFetchPRStatesBatch_BadAliasConnReturnsError(t *testing.T) {
 
 // An alias in the response that the caller never asked for is ignored, not mapped.
 func TestFetchPRStatesBatch_UnknownAliasIgnored(t *testing.T) {
-	t.Parallel()
 	const extraAlias = `{
   "data": {
     "rateLimit": {"cost": 2, "remaining": 4998},
