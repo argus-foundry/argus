@@ -94,7 +94,9 @@ func TestSmoke_CoordinatorBoard(t *testing.T) {
 	syncUI(t, app.tapp)
 	readUI(t, app.tapp, func() {
 		testutil.Equal(t, app.heraPage.Machine().State(), hera.FocusCoord)
-		testutil.Equal(t, len(sess.writes), 1)
+		if len(sess.writes) != 1 {
+			t.Fatalf("reply writes = %d, want 1", len(sess.writes))
+		}
 		testutil.Equal(t, string(sess.writes[0]), fmt.Sprintf("\x1b[200~Re: Choose rollout (#%d)\n\n\x1b[201~", item.ID))
 		testutil.Equal(t, sess.origins[0], agentview.OriginUser)
 	})
