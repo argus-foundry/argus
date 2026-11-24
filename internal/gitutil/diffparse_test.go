@@ -8,6 +8,7 @@ import (
 )
 
 func TestParseUnifiedDiff(t *testing.T) {
+	t.Parallel()
 	raw := `diff --git a/file.go b/file.go
 --- a/file.go
 +++ b/file.go
@@ -35,6 +36,7 @@ func TestParseUnifiedDiff(t *testing.T) {
 }
 
 func TestBuildSideBySide(t *testing.T) {
+	t.Parallel()
 	raw := `--- a/file.go
 +++ b/file.go
 @@ -1,2 +1,2 @@
@@ -54,6 +56,7 @@ func TestBuildSideBySide(t *testing.T) {
 }
 
 func TestFormatLineNum(t *testing.T) {
+	t.Parallel()
 	if got := FormatLineNum(0, 4); got != "    " {
 		t.Errorf("FormatLineNum(0, 4) = %q", got)
 	}
@@ -63,12 +66,14 @@ func TestFormatLineNum(t *testing.T) {
 }
 
 func TestExpandTabs(t *testing.T) {
+	t.Parallel()
 	if got := ExpandTabs("a\tb"); got != "a  b" {
 		t.Errorf("ExpandTabs = %q", got)
 	}
 }
 
 func TestParseRange(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		in        string
@@ -91,6 +96,7 @@ func TestParseRange(t *testing.T) {
 }
 
 func TestScrollState_OffsetAdjustment(t *testing.T) {
+	t.Parallel()
 	t.Run("CursorDown scrolls offset when off-screen", func(t *testing.T) {
 		var s ScrollState
 		// Move cursor past the visible window of 3 items.
@@ -136,6 +142,7 @@ func TestScrollState_OffsetAdjustment(t *testing.T) {
 	})
 }
 func TestFormatLineNum_Truncated(t *testing.T) {
+	t.Parallel()
 	t.Run("number wider than width is truncated to last n digits", func(t *testing.T) {
 		got := FormatLineNum(123456, 3)
 		testutil.Equal(t, got, "456")
@@ -143,6 +150,7 @@ func TestFormatLineNum_Truncated(t *testing.T) {
 }
 
 func TestParseHunkHeader_Edges(t *testing.T) {
+	t.Parallel()
 	t.Run("non-hunk-header line returns defaults", func(t *testing.T) {
 		got := parseHunkHeader("not a hunk")
 		testutil.Equal(t, got.OldStart, 1)
@@ -165,6 +173,7 @@ func TestParseHunkHeader_Edges(t *testing.T) {
 }
 
 func TestParseUnifiedDiff_NoNewlineAtEnd(t *testing.T) {
+	t.Parallel()
 	raw := `--- a/file
 +++ b/file
 @@ -1,1 +1,1 @@
@@ -182,6 +191,7 @@ func TestParseUnifiedDiff_NoNewlineAtEnd(t *testing.T) {
 }
 
 func TestParseUnifiedDiff_EmptyContextLineInHunk(t *testing.T) {
+	t.Parallel()
 	raw := "--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n line1\n\n line3"
 	pd := ParseUnifiedDiff(raw)
 	if len(pd.Hunks) == 0 {
@@ -194,6 +204,7 @@ func TestParseUnifiedDiff_EmptyContextLineInHunk(t *testing.T) {
 }
 
 func TestParseGitStatus_RenamedShort(t *testing.T) {
+	t.Parallel()
 	// Lines shorter than 4 characters are silently skipped — already
 	// covered, but exercise once more for clarity.
 	got := ParseGitStatus("M\nA   foo.txt\n??")
@@ -203,6 +214,7 @@ func TestParseGitStatus_RenamedShort(t *testing.T) {
 }
 
 func TestParseGitDiffNameStatus_Skips(t *testing.T) {
+	t.Parallel()
 	// A line without a tab is skipped.
 	got := ParseGitDiffNameStatus("invalid-line-no-tab\nA\tfoo.txt")
 	if len(got) != 1 {
@@ -212,6 +224,7 @@ func TestParseGitDiffNameStatus_Skips(t *testing.T) {
 }
 
 func TestWordDiff_ConsecutiveUnmatchedTokens(t *testing.T) {
+	t.Parallel()
 	// Forces the inner-loop branch in mergeUnmatched where consecutive
 	// unmatched tokens get merged into a single span.
 	old := "alpha beta gamma delta"

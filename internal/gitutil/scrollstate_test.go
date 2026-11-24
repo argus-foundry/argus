@@ -3,6 +3,7 @@ package gitutil
 import "testing"
 
 func TestScrollState_CursorUpDown(t *testing.T) {
+	t.Parallel()
 	var s ScrollState
 	s.CursorDown(10, 5)
 	if s.Cursor() != 1 {
@@ -20,6 +21,7 @@ func TestScrollState_CursorUpDown(t *testing.T) {
 }
 
 func TestScrollState_ClampCursor(t *testing.T) {
+	t.Parallel()
 	var s ScrollState
 	s.SetCursor(10)
 	s.ClampCursor(5)
@@ -29,6 +31,7 @@ func TestScrollState_ClampCursor(t *testing.T) {
 }
 
 func TestScrollState_Reset(t *testing.T) {
+	t.Parallel()
 	var s ScrollState
 	s.SetCursor(5)
 	s.SetOffset(3)

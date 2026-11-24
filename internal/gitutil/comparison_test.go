@@ -31,6 +31,7 @@ func stackedRepo(t *testing.T) (dir, parentSHA string) {
 }
 
 func TestResolveComparison(t *testing.T) {
+	t.Parallel()
 	t.Run("origin-only namespaced requested base", func(t *testing.T) {
 		dir, parentSHA := stackedRepo(t)
 		gitRun(t, dir, "update-ref", "refs/remotes/origin/argus/orch/parent", parentSHA)
@@ -81,6 +82,7 @@ func TestResolveComparison(t *testing.T) {
 }
 
 func TestStatusAndDiffShareBase(t *testing.T) {
+	t.Parallel()
 	dir, parentSHA := stackedRepo(t)
 	trackOrigin(t, dir)
 	testutil.NoError(t, os.WriteFile(filepath.Join(dir, "local.txt"), []byte("wip\n"), 0o644))
@@ -119,6 +121,7 @@ func TestStatusAndDiffShareBase(t *testing.T) {
 }
 
 func TestFetchGitStatusErr(t *testing.T) {
+	t.Parallel()
 	st := FetchGitStatus("t", t.TempDir(), Options{})
 	if st.Err == nil {
 		t.Fatal("expected Err for non-repo worktree")

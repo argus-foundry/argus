@@ -58,6 +58,10 @@ func TestCleanupTaskGit_RemoteDeadline(t *testing.T) {
 		t.Skip("exercises a real Git subprocess deadline")
 	}
 	t.Setenv("HOME", t.TempDir())
+	// Inject a short deadline instead of waiting out the production 15s.
+	old := taskGitTimeout
+	taskGitTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { taskGitTimeout = old })
 	repo, _ := cleanupRepo(t)
 	realGit, err := exec.LookPath("git")
 	testutil.NoError(t, err)
@@ -72,7 +76,7 @@ func TestCleanupTaskGit_RemoteDeadline(t *testing.T) {
 	select {
 	case res := <-done:
 		testutil.Equal(t, res.RemoteBranch, CleanupFailed)
-	case <-time.After(18 * time.Second):
+	case <-time.After(8 * time.Second):
 		testutil.NoError(t, os.WriteFile(release, nil, 0600))
 		<-done
 		t.Fatal("remote check exceeded deadline")

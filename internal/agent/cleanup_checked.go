@@ -35,9 +35,12 @@ func (r GitCleanupResult) Failed() bool {
 	return r.Worktree == CleanupFailed || r.LocalBranch == CleanupFailed || r.RemoteBranch == CleanupFailed
 }
 
+// taskGitTimeout is the per-invocation Git deadline; tests shorten it.
+var taskGitTimeout = 15 * time.Second
+
 // RunTaskGit bounds Git and its subprocess group by the task lifetime.
 func RunTaskGit(ctx context.Context, dir string, args ...string) (string, int, error) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, taskGitTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // G702: fixed Git binary with structured arguments, no shell.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

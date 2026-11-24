@@ -32,7 +32,7 @@ const ThumbSize = 320
 
 // maxThumbPixels bounds the decoded size of a source image so a small file
 // declaring huge dimensions cannot exhaust daemon memory.
-const maxThumbPixels = 24 * 1000 * 1000
+var maxThumbPixels = 24 * 1000 * 1000 // var only so tests can shrink the limit
 
 // ErrNoThumbnail means the artifact has no server-side thumbnail (unsupported
 // format, or ffmpeg unavailable); the client falls back to a type icon.

@@ -101,6 +101,7 @@ func TestFetchPRStatesBatch_ParsesPerBranchResults(t *testing.T) {
 // same PRMergedClosed value, but Merged must tell them apart – the PR-merge
 // coordinator nudge must never fire for an unmerged close.
 func TestMapBatchNode_MergedDistinguishesFromClosed(t *testing.T) {
+	t.Parallel()
 	merged := mapBatchNode([]prJSON{{State: "MERGED", URL: "https://example/pr/1"}})
 	testutil.Equal(t, merged.State, model.PRMergedClosed)
 	testutil.Equal(t, merged.Merged, true)
@@ -174,6 +175,7 @@ func TestFetchPRStatesBatch_BadJSONReturnsError(t *testing.T) {
 
 // A well-formed envelope whose per-alias connection is malformed is an error.
 func TestFetchPRStatesBatch_BadAliasConnReturnsError(t *testing.T) {
+	t.Parallel()
 	const badAlias = `{
   "data": {
     "rateLimit": {"cost": 1, "remaining": 4999},
@@ -189,6 +191,7 @@ func TestFetchPRStatesBatch_BadAliasConnReturnsError(t *testing.T) {
 
 // An alias in the response that the caller never asked for is ignored, not mapped.
 func TestFetchPRStatesBatch_UnknownAliasIgnored(t *testing.T) {
+	t.Parallel()
 	const extraAlias = `{
   "data": {
     "rateLimit": {"cost": 2, "remaining": 4998},
@@ -224,6 +227,7 @@ func TestFetchPRStatesBatch_EmptyBranchesNoQuery(t *testing.T) {
 
 // Scenario: Resolves repo from cached PR url.
 func TestParsePRRepo_FromCachedURL(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		url  string
@@ -243,6 +247,7 @@ func TestParsePRRepo_FromCachedURL(t *testing.T) {
 
 // An empty or non-github url is not parseable; caller falls back to git remote.
 func TestParsePRRepo_Unparseable(t *testing.T) {
+	t.Parallel()
 	for _, url := range []string{"", "not a url", "https://example.com/foo/bar"} {
 		_, ok := ParsePRRepo(url)
 		testutil.Equal(t, ok, false)
@@ -252,6 +257,7 @@ func TestParsePRRepo_Unparseable(t *testing.T) {
 // Scenario: Group branches sharing a repo into one group.
 // Scenario: Falls back to worktree default repo (resolveDefault seam) when no url.
 func TestGroupBranchesByRepo(t *testing.T) {
+	t.Parallel()
 	// Two tasks carry a cached url on argus-foundry/argus, one has none (→ default repo
 	// via the stubbed resolver), one carries a url on a different repo.
 	inputs := []BranchRepoInput{
@@ -286,6 +292,7 @@ func TestGroupBranchesByRepo(t *testing.T) {
 // Two distinct tasks in the same repo sharing a branch (same head ref → same PR)
 // must BOTH appear under that branch — neither silently overwritten/dropped.
 func TestGroupBranchesByRepo_SharedBranchKeepsBothTasks(t *testing.T) {
+	t.Parallel()
 	inputs := []BranchRepoInput{
 		{ID: "t1", Branch: "argus/shared", Worktree: "/wt/t1", CachedURL: "https://github.com/argus-foundry/argus/pull/1"},
 		{ID: "t2", Branch: "argus/shared", Worktree: "/wt/t2", CachedURL: "https://github.com/argus-foundry/argus/pull/1"},
@@ -303,6 +310,7 @@ func TestGroupBranchesByRepo_SharedBranchKeepsBothTasks(t *testing.T) {
 // A task whose repo cannot be resolved at all (no url, default resolver fails)
 // is dropped from grouping — it cannot be queried without an owner/name.
 func TestGroupBranchesByRepo_UnresolvableDropped(t *testing.T) {
+	t.Parallel()
 	inputs := []BranchRepoInput{
 		{ID: "t1", Branch: "argus/a", Worktree: "/wt/t1", CachedURL: ""},
 	}
@@ -313,6 +321,7 @@ func TestGroupBranchesByRepo_UnresolvableDropped(t *testing.T) {
 }
 
 func TestPRResult_Lifecycle(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		res  PRResult

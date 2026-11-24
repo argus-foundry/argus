@@ -13,7 +13,9 @@ import (
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
 
-const maxCodexMoveMetadataBytes = 4 << 20
+// maxCodexMoveMetadataBytes bounds the rollout header a move will copy. It is a
+// var only so tests can shrink the boundary instead of writing 4 MiB fixtures.
+var maxCodexMoveMetadataBytes int64 = 4 << 20
 
 var errCodexRolloutMissing = errors.New("source rollout missing")
 

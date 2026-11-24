@@ -10,6 +10,7 @@ import (
 )
 
 func TestParsePRURL(t *testing.T) {
+	t.Parallel()
 	good := map[string]string{
 		"https://github.com/org/repo/pull/7":             "https://github.com/org/repo/pull/7",
 		" https://GitHub.com/org/re.po-x/pull/7/ ":       "https://github.com/org/re.po-x/pull/7",

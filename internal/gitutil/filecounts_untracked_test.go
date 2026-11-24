@@ -14,6 +14,7 @@ import (
 )
 
 func TestFileCountsEntryTransitions(t *testing.T) {
+	t.Parallel()
 	for _, after := range []string{"outside-link", "inside-link", "fifo", "directory", "replacement", "growth", "removed"} {
 		t.Run(after, func(t *testing.T) {
 			dir := t.TempDir()
@@ -58,6 +59,7 @@ func TestFileCountsEntryTransitions(t *testing.T) {
 }
 
 func TestFileCountsGrowthAfterStat(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, dir, "growing", "before\n")
 	f, err := os.Open(filepath.Join(dir, "growing"))
@@ -83,6 +85,7 @@ func (r *prefixOnlyCountReader) Read(p []byte) (int, error) {
 }
 
 func TestFileCountsReaderBoundaries(t *testing.T) {
+	t.Parallel()
 	t.Run("binary prefix", func(t *testing.T) {
 		r := &prefixOnlyCountReader{}
 		got := countUntrackedContent(r, FileChange{}, false)

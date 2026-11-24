@@ -1389,7 +1389,15 @@ func readLogGapEndingAt(taskID string, ringTail []byte, length int64) ([]byte, b
 // loaded window, we extend by this absolute byte chunk instead, guaranteeing
 // each ceiling-hit rebuild reaches strictly further back regardless of density,
 // until the whole log is loaded (firstByte reaches 0). See gotchas/pty-terminal.md.
-const scrollExtendChunk = 8 * 1024 * 1024
+//
+// A var only so tests can shrink the window (and the log they emulate) while
+// keeping the same boundary; production never writes it.
+var scrollExtendChunk int64 = 8 * 1024 * 1024
+
+// replayReadFloor is the minimum log tail asyncReplayRebuild reads (see
+// replayRebuildReadSize). A var only so tests can shrink it; production never
+// writes it.
+var replayReadFloor int64 = 8 * 1024 * 1024
 
 // replayEmuDims resolves the VT emulator dimensions for the scroll-mode
 // replay. The committed scrollback bytes are authored at the session's PTY
@@ -1464,8 +1472,8 @@ func replayRebuildReadSize(taskID string, scrollOffset, viewportHeight, ptyCols 
 // offset end (0 = EOF) instead of the file size.
 func replayRebuildReadSizeTo(taskID string, scrollOffset, viewportHeight, ptyCols int, prevFirstByte int64, extend bool, end int64) int64 {
 	needed := int64(scrollOffset+viewportHeight) * int64(ptyCols) * 3
-	if needed < 8*1024*1024 {
-		needed = 8 * 1024 * 1024
+	if needed < replayReadFloor {
+		needed = replayReadFloor
 	}
 	if prevFirstByte > 0 {
 		// readLogTailForTask returns bytes [fileSize - readSize, fileSize),
