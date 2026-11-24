@@ -87,16 +87,17 @@ func Open(path string) (*DB, error) {
 func OpenInMemory() (*DB, error) {
 	// Match Open: enable FK enforcement so hera_* cascade tests exercise the
 	// same behavior as production.
-	conn, err := sql.Open("sqlite", ":memory:?_pragma=foreign_keys(on)")
-	if err != nil {
+	// Each connection is a clone of a once-built migrated template (see
+	// memtemplate.go); Open(path) still replays the real migrations.
+	conn := sql.OpenDB(&memConnector{})
+	// Connect eagerly so a template build failure is returned here instead of
+	// surfacing from the first query.
+	if err := conn.Ping(); err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
 
 	d := &DB{conn: conn}
-	if err := d.createTables(); err != nil {
-		conn.Close()
-		return nil, err
-	}
 	// Seed defaults for in-memory (no migration from files).
 	if err := d.seedDefaults(); err != nil {
 		conn.Close()

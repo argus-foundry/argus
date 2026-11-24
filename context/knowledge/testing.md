@@ -152,7 +152,7 @@ Always `t.TempDir()` for paths and `t.Setenv("HOME", t.TempDir())` for code that
 
 ## SQLite
 
-`db.OpenInMemory(t)` already returns a fresh DB and registers cleanup. Each `:memory:` is a distinct database — for shared in-memory across connections in one test, use `file::memory:?cache=shared`.
+`db.OpenInMemory()` returns a fresh DB (caller closes it). It clones a once-per-process migrated template via SQLite's backup API (`internal/db/memtemplate.go`), so it costs ~ms even under `-race`; each clone is a private `:memory:` database, and a test needing a 2nd concurrent connection gets an explicit error rather than an empty DB. Seeding (reads `HOME`) still runs per open. `Open(path)` never uses the template, so migration/upgrade tests must use a real file path (see `TestOpen_PathStillMigrates`). A test that needs a custom pre-migration schema builds its own `sql.Open("sqlite", ...)` + `createTables()`.
 
 ## Process / PTY
 
