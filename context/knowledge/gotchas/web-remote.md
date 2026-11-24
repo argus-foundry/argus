@@ -353,3 +353,6 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **Keyboard shortcuts stay Decisions/FYIs only; swipe walks all four tabs.** `navigate` still maps ⌘/Ctrl ←/→ to decision/fyi to keep existing behavior, while `adjacent()` moves one tab without wrapping. Tabs use `flex-wrap` so four labels never overflow at phone width.
 - **A command/step is only ever `textContent` in a `<pre>` plus a Copy button.** Nothing is executed, linkified or parsed; clipboard failure falls back to the shared `#copy-fallback` textarea.
 - **Nav rows may lack `actions`/`todos` against an older daemon** — every count read goes through `countOf`/`total` with a `||0` default, so the page degrades to the two-kind view instead of rendering `NaN`.
+
+- **Decide closed-draft recovery must exclude only definitive closed/unavailable drafts from the queue; frozen uncertain payloads remain immutable and retryable.** Keep written notes and annotation quotes in collapsed recovery even when a bare already_resolved choice/Done can be treated as accepted; that outcome does not prove new written feedback was saved.
+- **Board trigger_pending alone changes attention/order, not authored response revision.** Emit the update and mark unread, but keep updated_at stable so queued Done receipts remain valid; body/command/trigger text/blocking edits still advance it.

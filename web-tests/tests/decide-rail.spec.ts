@@ -72,8 +72,8 @@ test('network uncertainty survives reload with stable ID and immutable payload; 
  const sends=await rail(page,{failFYI:true});await page.goto(origin+'/decide#t=launch');
  await page.locator('#decision-11 input[value=a]').check();await page.locator('#main').focus();await page.keyboard.press('Control+ArrowDown');await page.keyboard.press('Control+ArrowRight');
  await page.locator('#note-22').fill('Do this once');await page.getByRole('button',{name:'Comment',exact:true}).click();
- await page.getByRole('button',{name:'Submit & close',exact:true}).click();await expect(page.locator('#status')).toContainText('Some actions were accepted');
- await expect(page.locator('#confirmed')).toContainText('1 answers · 0 comments · 0 dismissals');
+ await page.getByRole('button',{name:'Submit & close',exact:true}).click();await expect(page.locator('.submit-note')).toContainText('1 sent · 1 needs another look');
+ await expect(page.locator('#confirmed')).toHaveCount(0);
  const first=sends.find(s=>s.path.endsWith('/fyi-actions')).body.actions[0];
  await page.reload();await expect(page.locator('#main h1')).toHaveText('Parent');
  await page.keyboard.press('Control+ArrowDown');await page.keyboard.press('Control+ArrowRight');
@@ -90,9 +90,9 @@ for(const mode of ['hidden','missing'])test(`${mode} board result prevents full 
  const sends=await rail(page,{hidden:mode==='hidden',omitResult:mode==='missing'});await page.goto(origin+'/decide#t=launch');
  await page.locator('#decision-11 input[value=a]').check();await page.locator('#main').focus();await page.keyboard.press('Control+ArrowDown');await page.keyboard.press('Control+ArrowRight');
  await page.getByRole('button',{name:'Dismiss',exact:true}).click();await page.getByRole('button',{name:'Submit & close',exact:true}).click();
- await expect(page.locator('#main h1')).toHaveText('Queued responses');
- await expect(page.locator('#main')).toContainText(mode==='hidden'?'hidden':'unconfirmed');
- await expect(page.locator('#tally')).toContainText('1 queued');
+ await expect(page.locator('#main h1')).toHaveText('Child');
+ await expect(page.locator('.submit-note')).toContainText('1 sent · 1 needs another look');
+ await expect(page.locator('#tally')).toContainText(mode==='hidden'?'0 queued':'1 queued');
  expect(sends).toHaveLength(2);expect(await page.evaluate(()=>(globalThis as any).attemptedClose)).toBeUndefined();
 });
 
@@ -146,7 +146,7 @@ test('accepted comment stays open and is cleared when another FYI action fails',
  await page.locator('#note-22').fill('Accepted once');await page.locator('#decision-22').getByRole('button',{name:'Comment',exact:true}).click();
  await page.locator('#decision-23').getByRole('button',{name:'Dismiss',exact:true}).click();await page.getByRole('button',{name:'Submit & close',exact:true}).click();
  await expect(page.locator('#tally')).toContainText('1 queued');await expect(page.locator('#main')).not.toContainText('Accepted once');
- await page.getByRole('button',{name:'Edit on board'}).click();await expect(page.locator('#decision-22')).toContainText('Comment sent · still open');await expect(page.locator('#note-22')).toHaveValue('');
+ await expect(page.locator('#decision-22')).toContainText('Comment sent · still open');await expect(page.locator('#note-22')).toHaveValue('');
  await expect(page.locator('#decision-22 button[aria-pressed=true]')).toHaveCount(0);
 });
 
@@ -167,8 +167,8 @@ test('poll refresh requires acceptance and retains removed-board drafts as unava
  removed=true;await page.clock.fastForward(20000);await expect(page.locator('#updates')).toBeVisible();
  await expect(page.locator('#note-22')).toHaveValue('Keep across refresh');
  await page.locator('#refresh').click();await page.getByRole('button',{name:'Review queued',exact:true}).click();
- await expect(page.locator('#main')).toContainText('Keep across refresh');await expect(page.locator('#main')).toContainText('Unavailable: coordinator');
- await expect(page.locator('#tally')).toContainText('1 queued');
+ await expect(page.locator('summary')).toContainText('1 unsent note, its item is unavailable');await page.locator('summary').click();await expect(page.locator('.unsent-recovery')).toContainText('Keep across refresh');
+ await expect(page.locator('#tally')).toContainText('0 queued');
 });
 
 test('FYI-only initial selection and explicit focus select FYIs; required comments block across tabs',async({page})=>{
@@ -193,10 +193,10 @@ test('visibility refusal cannot unlock a previously uncertain comment before rec
  const sends=await rail(page,{failFYI:true});await page.goto(origin+'/decide#t=launch');await expect(page.locator('#decision-11')).toBeVisible();
  await page.locator('#main').focus();await page.keyboard.press('Control+ArrowDown');await page.keyboard.press('Control+ArrowRight');
  await page.locator('#note-22').fill('Immutable until confirmed');await page.getByRole('button',{name:'Comment',exact:true}).click();
- await page.locator('#submit').click();await expect(page.locator('#main h1')).toHaveText('Queued responses');
+ await page.locator('#submit').click();await expect(page.locator('#main h1')).toHaveText('Child');
  const original=sends[0].body.actions[0],retries:any[]=[];let hidden=true;
  await page.route('**/roles/2/board/fyi-actions',route=>{const {actions}=route.request().postDataJSON();retries.push(actions[0]);return hidden?route.fulfill({status:403,json:{error:'Coordinator hidden'}}):route.fulfill({json:{results:[{action_id:actions[0].action_id,item_id:22,outcome:'commented'}]}});});
- await page.locator('#submit').click();await expect(page.locator('#main')).toContainText('Coordinator hidden');
+ await page.locator('#submit').click();await expect(page.locator('.submit-note')).toContainText('0 sent · 1 needs another look');await page.locator('#review').click();await expect(page.locator('#main')).toContainText('Coordinator hidden');
  await expect(page.getByRole('button',{name:'Clear queued response',exact:true})).toBeDisabled();
  hidden=false;await page.locator('#submit-close').click();await expect(page.locator('h1')).toHaveText('Actions sent — you can close this tab');
  expect(retries).toEqual([original,original]);
@@ -253,13 +253,12 @@ test('partial submit accepts unchanged items across coordinators and retries onl
  // The backing boards change after the drafts were loaded, before submit.
  for(const items of boards.values())items[1]={...items[1],updated_at:'changed-revision',body:'Updated context'};
  await page.locator('#submit').click();
- await expect(page.locator('.receipt')).toHaveCount(2);
- await expect(page.locator('#confirmed')).toContainText('2 comments');
- for(const row of await page.locator('.receipt').all())await expect(row).toContainText('Item changed.');
+ await expect(page.locator('.submit-note')).toContainText('2 sent · 2 needs another look');
+ await expect(page.locator('#decision-202')).toContainText('Item changed.');
  await expect(page.locator('#main')).not.toContainText('Required note missing or too long');
  expect(sends.map(s=>s.actions.map((a:any)=>a.item_id))).toEqual([[101,102],[201,202]]);
  for(const role of [1,2]){
-  if(role===1)await page.locator('.receipt').first().getByRole('button',{name:'Edit on board'}).click();
+  if(role===1){await page.locator('#main').focus();await page.keyboard.press('Control+ArrowUp');}
   else {await page.locator('#main').focus();await page.keyboard.press('Control+ArrowDown');}
   const id=role*100+2;await expect(page.locator('#note-'+id)).toHaveValue('Preserved note '+id);
   await page.locator('#decision-'+id).getByRole('button',{name:'Comment',exact:true}).click();
@@ -279,12 +278,10 @@ test('closed feedback explains why it was not saved while open sibling is accept
  await page.route('**/roles/2/board/fyi-actions',route=>{const {actions}=route.request().postDataJSON();return route.fulfill({json:{results:actions.map((a:any)=>({action_id:a.action_id,item_id:a.item_id,outcome:a.item_id===22?'invalid':'commented',...(a.item_id===22?{item:{...fyi,resolved:true}}:{})}))}});});
  await page.goto(origin+'/decide?role=2#t=launch');await expect(page.locator('#decision-11')).toBeVisible();await page.locator('#main').focus();await page.keyboard.press('Control+ArrowDown');await page.keyboard.press('Control+ArrowRight');
  for(const id of [22,23]){await page.locator('#note-'+id).fill('Keep feedback '+id);await page.locator('#decision-'+id).getByRole('button',{name:'Comment',exact:true}).click();}
- await page.locator('#submit').click();await expect(page.locator('.receipt')).toHaveCount(1);
- await expect(page.locator('.receipt')).toContainText('Already resolved — your response was not saved.');
- await expect(page.locator('.receipt')).toContainText('Keep feedback 22');
- await expect(page.locator('.receipt').getByRole('button',{name:'Edit on board'})).toHaveCount(0);
- await expect(page.locator('.receipt').getByRole('button',{name:'Clear queued response',exact:true})).toBeEnabled();
- await expect(page.locator('#confirmed')).toContainText('1 comments');
+ await page.locator('#submit').click();await expect(page.locator('.submit-note')).toContainText('1 sent · 1 needs another look');
+ await expect(page.locator('summary')).toContainText('1 unsent note');await page.locator('summary').click();
+ await expect(page.locator('.unsent-recovery')).toContainText('Keep feedback 22');
+ await expect(page.getByRole('button',{name:'Discard unsent note',exact:true})).toBeEnabled();
 });
 
 test('note warnings distinguish response and annotation validity from actual missing or oversized notes',async({page})=>{

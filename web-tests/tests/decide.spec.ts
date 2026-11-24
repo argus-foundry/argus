@@ -232,11 +232,9 @@ for (const outcome of ['conflict', 'invalid', 'not_found', 'request_failed']) {
     const response = page.waitForResponse(`${origin}/api/hera/roles/7/board/answers`);
     await page.getByRole('button', { name: 'Submit & close', exact: true }).click();
     await response;
-    await expect(page.locator('#status')).toContainText('Review the remaining responses');
-    await expect(page.locator('#main')).toContainText('Keep this note');
-    await page.getByRole('button', {name:'Edit on board'}).click();
-    await expect(page.locator('#decision-40')).toBeVisible();
-    await expect(page.locator('#note-40')).toHaveValue('Keep this note');
+    await expect(page.locator('.submit-note')).toContainText('0 sent · 1 needs another look');
+    if(outcome==='not_found'){await expect(page.locator('summary')).toContainText('1 unsent note');await page.locator('summary').click();await expect(page.locator('.unsent-recovery')).toContainText('Keep this note');}
+    else {await expect(page.locator('#decision-40')).toBeVisible();await expect(page.locator('#note-40')).toHaveValue('Keep this note');}
     await expect(page.getByRole('heading', { name: 'Actions sent — you can close this tab' })).toHaveCount(0);
     expect(await page.evaluate(() => (globalThis as any).closeAttempts)).toBe(0);
     expect(page.isClosed()).toBe(false);
