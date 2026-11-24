@@ -264,6 +264,7 @@ func TestSmoke_CachedScreenSetup(t *testing.T) {
 	var flushes atomic.Int64
 	tracker.now = func() time.Time { flushes.Add(1); return time.Now() }
 	app := &App{tapp: tview.NewApplication(), typing: tracker}
+	registerBarrier(t, app.tapp, sim)
 	app.setTerminalScreen(raw)
 	testutil.Equal(t, observed.mouse, true)
 	testutil.Equal(t, observed.paste, true)
