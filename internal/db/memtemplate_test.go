@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -24,7 +25,7 @@ func openFreshInMemory(t *testing.T) *DB {
 	testutil.NoError(t, d.createTables())
 	testutil.NoError(t, d.seedDefaults())
 	testutil.NoError(t, d.sweepLegacyKeybindings())
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 	return d
 }
 
@@ -32,7 +33,7 @@ func schemaRows(t *testing.T, d *DB) [][3]string {
 	t.Helper()
 	rows, err := d.conn.Query(`SELECT type, name, COALESCE(sql,'') FROM sqlite_master ORDER BY type, name`)
 	testutil.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out [][3]string
 	for rows.Next() {
 		var r [3]string
@@ -52,9 +53,9 @@ func pragma(t *testing.T, d *DB, name string) string {
 
 func dumpTable(t *testing.T, d *DB, table string) [][]string {
 	t.Helper()
-	rows, err := d.conn.Query("SELECT * FROM " + table + " ORDER BY 1, 2")
+	rows, err := d.conn.Query(fmt.Sprintf("SELECT * FROM %q ORDER BY 1, 2", table))
 	testutil.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	cols, _ := rows.Columns()
 	var out [][]string
 	for rows.Next() {
@@ -77,7 +78,7 @@ func TestOpenInMemory_CloneMatchesFreshlyMigrated(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // seeding reads HOME; pin it so both sides agree
 	clone, err := OpenInMemory()
 	testutil.NoError(t, err)
-	defer clone.Close()
+	defer func() { _ = clone.Close() }()
 	fresh := openFreshInMemory(t)
 
 	t.Run("schema", func(t *testing.T) {
@@ -136,13 +137,13 @@ func TestOpenInMemory_SeedingRunsPerOpen(t *testing.T) {
 	want1 := config.DefaultMetisVaultPath()
 	a, err := OpenInMemory()
 	testutil.NoError(t, err)
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	t.Setenv("HOME", home2)
 	want2 := config.DefaultMetisVaultPath()
 	testutil.NotEqual(t, want1, want2)
 	b, err := OpenInMemory()
 	testutil.NoError(t, err)
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 
 	get := func(d *DB) string {
 		var v string
@@ -156,10 +157,10 @@ func TestOpenInMemory_SeedingRunsPerOpen(t *testing.T) {
 func TestOpenInMemory_Isolation(t *testing.T) {
 	a, err := OpenInMemory()
 	testutil.NoError(t, err)
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	b, err := OpenInMemory()
 	testutil.NoError(t, err)
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 
 	_, err = a.conn.Exec(`INSERT INTO config (key, value) VALUES ('iso.key', 'only-in-a')`)
 	testutil.NoError(t, err)
@@ -175,7 +176,7 @@ func TestOpenInMemory_Isolation(t *testing.T) {
 	// A later clone must not see it either: the template itself is untouched.
 	c, err := OpenInMemory()
 	testutil.NoError(t, err)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	testutil.Equal(t, count(c), 0)
 
 }
@@ -194,7 +195,7 @@ func TestOpenInMemory_ParallelOpens(t *testing.T) {
 					errs <- err
 					return
 				}
-				key := "par." + string(rune('a'+w))
+				key := "par." + fmt.Sprint(w)
 				if _, err := d.conn.Exec(`INSERT INTO config (key, value) VALUES (?, 'v')`, key); err != nil {
 					errs <- err
 				}
@@ -204,7 +205,7 @@ func TestOpenInMemory_ParallelOpens(t *testing.T) {
 				} else if n != 1 {
 					errs <- errors.New("write leaked between clones")
 				}
-				d.Close()
+				_ = d.Close()
 			}
 		}(w)
 	}
@@ -230,7 +231,7 @@ func TestOpenInMemory_TemplateBuildFailureIsAnError(t *testing.T) {
 
 	d, err := OpenInMemory()
 	if err == nil {
-		d.Close()
+		_ = d.Close()
 		t.Fatal("expected an error, got a DB")
 	}
 	testutil.ErrorIs(t, err, boom)
@@ -242,7 +243,7 @@ func TestOpenInMemory_TemplateBuildFailureIsAnError(t *testing.T) {
 	memTemplate.mu.Unlock()
 	d, err = OpenInMemory()
 	testutil.NoError(t, err)
-	d.Close()
+	_ = d.Close()
 }
 
 // Open(path) must keep running the real migrations, independent of the
@@ -259,7 +260,7 @@ func TestOpen_PathStillMigrates(t *testing.T) {
 
 	d, err := Open(path)
 	testutil.NoError(t, err)
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 
 	var name string
 	testutil.NoError(t, d.conn.QueryRow(`SELECT name FROM tasks WHERE id='t1'`).Scan(&name))
@@ -270,7 +271,7 @@ func TestOpen_PathStillMigrates(t *testing.T) {
 
 	mem, err := OpenInMemory()
 	testutil.NoError(t, err)
-	defer mem.Close()
+	defer func() { _ = mem.Close() }()
 	tableNames := func(x *DB) []string {
 		var out []string
 		for _, r := range schemaRows(t, x) {
