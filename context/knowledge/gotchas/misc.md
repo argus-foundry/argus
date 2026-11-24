@@ -5,6 +5,7 @@
 
 ## Database Patterns
 
+- **`OpenInMemory` clones a template; only `Open(path)` replays migrations.** The template (`memtemplate.go`) holds `createTables()` output only — exactly what `OpenInMemory` always ran — so `migrate()`/`fixupBackends()`/`seedDefaults()` stay per-open (seeding reads `HOME`; freezing it into the template would leak the first test's HOME). Use the driver backup API, not `Deserialize` (buffer ownership is unsafe). The template conn is intentionally never closed (one pure in-memory conn, no goroutine); a build failure is returned from `OpenInMemory` (eager `Ping`) and not cached. A schema change needs no invalidation — the template is rebuilt per process.
 - **New columns use `ALTER TABLE ... ADD COLUMN ... DEFAULT ''` after `CREATE TABLE IF NOT EXISTS`.** Error for duplicate column silently ignored.
 - **`taskColumns` is the canonical column list.** Update `taskColumns`, `scanTask`, `Add`, and `Update` in lockstep.
 - **Backend default config must be self-healing.** `fixupBackends()` runs on every `Open()` to repair outdated configs. Any `DefaultConfig()` change must be mirrored there. All Claude fixup checks use `name == "claude"` (not `strings.Contains(command, "claude")`) to avoid matching user-created backends.
