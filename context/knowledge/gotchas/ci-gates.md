@@ -1,5 +1,7 @@
 ## CI gate troubleshooting (`make pre-pr`)
 
+- **Keep Makefile `RACE_FLAGS` and CI's Test step in sync: exclude only `modernc.org/sqlite/lib`, `modernc.org/libc/...`, and `modernc.org/memory` with separate `-gcflags=<pattern>=-race=false` arguments.** Instrumenting SQLite's machine-translated C core makes race suites much slower; this trades away races inside that core only. Keep `-race` on Argus, `database/sql`, and the Go driver `modernc.org/sqlite`: widening to `modernc.org/sqlite/...` missed a planted caller-owned byte-slice race during a query. Distinct `-gcflags` package patterns combine, rather than the last argument replacing the others.
+
 `make pre-pr` mirrors `.github/workflows/ci.yml` step-for-step (build → vet → fmt-check → lint-pr → vuln → test-cover-gate → workspace-test). Steps run in sequence and the first failure short-circuits the rest, so a formatting miss hides downstream test/lint/coverage failures until fixed — always run the **full** `pre-pr` locally to surface everything in one pass. Per-gate failure recipes:
 
 - **Git fixture commits must isolate `HOME`, including host-side Iris runs.** Use `t.Setenv("HOME", t.TempDir())` so operator Git signing and hooks cannot invoke the real 1Password agent; the self-update and install-signed fixtures otherwise fail with `agent returned an error`. `script/iris-check` defaults package concurrency to `-p=3` on the shared host and preserves explicit `GOFLAGS`.

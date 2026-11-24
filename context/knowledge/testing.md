@@ -108,7 +108,7 @@ Pure-logic tests should call `t.Parallel()`. Tests that use `t.Setenv`, modify g
 
 ## Concurrency Testing
 
-- **`-race -count=1`** on every CI run (already wired).
+- **`-race -count=1`** on every CI run (already wired). Makefile `RACE_FLAGS` and CI's Test step exclude only `modernc.org/sqlite/lib`, `modernc.org/libc/...`, and `modernc.org/memory` via separate `-gcflags=<pattern>=-race=false` arguments. This avoids expensive race instrumentation in SQLite's machine-translated C core; it gives up detection of races inside that core only. Argus, `database/sql`, and the Go driver `modernc.org/sqlite` remain instrumented, including driver reads of caller-owned byte slices. Never widen the exclusion to `modernc.org/sqlite/...`: that hides races when a caller mutates a slice during a query. Repeated `-gcflags` arguments combine for these distinct package patterns; they do not replace one another.
 - **`testing/synctest`** (stable in Go 1.25) for any test that previously used `time.Sleep` for synchronization. `synctest.Test(t, func(t *testing.T) {...})` runs in a bubble where `time.Sleep`, tickers, and deadlines advance instantly when all goroutines block. Use `synctest.Wait()` to flush pending goroutines instead of polling.
 - **Never `time.Sleep` to wait for state.** Use channels, `sync.Cond`, or `synctest.Wait`. Sleep-based sync is the single largest source of flakes.
 

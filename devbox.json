@@ -8,9 +8,9 @@
     "init_hook": [],
     "scripts": {
       "build": "go build ./...",
-      "test": "go test -race -count=1 ./...",
+      "test": "make test",
       "test:watch": "gotestsum --watch ./...",
-      "test:cover": "go test -race -count=1 -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1",
+      "test:cover": "make test-cover",
       "vet": "go vet ./..."
     }
   }

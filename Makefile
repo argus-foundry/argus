@@ -90,6 +90,11 @@ lint-pr:
 # per-package guard leaves headroom for race+coverage on shared hosts.
 TEST_TIMEOUT ?= 20m
 
+# Skip race/checkptr instrumentation in the machine-translated SQLite C core
+# only. The Go driver (modernc.org/sqlite), database/sql and all argus code stay
+# instrumented. Keep in sync with the Test step in .github/workflows/ci.yml.
+RACE_FLAGS ?= -race -gcflags=modernc.org/sqlite/lib=-race=false -gcflags=modernc.org/libc/...=-race=false -gcflags=modernc.org/memory=-race=false
+
 # -timeout bounds a hung package while the machine is AWAKE. It is a weak
 # guard, not the real backstop: Go's test timeout uses the runtime-monotonic
 # clock, which macOS suspends during sleep, so an overnight-slept run never
@@ -97,7 +102,7 @@ TEST_TIMEOUT ?= 20m
 # (script/reap-orphaned-tests.sh) is the sleep-proof backstop.
 # This is a hang guard, not a speed budget.
 test:
-	go test -race -count=1 -timeout $(TEST_TIMEOUT) ./...
+	go test $(RACE_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./...
 
 workspace-test:
 	npm test --prefix web-workspace
@@ -107,7 +112,7 @@ test-watch:
 	gotestsum --watch ./...
 
 test-cover:
-	go test -race -count=1 -timeout $(TEST_TIMEOUT) -coverprofile=coverage.out ./...
+	go test $(RACE_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) -coverprofile=coverage.out ./...
 	@echo "--- raw ---"
 	@go tool cover -func=coverage.out | tail -1
 	@echo "--- filtered (per coverage-ignore.txt) ---"
@@ -116,7 +121,7 @@ test-cover:
 # CI gate. Fails if filtered coverage drops below the current floor.
 # Ratchets up over time toward the 95% target.
 test-cover-gate:
-	go test -race -count=1 -timeout $(TEST_TIMEOUT) -coverprofile=coverage.out ./...
+	go test $(RACE_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) -coverprofile=coverage.out ./...
 	go run ./scripts/coverfilter -in coverage.out -out coverage.filtered.out -min 88
 
 # Hermeticity guard: run the cases that used to false-fail inside an
@@ -132,7 +137,7 @@ test-contaminated:
 
 test-pkg:
 	@test -n "$(PKG)" || { echo "Usage: make test-pkg PKG=./internal/db/"; exit 1; }
-	go test -race -count=1 -timeout $(TEST_TIMEOUT) -v $(PKG)
+	go test $(RACE_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) -v $(PKG)
 
 # Black-box smoke test the plugin substrate against the locally running
 # daemon. Mints nothing — see cmd/argus-plugin-smoke for the one-time setup

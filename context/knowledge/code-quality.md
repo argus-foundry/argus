@@ -766,7 +766,7 @@ PR URL detection was lost during the Bubble Tea → tcell/tview migration. The d
 - `Nil`/`NotNil` use `reflect.ValueOf(got).IsNil()` to handle the nil-interface trap (nil `*T` assigned to `any` is non-nil at interface level)
 
 ### Build Targets (Makefile)
-- `make test` — `go test -race -count=1 ./...`
+- `make test` — race suite with `-count=1`; Makefile `RACE_FLAGS` excludes only SQLite's C core (see testing.md)
 - `make test-watch` — `gotestsum --watch` (checks for install)
 - `make test-cover` — coverage profile + summary
 - `make test-pkg PKG=./internal/db/` — single package verbose
