@@ -17,6 +17,7 @@ func moveSessionHeader(id, cwd string) []byte {
 }
 
 func TestCodexMoveRejectsNonConversationFiles(t *testing.T) {
+	limitCodexMoveMetadata(t, 256<<10)
 	cases := []string{"credential hard link", "copied credentials", "valid rollout hard link", "wrong thread", "wrong record type", "missing payload", "malformed JSON", "missing newline", "oversized header"}
 	for _, kind := range cases {
 		t.Run(kind, func(t *testing.T) {
@@ -42,7 +43,7 @@ func TestCodexMoveRejectsNonConversationFiles(t *testing.T) {
 			case "missing newline":
 				testutil.NoError(t, os.WriteFile(f.rollout, bytes.TrimSuffix(moveSessionHeader(codexMoveSID, f.worktree), []byte("\n")), 0600))
 			case "oversized header":
-				testutil.NoError(t, os.WriteFile(f.rollout, []byte(strings.Repeat(" ", 4<<20)+string(moveSessionHeader(codexMoveSID, f.worktree))), 0600))
+				testutil.NoError(t, os.WriteFile(f.rollout, []byte(strings.Repeat(" ", int(maxCodexMoveMetadataBytes))+string(moveSessionHeader(codexMoveSID, f.worktree))), 0600))
 			}
 			info, err := os.Stat(f.rollout)
 			testutil.NoError(t, err)

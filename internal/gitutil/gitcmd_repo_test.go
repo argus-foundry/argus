@@ -55,6 +55,7 @@ func headSHA(t *testing.T, dir string) string {
 }
 
 func TestFetchGitStatus(t *testing.T) {
+	t.Parallel()
 	t.Run("empty worktree returns empty msg", func(t *testing.T) {
 		got := FetchGitStatus("task-1", "", Options{})
 		testutil.Equal(t, got.TaskID, "task-1")
@@ -105,6 +106,7 @@ func TestFetchGitStatus(t *testing.T) {
 }
 
 func TestFindMergeBase(t *testing.T) {
+	t.Parallel()
 	t.Run("no merge base for non-repo", func(t *testing.T) {
 		// runGit returns "" with err, so findMergeBase returns "".
 		got := findMergeBase("/nonexistent/path")
@@ -173,6 +175,7 @@ func TestFindMergeBase(t *testing.T) {
 }
 
 func TestFetchFileDiff(t *testing.T) {
+	t.Parallel()
 	t.Run("empty worktree returns empty msg", func(t *testing.T) {
 		got := FetchFileDiff("tid", "", "file.txt", Options{})
 		testutil.Equal(t, got.TaskID, "tid")
@@ -223,6 +226,7 @@ func TestFetchFileDiff(t *testing.T) {
 }
 
 func TestFetchDirFiles(t *testing.T) {
+	t.Parallel()
 	t.Run("empty worktree", func(t *testing.T) {
 		got := FetchDirFiles("tid", "", "sub")
 		testutil.Equal(t, got.TaskID, "tid")
@@ -281,6 +285,7 @@ func TestFetchDirFiles(t *testing.T) {
 }
 
 func TestListRemoteBranches_Repo(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	// Create a fake remote-tracking ref by adding a remote and fetching a fake URL.
 	// Instead we just create the ref directly via update-ref.

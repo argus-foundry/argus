@@ -9,6 +9,7 @@ import (
 )
 
 func TestUntrackedDiffInputConversion(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"eol", "eol-safecrlf", "clean"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := initRepo(t, t.TempDir())

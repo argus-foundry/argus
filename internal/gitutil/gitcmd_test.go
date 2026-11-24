@@ -7,6 +7,7 @@ import (
 )
 
 func TestSortBranchesWithPriority(t *testing.T) {
+	t.Parallel()
 	t.Run("priority branches first", func(t *testing.T) {
 		branches := []string{"origin/dev", "origin/main", "upstream/master", "origin/feature-a"}
 		got := sortBranchesWithPriority(branches)
@@ -51,11 +52,13 @@ func TestSortBranchesWithPriority(t *testing.T) {
 }
 
 func TestListRemoteBranches_EmptyPath(t *testing.T) {
+	t.Parallel()
 	got := ListRemoteBranches("")
 	testutil.Nil(t, got)
 }
 
 func TestListRemoteBranches_InvalidPath(t *testing.T) {
+	t.Parallel()
 	got := ListRemoteBranches("/nonexistent/path")
 	testutil.Nil(t, got)
 }

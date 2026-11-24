@@ -177,7 +177,9 @@ func traverseLog(t *testing.T, alive bool) {
 	tp.SetTaskID(taskID)
 	tp.Draw(screen)
 
-	const step = 7
+	// 19 rows per step keeps consecutive views overlapping (24-row pane) while
+	// cutting the number of replay draws ~2.7x versus the original 7.
+	const step = 19
 	checkWindow := func(label string) []int {
 		nums := visibleLineNumbers(screen)
 		if len(nums) < 10 {

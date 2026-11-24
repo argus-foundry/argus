@@ -36,6 +36,7 @@ func TestFileCountsAncestorSwap(t *testing.T) {
 }
 
 func TestFileCountsConflicts(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"modify", "add"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := initRepo(t, t.TempDir())
@@ -69,6 +70,7 @@ func TestFileCountsConflicts(t *testing.T) {
 }
 
 func TestFileCountsRenameMatchesDiff(t *testing.T) {
+	t.Parallel()
 	for _, committed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "staged", true: "committed"}[committed], func(t *testing.T) {
 			dir := initRepo(t, t.TempDir())
@@ -92,6 +94,7 @@ func TestFileCountsRenameMatchesDiff(t *testing.T) {
 }
 
 func TestFileCountsTrackedTextconv(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	writeFile(t, dir, ".gitattributes", "*.dat diff=convert\n")
 	gitConfig(t, dir, "diff.convert.textconv", "printf 'constant\\n'")
@@ -106,6 +109,7 @@ func TestFileCountsTrackedTextconv(t *testing.T) {
 }
 
 func TestFileCountsUntrackedAttributes(t *testing.T) {
+	t.Parallel()
 	for _, attr := range []string{"-diff", "binary", "diff=convert", "filter=convert", "working-tree-encoding=UTF-16", "diff"} {
 		t.Run(attr, func(t *testing.T) {
 			dir := initRepo(t, t.TempDir())
@@ -139,6 +143,7 @@ func TestFileCountsUntrackedAttributes(t *testing.T) {
 }
 
 func TestFileCountsDeleteRecreate(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	writeFile(t, dir, "f", "old\n")
 	gitRun(t, dir, "add", "f")
@@ -154,6 +159,7 @@ func TestFileCountsDeleteRecreate(t *testing.T) {
 }
 
 func TestFileCountsLocalPriority(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unstaged", true: "staged"}[stage], func(t *testing.T) {
 			dir := initRepo(t, t.TempDir())
@@ -178,6 +184,7 @@ func TestFileCountsLocalPriority(t *testing.T) {
 }
 
 func TestFileCountsSymlinksAndCap(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "target")
 	testutil.NoError(t, os.WriteFile(outside, []byte("many\nlines\n"), 0o600))

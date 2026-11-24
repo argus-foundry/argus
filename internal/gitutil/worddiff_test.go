@@ -5,6 +5,7 @@ import (
 )
 
 func TestWordDiff(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		old     string
@@ -77,6 +78,7 @@ func TestWordDiff(t *testing.T) {
 }
 
 func TestWordDiffMultipleChanges(t *testing.T) {
+	t.Parallel()
 	old := "func foo(a int) string"
 	new := "func bar(b int) error"
 	gotOld, gotNew := WordDiff(old, new)

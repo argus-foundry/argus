@@ -95,7 +95,13 @@ Prefer `t.Cleanup` over `defer` inside helpers — runs LIFO at end of test, sur
 
 ### Parallelism
 
-Pure-logic tests should call `t.Parallel()`. Tests that use `t.Setenv`, modify global state, or share files **must not** parallelize — `t.Setenv` panics under parallel. UI smoke tests are sequential.
+Pure-logic tests should call `t.Parallel()` (all of `internal/gitutil` does; it cut that package 79s -> 26s). Before parallelizing a file, grep it for `t.Setenv`, `Chdir`, and assignments to package-level seams (`prRunner`, `handoffGit`, `runGitHook`, ...). Tests that use `t.Setenv`, modify global state, or share files **must not** parallelize — `t.Setenv` panics under parallel. UI smoke tests are sequential.
+
+### Slow tests: shrink the boundary, don't skip the test
+
+When a test is slow because its input is big (multi-MB logs, 4 MiB headers, an 81 MP image, a real 15s deadline), **inject the limit through an unexported package var and scale the input down to the same side-of-the-boundary cases** (just under, just over). Pin the production default in a one-line test (`TestReplayReadWindowDefaults`, `TestThumbnail_ProductionPixelLimit`) so the shrunken value can never become the real one. Tests that write such a var must not be `t.Parallel` (parallel tests only resume after the serial phase, so a serial writer with a `t.Cleanup` restore cannot race them).
+
+**A shrunken fixture must still be a valid input that would pass without the guard.** A header-patched/truncated PNG is rejected by the decoder anyway, so the size-guard mutation survived; a real 40x40 image over a 1000-pixel limit (with a 30x30 sibling that must succeed) kills it. Always run the mutation (break the guard, confirm FAIL) before trusting a speed-up. Same-flavor limits: fd-leak cycle tests need only enough cycles for the before/after equality to bite (8, not 30); scroll-traversal tests keep consecutive views overlapping (step 19 in a 24-row pane) rather than stepping one screen-fraction at a time.
 
 ## Environment hermeticity
 
