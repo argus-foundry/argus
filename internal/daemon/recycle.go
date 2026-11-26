@@ -103,7 +103,7 @@ func (r *HeraRecycleRunner) Restart(taskID string, roleID int64) error {
 	if r.daemonOwned {
 		// The native TUI acquires this lock before it calls the adapter.
 		// The resident branch above delegates to its own locked runner.
-		unlock, acquired, err := r.database.TryLockSessionMutation(taskID)
+		unlock, acquired, err := r.database.TryLockSessionLaunch(taskID)
 		if err != nil {
 			return err
 		}

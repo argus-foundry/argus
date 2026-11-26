@@ -530,7 +530,7 @@ func (a *App) heraReclaimAndArchiveTask(taskID string) (reclaimed bool) {
 	release := func() {}
 	if database, ok := a.db.(*db.DB); ok {
 		var acquired bool
-		release, acquired, err = database.TryLockHeraReclaim(taskID)
+		release, acquired, err = tryLockStandaloneReclaim(database, taskID)
 		if err != nil {
 			uxlog.Log("[hera-view] nuke: standalone reclaim lock failed task=%s: %v", taskID, err)
 			return false
@@ -539,17 +539,36 @@ func (a *App) heraReclaimAndArchiveTask(taskID string) (reclaimed bool) {
 			heraGoSafe("nuke: wait for standalone reclaim "+taskID, func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
+				releaseSession, err := database.LockSessionMutation(ctx, taskID)
+				if err != nil {
+					uxlog.Log("[hera-view] nuke: standalone session wait failed task=%s: %v", taskID, err)
+					return
+				}
 				unlock, err := database.LockHeraReclaim(ctx, taskID)
 				if err != nil {
+					releaseSession()
 					uxlog.Log("[hera-view] nuke: standalone reclaim wait failed task=%s: %v", taskID, err)
 					return
 				}
-				a.reclaimStandaloneHeraTask(runner, taskID, unlock)
+				a.reclaimStandaloneHeraTask(runner, taskID, func() { unlock(); releaseSession() })
 			})
 			return t.Worktree != ""
 		}
 	}
 	return a.reclaimStandaloneHeraTask(runner, taskID, release)
+}
+
+func tryLockStandaloneReclaim(database *db.DB, taskID string) (func(), bool, error) {
+	releaseSession, acquired, err := database.TryLockSessionMutation(taskID)
+	if err != nil || !acquired {
+		return nil, false, err
+	}
+	releaseBinding, acquired, err := database.TryLockHeraReclaim(taskID)
+	if err != nil || !acquired {
+		releaseSession()
+		return nil, false, err
+	}
+	return func() { releaseBinding(); releaseSession() }, true, nil
 }
 
 func (a *App) reclaimStandaloneHeraTask(runner agent.SessionProvider, taskID string, release func()) bool {
@@ -582,7 +601,16 @@ func (a *App) reclaimStandaloneHeraTask(runner agent.SessionProvider, taskID str
 	}
 	heraGoSafe("nuke: stop session and reclaim "+taskID, func() {
 		defer release()
-		if runner.HasSession(taskID) {
+		if local, ok := runner.(*agent.Runner); ok {
+			stopped, err := stopStandaloneReclaim(local, taskID)
+			if !stopped {
+				a.clearHeraReclaimPending(taskID)
+			}
+			if err != nil {
+				uxlog.Log("[hera-view] nuke: standalone owner not retired task=%s: %v", taskID, err)
+				return
+			}
+		} else if runner.HasSession(taskID) {
 			if err := runner.Stop(taskID); err != nil {
 				uxlog.Log("[hera-view] nuke: stop session failed task=%s: %v", taskID, err)
 				a.clearHeraReclaimPending(taskID)
@@ -594,6 +622,36 @@ func (a *App) reclaimStandaloneHeraTask(runner agent.SessionProvider, taskID str
 		a.removeHeraReclaimedWorktree(t)
 	})
 	return t.Worktree != ""
+}
+
+func stopStandaloneReclaim(runner *agent.Runner, taskID string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	stopped := false
+	for {
+		if err := runner.CheckReclaimSessionRetired(taskID); err == nil {
+			return stopped, nil
+		} else if !errors.Is(err, agent.ErrSessionStarting) {
+			return stopped, err
+		}
+		if !stopped {
+			sess, err := agent.AttachableSession(runner, taskID)
+			if err == nil && sess != nil {
+				if err := runner.StopTreeForPID(taskID, sess.PID()); err == nil {
+					stopped = true
+				} else if !errors.Is(err, agent.ErrSessionStarting) && !errors.Is(err, agent.ErrSessionNotFound) {
+					return stopped, err
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return stopped, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (a *App) removeHeraReclaimedWorktree(t *model.Task) {
@@ -669,25 +727,12 @@ func (a *App) reclaimConnectedHeraTask(runner agent.SessionProvider, database *d
 	}
 
 	pid := sess.PID()
-	var armed bool
-	if task.Status == model.StatusInProgress {
-		armed, err = database.ArmHeraReclaimStop(taskID, pid)
-		if err != nil || !armed {
-			uxlog.Log("[hera-view] nuke: reclaim stop intent rejected task=%s pid=%d err=%v", taskID, pid, err)
-			return
-		}
-	}
-	if err := owner.StopTreeForPID(taskID, pid); err != nil {
+	if err := herasvc.RequestScopedReclaimStop(database, owner, taskID, pid); err != nil {
 		uxlog.Log("[hera-view] nuke: scoped stop failed task=%s pid=%d: %v", taskID, pid, err)
-		if armed && !errors.Is(err, agent.ErrSessionStopUnconfirmed) {
-			if clearErr := database.ClearHeraReclaimStop(taskID, pid); clearErr != nil {
-				uxlog.Log("[hera-view] nuke: reclaim stop intent cleanup failed task=%s pid=%d: %v", taskID, pid, clearErr)
-			}
-		}
 		return
 	}
 	// The sweep waits for both retirement and the daemon's exit finalization.
-	uxlog.Log("[hera-view] nuke: scoped stop accepted task=%s pid=%d reclaim_intent=%t", taskID, pid, armed)
+	uxlog.Log("[hera-view] nuke: scoped stop accepted task=%s pid=%d", taskID, pid)
 }
 
 // heraPruneReclaimedTask hard-deletes taskID's row once its worktree+branch

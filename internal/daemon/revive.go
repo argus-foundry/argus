@@ -110,7 +110,7 @@ func (r *HeraReviveRunner) RestartDead(taskID string) error {
 }
 
 func (r *HeraReviveRunner) restartDead(taskID string, resumeOnly bool, started func(uint64)) error {
-	unlock, acquired, err := r.database.TryLockSessionMutation(taskID)
+	unlock, acquired, err := r.database.TryLockSessionLaunch(taskID)
 	if err != nil {
 		return fmt.Errorf("revive restart: lock task %s: %w", taskID, err)
 	}

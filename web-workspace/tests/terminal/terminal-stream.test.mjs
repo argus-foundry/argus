@@ -154,3 +154,29 @@ test('cached output is replaced when the snapshot PID changes', async t => {
     '/api/tasks/replacement/stream?since=9&expected_pid=32',
   ]);
 });
+
+test('cached recorded output refreshes before reuse without a process cursor', async t => {
+  const task = { id: 'recorded', status: 'complete', live: false };
+  const size = { cols: 80, rows: 24 };
+  const adjustments = [];
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  let history = 'old';
+  const api = {
+    json: async path => path.endsWith('/size') ? size : task,
+    request: async () => new Response(history, { headers: {
+      'X-Source': 'log', 'X-Output-Total': String(history.length),
+    } }),
+  };
+  const stream = new TerminalStream(api, task, controller.signal, {
+    state() {}, currentSize: () => size,
+    write: async bytes => adjustments.push(['write', new TextDecoder().decode(bytes)]),
+    replace: async bytes => adjustments.push(['replace', new TextDecoder().decode(bytes)]),
+  });
+  await stream.start();
+  stream.suspend();
+  history = 'finished output';
+  await stream.resume();
+  assert.deepEqual(adjustments, [['write', 'old'], ['replace', 'finished output']]);
+  assert.equal(stream.cursor, 0);
+});

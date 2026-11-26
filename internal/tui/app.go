@@ -6973,7 +6973,7 @@ func (a *App) lockDeferredSessionRestart(taskID string, expected agent.SessionHa
 	if !ok {
 		return 0, func() {}, nil
 	}
-	unlock, acquired, err := d.TryLockSessionMutation(taskID)
+	unlock, acquired, err := d.TryLockSessionLaunch(taskID)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -7746,7 +7746,7 @@ func (a *App) startSessionFillAtGeneration(task *model.Task, mode agent.SessionR
 	_, remote := a.db.(remoteTaskCreator)
 	var stopGeneration int64
 	if localDB != nil {
-		unlock, acquired, err := localDB.TryLockSessionMutation(task.ID)
+		unlock, acquired, err := localDB.TryLockSessionLaunch(task.ID)
 		if err != nil {
 			a.sessionStartFailed(task.ID, err)
 			return false

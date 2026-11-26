@@ -259,7 +259,7 @@ func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView
 			return noop, err
 		}
 	}
-	if err := nukeRoleRow(d, r.RoleID, db.HeraActorResident); err != nil {
+	if err := d.NukeHeraRoleAndEndBindingAs(r.RoleID, db.HeraActorResident); err != nil {
 		residentDeleteLog("[resident] delete role %d: nuke failed task=%s: %v", r.RoleID, t.ID, err)
 		return noop, fmt.Errorf("nuke role %d: %w", r.RoleID, err)
 	}

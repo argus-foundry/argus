@@ -1880,9 +1880,6 @@ type managedSSEFixture struct {
 func (s *managedSSEFixture) Done() <-chan struct{}  { return s.done }
 func (s *managedSSEFixture) RemoveWriter(io.Writer) {}
 func (s *managedSSEFixture) PID() int {
-	if s.pid == 0 {
-		return 123
-	}
 	pid := s.pid
 	if s.replaceAfterPIDRead != 0 {
 		s.pid = s.replaceAfterPIDRead
@@ -1916,7 +1913,7 @@ func (r managedSSERunner) Get(string) agent.SessionHandle { return r.session }
 
 func TestHandleStreamOutputBindsRetiringProcess(t *testing.T) {
 	s, _ := testServer(t)
-	session := &managedSSEFixture{done: make(chan struct{})}
+	session := &managedSSEFixture{pid: 123, done: make(chan struct{})}
 	s.runner = managedSSERunner{Runner: agent.NewRunner(nil), session: session}
 	w := httptest.NewRecorder()
 	req := authedReq("GET", "/api/tasks/process/stream?since=4", "")
@@ -1931,6 +1928,15 @@ func TestHandleStreamOutputBindsRetiringProcess(t *testing.T) {
 	testutil.Equal(t, session.attachedFrom, uint64(4))
 	testutil.Contains(t, w.Body.String(), "data: bGFzdCBieXRlcw==")
 	testutil.Contains(t, w.Body.String(), "event: exit")
+}
+
+func TestTerminalStreamRefusesPendingProcesslessRelay(t *testing.T) {
+	s, _ := testServer(t)
+	s.runner = managedSSERunner{Runner: agent.NewRunner(nil), session: &managedSSEFixture{}}
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, authedReq("GET", "/api/tasks/process/stream?since=13", ""))
+	testutil.Equal(t, w.Code, http.StatusConflict)
+	testutil.Contains(t, w.Body.String(), "stale_session")
 }
 
 func TestTerminalOutputCursorRejectsReplacement(t *testing.T) {
@@ -4311,6 +4317,20 @@ func TestHandleResumeTask_StartFails(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, authedReq("POST", "/api/tasks/"+task.ID+"/resume", ""))
 	testutil.Equal(t, w.Code, http.StatusInternalServerError)
+}
+
+func TestHandleResumeTask_RefusesArmedHeraReclaim(t *testing.T) {
+	s, database := testServer(t)
+	task := &model.Task{ID: "reclaim", Name: "Reclaim", Status: model.StatusComplete, Archived: true}
+	testutil.NoError(t, database.Add(task))
+	armed, err := database.ArmHeraReclaimStop(task.ID, 123)
+	testutil.NoError(t, err)
+	testutil.True(t, armed)
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, authedReq("POST", "/api/tasks/reclaim/resume", ""))
+	testutil.Equal(t, w.Code, http.StatusConflict)
+	testutil.Contains(t, w.Body.String(), "reclaim_pending")
+	testutil.Nil(t, s.runner.Get(task.ID))
 }
 
 func TestHandleResumeTask_RefusesDuringRerenderRestart(t *testing.T) {

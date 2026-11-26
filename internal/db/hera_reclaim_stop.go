@@ -10,17 +10,8 @@ import (
 
 var ErrHeraReclaimInProgress = errors.New("task reclaim is in progress")
 
-// lockHeraBindingAdmission keeps live bindings from being installed while
-// reclaim is stopping the prior owner or removing the task's worktree.
-func (d *DB) lockHeraBindingAdmission(taskID string) (func(), error) {
-	return d.lockHeraTaskAdmission(taskID, false)
-}
-
-func (d *DB) lockHeraTaskRestore(taskID string) (func(), error) {
-	return d.lockHeraTaskAdmission(taskID, true)
-}
-
-func (d *DB) lockHeraTaskAdmission(taskID string, restoring bool) (func(), error) {
+// lockHeraTaskAdmission coordinates restoration and role binding with reclaim.
+func (d *DB) lockHeraTaskAdmission(taskID string) (func(), error) {
 	unlock, acquired, err := d.TryLockHeraReclaim(taskID)
 	if err != nil {
 		return nil, err
@@ -34,9 +25,9 @@ func (d *DB) lockHeraTaskAdmission(taskID string, restoring bool) (func(), error
 		EXISTS (SELECT 1 FROM tasks WHERE id=? AND hera_reclaim_pid<>0)
 		OR (EXISTS (SELECT 1 FROM hera_bindings WHERE argus_task_id=? AND end_reason=?)
 		  AND (NOT EXISTS (SELECT 1 FROM tasks WHERE id=?)
-		    OR (? AND EXISTS (SELECT 1 FROM tasks WHERE id=? AND archived=1)
+		    OR (EXISTS (SELECT 1 FROM tasks WHERE id=? AND archived=1)
 		      AND NOT EXISTS (SELECT 1 FROM hera_bindings WHERE argus_task_id=? AND ended_at IS NULL))))`,
-		taskID, taskID, HeraEndReasonUserDeleted, taskID, restoring, taskID, taskID).Scan(&blocked)
+		taskID, taskID, HeraEndReasonUserDeleted, taskID, taskID, taskID).Scan(&blocked)
 	d.mu.Unlock()
 	if err != nil || blocked {
 		unlock()
@@ -57,7 +48,7 @@ func (d *DB) ArmHeraReclaimStop(taskID string, pid int) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	result, err := d.conn.Exec(`UPDATE tasks SET hera_reclaim_pid=?
-		WHERE id=? AND archived=1 AND status=? AND kind<>?`, pid, taskID, model.StatusInProgress.String(), model.KindResident)
+		WHERE id=? AND archived=1 AND kind<>? AND hera_reclaim_pid=0`, pid, taskID, model.KindResident)
 	if err != nil {
 		return false, err
 	}

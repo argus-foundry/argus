@@ -21,7 +21,7 @@ func (s *Server) tryLockExistingSessionMutation(id string) (func(), error) {
 	if _, err := s.db.Get(id); err != nil {
 		return nil, err
 	}
-	unlock, acquired, err := s.db.TryLockSessionMutation(id)
+	unlock, acquired, err := s.db.TryLockSessionLaunch(id)
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +40,8 @@ func (s *Server) lockSessionMutationHTTP(w http.ResponseWriter, id string) (func
 		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
 	case errors.Is(err, agent.ErrSessionStarting):
 		writeSessionMutationConflict(w)
+	case errors.Is(err, db.ErrHeraReclaimInProgress):
+		writeCodedErrCause(w, http.StatusConflict, "", "reclaim_pending", err)
 	case err != nil:
 		uxlog.Log("[api] session operation lock failed task=%s err=%v", id, err)
 		writeCodedErrCause(w, http.StatusInternalServerError, "could not coordinate session operation", "session_lock_failed", nil)

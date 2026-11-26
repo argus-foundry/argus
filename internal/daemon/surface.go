@@ -382,7 +382,9 @@ const (
 	// v26: session listings and status retain ordinary launch reservations.
 	// v27: owner snapshots identify managed predecessors and report failed
 	// launches as retired while admission stays closed through finalization.
-	SupervisorStreamSurface = 27
+	// v28: a queued managed restart identifies its predecessor before the
+	// retiring session's exit callback publishes its receipt.
+	SupervisorStreamSurface = 28
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -641,7 +643,7 @@ var SupervisorStreamPaths = []string{
 // message prints the computed digest to paste back here.
 const (
 	SpawnSurfaceDigest  = "d5dc8e881ff9ce381a59e01eb592ab9b44cf02d1d1b44fe96001a8e2aed737e3"
-	StreamSurfaceDigest = "bd3b88fb8a09aa72af48449e32bee36719e46d9ed97133f58efef03d7d5bb5c3"
+	StreamSurfaceDigest = "c32549215cc8722aab69685e7367ae3ebd42cdc2ef4192fa42e034c026d2065d"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

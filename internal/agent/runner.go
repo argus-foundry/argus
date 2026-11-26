@@ -260,9 +260,6 @@ func (r *Runner) start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		// or this outgoing process has reported the launch failure.
 		r.mu.Lock()
 		pending := r.pendingRestart[task.ID]
-		if pending != nil {
-			pending.outgoingPID = sess.PID()
-		}
 		// A late legacy StopScoped may have marked the dead session
 		// during onFinish. The replacement must own a clean stop state.
 		delete(r.stopped, task.ID)
@@ -493,11 +490,12 @@ func (r *Runner) kickRerender(task *model.Task, cfg config.Config, rows, cols ui
 	// Publish a recovered ID only after reserving the pending restart.
 	task.SessionID = restartTask.SessionID
 	r.pendingRestart[task.ID] = &pendingRestart{
-		task:   task,
-		cfg:    cfg,
-		rows:   rows,
-		cols:   cols,
-		resume: resume,
+		task:        task,
+		cfg:         cfg,
+		rows:        rows,
+		cols:        cols,
+		resume:      resume,
+		outgoingPID: sess.PID(),
 	}
 	r.stopped[task.ID] = true
 	r.mu.Unlock()
@@ -555,11 +553,11 @@ func (r *Runner) Recycle(task *model.Task, cfg config.Config, rows, cols uint16)
 		return ErrSessionNotFound
 	}
 	r.pendingRestart[task.ID] = &pendingRestart{
-		task:   task,
-		cfg:    cfg,
-		rows:   rows,
-		cols:   cols,
-		resume: false,
+		task:        task,
+		cfg:         cfg,
+		rows:        rows,
+		cols:        cols,
+		outgoingPID: sess.PID(),
 	}
 	r.stopped[task.ID] = true
 	r.mu.Unlock()

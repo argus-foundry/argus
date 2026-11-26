@@ -222,7 +222,7 @@ func (r *taskRecycleRunner) awaitIdleAndRestart(taskID string, buildSeed func(*m
 // recycle_coord guards against) then hands off to the shared
 // restartSessionWithSeedPrompt kill/restart primitive.
 func (r *taskRecycleRunner) restart(taskID string, buildSeed func(*model.Task) string) error {
-	unlock, acquired, err := r.database.TryLockSessionMutation(taskID)
+	unlock, acquired, err := r.database.TryLockSessionLaunch(taskID)
 	if err != nil {
 		return err
 	}

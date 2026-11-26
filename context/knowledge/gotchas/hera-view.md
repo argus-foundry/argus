@@ -492,3 +492,5 @@ M6a scaffolds the native Hera view: a `HeraPage` (rail | coordinator pane | agen
 - **Hera reclaim takes the task’s session lock before its binding admission lock.** Keep binding admission closed through the PID-scoped stop or worktree removal. A durable stop intent can be retried only while the same process is live and the archived task still has no bindings.
 
 - **Restore and pin share the reclaim fence.** A task already selected for archived nuke cleanup remains owned by cleanup until its worktree is reclaimed. Standalone cleanup holds binding admission through stop and removal.
+
+- **A scoped stop is pending until the retiring owner confirms its exit.** The task’s workflow status can already be complete while its PTY is live. Resume and restart consult the durable marker under the session lock.

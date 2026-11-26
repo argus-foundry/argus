@@ -1,10 +1,14 @@
 package hera
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/uxlog"
@@ -82,32 +86,38 @@ func PreviewNukeSubtree(d *db.DB, subtree []*heramodel.OrchView) NukePreview {
 	return p
 }
 
-// nukeRoleRow ends the role's live binding (user_deleted) and stamps it NUKED —
-// never a hard delete.
-func nukeRoleRow(d *db.DB, roleID int64, actor db.HeraActor) error {
-	if b, err := d.HeraLiveBindingByRole(roleID); err == nil && b != nil {
-		if eErr := d.EndHeraBinding(b.ID, db.HeraEndReasonUserDeleted); eErr != nil {
-			uxlog.Log("[hera] nuke role %d: end binding %d failed: %v", roleID, b.ID, eErr)
-		}
-	}
-	return d.NukeHeraRoleAs(roleID, actor)
-}
-
 // archiveNukedTask archives a reclaimed task (in_review advances to complete).
 func archiveNukedTask(d *db.DB, taskID string) {
+	unlock, acquired, err := d.TryLockHeraReclaim(taskID)
+	if err != nil || !acquired {
+		uxlog.Log("[hera] nuke: archive deferred task=%s err=%v", taskID, err)
+		return
+	}
+	defer unlock()
+	archiveNukedTaskLocked(d, taskID)
+}
+
+func archiveNukedTaskLocked(d *db.DB, taskID string) bool {
+	bindings, err := d.ListHeraLiveBindingsByTask(taskID)
+	if err != nil || len(bindings) != 0 {
+		uxlog.Log("[hera] nuke: archive binding guard task=%s live=%d err=%v", taskID, len(bindings), err)
+		return false
+	}
 	t, err := d.Get(taskID)
 	if err != nil || t == nil {
 		uxlog.Log("[hera] nuke: task %s not found, skip archive: %v", taskID, err)
-		return
+		return false
+	}
+	if err := d.SetArchived(t.ID, true); err != nil {
+		uxlog.Log("[hera] nuke: archive task failed task=%s: %v", t.ID, err)
+		return false
 	}
 	if t.Status == model.StatusInReview {
 		if sErr := d.SetStatus(t.ID, model.StatusComplete); sErr != nil {
 			uxlog.Log("[hera] nuke: complete task failed task=%s: %v", t.ID, sErr)
 		}
 	}
-	if aErr := d.SetArchived(t.ID, true); aErr != nil {
-		uxlog.Log("[hera] nuke: archive task failed task=%s: %v", t.ID, aErr)
-	}
+	return true
 }
 
 // CheckNukeTask refuses (db.ErrGraduationPending, wrapped) when taskID still
@@ -167,18 +177,20 @@ func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (re
 				reclaim = r.TaskID
 			}
 			if r.Live {
-				if err := nukeRoleRow(d, r.RoleID, db.HeraActorHuman); err != nil {
+				if err := d.NukeHeraRoleAndEndBindingAs(r.RoleID, db.HeraActorHuman); err != nil {
 					uxlog.Log("[hera] nuke subtree: nuke role %d failed: %v", r.RoleID, err)
 				}
 			}
 			if reclaim != "" {
-				archiveNukedTask(d, reclaim)
 				reclaimed = append(reclaimed, reclaim)
 			}
 		}
 		if err := d.NukeHeraOrchestrator(o.ID); err != nil {
 			uxlog.Log("[hera] nuke subtree: nuke orchestrator %d failed: %v", o.ID, err)
 		}
+	}
+	for _, id := range reclaimed {
+		archiveNukedTask(d, id)
 	}
 	return reclaimed, reclaimBackground(d, runner, reclaimed), nil
 }
@@ -211,7 +223,7 @@ func NukeSingleRoleAs(d *db.DB, runner NukeRunner, r *heramodel.RoleView, actor 
 			reclaimed = []string{r.TaskID}
 		}
 	}
-	if err := nukeRoleRow(d, r.RoleID, actor); err != nil {
+	if err := d.NukeHeraRoleAndEndBindingAs(r.RoleID, actor); err != nil {
 		uxlog.Log("[hera] nuke role %d failed: %v", r.RoleID, err)
 	}
 	for _, id := range reclaimed {
@@ -226,16 +238,69 @@ func reclaimBackground(d *db.DB, runner NukeRunner, taskIDs []string) func() {
 	}
 	return func() {
 		for _, id := range taskIDs {
-			if runner.HasSession(id) {
-				if err := runner.Stop(id); err != nil {
-					uxlog.Log("[hera] nuke: stop session failed task=%s: %v", id, err)
-				}
-			}
+			stopNukedTask(d, runner, id)
 		}
 		if _, err := ReconcileHeraReclaims(d, runner); err != nil {
 			uxlog.Log("[hera] nuke: reclaim sweep failed: %v", err)
 		}
 	}
+}
+
+func stopNukedTask(d *db.DB, runner NukeRunner, taskID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	unlock, err := d.LockSessionMutation(ctx, taskID)
+	if err != nil {
+		uxlog.Log("[hera] nuke: session lock failed task=%s err=%v", taskID, err)
+		return
+	}
+	defer unlock()
+	release, err := d.LockHeraReclaim(ctx, taskID)
+	if err != nil {
+		uxlog.Log("[hera] nuke: reclaim lock failed task=%s err=%v", taskID, err)
+		return
+	}
+	defer release()
+	if !archiveNukedTaskLocked(d, taskID) {
+		return
+	}
+	provider, providerOK := runner.(agent.SessionProvider)
+	owner, ownerOK := runner.(agent.HeraReclaimSessionOwner)
+	if providerOK && ownerOK {
+		sess, err := agent.AttachableSession(provider, taskID)
+		if err != nil {
+			uxlog.Log("[hera] nuke: could not verify session task=%s err=%v", taskID, err)
+		} else if sess != nil {
+			if err := RequestScopedReclaimStop(d, owner, taskID, sess.PID()); err != nil {
+				uxlog.Log("[hera] nuke: scoped stop failed task=%s err=%v", taskID, err)
+			}
+		}
+		return
+	}
+	if runner.HasSession(taskID) {
+		if err := runner.Stop(taskID); err != nil {
+			uxlog.Log("[hera] nuke: stop session failed task=%s err=%v", taskID, err)
+		}
+	}
+}
+
+// RequestScopedReclaimStop records the active PTY before signaling it. Callers
+// hold both task lifecycle locks and have checked binding eligibility.
+func RequestScopedReclaimStop(d *db.DB, owner agent.HeraReclaimSessionOwner, taskID string, pid int) error {
+	armed, err := d.ArmHeraReclaimStop(taskID, pid)
+	if err != nil {
+		return err
+	}
+	if !armed {
+		return db.ErrHeraReclaimInProgress
+	}
+	if err := owner.StopTreeForPID(taskID, pid); err != nil {
+		if !errors.Is(err, agent.ErrSessionStopUnconfirmed) {
+			err = errors.Join(err, d.ClearHeraReclaimStop(taskID, pid))
+		}
+		return err
+	}
+	return nil
 }
 
 func residentOrchestrator(d *db.DB, id int64) bool {

@@ -683,7 +683,13 @@ func (d *DB) NukeHeraRoleAs(id int64, actor HeraActor) error {
 // NukeHeraRoleAndEndBinding records a human nuke and ends the role's live
 // binding together, so a failed nuke cannot leave a sweep candidate.
 func (d *DB) NukeHeraRoleAndEndBinding(id int64) error {
-	return d.nukeHeraRole(id, HeraActorHuman, true)
+	return d.NukeHeraRoleAndEndBindingAs(id, HeraActorHuman)
+}
+
+// NukeHeraRoleAndEndBindingAs records the role transition and binding end
+// atomically and preserves the caller's actor for resident notifications.
+func (d *DB) NukeHeraRoleAndEndBindingAs(id int64, actor HeraActor) error {
+	return d.nukeHeraRole(id, actor, true)
 }
 
 func (d *DB) nukeHeraRole(id int64, actor HeraActor, endBinding bool) error {
@@ -827,7 +833,7 @@ func insertHeraRole(ex execer, in CreateHeraRoleInput, now string) (*HeraRole, e
 // orchestrator), (worktree, orchestrator), or role fails with a constraint
 // error — the deterministic backstop behind any app-level pre-check.
 func (d *DB) CreateHeraBinding(in CreateHeraBindingInput) (*HeraBinding, error) {
-	unlock, err := d.lockHeraBindingAdmission(in.ArgusTaskID)
+	unlock, err := d.lockHeraTaskAdmission(in.ArgusTaskID)
 	if err != nil {
 		return nil, err
 	}
@@ -853,7 +859,7 @@ func (d *DB) CreateHeraBinding(in CreateHeraBindingInput) (*HeraBinding, error) 
 // (e.g. born-bound spawn) supply a name made unique within the orchestrator,
 // and the partial unique index is the backstop.
 func (d *DB) CreateHeraRoleWithBinding(roleIn CreateHeraRoleInput, taskID, worktreePath string) (*HeraRole, *HeraBinding, error) {
-	unlock, err := d.lockHeraBindingAdmission(taskID)
+	unlock, err := d.lockHeraTaskAdmission(taskID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -917,7 +923,7 @@ type MoveHeraBindingResult struct {
 // failure, so a not-found or a doomed role/binding insert leaves the old
 // binding live and untouched.
 func (d *DB) MoveHeraBinding(oldBindingID int64, roleIn CreateHeraRoleInput, taskID, worktreePath string) (*MoveHeraBindingResult, error) {
-	unlock, err := d.lockHeraBindingAdmission(taskID)
+	unlock, err := d.lockHeraTaskAdmission(taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -1161,7 +1167,7 @@ func (d *DB) EndHeraCoordinatorBindingsForTask(taskID, reason string) (int, erro
 // re-opened. Called wherever an accepted task's session is resumed so a
 // revived sub-coordinator gets its coordinator hat back.
 func (d *DB) RestoreAcceptedHeraCoordinatorBindings(taskID string) (int, error) {
-	unlock, err := d.lockHeraBindingAdmission(taskID)
+	unlock, err := d.lockHeraTaskAdmission(taskID)
 	if err != nil {
 		return 0, err
 	}

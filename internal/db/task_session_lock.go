@@ -50,6 +50,27 @@ func (d *DB) TryLockSessionMutation(taskID string) (unlock func(), acquired bool
 	return d.tryLockTaskOperation(taskID, "")
 }
 
+// TryLockSessionLaunch fences relaunch until an armed Hera stop's exact
+// process has been finalized.
+func (d *DB) TryLockSessionLaunch(taskID string) (func(), bool, error) {
+	unlock, acquired, err := d.TryLockSessionMutation(taskID)
+	if err != nil || !acquired {
+		return unlock, acquired, err
+	}
+	pending, err := d.HeraReclaimStopPending(taskID)
+	if errors.Is(err, ErrTaskNotFound) {
+		err = nil
+	}
+	if err == nil && !pending {
+		return unlock, true, nil
+	}
+	unlock()
+	if err == nil {
+		err = ErrHeraReclaimInProgress
+	}
+	return nil, false, err
+}
+
 // TryLockHeraReclaim coordinates worktree reclaim and binding admission across
 // processes. When a caller also needs the session lock, it takes that lock first.
 func (d *DB) TryLockHeraReclaim(taskID string) (unlock func(), acquired bool, err error) {

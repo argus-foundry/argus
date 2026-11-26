@@ -257,6 +257,8 @@ func (a apiVoice) lockSessionMutation(taskID string) (func(), error) {
 		return nil, &voice.OpError{Speech: "I can't find that workflow.", Code: "not_found"}
 	case errors.Is(err, agent.ErrSessionStarting):
 		return nil, &voice.OpError{Speech: "The agent is starting or restarting.", Code: "agent_restarting"}
+	case errors.Is(err, db.ErrHeraReclaimInProgress):
+		return nil, &voice.OpError{Speech: "That workflow is being reclaimed.", Code: "reclaim_pending"}
 	case err != nil:
 		uxlog.Log("[voice] session operation lock failed task=%s err=%v", taskID, err)
 		return nil, &voice.OpError{Speech: "I couldn't coordinate a session operation.", Code: "session_lock_failed"}

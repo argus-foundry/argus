@@ -6,7 +6,7 @@ const MAX_PENDING_BYTES = 2 * 1024 * 1024;
 function snapshotCursor(response) {
   const pid = outputCursor(response.headers.get('X-Argus-Session-Pid') ?? '0');
   const recorded = response.headers.get('X-Source') === 'log';
-  return { pid, cursor: recorded && !pid ? 0 : outputCursor(response.headers.get('X-Output-Total')) };
+  return { pid, recorded, cursor: recorded && !pid ? 0 : outputCursor(response.headers.get('X-Output-Total')) };
 }
 
 export class TerminalStream {
@@ -241,11 +241,12 @@ export class TerminalStream {
       if(!this.active || version!==this.version)return;
       const [size,response]=await Promise.all([this.size(task,signal),this.api.request(this.path+'/output?bytes=1048576',{signal})]);
       const bytes=new Uint8Array(await response.arrayBuffer());
-      const {cursor,pid}=snapshotCursor(response);
+      const {cursor,pid,recorded}=snapshotCursor(response);
       if(!this.active || version!==this.version)return;
       if(!terminalSize(size))throw new Error('Invalid terminal dimensions');
       const current=this.hooks.currentSize?.();
-      const remaining=this.needsReplacement || pid!==this.pid ? null : retainedOutput(this.cursor,cursor,bytes);
+      const remaining=this.needsReplacement || pid!==this.pid || (recorded && !pid)
+        ? null : retainedOutput(this.cursor,cursor,bytes);
       this.hooks.updateTask?.(task);
       this.needsReplacement=true;
       if(remaining && current?.cols===size.cols && current?.rows===size.rows)await this.hooks.write(remaining);

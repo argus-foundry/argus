@@ -1732,7 +1732,7 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 	if !agent.MarginExceedsRerenderThreshold(initCols, int(cols)) && !committedDrift {
 		return false, ""
 	}
-	unlockSession, acquired, err := s.db.TryLockSessionMutation(taskID)
+	unlockSession, acquired, err := s.db.TryLockSessionLaunch(taskID)
 	if err != nil || !acquired {
 		uxlog.Log("[rerender] session operation lock unavailable task=%s err=%v", taskID, err)
 		s.invalidateColsCache(taskID)
@@ -1882,6 +1882,10 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 		sess = s.runner.Get(id)
 	}
 	if sess == nil {
+		if s.runner.HasPendingRestart(id) {
+			writeCodedErrCause(w, http.StatusConflict, "session has not published a process", "stale_session", nil)
+			return
+		}
 		writeErr(w, http.StatusNotFound, "no active session", nil)
 		return
 	}
@@ -1911,6 +1915,10 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 
 	if pid == 0 {
 		pid = sess.PID()
+	}
+	if pid <= 0 {
+		writeCodedErrCause(w, http.StatusConflict, "session has not published a process", "stale_session", nil)
+		return
 	}
 	cols, rows := sess.InitialPTYSize()
 	sessDone := sess.Done()
@@ -2005,7 +2013,8 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 			// SSE delivery. Daemon already evaluated HasPendingRestart
 			// for its own skip-transition decision; surface it here too.
 			exitPayload := `{"rerendering":false}`
-			if s.runner.HasPendingRestart(id) || (sess.Alive() && sess.PID() != pid) {
+			if current := s.runner.Get(id); s.runner.HasPendingRestart(id) ||
+				(current != nil && current.Alive() && current.PID() > 0 && current.PID() != pid) {
 				exitPayload = `{"rerendering":true}`
 			}
 			fmt.Fprintf(w, "event: exit\ndata: %s\n\n", exitPayload) //nolint:errcheck

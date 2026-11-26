@@ -409,11 +409,14 @@ func (s *Session) followReplacement() {
 		}
 		// A stale snapshot can mean an actual exit or a launch gap. The
 		// daemon remains authoritative for deciding which one occurred.
-		task, taskErr := s.p.c.GetTask(ctx, s.taskID)
-		if IsNotFound(taskErr) || (taskErr == nil && task.Status != "in_progress" && !task.Live) {
-			s.close()
-			s.p.removeSession(s, SessionExitInfo{Stopped: true})
-			return
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict {
+			task, taskErr := s.p.c.GetTask(ctx, s.taskID)
+			if IsNotFound(taskErr) || (taskErr == nil && task.Status != "in_progress" && !task.Live) {
+				s.close()
+				s.p.removeSession(s, SessionExitInfo{Stopped: true})
+				return
+			}
 		}
 		select {
 		case <-ctx.Done():

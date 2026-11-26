@@ -552,6 +552,39 @@ func TestRunner_HasSession_MoreCases(t *testing.T) {
 	}
 }
 
+func TestRunner_PendingLaunchNamesPredecessorBeforeExitCallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	runner := NewRunner(func(string, error, bool, []byte) {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+	})
+	t.Cleanup(runner.StopAll)
+	defer func() {
+		runner.CancelPendingStarts()
+		close(release)
+	}()
+	cfg := config.Config{
+		Defaults: config.Defaults{Backend: "test"},
+		Backends: map[string]config.Backend{"test": {Command: "sleep 30"}},
+	}
+	task := &model.Task{ID: "queued", Name: "Queued", Worktree: t.TempDir()}
+	old, err := runner.Start(task, cfg, 24, 80, false)
+	testutil.NoError(t, err)
+	testutil.NoError(t, runner.Recycle(task, cfg, 24, 80))
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retiring process did not enter the finish callback")
+	}
+	sessions, pending := runner.SessionsAndPendingLaunches()
+	testutil.Equal(t, len(sessions), 0)
+	testutil.Equal(t, pending[task.ID], old.PID())
+}
+
 func TestRunner_PendingRestartIDs(t *testing.T) {
 	r := NewRunner(nil)
 

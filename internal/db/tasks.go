@@ -183,7 +183,7 @@ func (d *DB) insertTaskLocked(t *model.Task) error {
 
 func (d *DB) Update(t *model.Task) error {
 	if !t.Archived {
-		unlock, err := d.lockHeraTaskRestore(t.ID)
+		unlock, err := d.lockHeraTaskAdmission(t.ID)
 		if err != nil {
 			return err
 		}
@@ -467,7 +467,7 @@ func (d *DB) SetArchived(id string, archived bool) error {
 
 func (d *DB) setArchived(id string, archived bool) error {
 	if !archived {
-		unlock, err := d.lockHeraTaskRestore(id)
+		unlock, err := d.lockHeraTaskAdmission(id)
 		if err != nil {
 			return err
 		}
@@ -570,7 +570,7 @@ func emitSectionChange(id string, oldArchived, oldPinned, newArchived, newPinned
 // and/or archived), and only when a flag actually moved.
 func (d *DB) SetPinned(id string, pinned bool) error {
 	if pinned {
-		unlock, err := d.lockHeraTaskRestore(id)
+		unlock, err := d.lockHeraTaskAdmission(id)
 		if err != nil {
 			return err
 		}

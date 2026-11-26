@@ -353,12 +353,18 @@ func TestSession_StreamKeepsHistoryBoundToItsPID(t *testing.T) {
 
 func TestSession_RebindsManagedReplacementWithoutExitCallback(t *testing.T) {
 	opened := make(chan struct{}, 1)
-	var streams atomic.Int64
+	var streams, snapshots atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/tasks/t1/output":
+			if snapshots.Add(1) == 1 {
+				w.WriteHeader(http.StatusConflict)
+				return
+			}
 			w.Header().Set("X-Argus-Session-Pid", "456")
 			_, _ = io.WriteString(w, "w")
+		case "/api/tasks/t1":
+			_, _ = io.WriteString(w, `{"id":"t1","status":"in_review","live":false}`)
 		case "/api/tasks/t1/stream":
 			if streams.Add(1) == 1 {
 				w.Header().Set("X-Argus-Session-Pid", "123")
@@ -398,6 +404,7 @@ func TestSession_RebindsManagedReplacementWithoutExitCallback(t *testing.T) {
 	testutil.Equal(t, next.PID(), 456)
 	testutil.Equal(t, string(old.RecentOutput()), "old")
 	testutil.Equal(t, exits.Load(), int64(0))
+	testutil.Equal(t, snapshots.Load(), int64(2))
 }
 
 func TestSession_RingBufferReceivesStream(t *testing.T) {
