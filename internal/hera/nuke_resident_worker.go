@@ -271,7 +271,15 @@ func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView
 	var lease *db.HeraReclaimLease
 	if reclaim {
 		leaseRepo, branch, tip := agent.WorktreeRemoteBranchLease(t.Worktree, t.Branch, repoDir)
-		lease = &db.HeraReclaimLease{RepoDir: leaseRepo, Branch: branch, Tip: tip}
+		if leaseRepo == "" {
+			leaseRepo = repoDir
+		}
+		repoID, err := agent.TaskGitRepositoryID(context.Background(), leaseRepo)
+		if err != nil {
+			residentDeleteLog("[resident] delete: repository identity unavailable task=%s err=%v", t.ID, err)
+			leaseRepo, tip = "", ""
+		}
+		lease = &db.HeraReclaimLease{RepoDir: leaseRepo, RepoID: repoID, Branch: branch, Tip: tip}
 	}
 	if reclaim && opts.Recheck != nil {
 		guard := armStopCloseoutGuard(d, t.ID)
@@ -314,7 +322,7 @@ func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView
 		return noop, nil
 	}
 	cfg := d.Config()
-	if _, err := settleResidentLocalReclaim(context.Background(), d, cfg, t, repoDir, lease, repoLocked); err != nil {
+	if _, err := settleResidentLocalReclaim(context.Background(), d, cfg, t, lease, repoLocked); err != nil {
 		residentDeleteLog("[resident] delete role %d: local cleanup deferred task=%s: %v", r.RoleID, t.ID, err)
 		return noop, nil
 	}
@@ -343,6 +351,9 @@ func residentRemoteBranchDeleteOwned(ctx context.Context, d *db.DB, opts Residen
 		return err
 	}
 	defer unlock()
+	if err := verifyReclaimRepository(ctx, lease); err != nil {
+		return err
+	}
 	_, branch, err := residentReclaimTargets(ctx, d, d.Config(), taskID, lease.RepoDir, "", lease.Branch)
 	if err != nil {
 		return err
@@ -604,7 +615,7 @@ func residentWorkerStackFollowUp(d *db.DB, x *model.Task) {
 	}
 	ctx := context.Background()
 	cfg := d.Config()
-	byBase := stackTasksInRepository(ctx, cfg, agent.ResolveDir(x, cfg), all)
+	byBase := StackTasksInRepository(ctx, cfg, agent.ResolveDir(x, cfg), all)
 	n := reconcileStackedBranches(ctx, d, cfg, byBase, x, map[string]mergesafety.Verdict{}, true)
 	residentDeleteLog("[resident] delete: stacked-branch follow-up task=%s deleted=%d", x.ID, n)
 }

@@ -15,7 +15,6 @@ import (
 	"github.com/argus-foundry/argus/internal/daemon"
 	"github.com/argus-foundry/argus/internal/db"
 	herasvc "github.com/argus-foundry/argus/internal/hera"
-	"github.com/argus-foundry/argus/internal/mergesafety"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/tui/hera"
 	"github.com/argus-foundry/argus/internal/tui/modal"
@@ -934,7 +933,7 @@ func (a *App) heraCascadeNukeFrom(rootID int64) {
 			for _, id := range reclaimIDs {
 				inCascade[id] = true
 			}
-			extra = a.classifyStackedBranchesForCascade(context.Background(), notSafeIDs, inCascade, make(map[string]mergesafety.Verdict))
+			extra = a.classifyStackedBranchesForCascade(context.Background(), notSafeIDs, inCascade)
 		}
 		a.tapp.QueueUpdateDraw(func() { reviewThenConfirm(confirmed, extra) })
 	}()
@@ -1109,18 +1108,8 @@ func (a *App) heraDeleteStackedBranches(extra []stackedBranchCandidate) {
 	if !ok {
 		return
 	}
-	cfg := a.db.Config()
 	for _, c := range extra {
-		t, err := a.db.Get(c.TaskID)
-		if err != nil || t == nil {
-			uxlog.Log("[hera-view] cascade: stacked branch delete skipped, task %s not found: %v", c.TaskID, err)
-			continue
-		}
-		repoDir := agent.ResolveDir(t, cfg)
-		if repoDir == "" {
-			continue
-		}
-		if herasvc.DeleteStackedTaskBranch(context.Background(), database, c.TaskID, repoDir, c.Branch) {
+		if herasvc.DeleteStackedTaskBranch(context.Background(), database, c.TaskID, c.RepoDir, c.RepoID, c.Branch) {
 			uxlog.Log("[hera-view] cascade: stacked branch cleanup ran branch=%q task=%s", c.Branch, c.TaskID)
 		}
 	}

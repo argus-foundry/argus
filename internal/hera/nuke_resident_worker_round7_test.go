@@ -408,6 +408,60 @@ func TestDeferredLocalReclaimPreservesLockedWorktreeInOriginalRepository(t *test
 	testutil.True(t, gitBranchExists(other, branch))
 }
 
+func TestResidentReclaimKeepsCapturedRepositoryAfterWorktreeReuse(t *testing.T) {
+	home := t.TempDir()
+	original, other := initGitRepo(t, t.TempDir()), initGitRepo(t, t.TempDir())
+	checkout := filepath.Join(home, ".argus", "worktrees", "worker")
+	const branch = "argus/worker"
+	gitRun(t, original, "worktree", "add", "-b", branch, checkout)
+	task := &model.Task{ID: "worker", Name: "Worker", Worktree: checkout}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	t.Setenv("HOME", home)
+	starting := true
+	owner := nukeReclaimOwner{Runner: agent.NewRunner(nil), pending: &starting}
+	_, err := NukeResidentWorker(d, owner, view)
+	testutil.NoError(t, err)
+	gitRun(t, original, "worktree", "remove", checkout)
+	gitRun(t, other, "worktree", "add", "-b", branch, checkout)
+
+	sum, err := ReconcileHeraReclaims(d, &fakeSessionChecker{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, sum.Pruned, 0)
+	testutil.True(t, agent.DirExists(checkout))
+	testutil.True(t, gitBranchExists(other, branch))
+	lease, err := d.HeraResidentReclaimLease(task.ID)
+	testutil.NoError(t, err)
+	if lease == nil {
+		t.Fatal("deferred worker reclaim was lost")
+	}
+	testutil.True(t, agent.SamePath(lease.RepoDir, original))
+	testutil.False(t, lease.LocalDone)
+}
+
+func TestResidentReclaimRefusesLeasedPushAfterRepositoryAliasChanges(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	original, other := initGitRepo(t, t.TempDir()), initGitRepo(t, t.TempDir())
+	alias := filepath.Join(t.TempDir(), "repository")
+	testutil.NoError(t, os.Symlink(original, alias))
+	repoID, err := agent.TaskGitRepositoryID(context.Background(), alias)
+	testutil.NoError(t, err)
+	lease := &db.HeraReclaimLease{RepoDir: alias, RepoID: repoID, Branch: "argus/worker", Tip: "1234567"}
+	testutil.NoError(t, os.Remove(alias))
+	testutil.NoError(t, os.Symlink(other, alias))
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	called := false
+	err = residentRemoteBranchDeleteOwned(context.Background(), d, ResidentDeleteOptions{
+		RemoteBranchDelete: func(context.Context, string, string, string) error {
+			called = true
+			return nil
+		},
+	}, "worker", lease)
+	testutil.Error(t, err)
+	testutil.False(t, called)
+}
+
 // A session that exits on Stop but has not settled by the end of the wait is
 // refused ("had not settled"), the recheck never runs, and the worker is left
 // resumable. Covers both the wait measured from the Stop call's START (not

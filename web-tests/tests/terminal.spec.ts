@@ -258,6 +258,11 @@ test.describe('terminal', () => {
       archived = archive;
       await route.fulfill({ status: 200, json: { archived } }).catch(() => {});
     });
+    await page.route(/\/api\/tasks\/[^/?]+$/, async route => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...await response.json(), archived } });
+    });
     try {
       await login(page);
       if (!archive) await page.evaluate(() => (window as any).setListFilter('archived'));
@@ -272,6 +277,60 @@ test.describe('terminal', () => {
       await expect(page.locator('.task-item')).toHaveCount(0);
     } finally {
       release!();
+    }
+  });
+
+  test('late Archive leaves the active terminal reopened after Unarchive', async ({ page }) => {
+    let archived = false;
+    let archiveCommitted = false;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks(?:\?|$)/, async route => {
+      const url = new URL(route.request().url());
+      const selectedArchive = url.searchParams.get('archived') === '1';
+      url.search = '';
+      const response = await route.fetch({ url: String(url) });
+      const body = await response.json();
+      body.tasks = selectedArchive === archived ? body.tasks.map(task => ({ ...task, archived })) : [];
+      await route.fulfill({ response, json: body });
+    });
+    await page.route(/\/api\/tasks\/[^/?]+$/, async route => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...await response.json(), archived } });
+    });
+    await page.route(/\/api\/tasks\/[^/]+\/(?:archive|unarchive)$/, async route => {
+      const archive = route.request().url().endsWith('/archive');
+      archived = archive;
+      if (archive) {
+        archiveCommitted = true;
+        await held;
+      }
+      await route.fulfill({ status: 200, json: { archived: archive } }).catch(() => {});
+    });
+    try {
+      await login(page);
+      const task = page.locator('.task-item').filter({ hasText: 'echo-bash' });
+      await task.click();
+      await page.evaluate(() => { (window as any).pendingArchive = (window as any).setArchive(true); });
+      await expect.poll(() => archiveCommitted).toBe(true);
+      await page.locator('#detail-view .detail-back').click();
+      await page.evaluate(() => (window as any).setListFilter('archived'));
+      await task.click();
+      await page.evaluate(() => (window as any).setArchive(false));
+      await expect(page.locator('#detail-view')).not.toHaveClass(/\bopen\b/);
+      await page.evaluate(() => (window as any).setListFilter('active'));
+      await task.click();
+      await expect(page.locator('.term-status.live')).toBeVisible();
+      await page.evaluate(() => { (window as any).reopenedTerm = (window as any).term; });
+      release!();
+      expect(await page.evaluate(async () => {
+        await (window as any).pendingArchive;
+        return (window as any).term === (window as any).reopenedTerm;
+      })).toBe(true);
+    } finally {
+      release!();
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
     }
   });
 

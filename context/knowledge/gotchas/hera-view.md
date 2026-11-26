@@ -504,3 +504,5 @@ M6a scaffolds the native Hera view: a `HeraPage` (rail | coordinator pane | agen
 - **A later sibling end supersedes a legacy nuke marker.** Older clients wrote the same end reason for preserved and reclaimable bindings. Same-task binding history distinguishes those cases even after the sibling goes offline.
 
 - **Resident worker deletion holds the task's session and reclaim locks through preflight and teardown.** Its local cleanup requires a committed claim and confirmed retirement. An unsettled process leaves the worktree for the periodic sweep.
+
+- **TUI stack confirmation carries the classified Git identity.** Repository aliases can share a stack. Equal branch names in different repositories cannot share cleanup evidence.

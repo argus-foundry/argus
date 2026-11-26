@@ -479,7 +479,9 @@ func TestHeraStackedDeletePreservesReclaimOwnedBranch(t *testing.T) {
 	role := seedHeraRoleOnTask(t, d, orch, "worker", db.HeraKindWorker, task.ID, "")
 	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(role.ID))
 
-	app.heraDeleteStackedBranches([]stackedBranchCandidate{{TaskID: task.ID, Branch: branch}})
+	repoID, err := agent.TaskGitRepositoryID(context.Background(), repo)
+	testutil.NoError(t, err)
+	app.heraDeleteStackedBranches([]stackedBranchCandidate{{TaskID: task.ID, Branch: branch, RepoDir: repo, RepoID: repoID}})
 	verify := exec.Command("git", "show-ref", "--verify", "refs/heads/"+branch)
 	verify.Dir = repo
 	testutil.NoError(t, verify.Run())
@@ -1919,7 +1921,7 @@ func TestHeraActions_OrchHeaderDeleteCascadesNestedSubtree(t *testing.T) {
 // message reflects only what was kept).
 func TestHeraCascadeNukeFrom_StackedBranchSequentialReview(t *testing.T) {
 	d := testDB(t)
-	testutil.NoError(t, d.SetProject("p", config.Project{Path: t.TempDir(), Branch: "master"}))
+	testutil.NoError(t, d.SetProject("p", config.Project{Path: stackFixtureRepo(t), Branch: "master"}))
 	now := time.Now()
 	chainTasks := []*model.Task{
 		{ID: "midA", Name: "midA", Project: "p", Branch: "bA", BaseBranch: "b1", Status: model.StatusInProgress, CreatedAt: now},
@@ -1999,7 +2001,7 @@ func TestHeraCascadeNukeFrom_StackedBranchSequentialReview(t *testing.T) {
 	// Re-running discovery over the SAME candidate proves the exclusion
 	// persisted and is never re-offered, while the kept branch (midB, never
 	// excluded) still surfaces normally.
-	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"task1"}, map[string]bool{"task1": true}, make(map[string]mergesafety.Verdict))
+	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"task1"}, map[string]bool{"task1": true})
 	got := map[string]bool{}
 	for _, c := range extra {
 		got[c.TaskID] = true

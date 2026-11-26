@@ -490,3 +490,11 @@ After a successful Archive or Unarchive, the PWA SHALL close the detail for that
 #### Scenario: An archive response returns after the same task is reopened
 - **WHEN** success removes the task from the selected Active or Archived list
 - **THEN** its reopened terminal closes, while an unrelated task's terminal stays open.
+
+### Requirement: Reconcile a delayed archive response with current state
+
+A delayed Archive or Unarchive completion SHALL use the task's authoritative current archival state before closing a newer detail visit.
+
+#### Scenario: Unarchive succeeds before the older Archive response arrives
+- **WHEN** the user has reopened the currently active task after Unarchive
+- **THEN** the older Archive response leaves the active terminal open.

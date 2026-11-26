@@ -380,3 +380,5 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **A successful delete applies to the task ID across visits.** If the current detail still shows that ID, close it. Leave another task's view open.
 
 - **Archive and Unarchive can remove the current task from its list.** After success, close a reopened view of that same task if it moved to the other filter.
+
+- **Re-read archival state before applying a response to a newer detail visit.** The server can commit a later Unarchive before the earlier Archive response arrives in the browser.

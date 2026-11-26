@@ -343,7 +343,7 @@ func TestStackTasksUseSharedGitRepositoryIdentity(t *testing.T) {
 	}}
 	same := &model.Task{ID: "same", Project: "linked", Branch: "child", BaseBranch: "base"}
 	other := &model.Task{ID: "other", Project: "other", Branch: "child", BaseBranch: "base"}
-	got := stackTasksInRepository(context.Background(), cfg, repo, []*model.Task{same, other})
+	got := StackTasksInRepository(context.Background(), cfg, repo, []*model.Task{same, other})
 	testutil.Equal(t, len(got), 1)
 	testutil.Equal(t, got["base"], same)
 }
@@ -366,7 +366,9 @@ func TestStackedDeletePreservesSuccessorAfterOldTaskDisappears(t *testing.T) {
 	testutil.NoError(t, d.Delete(old.ID))
 	testutil.NoError(t, d.Add(&model.Task{ID: "new", Name: "New worker", Project: "p", Branch: branch}))
 
-	testutil.False(t, DeleteStackedTaskBranch(context.Background(), d, old.ID, repo, branch))
+	repoID, err := agent.TaskGitRepositoryID(context.Background(), repo)
+	testutil.NoError(t, err)
+	testutil.False(t, DeleteStackedTaskBranch(context.Background(), d, old.ID, repo, repoID, branch))
 	gitRun(t, repo, "show-ref", "--verify", "refs/heads/"+branch)
 	gitRun(t, remote, "show-ref", "--verify", "refs/heads/"+branch)
 }

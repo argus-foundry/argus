@@ -11,6 +11,7 @@ package hera
 
 import (
 	"context"
+	"errors"
 	"slices"
 
 	"github.com/argus-foundry/argus/internal/agent"
@@ -149,7 +150,7 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 
 	repoDir := agent.ResolveDir(t, cfg)
 	if lease != nil {
-		removed, err := settleResidentLocalReclaim(ctx, d, cfg, t, repoDir, lease, false)
+		removed, err := settleResidentLocalReclaim(ctx, d, cfg, t, lease, false)
 		if err != nil {
 			uxlog.Log("[resident] reclaim sweep: local ownership unavailable task=%s err=%v", id, err)
 			return
@@ -163,7 +164,7 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 		uxlog.Log("[hera] reclaim sweep: retried worktree+branch removal task=%s", id)
 	}
 
-	byBase := stackTasksInRepository(ctx, cfg, repoDir, allTasks)
+	byBase := StackTasksInRepository(ctx, cfg, repoDir, allTasks)
 	sum.StackedBranchesDeleted += reconcileStackedBranches(ctx, d, cfg, byBase, t, map[string]mergesafety.Verdict{}, lease != nil)
 	if lease != nil {
 		if err := residentRemoteBranchDeleteOwned(ctx, d, ResidentDeleteOptions{}, id, lease); err != nil {
@@ -185,9 +186,9 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 	}
 }
 
-// stackTasksInRepository keeps identically named branches in another Git
+// StackTasksInRepository keeps identically named branches in another Git
 // repository out of the evidence and admission checks for this stack.
-func stackTasksInRepository(ctx context.Context, cfg config.Config, repoDir string, tasks []*model.Task) map[string]*model.Task {
+func StackTasksInRepository(ctx context.Context, cfg config.Config, repoDir string, tasks []*model.Task) map[string]*model.Task {
 	root, err := agent.TaskGitRepositoryID(ctx, repoDir)
 	if err != nil || root == "" {
 		return nil
@@ -213,7 +214,7 @@ func stackTasksInRepository(ctx context.Context, cfg config.Config, repoDir stri
 
 // settleResidentLocalReclaim fences worktree creation before checking for a
 // replacement. It records the completed local step before any Git network I/O.
-func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config, task *model.Task, repoDir string, lease *db.HeraReclaimLease, repoLocked bool) (bool, error) {
+func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config, task *model.Task, lease *db.HeraReclaimLease, repoLocked bool) (bool, error) {
 	if lease.LocalDone {
 		return false, nil
 	}
@@ -229,12 +230,9 @@ func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config
 		lease.LocalDone = true
 		return false, d.SetResidentReclaimLease(task.ID, lease)
 	}
-	if lease.RepoDir != "" {
-		repoDir = lease.RepoDir
-	}
-	if resolved := agent.ResidentCleanupRepository(ctx, task.Worktree, repoDir); resolved != "" {
-		repoDir = resolved
-		lease.RepoDir = resolved
+	repoDir := lease.RepoDir
+	if repoDir == "" {
+		return false, errors.New("original reclaim repository was unavailable at nuke time")
 	}
 	unlock, acquired, err := agent.TryLockTaskGitOwnership(ctx, repoDir)
 	if err != nil {
@@ -244,6 +242,9 @@ func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config
 		return false, db.ErrHeraReclaimInProgress
 	}
 	defer unlock()
+	if err := verifyReclaimRepository(ctx, lease); err != nil {
+		return false, err
+	}
 	worktree, branch, err = residentReclaimTargets(ctx, d, cfg, task.ID, repoDir, worktree, branch)
 	if err != nil {
 		return false, err
@@ -257,6 +258,20 @@ func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config
 	}
 	lease.LocalDone = true
 	return removed, d.SetResidentReclaimLease(task.ID, lease)
+}
+
+func verifyReclaimRepository(ctx context.Context, lease *db.HeraReclaimLease) error {
+	if lease.RepoID == "" {
+		return nil
+	}
+	current, err := agent.TaskGitRepositoryID(ctx, lease.RepoDir)
+	if err != nil {
+		return err
+	}
+	if !agent.SamePath(current, lease.RepoID) {
+		return errors.New("captured reclaim repository changed")
+	}
+	return nil
 }
 
 // residentReclaimTargets is called with Git ownership fenced across creation.
@@ -341,6 +356,10 @@ func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, 
 	if repoDir == "" {
 		return 0
 	}
+	repoID, err := agent.TaskGitRepositoryID(ctx, repoDir)
+	if err != nil || repoID == "" {
+		return 0
+	}
 
 	tipVerdict, cached := tipVerdicts[tip.Branch]
 	if !cached {
@@ -392,7 +411,7 @@ func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, 
 		if !v.Safe {
 			continue
 		}
-		if !branchExistsOnOrigin(ctx, repoDir, y.Branch) || !deleteStackedTaskBranch(ctx, d, y.ID, repoDir, y.Branch, y.ID == x.ID) {
+		if !branchExistsOnOrigin(ctx, repoDir, y.Branch) || !deleteStackedTaskBranch(ctx, d, y.ID, repoDir, repoID, y.Branch, y.ID == x.ID) {
 			continue
 		}
 
@@ -404,11 +423,11 @@ func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, 
 
 // DeleteStackedTaskBranch revalidates a confirmed stack entry against task
 // creation and reclaim before deleting its branch.
-func DeleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, branch string) bool {
-	return deleteStackedTaskBranch(ctx, d, taskID, repoDir, branch, false)
+func DeleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, repoID, branch string) bool {
+	return deleteStackedTaskBranch(ctx, d, taskID, repoDir, repoID, branch, false)
 }
 
-func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, branch string, admissionHeld bool) bool {
+func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, repoID, branch string, admissionHeld bool) bool {
 	if !admissionHeld {
 		unlock, err := d.TryLockTaskOutsideReclaim(taskID)
 		if err != nil {
@@ -429,7 +448,7 @@ func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, bra
 		return false
 	}
 	root, err := agent.TaskGitRepositoryID(ctx, repoDir)
-	if err != nil || root == "" {
+	if err != nil || root == "" || !agent.SamePath(root, repoID) {
 		return false
 	}
 	cfg := d.Config()
