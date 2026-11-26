@@ -23,6 +23,7 @@ func TestGitSign_RefusesNonLocalCallers(t *testing.T) {
 		{"master token from a tailscale peer", "100.94.76.10:50000", "test-token", [2]string{}},
 		{"master token from ipv6 non-loopback", "[fd7a:115c:a1e0::1]:50000", "test-token", [2]string{}},
 		{"master token proxied by tailscale serve", "127.0.0.1:50000", "test-token", [2]string{"X-Forwarded-For", "100.94.76.10"}},
+		{"master token proxied with X-Real-IP", "127.0.0.1:50000", "test-token", [2]string{"X-Real-IP", "100.94.76.10"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sign, _, n := recordingSigner([]byte(gitSignSignature), nil)

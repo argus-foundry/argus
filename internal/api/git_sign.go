@@ -90,12 +90,12 @@ func (s *Server) handleGitSign(w http.ResponseWriter, r *http.Request) {
 // local `argus -Y sign` helper signs: it runs on the daemon's host and
 // presents the master token. Per-device and plugin tokens, non-loopback peers
 // (Tailscale), and loopback requests relayed by a local reverse proxy such as
-// `tailscale serve` (which adds X-Forwarded-For) are refused.
+// `tailscale serve` (which adds X-Forwarded-For; X-Real-IP and Forwarded too) are refused.
 func gitSignCallerRefusal(r *http.Request) string {
 	if r.Header.Get("X-Argus-Auth") != "master" {
 		return "master token required"
 	}
-	if !remoteIsLoopback(r) || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("Forwarded") != "" {
+	if !remoteIsLoopback(r) || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("Forwarded") != "" || r.Header.Get("X-Real-IP") != "" {
 		return "local callers only"
 	}
 	return ""

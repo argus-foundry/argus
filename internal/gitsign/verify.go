@@ -65,6 +65,10 @@ func Verify(pub ssh.PublicKey, namespace string, data, armored []byte) error {
 	if err := ssh.Unmarshal(fields[4], &sig); err != nil {
 		return fail("malformed signature")
 	}
+	// PROTOCOL.sshsig: RSA signatures must use rsa-sha2-*, never SHA-1 ssh-rsa.
+	if sig.Format == ssh.KeyAlgoRSA {
+		return fail("SHA-1 ssh-rsa signatures are not accepted")
+	}
 	toSign := []byte(sshsigMagic)
 	toSign = appendString(toSign, fields[1])
 	toSign = appendString(toSign, fields[2])
@@ -79,7 +83,8 @@ func Verify(pub ssh.PublicKey, namespace string, data, armored []byte) error {
 // unarmor decodes the base64 body between the SSH SIGNATURE markers.
 func unarmor(armored []byte) ([]byte, error) {
 	s := strings.TrimSpace(string(armored))
-	if !strings.HasPrefix(s, armorBegin) || !strings.HasSuffix(s, armorEnd) {
+	// The length check stops overlapping markers from slicing out of range.
+	if len(s) < len(armorBegin)+len(armorEnd) || !strings.HasPrefix(s, armorBegin) || !strings.HasSuffix(s, armorEnd) {
 		return nil, errors.New("not an armored SSH signature")
 	}
 	body := strings.Join(strings.Fields(s[len(armorBegin):len(s)-len(armorEnd)]), "")
