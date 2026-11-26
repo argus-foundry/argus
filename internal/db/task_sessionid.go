@@ -151,6 +151,27 @@ func (d *DB) RecordSessionStop(id string) error {
 	return err
 }
 
+// ReconcileMissingSession parks an inferred missing session unless the task
+// changed owners or a targeted Hera reclaim still expects a confirmed exit.
+func (d *DB) ReconcileMissingSession(id string, pid int) (bool, error) {
+	inProgress, inReview := model.StatusInProgress.String(), model.StatusInReview.String()
+	d.mu.Lock()
+	result, err := d.conn.Exec(`UPDATE tasks SET status=?
+		WHERE id=? AND status=? AND agent_pid=? AND kind<>? AND hera_reclaim_pid=0`,
+		inReview, id, inProgress, pid, model.KindResident)
+	d.mu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows == 0 {
+		return false, err
+	}
+	events.Emit(model.EventTypeTaskStatusChanged, id, map[string]string{"from": inProgress, "to": inReview})
+	events.EmitTaskUpdated(id, model.TaskFieldStatus)
+	return true, nil
+}
+
 // SetSessionIDIfEmpty records a backend-minted session ID only while the task
 // has none, in one atomic statement so it can never overwrite an ID another
 // path (post-exit capture, resume refresh) already stored. Reports whether this

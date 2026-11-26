@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -286,6 +288,78 @@ func TestSup_ExitInfoScopedAfterAttach(t *testing.T) {
 		return info.Stopped
 	})
 	testutil.False(t, info.PendingRestart)
+}
+
+func TestSup_ExitInfoKeepsFastRestartSuccessor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const command = "if [ -f started ]; then printf 'successor exited'; exit 7; fi; touch started; exec sleep 60"
+	s, _ := testSupervisor(t, supCfg(command))
+	core := s.sessionCore
+	t.Cleanup(core.runner.StopAll)
+	const id = "fast-restart"
+	wt := t.TempDir()
+
+	var started StartResp
+	testutil.NoError(t, core.StartSession(&StartReq{TaskID: id, Backend: "test", Worktree: wt, Rows: 24, Cols: 80}, &started))
+	testutil.Equal(t, started.Error, "")
+	waitFor(t, "first process ready", func() bool {
+		_, err := os.Stat(filepath.Join(wt, "started"))
+		return err == nil
+	})
+
+	var recycled StatusResp
+	testutil.NoError(t, core.Recycle(&RecycleReq{TaskID: id, Backend: "test", Worktree: wt, Rows: 24, Cols: 80}, &recycled))
+	testutil.Equal(t, recycled.Error, "")
+	var status SessionInfo
+	waitFor(t, "successor exit", func() bool {
+		status = SessionInfo{}
+		testutil.NoError(t, core.SessionStatus(&TaskIDReq{TaskID: id}, &status))
+		return status.LastExitPID > 0 && status.LastExitPID != started.PID
+	})
+
+	var predecessor, successor, legacy ExitInfo
+	testutil.NoError(t, core.GetExitInfo(&TaskIDReq{TaskID: id, ExpectedPID: started.PID}, &predecessor))
+	testutil.True(t, predecessor.PendingRestart)
+	testutil.Equal(t, predecessor.RestartSuccessorPID, status.LastExitPID)
+	testutil.NoError(t, core.GetExitInfo(&TaskIDReq{TaskID: id, ExpectedPID: status.LastExitPID}, &successor))
+	testutil.False(t, successor.StreamLost)
+	testutil.False(t, successor.PendingRestart)
+	testutil.Contains(t, successor.Err, "exit status 7")
+	testutil.Contains(t, string(successor.LastOutput), "successor exited")
+
+	testutil.NoError(t, core.GetExitInfo(&TaskIDReq{TaskID: id}, &legacy))
+	testutil.Equal(t, legacy.PID, successor.PID)
+	testutil.NoError(t, core.GetExitInfo(&TaskIDReq{TaskID: id}, &legacy))
+	testutil.True(t, legacy.StreamLost)
+	testutil.NoError(t, core.GetExitInfo(&TaskIDReq{TaskID: id, ExpectedPID: successor.PID}, &legacy))
+	testutil.Equal(t, legacy.PID, successor.PID)
+}
+
+func TestExitInfoRetentionIsBounded(t *testing.T) {
+	core := newSessionCore(agent.NewRunner(nil), config.DefaultConfig, t.Context().Done())
+	const id = "retention"
+	core.mu.Lock()
+	for pid := 1; pid <= retainedExitCount+1; pid++ {
+		core.recordExitLocked(id, ExitInfo{PID: pid, LastOutput: []byte("old exit")}, nil)
+	}
+	pid := retainedExitCount + 1
+	core.recordExitLocked(id, ExitInfo{PID: pid, Err: "failed restart"}, nil)
+	generation := core.exitGen
+	oldGeneration := core.recentExits[id][0].gen
+	core.mu.Unlock()
+
+	var reply ExitInfo
+	testutil.NoError(t, core.GetExitInfo(&TaskIDReq{TaskID: id, ExpectedPID: 1}, &reply))
+	testutil.True(t, reply.StreamLost)
+	testutil.NoError(t, core.GetExitInfo(&TaskIDReq{TaskID: id, ExpectedPID: pid}, &reply))
+	testutil.Equal(t, reply.Err, "failed restart")
+	core.expireExit(id, oldGeneration)
+	core.expireExit(id, generation)
+	testutil.NoError(t, core.GetExitInfo(&TaskIDReq{TaskID: id, ExpectedPID: pid}, &reply))
+	testutil.True(t, reply.StreamLost)
+	var status SessionInfo
+	testutil.NoError(t, core.SessionStatus(&TaskIDReq{TaskID: id}, &status))
+	testutil.Equal(t, status.LastExitPID, pid)
 }
 
 func waitFor(t *testing.T, what string, ok func() bool) {

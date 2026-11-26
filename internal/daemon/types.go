@@ -157,7 +157,8 @@ type BootInfoResp struct {
 // process, and scopes stream attachment and exit lookups to the selected PID.
 // ResizeForPID and StopRerenderForPID use separate RPC methods so stale
 // supervisors cannot silently ignore the target of a width repair.
-const ProtocolVersion = 16
+// v17 adds StopTreeForPID and names the exact managed successor in ExitInfo.
+const ProtocolVersion = 17
 
 // SupervisorProtocolMatch reports whether a supervisor's handshake version
 // equals the daemon's. A mismatch is NOT fatal and NEVER triggers an auto-

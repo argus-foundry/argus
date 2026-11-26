@@ -2,6 +2,8 @@ package tui
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -26,7 +28,8 @@ type connectedReclaimRunner struct {
 	*agent.Runner
 	session   agent.SessionHandle
 	attachErr error
-	stop      func() error
+	stop      func(string, int) error
+	checkErr  error
 }
 
 func (r connectedReclaimRunner) AttachableSession(string) (agent.SessionHandle, error) {
@@ -35,7 +38,11 @@ func (r connectedReclaimRunner) AttachableSession(string) (agent.SessionHandle, 
 
 func (r connectedReclaimRunner) HasSession(string) bool { return r.session != nil }
 
-func (r connectedReclaimRunner) Stop(string) error { return r.stop() }
+func (r connectedReclaimRunner) StopTreeForPID(id string, pid int) error {
+	return r.stop(id, pid)
+}
+
+func (r connectedReclaimRunner) CheckReclaimSessionRetired(string) error { return r.checkErr }
 
 func TestHeraReclaimConnectedArmsSessionBeforeStop(t *testing.T) {
 	d := testDB(t)
@@ -43,19 +50,21 @@ func TestHeraReclaimConnectedArmsSessionBeforeStop(t *testing.T) {
 	const pid = 42
 	type observation struct {
 		armed, locked bool
+		taskID        string
+		pid           int
 		err           error
 	}
 	observed := make(chan observation, 1)
 	runner := connectedReclaimRunner{
 		Runner:  agent.NewRunner(nil),
 		session: &fakeKickSession{pid: pid, alive: true},
-		stop: func() error {
+		stop: func(id string, expectedPID int) error {
 			armed, err := d.ConsumeHeraReclaimStop(task.ID, pid)
 			unlock, acquired, lockErr := d.TryLockSessionMutation(task.ID)
 			if acquired {
 				unlock()
 			}
-			observed <- observation{armed: armed, locked: !acquired, err: errors.Join(err, lockErr)}
+			observed <- observation{armed: armed, locked: !acquired, taskID: id, pid: expectedPID, err: errors.Join(err, lockErr)}
 			return nil
 		},
 	}
@@ -67,6 +76,8 @@ func TestHeraReclaimConnectedArmsSessionBeforeStop(t *testing.T) {
 		testutil.NoError(t, got.err)
 		testutil.True(t, got.armed)
 		testutil.True(t, got.locked)
+		testutil.Equal(t, got.taskID, task.ID)
+		testutil.Equal(t, got.pid, pid)
 	case <-time.After(2 * time.Second):
 		t.Fatal("reclaim did not stop the active session")
 	}
@@ -77,53 +88,91 @@ func TestHeraReclaimConnectedArmsSessionBeforeStop(t *testing.T) {
 	testutil.False(t, app.consumeHeraReclaimPending(task.ID))
 }
 
-func TestHeraReclaimConnectedStopFailureClearsIntent(t *testing.T) {
-	d := testDB(t)
-	task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Archived: true}
-	testutil.NoError(t, d.Add(task))
-	const pid = 42
-	runner := connectedReclaimRunner{
-		Runner:  agent.NewRunner(nil),
-		session: &fakeKickSession{pid: pid, alive: true},
-		stop:    func() error { return errors.New("session could not be stopped") },
-	}
-	stopConnectedHeraReclaim(runner, d, task.ID, true)
-	armed, err := d.ConsumeHeraReclaimStop(task.ID, pid)
-	testutil.NoError(t, err)
-	testutil.False(t, armed)
-}
-
-func TestHeraReclaimConnectedUncertifiedSession(t *testing.T) {
+func TestHeraReclaimConnectedUnconfirmedPreservesWorktree(t *testing.T) {
 	const pid = 42
 	for _, tc := range []struct {
-		name      string
-		attachErr error
-		wantStop  bool
+		name        string
+		attachErr   error
+		checkErr    error
+		stopErr     error
+		wantPending bool
 	}{
-		{name: "unsettled", attachErr: agent.ErrSessionStarting},
-		{name: "legacy stop", attachErr: agent.ErrSessionCoordinationUnsupported, wantStop: true},
+		{name: "launch pending", attachErr: agent.ErrSessionStarting},
+		{name: "empty slot unconfirmed", checkErr: agent.ErrSessionCoordinationUnsupported},
+		{name: "unsupported stop", stopErr: agent.ErrSessionCoordinationUnsupported},
+		{name: "replacement", stopErr: agent.ErrSessionNotFound},
+		{name: "stop response lost", stopErr: agent.ErrSessionStopUnconfirmed, wantPending: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
-			task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Archived: true}
-			testutil.NoError(t, d.Add(task))
-			var stopped bool
+			worktree := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+			testutil.NoError(t, os.MkdirAll(worktree, 0o750))
+			task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Worktree: worktree}
+			var stopCalls int
 			runner := connectedReclaimRunner{
 				Runner:    agent.NewRunner(nil),
-				session:   &fakeKickSession{pid: pid, alive: true},
 				attachErr: tc.attachErr,
-				stop: func() error {
-					stopped = true
-					return nil
+				checkErr:  tc.checkErr,
+				stop: func(id string, expectedPID int) error {
+					stopCalls++
+					testutil.Equal(t, id, task.ID)
+					testutil.Equal(t, expectedPID, pid)
+					return tc.stopErr
 				},
 			}
-			stopConnectedHeraReclaim(runner, d, task.ID, true)
-			testutil.Equal(t, stopped, tc.wantStop)
-			armed, err := d.ConsumeHeraReclaimStop(task.ID, pid)
+			wantCalls := 0
+			if tc.stopErr != nil {
+				runner.session = &fakeKickSession{pid: pid, alive: true}
+				wantCalls = 1
+			}
+			app := New(d, runner, true)
+			testutil.NoError(t, d.Add(task))
+			app.reclaimConnectedHeraTask(runner, d, task.ID)
+			testutil.Equal(t, stopCalls, wantCalls)
+			pending, err := d.HeraReclaimStopPending(task.ID)
 			testutil.NoError(t, err)
-			testutil.False(t, armed)
+			testutil.Equal(t, pending, tc.wantPending)
+			testutil.True(t, agent.DirExists(worktree))
 		})
 	}
+}
+
+func TestHeraReclaimConnectedRetiredRemovesWorktree(t *testing.T) {
+	d := testDB(t)
+	worktree := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+	testutil.NoError(t, os.MkdirAll(worktree, 0o750))
+	task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInReview, Worktree: worktree}
+	testutil.NoError(t, d.Add(task))
+	runner := connectedReclaimRunner{Runner: agent.NewRunner(nil)}
+	app := New(d, runner, true)
+
+	app.reclaimConnectedHeraTask(runner, d, task.ID)
+
+	testutil.False(t, agent.DirExists(worktree))
+	_, err := d.Get(task.ID)
+	testutil.ErrorIs(t, err, db.ErrTaskNotFound)
+}
+
+func TestHeraReclaimConnectedTickLeavesArmedTaskInProgress(t *testing.T) {
+	d := testDB(t)
+	const pid = 42
+	task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, AgentPID: pid, Archived: true}
+	testutil.NoError(t, d.Add(task))
+	armed, err := d.ArmHeraReclaimStop(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.True(t, armed)
+	app := New(d, agent.NewRunner(nil), true)
+
+	app.mu.Lock()
+	app.refreshTasksWithIDs([]string{}, nil, false)
+	app.mu.Unlock()
+
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Status, model.StatusInProgress)
+	matched, err := d.ConsumeHeraReclaimStop(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.True(t, matched)
 }
 
 func newFakeReclaimRunner(liveTaskID string) *fakeReclaimRunner {

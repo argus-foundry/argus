@@ -474,13 +474,34 @@ func (c *Client) StopRerenderForPID(taskID string, expectedPID int) error {
 	if expectedPID <= 0 {
 		return agent.ErrSessionNotFound
 	}
+	return c.stopForPID("Daemon.StopRerenderForPID", taskID, agent.StopRerender, expectedPID)
+}
+
+func (c *Client) StopTreeForPID(taskID string, expectedPID int) error {
+	if expectedPID <= 0 {
+		return agent.ErrSessionNotFound
+	}
+	return c.stopForPID("Daemon.StopTreeForPID", taskID, agent.StopTree, expectedPID)
+}
+
+func (c *Client) CheckReclaimSessionRetired(taskID string) error {
+	return c.stopForPID("Daemon.StopTreeForPID", taskID, agent.StopTree, 0)
+}
+
+func (c *Client) stopForPID(method, taskID string, scope agent.StopScope, expectedPID int) error {
 	var resp daemon.StatusResp
-	req := &daemon.StopReq{TaskID: taskID, Scope: agent.StopRerender, ExpectedPID: expectedPID}
-	if err := c.call("Daemon.StopRerenderForPID", req, &resp); err != nil {
-		if strings.Contains(err.Error(), "can't find method Daemon.StopRerenderForPID") {
+	req := &daemon.StopReq{TaskID: taskID, Scope: scope, ExpectedPID: expectedPID}
+	if err := c.call(method, req, &resp); err != nil {
+		if strings.Contains(err.Error(), "can't find method "+method) {
 			return agent.ErrSessionCoordinationUnsupported
 		}
+		if scope == agent.StopTree && expectedPID > 0 {
+			return fmt.Errorf("%w: %w", agent.ErrSessionStopUnconfirmed, err)
+		}
 		return err
+	}
+	if resp.Error == "" && !resp.OK {
+		return agent.ErrSessionCoordinationUnsupported
 	}
 	return stopReplyError(resp)
 }
@@ -515,6 +536,8 @@ func stopReplyError(resp daemon.StatusResp) error {
 		return agent.ErrSessionStarting
 	case agent.ErrSessionCoordinationUnsupported.Error():
 		return agent.ErrSessionCoordinationUnsupported
+	case agent.ErrSessionStopUnconfirmed.Error():
+		return agent.ErrSessionStopUnconfirmed
 	default:
 		return fmt.Errorf("%s", resp.Error)
 	}
@@ -1063,23 +1086,30 @@ func (c *Client) removeSessionStreamLost(rs *RemoteSession) {
 
 // removeSession relays the outgoing process's exit. An owner-managed restart
 // keeps the handle in place so existing panes can follow it.
-func (c *Client) removeSession(rs *RemoteSession) (pendingRestart bool) {
+func (c *Client) removeSession(rs *RemoteSession) (daemon.ExitInfo, bool) {
 	taskID := rs.taskID
 	uxlog.Log("client.removeSession: task=%s", taskID)
 	info := c.sessionExitInfo(rs)
 	if info.StreamLost || !info.PendingRestart {
 		c.finishSession(rs, info)
-		return false
+		return info, false
 	}
+	if !c.relayRestartExit(rs, info) {
+		rs.close()
+		return info, false
+	}
+	return info, true
+}
+
+func (c *Client) relayRestartExit(rs *RemoteSession, info daemon.ExitInfo) bool {
 	c.mu.Lock()
 	fn, owned := c.onSessionExit, c.onSessionExitOwned
-	pendingRestart = c.sessions[taskID] == rs
+	current := c.sessions[rs.taskID] == rs
 	c.mu.Unlock()
-	c.fireSessionExit(fn, owned, taskID, info, rs)
-	if !pendingRestart {
-		rs.close()
+	if current {
+		c.fireSessionExit(fn, owned, rs.taskID, info, rs)
 	}
-	return pendingRestart
+	return current
 }
 
 func (c *Client) finishSession(rs *RemoteSession, info daemon.ExitInfo) {
@@ -1089,16 +1119,19 @@ func (c *Client) finishSession(rs *RemoteSession, info daemon.ExitInfo) {
 }
 
 func (c *Client) sessionExitInfo(rs *RemoteSession) daemon.ExitInfo {
-	pid := rs.PID()
+	return c.exitInfoForPID(rs.taskID, rs.PID())
+}
+
+func (c *Client) exitInfoForPID(taskID string, pid int) daemon.ExitInfo {
 	var info daemon.ExitInfo
-	err := c.call("Daemon.GetExitInfo", &daemon.TaskIDReq{TaskID: rs.taskID, ExpectedPID: pid}, &info)
+	err := c.call("Daemon.GetExitInfo", &daemon.TaskIDReq{TaskID: taskID, ExpectedPID: pid}, &info)
 	if err != nil || info.NoEvidenceOfExit() || (pid > 0 && info.PID > 0 && info.PID != pid) {
 		// A missing result or an exit from a different process cannot settle
 		// this handle. Older peers may still return a zero-value reply.
 		info = daemon.ExitInfo{StreamLost: true, PID: pid}
 	}
 	uxlog.Log("client.sessionExitInfo: task=%s pid=%d exitPID=%d err=%v rpcErr=%v stopped=%v streamLost=%v lastOutput=%d bytes",
-		rs.taskID, pid, info.PID, info.Err, err, info.Stopped, info.StreamLost, len(info.LastOutput))
+		taskID, pid, info.PID, info.Err, err, info.Stopped, info.StreamLost, len(info.LastOutput))
 	return info
 }
 

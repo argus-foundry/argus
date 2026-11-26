@@ -31,6 +31,16 @@ func (d *DB) ClearHeraReclaimStop(taskID string, pid int) error {
 	return err
 }
 
+// HeraReclaimStopPending reports whether cleanup still owes an exit relay
+// for this task. Check it while holding the task's session mutation lock.
+func (d *DB) HeraReclaimStopPending(taskID string) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var pid int
+	err := d.conn.QueryRow(`SELECT hera_reclaim_pid FROM tasks WHERE id=?`, taskID).Scan(&pid)
+	return pid != 0, err
+}
+
 // ConsumeHeraReclaimStop consumes the intent for the observed owner exactly
 // once. It reports whether the task is still eligible for reclaim completion.
 // The session owner handles the status transition and live worker policy.

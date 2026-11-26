@@ -30,6 +30,10 @@ import (
 // case, wrap this same sentinel rather than inventing a parallel one.
 var ErrStartAmbiguous = errors.New("session start RPC did not confirm daemon-side outcome")
 
+// ErrSessionStopUnconfirmed means the owner may have accepted a stop before
+// its RPC response was lost. Keep the exact process intent until exit.
+var ErrSessionStopUnconfirmed = errors.New("session stop RPC did not confirm owner-side outcome")
+
 // SessionProvider abstracts the management of agent sessions.
 // Implemented by Runner (in-process) and daemon client (remote).
 type SessionProvider interface {
@@ -57,6 +61,13 @@ type SessionProvider interface {
 // owns the session slot. Implemented by the runner and the supervisor client.
 type SettledSessionStopper interface {
 	StopSettled(taskID string) error
+}
+
+// HeraReclaimSessionOwner certifies the process affected by a reclaim and
+// distinguishes an empty task slot from one that can still produce a process.
+type HeraReclaimSessionOwner interface {
+	StopTreeForPID(taskID string, expectedPID int) error
+	CheckReclaimSessionRetired(taskID string) error
 }
 
 // AttachableSession checks whether an existing PTY is safe to reuse. A pending

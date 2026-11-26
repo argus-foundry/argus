@@ -1,12 +1,14 @@
 package hera
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
@@ -18,6 +20,17 @@ import (
 type fakeSessionChecker struct{ live map[string]bool }
 
 func (f *fakeSessionChecker) HasSession(taskID string) bool { return f.live[taskID] }
+
+type fakeReclaimOwner struct {
+	fakeSessionChecker
+	check func(string) error
+}
+
+func (f *fakeReclaimOwner) CheckReclaimSessionRetired(id string) error { return f.check(id) }
+
+func (f *fakeReclaimOwner) StopTreeForPID(string, int) error {
+	return errors.New("reclaim sweep should never signal the session")
+}
 
 func newLeakedWorktreeDir(t *testing.T) string {
 	t.Helper()
@@ -165,7 +178,7 @@ func TestReconcileHeraReclaims_LiveBindingNeverTouched(t *testing.T) {
 	testutil.Equal(t, got.ID, task.ID)
 }
 
-func TestReconcileHeraReclaims_LiveSessionRetriesButDoesNotPrune(t *testing.T) {
+func TestReconcileHeraReclaims_LiveSessionKeepsWorktreeAndRow(t *testing.T) {
 	d, err := db.OpenInMemory()
 	testutil.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
@@ -178,16 +191,66 @@ func TestReconcileHeraReclaims_LiveSessionRetriesButDoesNotPrune(t *testing.T) {
 	sum, err := ReconcileHeraReclaims(d, runner)
 	testutil.NoError(t, err)
 	testutil.Equal(t, sum.Candidates, 1)
-	testutil.Equal(t, sum.WorktreesRetried, 1)
+	testutil.Equal(t, sum.WorktreesRetried, 0)
 	testutil.Equal(t, sum.Pruned, 0)
 	testutil.Equal(t, sum.SkippedLiveSession, 1)
 
 	_, statErr := os.Stat(wt)
-	testutil.True(t, os.IsNotExist(statErr))
+	testutil.NoError(t, statErr)
 
 	got, err := d.Get(task.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, got.ID, task.ID)
+}
+
+func TestReconcileHeraReclaimsWaitsForExitAndOwner(t *testing.T) {
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	worktree := newLeakedWorktreeDir(t)
+	task := &model.Task{Name: "retiring", Status: model.StatusInProgress, Worktree: worktree, Archived: true}
+	seedNukedTask(t, d, task)
+	const pid = 42
+	armed, err := d.ArmHeraReclaimStop(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.True(t, armed)
+	var checks int
+	var ownerErr error
+	runner := &fakeReclaimOwner{check: func(id string) error {
+		checks++
+		testutil.Equal(t, id, task.ID)
+		unlock, acquired, err := d.TryLockSessionMutation(id)
+		testutil.NoError(t, err)
+		if acquired {
+			unlock()
+			t.Fatal("sweep checked the owner without the session mutation lock")
+		}
+		return ownerErr
+	}}
+
+	sum, err := ReconcileHeraReclaims(d, runner)
+	testutil.NoError(t, err)
+	testutil.Equal(t, checks, 0)
+	testutil.Equal(t, sum.Pruned, 0)
+	testutil.True(t, agent.DirExists(worktree))
+
+	consumed, err := d.ConsumeHeraReclaimStop(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.True(t, consumed)
+	for _, status := range []error{agent.ErrSessionStarting, agent.ErrSessionCoordinationUnsupported} {
+		ownerErr = status
+		sum, err = ReconcileHeraReclaims(d, runner)
+		testutil.NoError(t, err)
+		testutil.Equal(t, sum.Pruned, 0)
+		testutil.True(t, agent.DirExists(worktree))
+	}
+
+	ownerErr = nil
+	sum, err = ReconcileHeraReclaims(d, runner)
+	testutil.NoError(t, err)
+	testutil.Equal(t, checks, 3)
+	testutil.Equal(t, sum.Pruned, 1)
+	testutil.False(t, agent.DirExists(worktree))
 }
 
 // TestReconcileHeraReclaims_ExcludedStackedBranchStays exercises the

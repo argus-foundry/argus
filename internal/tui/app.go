@@ -3885,13 +3885,23 @@ func (a *App) refreshTasksWithIDsAndReconciliation(runningIDs, idleIDs []string,
 					uxlog.Log("[tui] reconciliation grace period for task %s (%s), started %v ago", t.ID, t.Name, now.Sub(startedAt).Round(time.Millisecond))
 					continue
 				}
+				if d, ok := a.db.(*db.DB); ok {
+					unlock, acquired, err := d.TryLockSessionMutation(t.ID)
+					if err != nil || !acquired {
+						uxlog.Log("[tui] stale task reconciliation lock unavailable task=%s err=%v", t.ID, err)
+						continue
+					}
+					changed, err := d.ReconcileMissingSession(t.ID, t.AgentPID)
+					unlock()
+					if err != nil || !changed {
+						uxlog.Log("[tui] stale task reconciliation deferred task=%s err=%v", t.ID, err)
+						continue
+					}
+				} else if err := a.db.SetStatus(t.ID, model.StatusInReview); err != nil {
+					uxlog.Log("[tui] stale task reconciliation failed task=%s err=%v", t.ID, err)
+					continue
+				}
 				t.SetStatus(model.StatusInReview) // in-memory: drives this frame's render
-				// Persist via the partial setter, not Update: although a.tasks was
-				// just reloaded from the DB at the top of this call, the concurrent
-				// autoname goroutine could land a rename in the microsecond window
-				// before this write. SetStatus touches only status/timestamps, so it
-				// can't clobber that name — same reasoning as OnPin/OnStatusChange.
-				a.db.SetStatus(t.ID, model.StatusInReview) //nolint:errcheck
 				// This write goes through the SAME a.db handle shouldRefetchTasks
 				// reads DataVersion from — invalidate so a LATER gated tick never
 				// mistakes its own (same-connection-invisible) write for "nothing

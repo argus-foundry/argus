@@ -35,7 +35,7 @@ func streamBackoff() []time.Duration { return *streamBackoffPtr.Load() }
 func (rs *RemoteSession) connectStream(sockPath string) {
 	backoff := streamBackoff()
 	maxStreamRetries := len(backoff)
-	waitingRestart := false
+	var restart daemon.ExitInfo
 	for attempt := 0; attempt <= maxStreamRetries; attempt++ {
 		// Check if the client was closed (e.g., daemon restart replaced it).
 		// This stops stale goroutines from flooding the new daemon with
@@ -58,38 +58,71 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 			select {
 			case <-time.After(backoff[attempt-1]):
 			case <-rs.client.closed:
+				rs.close()
+				return
 			case <-rs.done:
+				return
 			}
 		}
 
 		rs.streamAttempt = attempt
-		if waitingRestart {
+		if restart.PendingRestart {
 			if !rs.client.ownsSession(rs) {
 				rs.close()
 				return
 			}
-			info, err := rs.client.ProbeSession(rs.taskID)
-			if err != nil {
-				continue
-			}
-			if !info.Alive {
-				// A failed kick replaces the outgoing PID's pending record
-				// with a confirmed terminal exit.
-				exit := rs.client.sessionExitInfo(rs)
-				if !exit.StreamLost && !exit.PendingRestart {
+			if restart.RestartSuccessorPID == 0 {
+				exit := rs.client.exitInfoForPID(rs.taskID, restart.PID)
+				if exit.StreamLost {
+					continue
+				}
+				if !exit.PendingRestart {
+					// A launch failure updates the outgoing process's exit.
 					rs.client.finishSession(rs, exit)
 					return
 				}
-				continue
+				if exit.RestartSuccessorPID == 0 {
+					continue
+				}
+				restart = exit
+				if !rs.client.relayRestartExit(rs, exit) {
+					rs.close()
+					return
+				}
 			}
-			if info.PID == 0 || info.PID == rs.PID() {
-				continue
+
+			successorPID := restart.RestartSuccessorPID
+			info, err := rs.client.ProbeSession(rs.taskID)
+			var exit daemon.ExitInfo
+			if err != nil || !info.Alive || info.PID != successorPID {
+				// The successor may have exited before it could be attached.
+				// Its scoped record also allows a chained restart to be followed
+				// without treating a subsequent explicit launch as our successor.
+				exit = rs.client.exitInfoForPID(rs.taskID, successorPID)
+				if exit.StreamLost || exit.PID != successorPID {
+					continue
+				}
+				info = daemon.SessionInfo{PID: successorPID}
 			}
 			if !rs.client.adoptRestart(rs, info) {
 				rs.close()
 				return
 			}
-			waitingRestart = false
+			attempt = 0
+			rs.streamAttempt = 0
+			if exit.PID > 0 {
+				if !exit.PendingRestart {
+					rs.client.finishSession(rs, exit)
+					return
+				}
+				if !rs.client.relayRestartExit(rs, exit) {
+					rs.close()
+					return
+				}
+				restart = exit
+				continue
+			}
+			restart = daemon.ExitInfo{}
 		}
 		exited, daemonDown := rs.streamOnce(sockPath)
 		if daemonDown {
@@ -108,10 +141,12 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 		}
 		if exited {
 			// Process actually exited — fire the exit callback.
-			if !rs.client.removeSession(rs) {
+			exit, pendingRestart := rs.client.removeSession(rs)
+			if !pendingRestart {
 				return
 			}
-			waitingRestart = true
+			restart = exit
+			attempt = 0
 			continue
 		}
 

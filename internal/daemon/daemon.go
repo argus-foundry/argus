@@ -125,12 +125,13 @@ func DefaultPIDPath() string {
 // ExitInfo holds the exit state of a finished session, cached briefly
 // so clients can query it after the stream closes.
 type ExitInfo struct {
-	PID            int
-	Err            string
-	Stopped        bool
-	LastOutput     []byte
-	StreamLost     bool // true when stream disconnected but process exit not confirmed
-	PendingRestart bool // true when a kick-restart is queued (TUI must skip status flip)
+	PID                 int
+	Err                 string
+	Stopped             bool
+	LastOutput          []byte
+	StreamLost          bool // true when stream disconnected but process exit not confirmed
+	PendingRestart      bool // true when a kick-restart is queued (TUI must skip status flip)
+	RestartSuccessorPID int  // exact successor once the owner publishes a managed restart
 }
 
 // CleanExit is the authoritative predicate for a normal process exit.
@@ -154,7 +155,8 @@ func (e ExitInfo) CleanExit() bool {
 // exits 0 having printed nothing at all lands in_review via the tick
 // reconciler instead of complete — recoverable, and the safe direction.
 func (e ExitInfo) NoEvidenceOfExit() bool {
-	return e.PID == 0 && e.Err == "" && !e.Stopped && !e.StreamLost && !e.PendingRestart && len(e.LastOutput) == 0
+	return e.PID == 0 && e.Err == "" && !e.Stopped && !e.StreamLost && !e.PendingRestart &&
+		e.RestartSuccessorPID == 0 && len(e.LastOutput) == 0
 }
 
 // Daemon manages agent sessions and exposes them over a Unix socket.
@@ -434,6 +436,9 @@ func New(database *db.DB) *Daemon {
 	// the onFinish wiring above); the core owns the stream registry, exit cache,
 	// and the session RPC + stream handler, all promoted onto *Daemon.
 	d.sessionCore = newSessionCore(runner, d.db.Config, d.done)
+	runner.OnRestartStarted(func(taskID string, outgoingPID, successorPID int) {
+		d.linkRestart(taskID, outgoingPID, successorPID)
+	})
 
 	return d
 }
@@ -464,6 +469,11 @@ func (d *Daemon) handleSessionExit(taskID string, ei ExitInfo) {
 func (d *Daemon) handleSessionExitOwned(taskID string, ei ExitInfo, owner agent.SessionHandle) {
 	slog.Info("session exited", "task", taskID, "pid", ei.PID, "stopped", ei.Stopped, "err", ei.Err, "streamLost", ei.StreamLost, "pending", ei.PendingRestart, "lastOutputBytes", len(ei.LastOutput))
 
+	if ei.PendingRestart && ei.RestartSuccessorPID > 0 && d.linkRestart(taskID, ei.PID, ei.RestartSuccessorPID) {
+		// This updates an exit already relayed.
+		return
+	}
+
 	if !ei.StreamLost && !ei.PendingRestart {
 		// Coordinated resume can run as soon as the supervisor retires the
 		// old PTY. Its task lock covers start through the persisted launch.
@@ -488,7 +498,9 @@ func (d *Daemon) handleSessionExitOwned(taskID string, ei ExitInfo, owner agent.
 	latest := d.exitInfos[taskID]
 	// An unconfirmed relay cannot replace a confirmed exit record for
 	// another process, or be reported as that process's observed exit.
-	if !ei.StreamLost || latest.info.PID == 0 || (latest.info.PID == pid && latest.info.StreamLost) {
+	if ei.PendingRestart && ei.RestartSuccessorPID > 0 && latest.info.PID == ei.RestartSuccessorPID {
+		d.cacheExitLocked(taskID, ei, owner)
+	} else if !ei.StreamLost || latest.info.PID == 0 || (latest.info.PID == pid && latest.info.StreamLost) {
 		d.recordExitLocked(taskID, ei, owner)
 	}
 	conns := d.takeExitedStreamsLocked(taskID, pid)

@@ -156,6 +156,9 @@ func NewSupervisor(cfgFn func() config.Config, identity ...agent.ResidentWorkerI
 	}, identity...)
 
 	core = newSessionCore(runner, cfgFn, s.done)
+	runner.OnRestartStarted(func(taskID string, outgoingPID, successorPID int) {
+		core.linkRestart(taskID, outgoingPID, successorPID)
+	})
 	s.sessionCore = core
 	return s
 }

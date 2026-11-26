@@ -16,10 +16,8 @@ import (
 
 // pendingRestart holds the state needed to restart a session after
 // KickRerender or Recycle stops it. Stored under Runner.mu. The entry stays
-// in the map throughout the restart (so HasPendingRestart / Running surface
-// "still alive" during the BuildCmd gap), but `consumed` flips true once an
-// exit goroutine takes ownership — that prevents a fast-crashing resumed
-// session's exit goroutine from re-entering the restart and looping.
+// in the map until its successor is published (so HasPendingRestart / Running
+// surface "still alive" during the BuildCmd gap).
 //
 // resume distinguishes the two callers: KickRerender always sets true (the
 // agent re-emits its full conversation at the new PTY width via --resume);
@@ -27,23 +25,24 @@ import (
 // point of a recycle — via --session-id or no session flag at all,
 // depending on whether task.SessionID was cleared by the caller).
 type pendingRestart struct {
-	task     *model.Task
-	cfg      config.Config
-	rows     uint16
-	cols     uint16
-	resume   bool
-	consumed bool
+	task        *model.Task
+	cfg         config.Config
+	rows        uint16
+	cols        uint16
+	resume      bool
+	outgoingPID int
 }
 
 // Runner manages multiple agent sessions keyed by task ID.
 type Runner struct {
-	residentWorker ResidentWorkerIdentity
-	mu             sync.Mutex
-	mcpPort        int
-	sessions       map[string]*Session
-	stopped        map[string]bool // tracks task IDs where Stop was explicitly called
-	pendingRestart map[string]*pendingRestart
-	onFinish       func(taskID string, err error, stopped bool, lastOutput []byte)
+	residentWorker   ResidentWorkerIdentity
+	mu               sync.Mutex
+	mcpPort          int
+	sessions         map[string]*Session
+	stopped          map[string]bool // tracks task IDs where Stop was explicitly called
+	pendingRestart   map[string]*pendingRestart
+	onFinish         func(taskID string, err error, stopped bool, lastOutput []byte)
+	onRestartStarted func(taskID string, outgoingPID, successorPID int)
 
 	// needsInput is the set of task IDs the daemon's idle/needs-input watcher
 	// last flagged as blocked waiting on user input (the red ? in the TUI).
@@ -65,6 +64,14 @@ func (r *Runner) SetMCPPort(port int) {
 	r.mu.Lock()
 	r.mcpPort = port
 	r.mu.Unlock()
+}
+
+// OnRestartStarted registers the session owner's callback before launches.
+// The runner calls it before it begins observing the successor's exit.
+func (r *Runner) OnRestartStarted(fn func(taskID string, outgoingPID, successorPID int)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onRestartStarted = fn
 }
 
 // NewRunner creates a Runner. The onFinish callback is called (in a goroutine)
@@ -199,8 +206,16 @@ func (r *Runner) start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		return nil, context.Canceled
 	}
 	r.sessions[task.ID] = sess
+	onRestartStarted := r.onRestartStarted
+	if restart != nil {
+		// The successor's exit belongs to it even if it happens immediately.
+		delete(r.pendingRestart, task.ID)
+	}
 	r.mu.Unlock()
 
+	if restart != nil && onRestartStarted != nil {
+		onRestartStarted(task.ID, restart.outgoingPID, sess.PID())
+	}
 	events.Emit(model.EventTypeSessionStarted, task.ID, map[string]any{
 		"pid":    sess.PID(),
 		"resume": resume,
@@ -240,18 +255,12 @@ func (r *Runner) start(task *model.Task, cfg config.Config, rows, cols uint16, r
 			r.onFinish(task.ID, exitErr, wasStopped, lastOutput)
 		}
 
-		// Take ownership of the pendingRestart entry. The entry STAYS in the
-		// map throughout r.Start so consumers (handleStream wait,
-		// HasPendingRestart, ListSessions, SessionStatus, RunningAndIdle) see
-		// the gap as "still alive" and don't tear down. The `consumed` flag
-		// prevents a fast-crashing resumed session's exit goroutine from
-		// reading the same entry and looping another restart — only the
-		// goroutine that flipped consumed=true runs the Start.
+		// The pending entry reserves the slot until Start publishes a successor
+		// or this outgoing process has reported the launch failure.
 		r.mu.Lock()
 		pending := r.pendingRestart[task.ID]
-		shouldRestart := pending != nil && !pending.consumed
-		if shouldRestart {
-			pending.consumed = true
+		if pending != nil {
+			pending.outgoingPID = sess.PID()
 		}
 		// A late legacy StopScoped may have marked the dead session
 		// during onFinish. The replacement must own a clean stop state.
@@ -259,21 +268,16 @@ func (r *Runner) start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		delete(r.sessions, task.ID)
 		r.mu.Unlock()
 
-		if shouldRestart {
+		if pending != nil {
 			slog.Info("runner: restarting after kick", "task", task.ID, "cols", pending.cols, "rows", pending.rows, "resume", pending.resume)
 			_, rerr := r.start(pending.task, pending.cfg, pending.rows, pending.cols, pending.resume, pending)
-			// Clear the pending entry now that Start has returned; whether
-			// it succeeded (new session in the map) or failed, the gap is
-			// over and consumers should fall back to direct session lookup.
-			r.mu.Lock()
-			delete(r.pendingRestart, task.ID)
 			if rerr != nil {
+				r.mu.Lock()
+				delete(r.pendingRestart, task.ID)
 				// The failed restart still owes its outgoing owner's exit
 				// notification. Keep the slot reserved through that callback.
 				r.sessions[task.ID] = nil
-			}
-			r.mu.Unlock()
-			if rerr != nil {
+				r.mu.Unlock()
 				// Restart failed. The daemon's onFinish skipped the DB
 				// transition expecting a successful resume; without recovery
 				// the row stays InProgress with no live session. Re-fire
@@ -632,6 +636,23 @@ func (r *Runner) StopScoped(taskID string, scope StopScope) error {
 
 func (r *Runner) StopSettled(taskID string) error {
 	return r.stopScoped(taskID, StopTree, true, 0)
+}
+
+// StopTreeForPID claims a settled session for reclaim while checking its PID.
+func (r *Runner) StopTreeForPID(taskID string, expectedPID int) error {
+	if expectedPID <= 0 {
+		return ErrSessionNotFound
+	}
+	return r.stopScoped(taskID, StopTree, true, expectedPID)
+}
+
+// CheckReclaimSessionRetired verifies that the task has no PTY or reserved slot.
+func (r *Runner) CheckReclaimSessionRetired(taskID string) error {
+	sess, err := r.attachableSession(taskID)
+	if err == nil && sess != nil {
+		return ErrSessionStarting
+	}
+	return err
 }
 
 func (r *Runner) stopScoped(taskID string, scope StopScope, settled bool, expectedPID int) error {

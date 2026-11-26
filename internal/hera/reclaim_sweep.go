@@ -24,9 +24,8 @@ import (
 
 // SessionChecker is the narrow runner surface ReconcileHeraReclaims needs to
 // tell whether a candidate task's reclaim-triggered session stop has
-// settled yet. Mirrors agent.SessionProvider's HasSession(taskID string)
-// bool exactly (see internal/tui/heraactions.go's a.runner.HasSession usage)
-// so the daemon's real agent.SessionRunner satisfies it with no wrapping.
+// settled yet. In-process and RPC owners also implement
+// agent.HeraReclaimSessionOwner to certify that there is no pending start.
 type SessionChecker interface {
 	HasSession(taskID string) bool
 }
@@ -45,9 +44,8 @@ type Summary struct {
 	StackedBranchesDeleted int
 	// Pruned counts candidate rows deleted this pass.
 	Pruned int
-	// SkippedLiveSession counts candidates left in place because a live
-	// session still exists for the task — retried worktree/branch cleanup,
-	// but not yet safe to prune.
+	// SkippedLiveSession counts candidates whose session or exit relay is
+	// still unsettled, or whose lifecycle is being changed concurrently.
 	SkippedLiveSession int
 }
 
@@ -56,12 +54,9 @@ type Summary struct {
 // hera_bindings row ended for the nuke path's own reason
 // (db.HeraEndReasonUserDeleted) that holds no live binding
 // (db.HeraNukeReclaimCandidates — the same live-binding guard PruneTasks
-// re-verifies at delete time). For each candidate: retry the worktree + its
-// own local/remote branch removal if the worktree directory still exists on
-// disk, best-effort retry deleting any additional stacked branch this
-// candidate's base_branch chain confirms safe to delete (see
-// reconcileStackedBranches), then prune the row once no live session remains
-// for the task — leaving it in place for a later sweep otherwise.
+// re-verifies at delete time). Wait for the owner to confirm retirement and
+// for any durable stop intent to settle before retrying worktree and branch
+// cleanup or pruning the task.
 //
 // Idempotent and safe to call repeatedly, including on every daemon boot: a
 // candidate whose cleanup already fully completed (worktree gone, nothing
@@ -95,39 +90,76 @@ func ReconcileHeraReclaims(d *db.DB, runner SessionChecker) (Summary, error) {
 	tipVerdicts := make(map[string]mergesafety.Verdict)
 
 	for _, t := range candidates {
-		if d.GraduationPending(t.ID) {
-			uxlog.Log("[resident] reclaim sweep: skipped task=%s: graduation pending", t.ID)
-			continue
-		}
-		repoDir := agent.ResolveDir(t, cfg)
-		if t.Worktree != "" && agent.DirExists(t.Worktree) {
-			agent.RemoveWorktreeAndBranch(t.Worktree, t.Branch, repoDir)
-			sum.WorktreesRetried++
-			uxlog.Log("[hera] reclaim sweep: retried worktree+branch removal task=%s", t.ID)
-		}
-
-		sum.StackedBranchesDeleted += reconcileStackedBranches(ctx, d, cfg, byBaseBranch, t, tipVerdicts)
-
-		if runner.HasSession(t.ID) {
-			sum.SkippedLiveSession++
-			uxlog.Log("[hera] reclaim sweep: prune deferred task=%s (session still live)", t.ID)
-			continue
-		}
-		pruned, _, pErr := d.PruneTasks([]string{t.ID})
-		if pErr != nil {
-			uxlog.Log("[hera] reclaim sweep: prune failed task=%s: %v", t.ID, pErr)
-			continue
-		}
-		if len(pruned) > 0 {
-			sum.Pruned++
-			uxlog.Log("[hera] reclaim sweep: pruned task row %s", t.ID)
-		}
+		reconcileHeraReclaim(ctx, d, runner, cfg, t.ID, byBaseBranch, tipVerdicts, &sum)
 	}
 
 	uxlog.Log("[hera] reclaim sweep: candidates=%d worktrees_retried=%d stacked_branches_deleted=%d pruned=%d skipped_live_session=%d",
 		sum.Candidates, sum.WorktreesRetried, sum.StackedBranchesDeleted, sum.Pruned, sum.SkippedLiveSession)
 
 	return sum, nil
+}
+
+func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, cfg config.Config, id string, byBaseBranch map[string]*model.Task, tipVerdicts map[string]mergesafety.Verdict, sum *Summary) {
+	unlock, acquired, err := d.TryLockSessionMutation(id)
+	if err != nil || !acquired {
+		sum.SkippedLiveSession++
+		uxlog.Log("[hera] reclaim sweep: session lock unavailable task=%s err=%v", id, err)
+		return
+	}
+	defer unlock()
+
+	t, err := d.Get(id)
+	if err != nil {
+		uxlog.Log("[hera] reclaim sweep: task reload failed task=%s err=%v", id, err)
+		return
+	}
+	liveBindings, err := d.ListHeraLiveBindingsByTask(id)
+	if err != nil || len(liveBindings) != 0 {
+		uxlog.Log("[hera] reclaim sweep: binding guard task=%s live=%d err=%v", id, len(liveBindings), err)
+		return
+	}
+	if pending, err := d.GraduationPendingErr(id); err != nil || pending {
+		uxlog.Log("[resident] reclaim sweep: skipped task=%s graduation_pending=%t err=%v", id, pending, err)
+		return
+	}
+	pending, err := d.HeraReclaimStopPending(id)
+	if err != nil || pending {
+		sum.SkippedLiveSession++
+		uxlog.Log("[hera] reclaim sweep: exit relay unsettled task=%s pending=%t err=%v", id, pending, err)
+		return
+	}
+	if owner, ok := runner.(agent.HeraReclaimSessionOwner); ok {
+		err = owner.CheckReclaimSessionRetired(id)
+	} else if runner.HasSession(id) {
+		err = agent.ErrSessionStarting
+	}
+	if err != nil {
+		sum.SkippedLiveSession++
+		uxlog.Log("[hera] reclaim sweep: retirement not confirmed task=%s err=%v", id, err)
+		return
+	}
+
+	repoDir := agent.ResolveDir(t, cfg)
+	if t.Worktree != "" && agent.DirExists(t.Worktree) {
+		agent.RemoveWorktreeAndBranch(t.Worktree, t.Branch, repoDir)
+		sum.WorktreesRetried++
+		uxlog.Log("[hera] reclaim sweep: retried worktree+branch removal task=%s", id)
+	}
+
+	sum.StackedBranchesDeleted += reconcileStackedBranches(ctx, d, cfg, byBaseBranch, t, tipVerdicts)
+	if t.Archived && t.Worktree == "" && t.Branch != "" && repoDir != "" {
+		agent.DeleteBranch(repoDir, t.Branch)
+		agent.DeleteRemoteBranch(repoDir, t.Branch)
+	}
+	pruned, _, err := d.PruneTasks([]string{id})
+	if err != nil {
+		uxlog.Log("[hera] reclaim sweep: prune failed task=%s: %v", id, err)
+		return
+	}
+	if len(pruned) != 0 {
+		sum.Pruned++
+		uxlog.Log("[hera] reclaim sweep: pruned task row %s", id)
+	}
 }
 
 // walkStackForward walks a base_branch stack forward from x exactly like

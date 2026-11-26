@@ -3,7 +3,6 @@ package agent
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -592,7 +591,7 @@ func TestRunner_PendingRestartIDs(t *testing.T) {
 	testutil.Equal(t, len(r.PendingRestartIDs()), 0)
 
 	// Clear the pending entry before stopping. SetPendingRestartForTest
-	// injects entries with no task and consumed=false, so leaving it in place
+	// injects entries with no task, so leaving it in place
 	// would send the exit goroutine down the kick-restart path with a nil task.
 	r.SetPendingRestartForTest("b", false)
 	_ = r.Stop("b")
@@ -722,21 +721,17 @@ func TestRunner_KickRerender_DoublePending(t *testing.T) {
 	// Pin the in-flight state instead of racing a real process exit: an exit
 	// goroutine can finish the first restart before the second call executes.
 	// The neighboring integration test covers actual stop/restart behavior.
-	for _, consumed := range []bool{false, true} {
-		t.Run(fmt.Sprintf("consumed=%t", consumed), func(t *testing.T) {
-			r := NewRunner(nil)
-			cfg := runnerTestConfig()
-			task := &model.Task{ID: "kick-double", SessionID: "sid-1", Worktree: t.TempDir()}
-			r.sessions[task.ID] = &Session{}
-			pending := &pendingRestart{task: task, cfg: cfg, rows: 24, cols: 100, consumed: consumed}
-			r.pendingRestart[task.ID] = pending
-			err := r.KickRerender(task, cfg, 24, 120)
-			testutil.Error(t, err)
-			testutil.Contains(t, err.Error(), "already pending")
-			testutil.True(t, r.pendingRestart[task.ID] == pending)
-			testutil.Equal(t, pending.cols, uint16(100))
-		})
-	}
+	r := NewRunner(nil)
+	cfg := runnerTestConfig()
+	task := &model.Task{ID: "kick-double", SessionID: "sid-1", Worktree: t.TempDir()}
+	r.sessions[task.ID] = &Session{}
+	pending := &pendingRestart{task: task, cfg: cfg, rows: 24, cols: 100}
+	r.pendingRestart[task.ID] = pending
+	err := r.KickRerender(task, cfg, 24, 120)
+	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "already pending")
+	testutil.True(t, r.pendingRestart[task.ID] == pending)
+	testutil.Equal(t, pending.cols, uint16(100))
 }
 
 func TestRunner_KickRerender_AutoRestartsAtNewDimensions(t *testing.T) {
@@ -798,18 +793,8 @@ func TestRunner_HasPendingRestart_NoEntry(t *testing.T) {
 }
 
 func TestRunner_KickRerender_NoLoopOnImmediateCrash(t *testing.T) {
-	// Regression test for the central guarantee of the `consumed` flag: a
-	// resumed session that crashes immediately must NOT trigger another
-	// restart, even though pendingRestart's entry is still in the map until
-	// after r.Start returns. Without `consumed`, the new session's exit
-	// goroutine would read the entry and re-enter the kick path.
-	//
-	// Strategy: count Start invocations via onFinish. Use a backend that
-	// runs once cleanly the first time, but the resumed invocation exits
-	// immediately (because the appended `--resume sid-1` arg lands on
-	// `false`, which exits with status 1). We expect exactly TWO onFinish
-	// fires (one for the original kick, one for the failed resume) — never
-	// three.
+	// Publishing the successor must consume the pending restart before
+	// the successor's exit callback can interpret a rapid exit.
 	starts := make(chan int, 8)
 	var fireCount int
 	r := NewRunner(func(taskID string, _ error, _ bool, _ []byte) {
@@ -851,28 +836,19 @@ func TestRunner_KickRerender_NoLoopOnImmediateCrash(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	// Inject a pendingRestart entry directly with consumed=true to simulate
-	// the state "the previous restart goroutine already claimed this entry
-	// and is now running the resumed session". The resumed session is the
-	// owner start below; its exit goroutine must read consumed=true and
-	// skip another restart. Flipping consumed AFTER Start would race with
-	// the exit goroutine — on slow runners the goroutine reads consumed=
-	// false first, calls r.Start(pending.task=nil, ...), and panics with a
-	// nil deref. Setting it up-front removes the race.
-	restart := &pendingRestart{consumed: true}
+	// Drive the reserved start as the outgoing process's goroutine would.
+	restart := &pendingRestart{task: task, cfg: cfg, rows: 24, cols: 80, resume: true}
 	r.mu.Lock()
 	r.pendingRestart[task.ID] = restart
 	r.mu.Unlock()
 
-	// Drive the owner's start to simulate the resumed session, then let it die.
-	// The resumed session's exit goroutine should read consumed=true and
-	// skip the loop.
 	if _, err := r.start(task, cfg, 24, 80, true, restart); err != nil {
 		t.Fatal(err)
 	}
 
 	// Wait for the resumed session's onFinish.
 	<-starts
+	testutil.False(t, r.HasPendingRestart(task.ID))
 
 	// No third Start should have fired. Give it 100ms to surface any leak.
 	select {
@@ -881,10 +857,6 @@ func TestRunner_KickRerender_NoLoopOnImmediateCrash(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		// No third fire — loop guard worked.
 	}
-
-	r.mu.Lock()
-	delete(r.pendingRestart, task.ID)
-	r.mu.Unlock()
 }
 
 func TestRunner_KickRerender_StartFailure_ReFiresOnFinish(t *testing.T) {

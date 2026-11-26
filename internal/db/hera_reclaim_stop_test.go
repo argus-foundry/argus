@@ -66,3 +66,31 @@ func TestHeraReclaimStopRespectsCurrentTaskState(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.False(t, matched)
 }
+
+func TestReconcileMissingSessionPreservesArmedReclaim(t *testing.T) {
+	d := testDB(t)
+	const pid = 41
+	task := &model.Task{ID: "reclaim", Name: "Reclaim", AgentPID: pid, Status: model.StatusInProgress, Archived: true}
+	testutil.NoError(t, d.Add(task))
+	armed, err := d.ArmHeraReclaimStop(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.True(t, armed)
+
+	changed, err := d.ReconcileMissingSession(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.False(t, changed)
+	got, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Status, model.StatusInProgress)
+
+	testutil.NoError(t, d.ClearHeraReclaimStop(task.ID, pid))
+	changed, err = d.ReconcileMissingSession(task.ID, pid-1)
+	testutil.NoError(t, err)
+	testutil.False(t, changed)
+	changed, err = d.ReconcileMissingSession(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.True(t, changed)
+	got, err = d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Status, model.StatusInReview)
+}

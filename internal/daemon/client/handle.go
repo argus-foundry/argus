@@ -480,25 +480,29 @@ func (rs *RemoteSession) AddWriter(w io.Writer) {
 // is held through replay and the stream reader takes the same lock). Mirrors
 // Session.AddWriterFrom; used by the daemon API server's SSE /stream channelWriter.
 func (rs *RemoteSession) AddWriterFrom(w io.Writer, offset uint64) {
+	rs.addWriterFrom(w, offset, 0)
+}
+
+// AddWriterFromPID attaches a nonblocking writer to this process without a
+// gap between replay and live output. The offset is relative to the process.
+func (rs *RemoteSession) AddWriterFromPID(w io.Writer, offset uint64, expectedPID int) bool {
+	return rs.addWriterFrom(w, offset, expectedPID)
+}
+
+func (rs *RemoteSession) addWriterFrom(w io.Writer, offset uint64, expectedPID int) bool {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
-	currentTotal := rs.buf.TotalWritten()
-	if offset < currentTotal {
-		gap := currentTotal - offset
-		var replay []byte
-		if gap > uint64(rs.buf.Len()) { //nolint:gosec // Len() is non-negative
-			replay = rs.buf.Bytes()
-		} else {
-			replay = rs.buf.Tail(int(gap)) //nolint:gosec // gap <= Len() per branch guard
-		}
-		if len(replay) > 0 {
-			if _, err := w.Write(replay); err != nil {
-				return
-			}
+	if !rs.writerMatchesProcess(expectedPID) {
+		return false
+	}
+	if replay := rs.replayForWriter(offset, expectedPID); len(replay) > 0 {
+		if _, err := w.Write(replay); err != nil {
+			return false
 		}
 	}
-	rs.writers = append(rs.writers, w)
+	rs.registerWriter(w, expectedPID)
+	return true
 }
 
 // AddWriterFromTolerant replays [offset..currentTotal) OUTSIDE the lock, then
@@ -510,32 +514,18 @@ func (rs *RemoteSession) AddWriterFromTolerant(w io.Writer, offset uint64) {
 	rs.addWriterFromTolerant(w, offset, 0)
 }
 
-// AddWriterFromPID registers a stream writer with an offset relative to the
-// given process. A replay may block, so verify the identity again before
-// registering it to receive live output.
-func (rs *RemoteSession) AddWriterFromPID(w io.Writer, offset uint64, expectedPID int) bool {
+// AddWriterFromPIDTolerant scopes a potentially blocking writer to this process.
+func (rs *RemoteSession) AddWriterFromPIDTolerant(w io.Writer, offset uint64, expectedPID int) bool {
 	return rs.addWriterFromTolerant(w, offset, expectedPID)
 }
 
 func (rs *RemoteSession) addWriterFromTolerant(w io.Writer, offset uint64, expectedPID int) bool {
 	rs.mu.Lock()
-	currentTotal := rs.buf.TotalWritten()
-	if expectedPID > 0 {
-		if rs.pid != expectedPID || !rs.Alive() {
-			rs.mu.Unlock()
-			return false
-		}
-		currentTotal -= rs.streamBase
+	if !rs.writerMatchesProcess(expectedPID) {
+		rs.mu.Unlock()
+		return false
 	}
-	var replay []byte
-	if offset < currentTotal {
-		gap := currentTotal - offset
-		if gap > uint64(rs.buf.Len()) { //nolint:gosec // Len() is non-negative
-			replay = rs.buf.Bytes()
-		} else {
-			replay = rs.buf.Tail(int(gap)) //nolint:gosec // gap <= Len() per branch guard
-		}
-	}
+	replay := rs.replayForWriter(offset, expectedPID)
 	rs.mu.Unlock()
 
 	if len(replay) > 0 {
@@ -546,9 +536,35 @@ func (rs *RemoteSession) addWriterFromTolerant(w io.Writer, offset uint64, expec
 
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	if expectedPID > 0 && (rs.pid != expectedPID || !rs.Alive()) {
+	if !rs.writerMatchesProcess(expectedPID) {
 		return false
 	}
+	rs.registerWriter(w, expectedPID)
+	return true
+}
+
+// These writer helpers are called under rs.mu, which guards process identity
+// and serializes stream appends with cursor replay.
+func (rs *RemoteSession) writerMatchesProcess(expectedPID int) bool {
+	return expectedPID == 0 || (rs.pid == expectedPID && rs.Alive())
+}
+
+func (rs *RemoteSession) replayForWriter(offset uint64, expectedPID int) []byte {
+	currentTotal := rs.buf.TotalWritten()
+	if expectedPID > 0 {
+		currentTotal -= rs.streamBase
+	}
+	if offset >= currentTotal {
+		return nil
+	}
+	gap := currentTotal - offset
+	if gap > uint64(rs.buf.Len()) { //nolint:gosec // Len() is non-negative.
+		return rs.buf.Bytes()
+	}
+	return rs.buf.Tail(int(gap)) //nolint:gosec // gap <= Len() per branch guard.
+}
+
+func (rs *RemoteSession) registerWriter(w io.Writer, expectedPID int) {
 	rs.writers = append(rs.writers, w)
 	if expectedPID > 0 {
 		if rs.pidBoundWriters == nil {
@@ -556,7 +572,6 @@ func (rs *RemoteSession) addWriterFromTolerant(w io.Writer, offset uint64, expec
 		}
 		rs.pidBoundWriters[w] = struct{}{}
 	}
-	return true
 }
 
 // RemoveWriter unregisters a writer. Safe to call concurrently.

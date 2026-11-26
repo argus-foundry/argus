@@ -70,3 +70,35 @@ func TestManagedRestartStreamPosition(t *testing.T) {
 	testutil.True(t, rs.AddWriterFromPID(&current, 4, 222))
 	testutil.Equal(t, current.String(), "output")
 }
+
+type replayLockWriter struct {
+	session *RemoteSession
+	bytes.Buffer
+	replayedUnderLock bool
+}
+
+func (w *replayLockWriter) Write(p []byte) (int, error) {
+	if w.session.mu.TryLock() {
+		w.session.mu.Unlock()
+	} else {
+		w.replayedUnderLock = true
+	}
+	return w.Buffer.Write(p)
+}
+
+func TestProcessSSEReplayJoinsLiveOutputUnderLock(t *testing.T) {
+	rs := newRemoteSession("task", &Client{})
+	t.Cleanup(rs.close)
+	rs.updateInfo(daemon.SessionInfo{PID: 111})
+	rs.buf.Write([]byte("history"))
+	sse := &replayLockWriter{session: rs}
+	socket := &replayLockWriter{session: rs}
+
+	testutil.True(t, rs.AddWriterFromPID(sse, 3, 111))
+	testutil.True(t, sse.replayedUnderLock)
+	testutil.Equal(t, sse.String(), "tory")
+	testutil.True(t, rs.AddWriterFromPIDTolerant(socket, 3, 111))
+	testutil.False(t, socket.replayedUnderLock)
+	testutil.Equal(t, socket.String(), "tory")
+	testutil.Equal(t, len(rs.writers), 2)
+}
