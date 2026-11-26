@@ -339,10 +339,10 @@ func DeleteRemoteBranchAtOrigin(ctx context.Context, repoDir, branch, expectTip,
 	}
 	run := func(args ...string) (string, int, error) {
 		command := append(append([]string(nil), configArgs...), args...)
-		return runTaskGitWithEnv(ctx, repoDir, env, command...)
+		return runTaskGitWithEnv(ctx, repoDir, env, false, command...)
 	}
-	resolved, _, err := run("remote", "get-url", "--push", "--all", "origin")
-	if err != nil || resolved != strings.Join(targets, "\n") {
+	resolved, _, err := runTaskGitWithEnv(ctx, repoDir, env, true, append(configArgs, "remote", "get-url", "--push", "--all", "origin")...)
+	if err != nil || resolved != strings.Join(targets, "\n")+"\n" {
 		return errors.New("unable to pin original Git push destinations")
 	}
 	return deleteLeasedRemoteBranch(ctx, run, "origin", branch, expectTip, false)

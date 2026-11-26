@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -148,13 +149,46 @@ func taskGitOrigin(ctx context.Context, repoDir string) (string, []string) {
 	if repoDir == "" {
 		return "", nil
 	}
-	fetch, _, fetchErr := RunTaskGit(ctx, repoDir, "remote", "get-url", "--all", "origin")
-	push, _, pushErr := RunTaskGit(ctx, repoDir, "remote", "get-url", "--push", "--all", "origin")
-	if fetchErr != nil || pushErr != nil || fetch == "" || push == "" {
+	configBefore, err := taskGitOriginURLConfig(ctx, repoDir)
+	if err != nil {
+		return "", nil
+	}
+	fetch, _, fetchErr := runTaskGitWithEnv(ctx, repoDir, nil, true, "remote", "get-url", "--all", "origin")
+	push, _, pushErr := runTaskGitWithEnv(ctx, repoDir, nil, true, "remote", "get-url", "--push", "--all", "origin")
+	output, terminated := strings.CutSuffix(push, "\n")
+	if fetchErr != nil || pushErr != nil || fetch == "" || output == "" || !terminated {
+		return "", nil
+	}
+	configAfter, err := taskGitOriginURLConfig(ctx, repoDir)
+	if err != nil || configBefore != configAfter {
+		return "", nil
+	}
+	targets := strings.Split(output, "\n")
+	if slices.Contains(targets, "") {
 		return "", nil
 	}
 	hash := sha256.Sum256([]byte(fetch + "\x00" + push))
-	return hex.EncodeToString(hash[:]), strings.Split(push, "\n")
+	return hex.EncodeToString(hash[:]), targets
+}
+
+// Remote get-url uses newline-delimited output. Rule out line breaks in
+// any URL or rewrite that could contribute to that output.
+func taskGitOriginURLConfig(ctx context.Context, repoDir string) (string, error) {
+	const cfgPattern = `^(remote\.origin\.(url|pushurl)|url\..*\.(insteadof|pushinsteadof))$`
+	cfg, _, err := runTaskGitWithEnv(ctx, repoDir, nil, true, "config", "--null", "--get-regexp", cfgPattern)
+	if err != nil {
+		return "", err
+	}
+	records, terminated := strings.CutSuffix(cfg, "\x00")
+	if !terminated {
+		return "", errors.New("unable to frame Git origin URL configuration")
+	}
+	for record := range strings.SplitSeq(records, "\x00") {
+		if strings.Count(record, "\n") != 1 {
+			return "", errors.New("ambiguous line break in Git origin URL configuration")
+		}
+	}
+	return cfg, nil
 }
 
 // LockTaskGitOwnership fences creation and cleanup across TUI and daemon

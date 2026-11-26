@@ -40,10 +40,10 @@ var taskGitTimeout = 15 * time.Second
 
 // RunTaskGit bounds Git and its subprocess group by the task lifetime.
 func RunTaskGit(ctx context.Context, dir string, args ...string) (string, int, error) {
-	return runTaskGitWithEnv(ctx, dir, nil, args...)
+	return runTaskGitWithEnv(ctx, dir, nil, false, args...)
 }
 
-func runTaskGitWithEnv(ctx context.Context, dir string, env []string, args ...string) (string, int, error) {
+func runTaskGitWithEnv(ctx context.Context, dir string, env []string, exactStdout bool, args ...string) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, taskGitTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // G702: fixed Git binary with structured arguments, no shell.
@@ -63,17 +63,27 @@ func runTaskGitWithEnv(ctx context.Context, dir string, env []string, args ...st
 	}()
 	cmd.Dir = dir
 	cmd.Env = append(append(cmd.Environ(), "LC_ALL=C"), env...)
-	out, err := cmd.CombinedOutput()
+	var out string
+	var err error
+	if exactStdout {
+		var raw []byte
+		raw, err = cmd.Output()
+		out = string(raw)
+	} else {
+		var combined []byte
+		combined, err = cmd.CombinedOutput()
+		out = strings.TrimSpace(string(combined))
+	}
 	if ctx.Err() != nil {
 		uxlog.Log("[worktree] git interrupted dir=%q err=%v", dir, ctx.Err())
-		return strings.TrimSpace(string(out)), -1, ctx.Err()
+		return out, -1, ctx.Err()
 	}
 	code := 0
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		code = ee.ExitCode()
 	}
-	return strings.TrimSpace(string(out)), code, err
+	return out, code, err
 }
 
 // TaskGitCleanupBranch resolves the same legacy branch fallback used by cleanup.
