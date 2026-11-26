@@ -4339,7 +4339,7 @@ async function setArchive(archived) {
         const latest = await api(`/api/tasks/${id}`);
         const fresh = latest.ok ? await latest.json() : null;
         if (reopened === detailViewGen && (latest.status === 404 ||
-            (fresh && fresh.archived !== (listFilter === FILTER_ARCHIVED)))) closeDetail();
+            (fresh && (fresh.archived === true) !== (listFilter === FILTER_ARCHIVED)))) closeDetail();
       }
     }
     refresh();

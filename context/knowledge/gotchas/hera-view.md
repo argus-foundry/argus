@@ -506,3 +506,5 @@ M6a scaffolds the native Hera view: a `HeraPage` (rail | coordinator pane | agen
 - **Resident worker deletion holds the task's session and reclaim locks through preflight and teardown.** Its local cleanup requires a committed claim and confirmed retirement. An unsettled process leaves the worktree for the periodic sweep.
 
 - **TUI stack confirmation carries the classified Git identity.** Repository aliases can share a stack. Equal branch names in different repositories cannot share cleanup evidence.
+
+- **Shared Git directories can have different merge targets.** Scope cached stack tip verdicts to the repository and configured default ref.

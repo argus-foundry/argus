@@ -261,7 +261,10 @@ test.describe('terminal', () => {
     await page.route(/\/api\/tasks\/[^/?]+$/, async route => {
       if (route.request().method() !== 'GET') return route.continue();
       const response = await route.fetch();
-      await route.fulfill({ response, json: { ...await response.json(), archived } });
+      const task = await response.json();
+      if (archived) task.archived = true;
+      else delete task.archived;
+      await route.fulfill({ response, json: task });
     });
     try {
       await login(page);
@@ -297,7 +300,10 @@ test.describe('terminal', () => {
     await page.route(/\/api\/tasks\/[^/?]+$/, async route => {
       if (route.request().method() !== 'GET') return route.continue();
       const response = await route.fetch();
-      await route.fulfill({ response, json: { ...await response.json(), archived } });
+      const task = await response.json();
+      if (archived) task.archived = true;
+      else delete task.archived;
+      await route.fulfill({ response, json: task });
     });
     await page.route(/\/api\/tasks\/[^/]+\/(?:archive|unarchive)$/, async route => {
       const archive = route.request().url().endsWith('/archive');

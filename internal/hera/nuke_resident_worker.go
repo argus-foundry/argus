@@ -223,7 +223,7 @@ func NukeResidentWorkerChecked(d *db.DB, runner NukeRunner, r *heramodel.RoleVie
 	// push. Take it now, before the first change, with a wait bounded by
 	// MutateBy, and hold it through the stop, exit wait, recheck and local
 	// removal, so nothing after the stop can block on it.
-	repoDir := agent.ResolveDir(t, d.Config())
+	repoDir := agent.TaskGitWorkingDirectory(agent.ResolveDir(t, d.Config()))
 	if reclaim && t.Worktree != "" {
 		if resolved := agent.ResidentCleanupRepository(context.Background(), t.Worktree, repoDir); resolved != "" {
 			repoDir = resolved
@@ -333,7 +333,7 @@ func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView
 		if err := residentRemoteBranchDeleteOwned(context.Background(), d, opts, t.ID, lease); err != nil {
 			residentDeleteLog("[resident] delete: remote ownership unavailable task=%s err=%v", t.ID, err)
 		}
-		residentWorkerStackFollowUp(d, t)
+		residentWorkerStackFollowUp(d, t, lease)
 	}, nil
 }
 
@@ -346,15 +346,16 @@ func residentRemoteBranchDeleteOwned(ctx context.Context, d *db.DB, opts Residen
 	}
 	ctx, cancel := context.WithTimeout(ctx, residentRemoteDeleteTimeout(opts))
 	defer cancel()
-	unlock, err := agent.LockTaskGitOwnership(ctx, lease.RepoDir)
+	repoDir := agent.TaskGitWorkingDirectory(lease.RepoDir)
+	unlock, err := agent.LockTaskGitOwnership(ctx, repoDir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	if err := verifyReclaimRepository(ctx, lease); err != nil {
+	if err := verifyReclaimRepository(ctx, repoDir, lease.RepoID); err != nil {
 		return err
 	}
-	_, branch, err := residentReclaimTargets(ctx, d, d.Config(), taskID, lease.RepoDir, "", lease.Branch)
+	_, branch, err := residentReclaimTargets(ctx, d, d.Config(), taskID, repoDir, "", lease.Branch)
 	if err != nil {
 		return err
 	}
@@ -362,7 +363,7 @@ func residentRemoteBranchDeleteOwned(ctx context.Context, d *db.DB, opts Residen
 		residentDeleteLog("[resident] delete: origin branch still referenced task=%s branch=%s", taskID, lease.Branch)
 		return nil
 	}
-	residentRemoteBranchDelete(ctx, opts, taskID, lease.RepoDir, branch, lease.Tip)
+	residentRemoteBranchDelete(ctx, opts, taskID, repoDir, branch, lease.Tip)
 	return nil
 }
 
@@ -607,7 +608,7 @@ func pruneReclaimedResidentWorker(d *db.DB, runner NukeRunner, taskID string) bo
 	return len(pruned) > 0
 }
 
-func residentWorkerStackFollowUp(d *db.DB, x *model.Task) {
+func residentWorkerStackFollowUp(d *db.DB, x *model.Task, lease *db.HeraReclaimLease) {
 	all, err := d.Tasks()
 	if err != nil {
 		residentDeleteLog("[resident] delete: stacked-branch follow-up skipped task=%s: %v", x.ID, err)
@@ -615,7 +616,8 @@ func residentWorkerStackFollowUp(d *db.DB, x *model.Task) {
 	}
 	ctx := context.Background()
 	cfg := d.Config()
-	byBase := StackTasksInRepository(ctx, cfg, agent.ResolveDir(x, cfg), all)
-	n := reconcileStackedBranches(ctx, d, cfg, byBase, x, map[string]mergesafety.Verdict{}, true)
+	repoDir := reclaimStackRepository(ctx, cfg, x, lease)
+	byBase := StackTasksInRepository(ctx, cfg, repoDir, all)
+	n := reconcileStackedBranches(ctx, d, cfg, repoDir, byBase, x, map[string]mergesafety.Verdict{}, true)
 	residentDeleteLog("[resident] delete: stacked-branch follow-up task=%s deleted=%d", x.ID, n)
 }

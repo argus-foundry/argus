@@ -73,7 +73,7 @@ func lockRepoContext(ctx context.Context, repoDir string) (func(), error) {
 	if repoDir == "" {
 		return func() {}, nil
 	}
-	v, _ := repoLocks.LoadOrStore(repoDir, &sync.Mutex{})
+	v, _ := repoLocks.LoadOrStore(TaskGitWorkingDirectory(repoDir), &sync.Mutex{})
 	mu := v.(*sync.Mutex)
 	for {
 		if err := ctx.Err(); err != nil {

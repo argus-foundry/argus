@@ -27,7 +27,7 @@ func TryLockRepo(repoDir string) (unlock func(), ok bool) {
 	if repoDir == "" {
 		return func() {}, true
 	}
-	v, _ := repoLocks.LoadOrStore(repoDir, &sync.Mutex{})
+	v, _ := repoLocks.LoadOrStore(TaskGitWorkingDirectory(repoDir), &sync.Mutex{})
 	mu := v.(*sync.Mutex)
 	if mu.TryLock() {
 		return mu.Unlock, true
@@ -112,8 +112,9 @@ func ResidentCleanupRepository(ctx context.Context, worktree, repoDir string) st
 		}
 	}
 	if repoDir != "" {
-		if configured, err := TaskGitRepositoryID(ctx, repoDir); err == nil && (linkedRepo == "" || SamePath(linkedRepo, configured)) {
-			return repoDir
+		directory := TaskGitWorkingDirectory(repoDir)
+		if configured, err := TaskGitRepositoryID(ctx, directory); err == nil && (linkedRepo == "" || SamePath(linkedRepo, configured)) {
+			return directory
 		}
 	}
 	if linkedRepo == "" {

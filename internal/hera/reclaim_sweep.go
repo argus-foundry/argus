@@ -164,8 +164,9 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 		uxlog.Log("[hera] reclaim sweep: retried worktree+branch removal task=%s", id)
 	}
 
-	byBase := StackTasksInRepository(ctx, cfg, repoDir, allTasks)
-	sum.StackedBranchesDeleted += reconcileStackedBranches(ctx, d, cfg, byBase, t, map[string]mergesafety.Verdict{}, lease != nil)
+	stackRepo := reclaimStackRepository(ctx, cfg, t, lease)
+	byBase := StackTasksInRepository(ctx, cfg, stackRepo, allTasks)
+	sum.StackedBranchesDeleted += reconcileStackedBranches(ctx, d, cfg, stackRepo, byBase, t, map[string]mergesafety.Verdict{}, lease != nil)
 	if lease != nil {
 		if err := residentRemoteBranchDeleteOwned(ctx, d, ResidentDeleteOptions{}, id, lease); err != nil {
 			uxlog.Log("[resident] reclaim sweep: remote ownership unavailable task=%s err=%v", id, err)
@@ -184,6 +185,26 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 		sum.Pruned++
 		uxlog.Log("[hera] reclaim sweep: pruned task row %s", id)
 	}
+}
+
+func reclaimStackRepository(ctx context.Context, cfg config.Config, task *model.Task, lease *db.HeraReclaimLease) string {
+	configured := agent.TaskGitWorkingDirectory(agent.ResolveDir(task, cfg))
+	if lease == nil {
+		return configured
+	}
+	captured := agent.TaskGitWorkingDirectory(lease.RepoDir)
+	if configured == "" || captured == "" || verifyReclaimRepository(ctx, captured, lease.RepoID) != nil {
+		return ""
+	}
+	configuredID, err := agent.TaskGitRepositoryID(ctx, configured)
+	if err != nil {
+		return ""
+	}
+	capturedID, err := agent.TaskGitRepositoryID(ctx, captured)
+	if err != nil || !agent.SamePath(capturedID, configuredID) {
+		return ""
+	}
+	return captured
 }
 
 // StackTasksInRepository keeps identically named branches in another Git
@@ -230,7 +251,7 @@ func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config
 		lease.LocalDone = true
 		return false, d.SetResidentReclaimLease(task.ID, lease)
 	}
-	repoDir := lease.RepoDir
+	repoDir := agent.TaskGitWorkingDirectory(lease.RepoDir)
 	if repoDir == "" {
 		return false, errors.New("original reclaim repository was unavailable at nuke time")
 	}
@@ -242,7 +263,7 @@ func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config
 		return false, db.ErrHeraReclaimInProgress
 	}
 	defer unlock()
-	if err := verifyReclaimRepository(ctx, lease); err != nil {
+	if err := verifyReclaimRepository(ctx, repoDir, lease.RepoID); err != nil {
 		return false, err
 	}
 	worktree, branch, err = residentReclaimTargets(ctx, d, cfg, task.ID, repoDir, worktree, branch)
@@ -260,15 +281,15 @@ func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config
 	return removed, d.SetResidentReclaimLease(task.ID, lease)
 }
 
-func verifyReclaimRepository(ctx context.Context, lease *db.HeraReclaimLease) error {
-	if lease.RepoID == "" {
+func verifyReclaimRepository(ctx context.Context, repoDir, repoID string) error {
+	if repoID == "" {
 		return nil
 	}
-	current, err := agent.TaskGitRepositoryID(ctx, lease.RepoDir)
+	current, err := agent.TaskGitRepositoryID(ctx, repoDir)
 	if err != nil {
 		return err
 	}
-	if !agent.SamePath(current, lease.RepoID) {
+	if current != repoID {
 		return errors.New("captured reclaim repository changed")
 	}
 	return nil
@@ -346,16 +367,16 @@ func walkStackForward(x *model.Task, byBaseBranch map[string]*model.Task) (chain
 // here is logged and skipped, never surfaced to the caller, and a resolution
 // failure (no project, no repo, tip not confirmed safe) simply results in
 // zero deletions for this candidate.
-func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, byBaseBranch map[string]*model.Task, x *model.Task, tipVerdicts map[string]mergesafety.Verdict, leasedRoot bool) int {
+func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, repoDir string, byBaseBranch map[string]*model.Task, x *model.Task, tipVerdicts map[string]mergesafety.Verdict, leasedRoot bool) int {
 	chain, tip, ok := walkStackForward(x, byBaseBranch)
 	if !ok || len(chain) == 0 {
 		return 0
 	}
 
-	repoDir, repoSlug, defaultRef, defaultShort := projectMergeSafetyContext(ctx, cfg, x)
 	if repoDir == "" {
 		return 0
 	}
+	repoSlug, defaultRef, defaultShort := projectMergeSafetyContext(ctx, cfg, x, repoDir)
 	repoID, err := agent.TaskGitRepositoryID(ctx, repoDir)
 	if err != nil || repoID == "" {
 		return 0
@@ -428,6 +449,7 @@ func DeleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, rep
 }
 
 func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, repoID, branch string, admissionHeld bool) bool {
+	repoDir = agent.TaskGitWorkingDirectory(repoDir)
 	if !admissionHeld {
 		unlock, err := d.TryLockTaskOutsideReclaim(taskID)
 		if err != nil {
@@ -448,7 +470,7 @@ func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, rep
 		return false
 	}
 	root, err := agent.TaskGitRepositoryID(ctx, repoDir)
-	if err != nil || root == "" || !agent.SamePath(root, repoID) {
+	if err != nil || root == "" || root != repoID {
 		return false
 	}
 	cfg := d.Config()
@@ -481,11 +503,7 @@ func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, rep
 // longer exists in config (or has an empty path) returns an empty repoDir;
 // callers treat that as unresolvable, per Classify's own "no repo
 // resolvable" fail-closed handling.
-func projectMergeSafetyContext(ctx context.Context, cfg config.Config, t *model.Task) (repoDir, repoSlug, defaultRef, defaultShort string) {
-	repoDir = agent.ResolveDir(t, cfg)
-	if repoDir == "" {
-		return "", "", "", ""
-	}
+func projectMergeSafetyContext(ctx context.Context, cfg config.Config, t *model.Task, repoDir string) (repoSlug, defaultRef, defaultShort string) {
 	if slug, ok := gitutil.ResolveDefaultRepo(ctx, repoDir); ok {
 		repoSlug = slug
 	}
@@ -493,7 +511,7 @@ func projectMergeSafetyContext(ctx context.Context, cfg config.Config, t *model.
 	if short, ref, err := gitutil.ResolveDefaultBranch(repoDir, proj.Branch); err == nil {
 		defaultShort, defaultRef = short, ref
 	}
-	return repoDir, repoSlug, defaultRef, defaultShort
+	return repoSlug, defaultRef, defaultShort
 }
 
 // branchExistsOnOrigin reports whether branch still has a remote-tracking

@@ -327,7 +327,7 @@ func TestStackedReclaimPreservesLeasedResidentBranchAfterPrune(t *testing.T) {
 			testutil.NoError(t, err)
 			testutil.Equal(t, len(pruned), 1)
 		}
-		deleted := reconcileStackedBranches(context.Background(), d, d.Config(), byBase, root, safeTips, false)
+		deleted := reconcileStackedBranches(context.Background(), d, d.Config(), repo, byBase, root, safeTips, false)
 		testutil.Equal(t, deleted, 0)
 		testutil.True(t, gitBranchExists(repo, worker.Branch))
 	}

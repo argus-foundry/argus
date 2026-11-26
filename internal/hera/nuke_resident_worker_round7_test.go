@@ -462,6 +462,65 @@ func TestResidentReclaimRefusesLeasedPushAfterRepositoryAliasChanges(t *testing.
 	testutil.False(t, called)
 }
 
+func TestResidentReclaimRefusesLeasedPushAfterCapturedPathChanges(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	original, other := initGitRepo(t, t.TempDir()), initGitRepo(t, t.TempDir())
+	repoID, err := agent.TaskGitRepositoryID(context.Background(), original)
+	testutil.NoError(t, err)
+	lease := &db.HeraReclaimLease{RepoDir: original, RepoID: repoID, Branch: "argus/worker", Tip: "1234567"}
+	testutil.NoError(t, os.Rename(original, filepath.Join(t.TempDir(), "moved-repository")))
+	testutil.NoError(t, os.Symlink(other, original))
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	called := false
+	err = residentRemoteBranchDeleteOwned(context.Background(), d, ResidentDeleteOptions{
+		RemoteBranchDelete: func(context.Context, string, string, string) error {
+			called = true
+			return nil
+		},
+	}, "worker", lease)
+	testutil.Error(t, err)
+	testutil.False(t, called)
+}
+
+func TestResidentStackReclaimPreservesRemappedRepository(t *testing.T) {
+	for _, deferred := range []bool{false, true} {
+		name := "immediate follow-up"
+		if deferred {
+			name = "deferred sweep"
+		}
+		t.Run(name, func(t *testing.T) {
+			task := &model.Task{ID: "worker", Name: "Worker", Project: "p", Branch: "root"}
+			d, _, view := residentWorkerNukeFixture(t, task)
+			original, other := initGitRepo(t, t.TempDir()), initGitRepo(t, t.TempDir())
+			gitRun(t, original, "branch", "root")
+			gitRun(t, other, "branch", "root")
+			gitRun(t, other, "branch", "child")
+			gitRun(t, other, "branch", "tip")
+			gitRun(t, other, "update-ref", "refs/remotes/origin/child", "child")
+			testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: original}))
+			var runner NukeRunner
+			if deferred {
+				runner = nukeReclaimOwner{Runner: agent.NewRunner(nil), pending: &deferred}
+			}
+			followUp, err := NukeResidentWorker(d, runner, view)
+			testutil.NoError(t, err)
+			testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: other}))
+			testutil.NoError(t, d.Add(&model.Task{ID: "child", Name: "Child", Project: "p", Branch: "child", BaseBranch: "root"}))
+			testutil.NoError(t, d.Add(&model.Task{ID: "tip", Name: "Tip", Project: "p", Branch: "tip", BaseBranch: "child"}))
+			if deferred {
+				summary, err := ReconcileHeraReclaims(d, &fakeSessionChecker{})
+				testutil.NoError(t, err)
+				testutil.Equal(t, summary.Pruned, 1)
+			} else {
+				followUp()
+			}
+			testutil.True(t, gitBranchExists(other, "child"))
+		})
+	}
+}
+
 // A session that exits on Stop but has not settled by the end of the wait is
 // refused ("had not settled"), the recheck never runs, and the worker is left
 // resumable. Covers both the wait measured from the Stop call's START (not

@@ -498,3 +498,11 @@ A delayed Archive or Unarchive completion SHALL use the task's authoritative cur
 #### Scenario: Unarchive succeeds before the older Archive response arrives
 - **WHEN** the user has reopened the currently active task after Unarchive
 - **THEN** the older Archive response leaves the active terminal open.
+
+### Requirement: Interpret omitted task archive state
+
+The PWA SHALL treat an omitted archived field in an authoritative task response as false.
+
+#### Scenario: The API omits archived after Unarchive
+- **WHEN** an older Archive response checks the reopened task and the GET response omits archived
+- **THEN** the Active view stays open.

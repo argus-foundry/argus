@@ -382,3 +382,5 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **Archive and Unarchive can remove the current task from its list.** After success, close a reopened view of that same task if it moved to the other filter.
 
 - **Re-read archival state before applying a response to a newer detail visit.** The server can commit a later Unarchive before the earlier Archive response arrives in the browser.
+
+- **The task API omits `archived` for active tasks.** Treat an omitted field as false when deciding whether a reopened terminal still belongs in its list.

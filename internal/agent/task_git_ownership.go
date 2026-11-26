@@ -49,6 +49,15 @@ func canonicalTaskPath(path string) string {
 	return path
 }
 
+// TaskGitWorkingDirectory resolves a repository alias once so the caller can
+// use the same directory for Git ownership, validation, and commands.
+func TaskGitWorkingDirectory(repo string) string {
+	if repo == "" {
+		return ""
+	}
+	return canonicalTaskPath(repo)
+}
+
 // TaskGitRepositoryID identifies shared Git refs across linked checkouts.
 func TaskGitRepositoryID(ctx context.Context, repo string) (string, error) {
 	if repo == "" {

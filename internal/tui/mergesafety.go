@@ -228,13 +228,14 @@ func (a *App) classifyStackedBranchesForCascade(ctx context.Context, notSafeIDs 
 	var out []stackedBranchCandidate
 	type repositoryBranch struct{ repository, branch string }
 	seenBranch := make(map[repositoryBranch]bool)
-	tipVerdictsByRepo := make(map[string]map[string]mergesafety.Verdict)
+	type mergeTarget struct{ repository, slug, defaultRef, defaultShort string }
+	tipVerdictsByTarget := make(map[mergeTarget]map[string]mergesafety.Verdict)
 	for _, id := range notSafeIDs {
 		x := byID[id]
 		if x == nil {
 			continue
 		}
-		repoDir := agent.ResolveDir(x, cfg)
+		repoDir := agent.TaskGitWorkingDirectory(agent.ResolveDir(x, cfg))
 		repoID, err := agent.TaskGitRepositoryID(ctx, repoDir)
 		if err != nil || repoID == "" {
 			continue
@@ -244,11 +245,6 @@ func (a *App) classifyStackedBranchesForCascade(ctx context.Context, notSafeIDs 
 		if !ok || len(chain) == 0 {
 			continue
 		}
-		tipVerdicts := tipVerdictsByRepo[repoID]
-		if tipVerdicts == nil {
-			tipVerdicts = make(map[string]mergesafety.Verdict)
-			tipVerdictsByRepo[repoID] = tipVerdicts
-		}
 		repoSlug := ""
 		if slug, slugOK := gitutil.ResolveDefaultRepo(ctx, repoDir); slugOK {
 			repoSlug = slug
@@ -257,6 +253,12 @@ func (a *App) classifyStackedBranchesForCascade(ctx context.Context, notSafeIDs 
 		defaultShort, defaultRef, dErr := gitutil.ResolveDefaultBranch(repoDir, proj.Branch)
 		if dErr != nil {
 			continue
+		}
+		target := mergeTarget{repoID, repoSlug, defaultRef, defaultShort}
+		tipVerdicts := tipVerdictsByTarget[target]
+		if tipVerdicts == nil {
+			tipVerdicts = make(map[string]mergesafety.Verdict)
+			tipVerdictsByTarget[target] = tipVerdicts
 		}
 
 		for _, y := range chain {

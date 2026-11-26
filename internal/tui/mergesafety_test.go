@@ -154,7 +154,7 @@ func TestCascadeStackConfirmationUsesClassifiedRepository(t *testing.T) {
 	app := New(d, agent.NewRunner(nil), false)
 	app.classifyStackInferredFn = func(_ context.Context, params mergesafety.StackParams, _ map[string]mergesafety.Verdict) (mergesafety.Verdict, error) {
 		testutil.Equal(t, params.Task.Project, "p")
-		testutil.Equal(t, params.RepoDir, original)
+		testutil.True(t, agent.SamePath(params.RepoDir, original))
 		return mergesafety.Verdict{Safe: true}, nil
 	}
 	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"task1"}, map[string]bool{"task1": true})
@@ -174,6 +174,39 @@ func TestCascadeStackConfirmationUsesClassifiedRepository(t *testing.T) {
 		verify.Dir = repo
 		testutil.NoError(t, verify.Run())
 	}
+}
+
+func TestCascadeStackDoesNotReuseVerdictsAcrossDefaultRefs(t *testing.T) {
+	d := testDB(t)
+	repo := stackFixtureRepo(t)
+	testutil.NoError(t, d.SetProject("stable", config.Project{Path: repo, Branch: "master"}))
+	testutil.NoError(t, d.SetProject("preview", config.Project{Path: repo, Branch: "develop"}))
+	for _, project := range []string{"stable", "preview"} {
+		for _, task := range []model.Task{
+			{ID: project + "-root", Branch: project + "-base"},
+			{ID: project + "-child", Branch: project + "-branch", BaseBranch: project + "-base"},
+			{ID: project + "-tip", Branch: "common-tip", BaseBranch: project + "-branch"},
+		} {
+			task.Project, task.Name = project, task.ID
+			testutil.NoError(t, d.Add(&task))
+		}
+	}
+	app := New(d, agent.NewRunner(nil), false)
+	app.classifyStackInferredFn = func(_ context.Context, params mergesafety.StackParams, cache map[string]mergesafety.Verdict) (mergesafety.Verdict, error) {
+		if verdict, ok := cache["common-tip"]; ok {
+			return verdict, nil
+		}
+		verdict := mergesafety.Verdict{Safe: params.DefaultShort == "master"}
+		cache["common-tip"] = verdict
+		return verdict, nil
+	}
+	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"stable-root", "preview-root"}, map[string]bool{
+		"stable-root": true, "preview-root": true,
+	})
+	if len(extra) != 1 {
+		t.Fatalf("got %d stack candidates, want only the stable merge target", len(extra))
+	}
+	testutil.Equal(t, extra[0].TaskID, "stable-child")
 }
 
 // TestClassifyTasksConcurrently_CountsSafe covers the bounded-concurrency

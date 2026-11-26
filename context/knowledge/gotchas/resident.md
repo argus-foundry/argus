@@ -77,6 +77,7 @@ Memory, orientation and tool permissions are in [resident-memory.md](resident-me
 - **A Git lease checks a commit, so check ownership again before the push.** A successor can use the same branch at the same commit. Keep the Git ownership lock through the bounded push and leave any branch or base ref still referenced by a surviving task.
 - **Cancel the Git process group while a cleanup lock is held.** A transport child can inherit Git's output pipes. Verify linked worktree registration and keep the directory when Git refuses removal.
 - **Deferred cleanup uses the Git identity captured at nuke time.** Reuse of a checkout path or a retargeted repository alias cannot change where an existing lease operates.
+- **Secondary stack cleanup uses the resident lease's repository.** A project pointing at a different Git repository cannot redirect either the immediate follow-up or the deferred sweep.
 
 ## Graduation
 
