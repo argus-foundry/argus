@@ -368,7 +368,8 @@ const (
 	// to the supervisor log within 64 KiB/60s, preserving ANSI/UTF-8 boundaries.
 	// v20: full session stops also snapshot and clean detached task browsers.
 	// v21: StopSettledSession arbitrates a voice stop against starting and
-	// restarting the target session under the runner lock.
+	// restarting the target session under the runner lock. Retirement clears
+	// stop bookkeeping before the next session can own that task ID.
 	SupervisorStreamSurface = 21
 )
 
@@ -629,7 +630,7 @@ const (
 	SpawnSurfaceDigest = "d5dc8e881ff9ce381a59e01eb592ab9b44cf02d1d1b44fe96001a8e2aed737e3"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
-	StreamSurfaceDigest = "34d709521a313d4637c5ee5345b1a97cd91d6fc68a034063d4a77ef27cec7973"
+	StreamSurfaceDigest = "ac06ce5ff0c5c80a6f4112b6657915b8a8c3fe75a9ee53d53b89e9e41a64e496"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

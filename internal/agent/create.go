@@ -491,6 +491,7 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	if input.BeforeStart != nil {
 		input.BeforeStart()
 	}
+	priorSessionID := task.SessionID
 	sess, err := runner.Start(task, cfg, rows, cols, false)
 	if input.AfterStart != nil {
 		input.AfterStart()
@@ -526,8 +527,17 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	task.SetStatus(model.StatusInProgress)
 	task.StartedAt = time.Now()
 	task.AgentPID = sess.PID()
-	if uErr := database.Update(task); uErr != nil {
+	committed, uErr := database.RecordInitialSession(taskID, task.AgentPID, priorSessionID, task.SessionID)
+	if uErr != nil {
 		slog.Warn("CreateAndStart: persist InProgress failed (session is running)", "id", taskID, "err", uErr)
+	} else {
+		task.Name = committed.Name
+		task.Status = committed.Status
+		task.Archived = committed.Archived
+		task.StartedAt = committed.StartedAt
+		task.EndedAt = committed.EndedAt
+		task.AgentPID = committed.AgentPID
+		task.SessionID = committed.SessionID
 	}
 
 	slog.Info("task created and started", "id", taskID, "name", task.Name, "project", input.Project, "pid", sess.PID())
@@ -536,7 +546,7 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	// or failing LLM call cannot block task startup. The goroutine is
 	// race-guarded — if the user manually renames before the model returns,
 	// the rename is skipped.
-	if input.AutoName {
+	if input.AutoName && task.Name == displayName {
 		go runAutoRenameForTask(database, *task, input.Prompt, cfg)
 	}
 

@@ -63,6 +63,53 @@ func TestStopSettledFencesRecycleBeforeSignaling(t *testing.T) {
 	cleanupSessionBrowsers = original
 }
 
+func TestLateStopDoesNotMarkNextSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	run := NewRunner(func(string, error, bool, []byte) {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+	})
+	t.Cleanup(run.StopAll)
+	cfg := runnerTestConfig()
+	cfg.Backends["test"] = config.Backend{Command: "true"}
+	task := &model.Task{ID: "late-stop", Name: "test", Worktree: t.TempDir()}
+	_, err := run.Start(task, cfg, 24, 80, false)
+	testutil.NoError(t, err)
+	select {
+	case <-entered:
+		testutil.ErrorIs(t, run.StopSettled(task.ID), ErrSessionNotFound)
+		// The ordinary stop path still accepts the exited slot and can
+		// set its marker before onFinish returns.
+		testutil.NoError(t, run.Stop(task.ID))
+	case <-time.After(time.Second):
+		t.Error("session exit did not reach its callback")
+	}
+	close(release)
+	ticks := time.NewTicker(time.Millisecond)
+	defer ticks.Stop()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for run.Get(task.ID) != nil {
+		select {
+		case <-ticks.C:
+		case <-deadline.C:
+			t.Fatal("exited session was not retired")
+		}
+	}
+	testutil.Nil(t, run.Get(task.ID))
+	cfg.Backends["test"] = config.Backend{Command: "sleep 60"}
+	_, err = run.Start(task, cfg, 24, 80, false)
+	testutil.NoError(t, err)
+	run.mu.Lock()
+	stopped := run.stopped[task.ID]
+	run.mu.Unlock()
+	testutil.False(t, stopped)
+}
+
 func TestRunner_StartAndGet(t *testing.T) {
 	finished := make(chan string, 1)
 	r := NewRunner(func(taskID string, err error, stopped bool, _ []byte) {

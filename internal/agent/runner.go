@@ -241,6 +241,9 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		if shouldRestart {
 			pending.consumed = true
 		}
+		// A late legacy StopScoped may have marked the dead session
+		// during onFinish. The replacement must own a clean stop state.
+		delete(r.stopped, task.ID)
 		delete(r.sessions, task.ID)
 		r.mu.Unlock()
 
@@ -581,7 +584,7 @@ func (r *Runner) stopScoped(taskID string, scope StopScope, settled bool) error 
 		r.mu.Unlock()
 		return ErrSessionStarting
 	}
-	if sess == nil {
+	if sess == nil || (settled && !sess.Alive()) {
 		r.mu.Unlock()
 		return ErrSessionNotFound
 	}

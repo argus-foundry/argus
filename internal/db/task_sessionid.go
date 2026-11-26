@@ -13,6 +13,18 @@ import (
 // edits made while the runner was starting. A newer session ID wins over
 // the ID the launch read before calling the runner.
 func (d *DB) RecordResumedSession(id string, pid int, priorID, launchedID string) error {
+	_, err := d.recordSessionLaunch(id, pid, priorID, launchedID, false)
+	return err
+}
+
+// RecordInitialSession promotes a Pending row when its first session starts.
+// If a stop or another lifecycle action has already advanced the row, it
+// returns that state instead of overwriting it.
+func (d *DB) RecordInitialSession(id string, pid int, priorID, launchedID string) (*model.Task, error) {
+	return d.recordSessionLaunch(id, pid, priorID, launchedID, true)
+}
+
+func (d *DB) recordSessionLaunch(id string, pid int, priorID, launchedID string, initial bool) (*model.Task, error) {
 	var old, current *model.Task
 	err := d.WithTx(func(tx *sql.Tx) error {
 		var err error
@@ -22,6 +34,10 @@ func (d *DB) RecordResumedSession(id string, pid int, priorID, launchedID string
 		}
 		if err != nil {
 			return err
+		}
+		if initial && old.Status != model.StatusPending {
+			current = old
+			return nil
 		}
 		row := *old
 		current = &row
@@ -39,7 +55,10 @@ func (d *DB) RecordResumedSession(id string, pid int, priorID, launchedID string
 		return err
 	})
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if old == current {
+		return current, nil
 	}
 	if old.Status != current.Status {
 		events.Emit(model.EventTypeTaskStatusChanged, id, map[string]string{
@@ -47,7 +66,7 @@ func (d *DB) RecordResumedSession(id string, pid int, priorID, launchedID string
 		})
 	}
 	events.EmitTaskUpdated(id, model.ChangedTaskFields(old, current)...)
-	return nil
+	return current, nil
 }
 
 // SetSessionIDIfEmpty records a backend-minted session ID only while the task

@@ -348,6 +348,61 @@ func TestVoiceStopRefusesCreationFinalization(t *testing.T) {
 	testutil.Equal(t, row.Status, model.StatusInReview)
 }
 
+func TestVoiceStopDuringSharedCreationPreservesFinalStatus(t *testing.T) {
+	srv, d := testServer(t)
+	run := agent.NewRunner(nil)
+	srv.runner = run
+	t.Cleanup(run.StopAll)
+	testutil.NoError(t, d.SetBackend("plain", config.Backend{Command: "sleep 60"}))
+	testutil.NoError(t, d.SetProject("argus", config.Project{Path: wtRepo(t), Backend: "plain"}))
+	entered := make(chan string, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	type result struct {
+		task *model.Task
+		err  error
+	}
+	finished := make(chan result, 1)
+	go func() {
+		task, _, err := agent.CreateAndStart(d, run, agent.CreateInput{
+			Name: "Review", Project: "argus",
+			AfterStart: func() {
+				for _, id := range run.Running() {
+					entered <- id
+				}
+				<-release
+			},
+		})
+		finished <- result{task: task, err: err}
+	}()
+	var id string
+	select {
+	case id = <-entered:
+	case got := <-finished:
+		t.Fatalf("create did not reach launch finalization: %v", got.err)
+	case <-ctx.Done():
+		t.Fatal("create did not reach launch finalization")
+	}
+	sess := run.Get(id)
+	testutil.NotNil(t, sess)
+	testutil.NoError(t, srv.VoiceOperator().Stop(ctx, id))
+	select {
+	case <-sess.Done():
+	case <-ctx.Done():
+		t.Fatal("voice stop did not terminate the published session")
+	}
+	releaseOnce.Do(func() { close(release) })
+	got := <-finished
+	testutil.NoError(t, got.err)
+	testutil.Equal(t, got.task.Status, model.StatusInReview)
+	row, err := d.Get(id)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Status, model.StatusInReview)
+}
+
 func TestVoiceLaunchReportsAmbiguousOutcome(t *testing.T) {
 	srv, d := testServer(t)
 	run := &voiceRun{Runner: agent.NewRunner(nil), startErr: agent.ErrStartAmbiguous}
