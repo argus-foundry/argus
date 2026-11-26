@@ -1870,12 +1870,23 @@ func TestHandleStreamOutput(t *testing.T) {
 type managedSSEFixture struct {
 	transcriptKickSession
 	done         chan struct{}
+	pid          int
+	output       string
 	attachedPID  int
 	attachedFrom uint64
 }
 
 func (s *managedSSEFixture) Done() <-chan struct{}  { return s.done }
 func (s *managedSSEFixture) RemoveWriter(io.Writer) {}
+func (s *managedSSEFixture) PID() int {
+	if s.pid == 0 {
+		return 123
+	}
+	return s.pid
+}
+func (s *managedSSEFixture) RecentOutputTailWithTotal(int) ([]byte, uint64) {
+	return []byte(s.output), uint64(len(s.output))
+}
 func (s *managedSSEFixture) AddWriterFromPID(w io.Writer, offset uint64, pid int) bool {
 	s.attachedPID, s.attachedFrom = pid, offset
 	_, err := w.Write([]byte("last bytes"))
@@ -1911,6 +1922,37 @@ func TestHandleStreamOutputBindsRetiringProcess(t *testing.T) {
 	testutil.Equal(t, session.attachedFrom, uint64(4))
 	testutil.Contains(t, w.Body.String(), "data: bGFzdCBieXRlcw==")
 	testutil.Contains(t, w.Body.String(), "event: exit")
+}
+
+func TestTerminalOutputCursorRejectsReplacement(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s, _ := testServer(t)
+	runner := &managedSSERunner{Runner: agent.NewRunner(nil), session: &managedSSEFixture{
+		pid: 31, output: "outgoing history",
+	}}
+	s.runner = runner
+	routes := s.routes()
+	const taskPath = "/api/tasks/process"
+
+	first := httptest.NewRecorder()
+	routes.ServeHTTP(first, authedReq("GET", taskPath+"/output", ""))
+	testutil.Equal(t, first.Code, http.StatusOK)
+	testutil.Equal(t, first.Header().Get("X-Argus-Session-Pid"), "31")
+	testutil.Equal(t, first.Body.String(), "outgoing history")
+
+	runner.session = &managedSSEFixture{pid: 32, output: "new process"}
+	stale := httptest.NewRecorder()
+	oldCursor := first.Header().Get("X-Output-Total")
+	routes.ServeHTTP(stale, authedReq("GET", taskPath+"/stream?expected_pid=31&since="+oldCursor, ""))
+	testutil.Equal(t, stale.Code, http.StatusConflict)
+	testutil.Contains(t, stale.Body.String(), "stale_session")
+	testutil.Equal(t, runner.session.attachedPID, 0)
+
+	fresh := httptest.NewRecorder()
+	routes.ServeHTTP(fresh, authedReq("GET", taskPath+"/output", ""))
+	testutil.Equal(t, fresh.Code, http.StatusOK)
+	testutil.Equal(t, fresh.Header().Get("X-Argus-Session-Pid"), "32")
+	testutil.Equal(t, fresh.Body.String(), "new process")
 }
 
 // --- handleListBackends ---

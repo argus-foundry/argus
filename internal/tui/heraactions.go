@@ -462,8 +462,7 @@ func (a *App) heraNukeRole(r *hera.RoleView) {
 	reclaim := r.Live && r.TaskID != "" && a.heraTaskSolelyBoundTo(r)
 	if err := a.heraOps.NukeRole(r); err != nil {
 		a.statusbar.SetError("Nuke role failed: " + err.Error())
-	}
-	if reclaim {
+	} else if reclaim {
 		a.heraReclaimAndArchiveTask(r.TaskID)
 	}
 	a.heraRefresh()
@@ -602,6 +601,11 @@ func (a *App) reclaimConnectedHeraTask(runner agent.SessionProvider, database *d
 			uxlog.Log("[hera-view] nuke: retirement not confirmed task=%s: %v", taskID, err)
 			return
 		}
+	}
+	bindings, err := database.ListHeraLiveBindingsByTask(taskID)
+	if err != nil || len(bindings) != 0 {
+		uxlog.Log("[hera-view] nuke: reclaim binding guard task=%s live=%d err=%v", taskID, len(bindings), err)
+		return
 	}
 	if err := database.SetArchived(taskID, true); err != nil {
 		uxlog.Log("[hera-view] nuke: archive task failed task=%s: %v", taskID, err)
@@ -904,18 +908,9 @@ func (a *App) heraTaskBoundOutside(taskID string, subtreeIDs map[int64]bool) boo
 //     removes the row from the rail; never DeleteHeraRole);
 //   - NUKES the orchestrator row (Ops.NukeOrchestrator — NOT DeleteHeraOrchestrator).
 //
-// The task reclaim decision is made BEFORE ending that role's binding so the
-// multi-binding check sees full binding state. The reclaimed set guards against
-// double-archiving a task reached via two roles. Net: zero hard deletes — every
-// role/orchestrator/inbox/task row is retained (recoverable via the DB), only the
-// worktree dir + git branch are reclaimed.
-//
-// heraReclaimAndArchiveTask itself is invoked AFTER Ops.NukeRole ends this role's
-// binding, not before — its async prune step (heraPruneReclaimedTask) re-verifies
-// no-live-hera-binding at delete time, and starting that goroutine while the
-// binding is still live races the (synchronous, main-goroutine) end-binding call:
-// on a loaded scheduler the prune read can win and skip the delete for good, with
-// nothing in-process to retry it.
+// Decide task eligibility before ending its first binding. Dispatch reclaim
+// after every subtree binding mutation, so shared tasks have no remaining
+// subtree bindings and a failed mutation can still disqualify the task.
 //
 // extra is Stage 5's Tier D-discovered, operator-reviewed set of additional
 // origin branches (fix-hera-nuke-cleanup, classifyStackedBranchesForCascade +
@@ -929,26 +924,35 @@ func (a *App) heraDoCascadeNuke(subtree []*hera.OrchView, subtreeIDs map[int64]b
 	if a.graduationPendingAny(subtreeTaskIDs(subtree), "cascade nuke") {
 		return
 	}
-	reclaimed := make(map[string]bool)
+	reclaimable := make(map[string]bool)
+	var candidates []string
 	for _, o := range subtree {
 		for i := range o.Roles {
 			r := &o.Roles[i]
-			reclaimTask := ""
-			if r.Live && r.TaskID != "" && !reclaimed[r.TaskID] && !a.heraTaskBoundOutside(r.TaskID, subtreeIDs) {
-				reclaimed[r.TaskID] = true
-				reclaimTask = r.TaskID
+			if !r.Live {
+				continue
 			}
-			if r.Live {
-				if err := a.heraOps.NukeRole(r); err != nil {
-					uxlog.Log("[hera-view] cascade: nuke role %d failed: %v", r.RoleID, err)
-				}
+			if _, seen := reclaimable[r.TaskID]; !seen && r.TaskID != "" {
+				reclaimable[r.TaskID] = !a.heraTaskBoundOutside(r.TaskID, subtreeIDs)
+				candidates = append(candidates, r.TaskID)
 			}
-			if reclaimTask != "" {
-				a.heraReclaimAndArchiveTask(reclaimTask)
+			if err := a.heraOps.NukeRole(r); err != nil {
+				uxlog.Log("[hera-view] cascade: nuke role %d failed: %v", r.RoleID, err)
+				reclaimable[r.TaskID] = false
 			}
 		}
 		if err := a.heraOps.NukeOrchestrator(o.ID); err != nil {
 			a.statusbar.SetError("Nuke sub-team failed: " + err.Error())
+			for _, role := range o.Roles {
+				if role.Live {
+					reclaimable[role.TaskID] = false
+				}
+			}
+		}
+	}
+	for _, taskID := range candidates {
+		if reclaimable[taskID] {
+			a.heraReclaimAndArchiveTask(taskID)
 		}
 	}
 	if len(extra) > 0 {
@@ -1055,6 +1059,7 @@ func (a *App) heraNukeArchivedRole(r *hera.RoleView) (reclaimed bool) {
 	doReclaim := taskID != "" && a.heraTaskReclaimable(taskID, r.RoleID)
 	if err := a.heraOps.NukeRole(r); err != nil {
 		uxlog.Log("[hera-view] clear archive: nuke role %d failed: %v", r.RoleID, err)
+		return false
 	}
 	if doReclaim {
 		reclaimed = a.heraReclaimAndArchiveTask(taskID)

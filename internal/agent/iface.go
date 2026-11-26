@@ -70,6 +70,16 @@ type HeraReclaimSessionOwner interface {
 	CheckReclaimSessionRetired(taskID string) error
 }
 
+// CheckManagedRestartSupported verifies that a remote owner can identify the
+// successor before callers prepare or persist changes for a managed restart.
+// An in-process owner tracks its own replacements.
+func CheckManagedRestartSupported(runner any, taskID string) error {
+	if owner, ok := runner.(interface{ CheckManagedRestartSupported(string) error }); ok {
+		return owner.CheckManagedRestartSupported(taskID)
+	}
+	return nil
+}
+
 // AttachableSession checks whether an existing PTY is safe to reuse. A pending
 // launch, stop, or replacement returns ErrSessionStarting. View-only lookups
 // continue using Get so a draining session's output remains available.

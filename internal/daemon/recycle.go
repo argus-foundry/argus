@@ -177,6 +177,9 @@ func restartSessionWithSeedPrompt(database *db.DB, runner agent.SessionRunner, c
 	sess := runner.Get(task.ID)
 	var sizer interface{ PTYSize() (int, int) }
 	if sess != nil {
+		if err := agent.CheckManagedRestartSupported(runner, task.ID); err != nil {
+			return err
+		}
 		sizer = sess
 	}
 	rows, cols, source := resolveSpawnSize(database, role, sizer, time.Now())

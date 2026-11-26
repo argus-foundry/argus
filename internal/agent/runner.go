@@ -611,15 +611,19 @@ func (r *Runner) SetPendingRestartForTest(taskID string, pending bool) {
 }
 
 // PendingRestartIDs returns the task IDs that have a queued kick-restart but
-// no current session in the runner. Used by the daemon's ListSessions RPC to
+// no live session in the runner. Used by the daemon's ListSessions RPC to
 // surface synthetic "alive" entries during the kick gap so daemon-client
 // reconcilers don't false-Complete the task.
 func (r *Runner) PendingRestartIDs() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.pendingRestartIDsLocked()
+}
+
+func (r *Runner) pendingRestartIDsLocked() []string {
 	out := make([]string, 0, len(r.pendingRestart))
 	for id := range r.pendingRestart {
-		if _, hasSess := r.sessions[id]; !hasSess {
+		if sess := r.sessions[id]; sess == nil || !sess.Alive() {
 			out = append(out, id)
 		}
 	}
@@ -679,7 +683,7 @@ func (r *Runner) stopScoped(taskID string, scope StopScope, settled bool, expect
 	r.stopped[taskID] = true
 	r.mu.Unlock()
 	slog.Info("runner.Stop", "task", taskID, "pid", sess.PID(), "scope", scope.String())
-	err := sess.StopScoped(scope)
+	err := sess.stopScoped(scope, expectedPID == 0)
 	if err != nil {
 		r.mu.Lock()
 		if r.sessions[taskID] == sess && r.pendingRestart[taskID] == nil {
@@ -687,12 +691,11 @@ func (r *Runner) stopScoped(taskID string, scope StopScope, settled bool, expect
 		}
 		r.mu.Unlock()
 	}
-	// Best-effort cleanup for a session that already detached itself to
-	// Claude Code's own background-session supervisor (see
-	// context/knowledge/gotchas/daemon-rpc.md) — the SIGTERM above can never
-	// reach it. Fire-and-forget so a claude CLI round-trip never adds
-	// latency to this call.
-	go reapOrphanedClaudeSessions(taskID, sess.WorkDir(), sess.claudeConfigDir())
+	if expectedPID == 0 {
+		// Ordinary stops also clean up detached Claude sessions in the worktree.
+		// A PID-scoped stop cannot certify ownership of these sessions.
+		go reapOrphanedClaudeSessions(taskID, sess.WorkDir(), sess.claudeConfigDir())
+	}
 	return err
 }
 
@@ -738,7 +741,7 @@ func (r *Runner) Running() []string {
 		}
 	}
 	for id := range r.pendingRestart {
-		if _, alreadyListed := r.sessions[id]; !alreadyListed {
+		if r.sessions[id] == nil {
 			ids = append(ids, id)
 		}
 	}
@@ -775,6 +778,22 @@ func (r *Runner) WorkDir(taskID string) string {
 func (r *Runner) Sessions() map[string]*Session {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.sessionsLocked()
+}
+
+// SessionsAndPendingRestarts snapshots handles and restart reservations at
+// once so a successor publishing mid-listing cannot disappear from both.
+func (r *Runner) SessionsAndPendingRestarts() (map[string]*Session, []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sessions, pending := r.sessionsLocked(), r.pendingRestartIDsLocked()
+	for _, id := range pending {
+		delete(sessions, id)
+	}
+	return sessions, pending
+}
+
+func (r *Runner) sessionsLocked() map[string]*Session {
 	out := make(map[string]*Session, len(r.sessions))
 	for id, sess := range r.sessions {
 		if sess != nil {
@@ -803,7 +822,7 @@ func (r *Runner) RunningAndIdle() (running, idle []string) {
 		}
 	}
 	for id := range r.pendingRestart {
-		if _, alreadyListed := r.sessions[id]; !alreadyListed {
+		if r.sessions[id] == nil {
 			running = append(running, id)
 		}
 	}

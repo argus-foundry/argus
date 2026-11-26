@@ -394,12 +394,17 @@ func (s *Session) runStream() {
 //   - exited == false → connection dropped without exit → caller decides
 //     whether to retry
 func (s *Session) streamOnce() (bool, error) {
-	resp, err := s.p.c.StreamOutput(s.streamCtx, s.taskID, s.buf.TotalWritten())
+	resp, err := s.p.c.StreamOutputForPID(s.streamCtx, s.taskID, s.buf.TotalWritten(), s.PID())
 	if err != nil {
 		var apiErr *Error
-		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
-			// Server has no session for this task. Treat as exited.
-			return true, err
+		if errors.As(err, &apiErr) {
+			switch apiErr.Status {
+			case http.StatusConflict:
+				// This reader cannot reuse its cursor for the replacement.
+				return true, nil
+			case http.StatusNotFound:
+				return true, err
+			}
 		}
 		uxlog.Log("[apiclient] stream task=%s connect failed: %v", s.taskID, err)
 		return false, err

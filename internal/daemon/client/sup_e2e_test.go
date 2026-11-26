@@ -612,6 +612,122 @@ func TestSupKicks(t *testing.T) {
 	}
 }
 
+func TestSupKickSlow(t *testing.T) {
+	d, sc, database := supE2E(t)
+	savedBackoff := streamBackoffPtr.Load()
+	backoff := []time.Duration{15 * time.Millisecond, 30 * time.Millisecond}
+	streamBackoffPtr.Store(&backoff)
+	t.Cleanup(func() { streamBackoffPtr.Store(savedBackoff) })
+
+	task := startE2E(t, d, sc, database, "slow-kick", "printf 'ready\\n'; exec sleep 30")
+	sess := sc.Get(task.ID)
+	pid := sess.PID()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(string(sess.RecentOutput()), "ready") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	testutil.Contains(t, string(sess.RecentOutput()), "ready")
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	resume := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(resume)
+	restore := agent.SetPrelaunchForTest(func(ctx context.Context, _ *model.Task, _ config.Config) error {
+		close(entered)
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	t.Cleanup(restore)
+
+	testutil.NoError(t, database.SetBackend(task.Backend, config.Backend{Command: "printf 'successor\\n'; exit 7"}))
+	testutil.NoError(t, sc.KickWidthRerenderForPID(task, database.Config(), 30, 105, pid))
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement did not enter prelaunch")
+	}
+	// Keep the exact restart pending longer than the whole transport budget.
+	time.Sleep(200 * time.Millisecond)
+	testutil.True(t, sess.Alive())
+	testutil.DeepEqual(t, sc.Running(), []string{task.ID})
+	resume()
+
+	waitStatus(t, database, task.ID, model.StatusInReview)
+	exit := sc.sessionExitInfo(sess.(*RemoteSession))
+	testutil.True(t, exit.PID > 0 && exit.PID != pid)
+	testutil.False(t, exit.StreamLost)
+	testutil.Contains(t, exit.Err, "exit status 7")
+}
+
+func TestSupOldKick(t *testing.T) {
+	d, sc, database := supE2E(t)
+	task := startE2E(t, d, sc, database, "old-kick", "printf 'ready\\n'; exec sleep 30")
+	pid := sc.Get(task.ID).PID()
+	t.Cleanup(func() { _ = sc.Stop(task.ID) })
+	cfg := database.Config()
+	sc.mu.Lock()
+	sc.peerProtocol = managedRestartProtocolVersion - 1
+	sc.mu.Unlock()
+
+	testutil.ErrorIs(t, sc.KickRerender(task, cfg, 30, 105), agent.ErrSessionCoordinationUnsupported)
+	testutil.ErrorIs(t, sc.KickWidthRerender(task, cfg, 30, 105), agent.ErrSessionCoordinationUnsupported)
+	testutil.ErrorIs(t, sc.KickWidthRerenderForPID(task, cfg, 30, 105, pid), agent.ErrSessionCoordinationUnsupported)
+	testutil.ErrorIs(t, sc.Revive(task, cfg, 30, 105), agent.ErrSessionCoordinationUnsupported)
+	testutil.ErrorIs(t, sc.Recycle(task, cfg, 30, 105), agent.ErrSessionCoordinationUnsupported)
+	info, err := sc.ProbeSession(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, info.Alive)
+	testutil.Equal(t, info.PID, pid)
+	testutil.False(t, sc.HasPendingRestart(task.ID))
+}
+
+func TestSupListExit(t *testing.T) {
+	d, sc, database := supE2E(t)
+	task := startE2E(t, d, sc, database, "list-exit", "printf 'ready\\n'; while [ ! -f finish ]; do sleep 0.02; done")
+	t.Cleanup(func() { _ = sc.Stop(task.ID) })
+	sess := sc.Get(task.ID)
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(string(sess.RecentOutput()), "ready") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	testutil.Contains(t, string(sess.RecentOutput()), "ready")
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	allowExit := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(allowExit)
+	sc.mu.Lock()
+	relay := sc.onSessionExitOwned
+	sc.mu.Unlock()
+	sc.OnSessionExitOwned(func(id string, info daemon.ExitInfo, owner agent.SessionHandle) {
+		close(entered)
+		<-release
+		relay(id, info, owner)
+	})
+
+	testutil.NoError(t, os.WriteFile(filepath.Join(task.Worktree, "finish"), nil, 0600))
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not receive the retiring process")
+	}
+	testutil.Equal(t, len(sc.Running()), 0)
+	var reply daemon.ListResp
+	testutil.NoError(t, d.ListSessions(&daemon.Empty{}, &reply))
+	testutil.DeepEqual(t, reply.Sessions, []daemon.SessionInfo{{TaskID: task.ID, Alive: true}})
+
+	allowExit()
+	waitStatus(t, database, task.ID, model.StatusComplete)
+	testutil.NoError(t, sc.Close())
+	if err := d.ListSessions(&daemon.Empty{}, &reply); err == nil {
+		t.Fatal("daemon reported an authoritative listing after losing the supervisor")
+	}
+}
+
 func TestSupDrain(t *testing.T) {
 	d, sc, database := supE2E(t)
 	// The trap has to run in the session leader. BuildCmd wraps the backend

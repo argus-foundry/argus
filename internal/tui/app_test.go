@@ -3503,6 +3503,26 @@ func TestReconcileWorksOnEmptyRunning(t *testing.T) {
 	}
 }
 
+type remoteReconcileStore struct {
+	*db.DB
+	remoteTaskCreator
+}
+
+func TestRemoteReconciliationLeavesDaemonStatus(t *testing.T) {
+	d := testDB(t)
+	app := New(&remoteReconcileStore{DB: d}, agent.NewRunner(nil), true)
+	task := &model.Task{ID: "remote-running", Name: "Remote", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+
+	app.mu.Lock()
+	app.refreshTasksWithIDs([]string{}, []string{}, false)
+	app.mu.Unlock()
+
+	current, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, current.Status, model.StatusInProgress)
+}
+
 // Covers the happy path (InProgress flipped) and idempotency on rows already
 // in a terminal state. The database.Tasks() error path is not exercised
 // directly — propagation is straight pass-through and the helper has no

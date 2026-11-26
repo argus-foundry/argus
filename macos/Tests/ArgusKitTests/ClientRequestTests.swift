@@ -192,17 +192,19 @@ struct ClientRequestTests {
 
     // MARK: - Output headers
 
-    @Test("output parses X-Output-Total and X-Source headers")
+    @Test("output parses the cursor and its session PID")
     func outputHeaders() async throws {
         MockURLProtocol.handler = { req in
             let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1",
-                                       headerFields: ["X-Output-Total": "4096", "X-Source": "log",
+                                       headerFields: ["X-Output-Total": "4096", "X-Source": "live",
+                                                      "X-Argus-Session-Pid": "123",
                                                       "Content-Type": "text/plain"])!
             return (resp, Data("terminal bytes".utf8))
         }
         let out = try await makeClient().output(taskID: "t1", tailBytes: 1024, clean: true)
         #expect(out.total == 4096)
-        #expect(out.source == "log")
+        #expect(out.source == "live")
+        #expect(out.sessionPID == 123)
         #expect(String(decoding: out.data, as: UTF8.self) == "terminal bytes")
 
         let items = queryItems(MockURLProtocol.lastRequest)
@@ -578,13 +580,27 @@ struct ClientRequestTests {
                                  headers: ["Content-Type": "text/event-stream"],
                                  body: Data("data: aGk=\n\n".utf8))
         let client = makeClient()
-        for try await _ in client.terminalStream(taskID: "42", since: 7) { break }
+        for try await _ in client.terminalStream(taskID: "42", since: 7, expectedPID: 42) { break }
 
         let req = MockURLProtocol.lastRequest
         #expect(req?.value(forHTTPHeaderField: "Authorization") == "Bearer secret-token")
         let items = queryItems(req)
         #expect(items["token"] == nil)
         #expect(items["since"] == "7")
+        #expect(items["expected_pid"] == "42")
         #expect(req?.url?.absoluteString.contains("secret-token") == false)
+    }
+
+    @Test("terminal stream parses a stale cursor conflict")
+    func streamStaleCursor() async throws {
+        MockURLProtocol.stubJSON(status: 409, body: Data(#"{"error":"session changed","code":"stale_session"}"#.utf8))
+        do {
+            for try await _ in makeClient().terminalStream(taskID: "42", since: 7, expectedPID: 42) {
+                Issue.record("a rejected cursor must not open a stream")
+            }
+            Issue.record("expected a stale session conflict")
+        } catch let error as ArgusError {
+            #expect(error.isStaleSession)
+        }
     }
 }

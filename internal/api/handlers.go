@@ -1333,107 +1333,97 @@ func (s *Server) handleGetOutput(w http.ResponseWriter, r *http.Request) {
 
 	clean := r.URL.Query().Get("clean") == "1"
 
-	// Always read from the on-disk session log when available, even for live
-	// sessions. The log file holds the complete history; the in-memory ring
-	// buffer only retains the last 256KB. For active in_progress tasks the
-	// SPA pairs this read with /stream?since=<X-Output-Total>, where the
-	// /stream endpoint replays only the (tiny) ring delta between this read
-	// and the live attach. Together they give the client full history with
-	// no gap and no duplicates.
-	logPath := agent.SessionLogPath(id)
-	// id comes from the URL path but is constrained: SessionLogPath does
-	// filepath.Join(~/.argus/sessions, id+".log"), and `id` originates as
-	// a server-generated nanosecond timestamp string (see model.Task.ID).
-	// A `..` segment in the URL would produce a path like ".._.log" inside
-	// the sessions dir, not an escape. Single-user local daemon, but the
-	// invariant should be held even if a future feature accepts user IDs.
-	f, err := os.Open(logPath) //nolint:gosec // logPath rooted at ~/.argus/sessions; id is server-generated
+	session, err := terminalSnapshotSession(s.runner, id)
 	if err != nil {
-		// Live session present but log unavailable (best-effort log creation
-		// failed at session start) — fall back to the ring buffer so the
-		// client sees the recent tail rather than a 404.
-		if sess := s.runner.Get(id); sess != nil {
-			// Atomic snapshot: data and ringTotal MUST come from the same
-			// lock acquisition. Reading them in two calls lets readLoop
-			// advance ringTotal past the bytes in data, leaving the client
-			// with a since-cursor that skips bytes never delivered.
-			readOutput := sess.RecentOutputTailWithTotal
-			if scoped, ok := sess.(interface {
-				ProcessOutputTailWithTotal(int) ([]byte, uint64)
-			}); ok {
-				readOutput = scoped.ProcessOutputTailWithTotal
-			}
-			data, ringTotal := readOutput(tailSize)
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.Header().Set("X-Source", "ring")
-			// data is the ring tail and ringTotal is the high-water mark; the
-			// client now has bytes [ringTotal-len(data) .. ringTotal]. Setting
-			// since=ringTotal on /stream attaches live with no replay (the
-			// caller-already-has-it region matches exactly). Any bytes the
-			// session writes between this header and the /stream open are
-			// covered by AddWriterFrom's same-lock replay.
-			w.Header().Set("X-Output-Total", strconv.FormatUint(ringTotal, 10))
-			if clean {
-				w.Write([]byte(sanitize.CleanPTYOutput(string(data)))) //nolint:errcheck,gosec // text/plain endpoint; bytes are PTY output for the local single-user daemon, not HTML
-			} else {
-				w.Write(data) //nolint:errcheck,gosec // text/plain endpoint; bytes are PTY output for the local single-user daemon, not HTML
-			}
-			return
-		}
+		writeCodedErrCause(w, http.StatusConflict, "session changed while reading output", "stale_session", nil)
+		return
+	}
+	pid := 0
+	if session != nil {
+		pid = session.PID()
+	}
+	data, total, source, err := terminalOutputSnapshot(id, session, tailSize)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		writeCodedErrCause(w, http.StatusConflict, "session changed while reading output", "stale_session", nil)
+		return
+	}
+	if errors.Is(err, os.ErrNotExist) {
 		writeErr(w, http.StatusNotFound, "no output available", nil)
 		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "", err)
+		return
+	}
+
+	// The next PTY can truncate the same task log. Only advertise a
+	// cursor after the process that owned the read is still current.
+	current, err := terminalSnapshotSession(s.runner, id)
+	currentPID := 0
+	if current != nil {
+		currentPID = current.PID()
+	}
+	if err != nil || currentPID != pid {
+		writeCodedErrCause(w, http.StatusConflict, "session changed while reading output", "stale_session", nil)
+		return
+	}
+	if clean {
+		data = []byte(sanitize.CleanPTYOutput(string(data)))
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Output-Total", strconv.FormatUint(total, 10))
+	w.Header().Set("X-Source", source)
+	if pid > 0 {
+		w.Header().Set("X-Argus-Session-Pid", strconv.Itoa(pid))
+	}
+	_, _ = w.Write(data) //nolint:gosec // Text/plain endpoint returns PTY output.
+}
+
+func terminalSnapshotSession(runner agent.SessionRunner, id string) (agent.SessionHandle, error) {
+	session, err := agent.AttachableSession(runner, id)
+	if errors.Is(err, agent.ErrSessionCoordinationUnsupported) {
+		// View-only reads remain available with older supervisors.
+		return runner.Get(id), nil
+	}
+	return session, err
+}
+
+func terminalOutputSnapshot(id string, session agent.SessionHandle, tailSize int) ([]byte, uint64, string, error) {
+	// SessionLogPath roots task IDs under the session log directory.
+	f, err := os.Open(agent.SessionLogPath(id)) //nolint:gosec // SessionLogPath sanitizes the ID.
+	if err != nil {
+		if session == nil {
+			return nil, 0, "", err
+		}
+		readOutput := session.RecentOutputTailWithTotal
+		if scoped, ok := session.(interface {
+			ProcessOutputTailWithTotal(int) ([]byte, uint64)
+		}); ok {
+			readOutput = scoped.ProcessOutputTailWithTotal
+		}
+		data, total := readOutput(tailSize)
+		return data, total, "ring", nil
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "", err)
-		return
+		return nil, 0, "", err
 	}
-	fileSize := info.Size()
-	startOff := fileSize - int64(tailSize)
-	if startOff < 0 {
-		startOff = 0
+	fileSize := max(info.Size(), 0)
+	length := min(fileSize, int64(tailSize))
+	data, err := io.ReadAll(io.NewSectionReader(f, fileSize-length, length))
+	if err != nil {
+		return nil, 0, "", err
 	}
-	// Always >= 0 by construction (startOff is clamped to [0, fileSize]).
-	// The same is asserted indirectly by io.CopyN below — it errors on a
-	// negative count, but we never produce one here.
-	bytesToRead := fileSize - startOff
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	// X-Output-Total advertises the byte position the client should pass back
-	// as ?since=<n> on the /stream endpoint to resume without overlap. We
-	// pin it to the file size we observed under Stat() and bound the body
-	// read to the same value (io.CopyN), so the count of bytes returned ==
-	// X-Output-Total - startOff exactly. Without the bound, a live session
-	// growing the file mid-read would leave the client's `since` short of
-	// the bytes they actually have.
-	w.Header().Set("X-Output-Total", strconv.FormatInt(fileSize, 10))
-	if sess := s.runner.Get(id); sess != nil {
-		w.Header().Set("X-Source", "live")
-	} else {
-		w.Header().Set("X-Source", "log")
+	if int64(len(data)) != length {
+		return nil, 0, "", io.ErrUnexpectedEOF
 	}
-
-	if _, err := f.Seek(startOff, io.SeekStart); err != nil {
-		writeErr(w, http.StatusInternalServerError, "", err)
-		return
+	source := "log"
+	if session != nil {
+		source = "live"
 	}
-	if clean {
-		raw, err := io.ReadAll(io.LimitReader(f, bytesToRead))
-		if err != nil {
-			// Headers (including X-Output-Total) are already sent; we
-			// can't downgrade to 500. Returning silently truncates the
-			// 200 response; the SPA's `since` will then point past the
-			// bytes actually delivered. Rare in practice — io.ReadAll
-			// from a local file fails only on OS errors — but worth
-			// flagging if anyone hits the truncation symptom.
-			return
-		}
-		w.Write([]byte(sanitize.CleanPTYOutput(string(raw)))) //nolint:errcheck
-	} else {
-		io.CopyN(w, f, bytesToRead) //nolint:errcheck
-	}
+	return data, uint64(fileSize), source, nil
 }
 
 // --- Get Links ---
@@ -1870,7 +1860,21 @@ func (s *Server) rerenderTarget(taskID string, expectedPID int) (agent.SessionHa
 func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	sess := s.runner.Get(id)
+	var sess agent.SessionHandle
+	if expected := r.URL.Query().Get("expected_pid"); expected != "" {
+		pid, err := strconv.Atoi(expected)
+		if err != nil || pid <= 0 || pid > 1<<31-1 {
+			writeErr(w, http.StatusBadRequest, "expected_pid must be a positive process ID", nil)
+			return
+		}
+		sess, err = terminalSnapshotSession(s.runner, id)
+		if err != nil || sess == nil || sess.PID() != pid {
+			writeCodedErrCause(w, http.StatusConflict, "session changed before stream attachment", "stale_session", nil)
+			return
+		}
+	} else {
+		sess = s.runner.Get(id)
+	}
 	if sess == nil {
 		writeErr(w, http.StatusNotFound, "no active session", nil)
 		return
@@ -1910,7 +1914,7 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 		ProcessDone(int) <-chan struct{}
 	}); ok && pid > 0 {
 		if !scoped.AddWriterFromPID(cw, since, pid) {
-			writeErr(w, http.StatusConflict, "session changed while attaching", nil)
+			writeCodedErrCause(w, http.StatusConflict, "session changed while attaching", "stale_session", nil)
 			return
 		}
 		sessDone = scoped.ProcessDone(pid)

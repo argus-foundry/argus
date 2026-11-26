@@ -96,11 +96,11 @@ public struct ResizeResult: Sendable, Equatable, Decodable {
 }
 
 /// The most-recent terminal output tail from `GET /api/tasks/{id}/output`.
-/// `total` is parsed from the `X-Output-Total` header (pass it back as
-/// `since` on ``ArgusClient/terminalStream(taskID:since:)`` for a gapless
-/// resume); `source` is the `X-Source` header (`ring` | `log` | `live`).
+/// Pass `total` and `sessionPID` back when opening the stream. `source`
+/// describes whether the tail came from the ring or the session log.
 public struct OutputTail: Sendable, Equatable {
     public let data: Data
     public let total: UInt64
     public let source: String
+    public let sessionPID: Int?
 }

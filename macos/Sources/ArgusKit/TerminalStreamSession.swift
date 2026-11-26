@@ -12,11 +12,12 @@ import Foundation
 /// write the clipboard, show the session-ended state). It never performs I/O.
 ///
 /// ## Protocol replicated (matches `internal/api/handlers.go` + the web SPA)
-/// 1. GET `/output` → `X-Output-Total: N` (the byte cursor) + the tail bytes.
+/// 1. GET `/output` → `X-Output-Total: N` and the PID alongside the tail bytes.
 ///    Call ``start(tailTotal:tailData:)`` with those: it seeds ``offset`` = N,
 ///    emits `.feed(tail)` then `.openStream(since: N)`.
-/// 2. Open `/stream?since=N`. Unnamed frames are base64 PTY bytes → `.feed`,
-///    advancing ``offset`` by the byte count for a gapless resume.
+/// 2. Open `/stream` with the cursor and PID. Unnamed frames carry PTY bytes,
+///    advancing ``offset`` by the byte count for a gapless resume. A stale
+///    PID requires a fresh snapshot before another attach.
 /// 3. `exit {"rerendering":true}` → a kick-restart is in flight: reconnect from
 ///    the current ``offset`` (with backoff, since the new session may 404 for a
 ///    beat while it spawns).
@@ -58,6 +59,7 @@ public struct TerminalStreamSession: Sendable, Equatable {
     /// `X-Output-Total`, advanced by every fed frame; passed back as `since`
     /// on reconnect for a gapless resume.
     public private(set) var offset: UInt64 = 0
+    public private(set) var sessionPID: Int?
     public private(set) var phase: Phase = .idle
 
     /// The delay the *next* reconnect will use; grows on each unhealthy
@@ -82,6 +84,8 @@ public struct TerminalStreamSession: Sendable, Equatable {
         case openStream(since: UInt64)
         /// Re-open the SSE stream, but only after waiting `after`.
         case reconnect(since: UInt64, after: Duration)
+        /// Discard the retiring process's display and fetch a new snapshot.
+        case reloadSnapshot
         /// The session ended (non-rerender). Show the ended / Restart state.
         case ended
         /// Agent-staged clipboard changed. `text == nil` means it was cleared.
@@ -94,8 +98,9 @@ public struct TerminalStreamSession: Sendable, Equatable {
     /// the cursor to `tailTotal`, resets the backoff, feeds any tail bytes, then
     /// opens the stream. Call this both for the initial attach and after a
     /// Restart (`POST /restart`) re-fetches the tail.
-    public mutating func start(tailTotal: UInt64, tailData: Data = Data()) -> [Action] {
+    public mutating func start(tailTotal: UInt64, tailData: Data = Data(), sessionPID: Int? = nil) -> [Action] {
         offset = tailTotal
+        self.sessionPID = sessionPID
         pendingDelay = baseDelay
         phase = .connecting
         var actions: [Action] = []
@@ -107,6 +112,13 @@ public struct TerminalStreamSession: Sendable, Equatable {
     /// Interprets one decoded ``TerminalEvent`` from the live stream.
     public mutating func handle(_ event: TerminalEvent) -> [Action] {
         switch event {
+        case .process(let pid):
+            if let sessionPID, sessionPID != pid {
+                return [reloadSnapshot()]
+            }
+            sessionPID = pid
+            return []
+
         case .connected:
             // The SSE response validated: the stream is open and healthy even if
             // no bytes follow (an idle agent). Resolve the spinner to live and,
@@ -168,6 +180,9 @@ public struct TerminalStreamSession: Sendable, Equatable {
     /// `error` is accepted for the caller's logging; the reconnect decision is
     /// phase-based, identical for a clean finish and a transport failure.
     public mutating func streamClosed(error: Error? = nil) -> Action? {
+        if (error as? ArgusError)?.isStaleSession == true {
+            return reloadSnapshot()
+        }
         switch phase {
         case .ended, .reconnecting:
             // Terminal, or a reconnect is already pending (rerender path).
@@ -178,6 +193,13 @@ public struct TerminalStreamSession: Sendable, Equatable {
     }
 
     // MARK: - Backoff helper
+
+    private mutating func reloadSnapshot() -> Action {
+        offset = 0
+        sessionPID = nil
+        phase = .connecting
+        return .reloadSnapshot
+    }
 
     /// Emits a reconnect for the current cursor after ``pendingDelay``, then
     /// grows the delay (capped at ``maxDelay``) for the next attempt and flips

@@ -122,6 +122,9 @@ type Client struct {
 	// that needs the exiting handle's identity (the daemon stamping its exit-info
 	// cache) cannot recover it with Get. Fired instead of onSessionExit when set.
 	onSessionExitOwned func(taskID string, info daemon.ExitInfo, owner agent.SessionHandle)
+	// finalizing retains an exit in session listings while its callback applies
+	// the authoritative status. Guarded by c.mu.
+	finalizing map[string]*RemoteSession
 
 	// needsInput holds the daemon-computed "waiting on the user" set. When this
 	// Client is the daemon's supervisor-client (d.runner in supervisor mode), the
@@ -144,6 +147,22 @@ const accountProtocolVersion = 8
 // recycleSessionIDProtocolVersion is the first supervisor protocol that carries
 // the fresh pinned SessionID on RecycleReq.
 const recycleSessionIDProtocolVersion = 12
+
+// managedRestartProtocolVersion is the first protocol that identifies the
+// exact successor in the outgoing process's exit record.
+const managedRestartProtocolVersion = 17
+
+// CheckManagedRestartSupported checks the owner before preparing a restart.
+func (c *Client) CheckManagedRestartSupported(taskID string) error {
+	c.mu.Lock()
+	peer := c.peerProtocol
+	c.mu.Unlock()
+	if peer == 0 || peer >= managedRestartProtocolVersion {
+		return nil
+	}
+	uxlog.Log("[restart] owner cannot identify a successor task=%s protocol=v%d need=v%d", taskID, peer, managedRestartProtocolVersion)
+	return fmt.Errorf("%w: supervisor protocol v%d cannot identify a managed successor", agent.ErrSessionCoordinationUnsupported, peer)
+}
 
 // RecycleCarriesSessionID implements agent.RecycleIDCapable from the cached
 // handshake version (no round trip). An unhandshaken peer (0) is assumed
@@ -687,11 +706,16 @@ func (c *Client) HasSession(taskID string) bool {
 // can skip the InProgress→InReview transition while the daemon is mid
 // kick-restart for this task.
 func (c *Client) HasPendingRestart(taskID string) bool {
+	pending, _ := c.hasPendingRestart(taskID)
+	return pending
+}
+
+func (c *Client) hasPendingRestart(taskID string) (bool, error) {
 	var resp daemon.PendingRestartResp
 	if err := c.call("Daemon.HasPendingRestart", &daemon.TaskIDReq{TaskID: taskID}, &resp); err != nil {
-		return false
+		return false, err
 	}
-	return resp.Pending
+	return resp.Pending, nil
 }
 
 // AttachableSession asks the owner whether an existing session is ready to reuse.
@@ -787,6 +811,9 @@ func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, 
 	if err := c.checkResidentSupported(task); err != nil {
 		return err
 	}
+	if err := c.CheckManagedRestartSupported(task.ID); err != nil {
+		return err
+	}
 	var resp daemon.StatusResp
 	if err := c.call(method, &daemon.KickReq{
 		Revive:          revive,
@@ -853,6 +880,9 @@ func (c *Client) Recycle(task *model.Task, cfg config.Config, rows, cols uint16)
 	if err := c.checkResidentSupported(task); err != nil {
 		return err
 	}
+	if err := c.CheckManagedRestartSupported(task.ID); err != nil {
+		return err
+	}
 	var resp daemon.StatusResp
 	if err := c.call("Daemon.Recycle", &daemon.RecycleReq{
 		MCPPort:         c.currentMCPPort(),
@@ -900,11 +930,38 @@ func (c *Client) SetNeedsInputIDs(ids []string) {
 // *agent.Session set, so it relays the supervisor's already-built SessionInfo —
 // synthetic pending-restart entries included). Nil on RPC failure.
 func (c *Client) ListSessionInfo() []daemon.SessionInfo {
+	infos, _ := c.ListSessionInfoChecked()
+	return infos
+}
+
+// ListSessionInfoChecked keeps a failed supervisor query distinct from an
+// empty listing when the daemon relays it to a connected client.
+func (c *Client) ListSessionInfoChecked() ([]daemon.SessionInfo, error) {
 	var resp daemon.ListResp
 	if err := c.call("Daemon.ListSessions", &daemon.Empty{}, &resp); err != nil {
-		return nil
+		return nil, err
 	}
-	return resp.Sessions
+	// A supervisor can list a retired process before its exit reaches the
+	// daemon. Keep the task pending while the local reader is waiting for
+	// that exit or its callback is applying the result.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	listed := make(map[string]bool, len(resp.Sessions))
+	for i, info := range resp.Sessions {
+		if !info.Alive && (c.sessions[info.TaskID] != nil || c.finalizing[info.TaskID] != nil) {
+			resp.Sessions[i] = daemon.SessionInfo{TaskID: info.TaskID, Alive: true}
+		}
+		listed[info.TaskID] = true
+	}
+	for _, sessions := range []map[string]*RemoteSession{c.sessions, c.finalizing} {
+		for id := range sessions {
+			if !listed[id] {
+				resp.Sessions = append(resp.Sessions, daemon.SessionInfo{TaskID: id, Alive: true})
+				listed[id] = true
+			}
+		}
+	}
+	return resp.Sessions, nil
 }
 
 // Hello performs the supervisor protocol handshake, returning its ProtocolVersion
@@ -1069,18 +1126,24 @@ func (c *Client) BootInfo() (daemon.BootInfoResp, error) {
 }
 
 // forgetSession removes only the handle that owned the outgoing stream.
-func (c *Client) forgetSession(rs *RemoteSession) (func(string, daemon.ExitInfo), func(string, daemon.ExitInfo, agent.SessionHandle)) {
+func (c *Client) forgetSession(rs *RemoteSession, finalizing bool) (func(string, daemon.ExitInfo), func(string, daemon.ExitInfo, agent.SessionHandle)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.sessions[rs.taskID] == rs {
 		delete(c.sessions, rs.taskID)
+		if finalizing {
+			if c.finalizing == nil {
+				c.finalizing = make(map[string]*RemoteSession)
+			}
+			c.finalizing[rs.taskID] = rs
+		}
 	}
 	return c.onSessionExit, c.onSessionExitOwned
 }
 
 func (c *Client) removeSessionStreamLost(rs *RemoteSession) {
 	uxlog.Log("client.removeSessionStreamLost: task=%s", rs.taskID)
-	fn, owned := c.forgetSession(rs)
+	fn, owned := c.forgetSession(rs, false)
 	c.fireSessionExit(fn, owned, rs.taskID, daemon.ExitInfo{StreamLost: true, PID: rs.PID()}, rs)
 }
 
@@ -1114,12 +1177,25 @@ func (c *Client) relayRestartExit(rs *RemoteSession, info daemon.ExitInfo) bool 
 
 func (c *Client) finishSession(rs *RemoteSession, info daemon.ExitInfo) {
 	rs.close()
-	fn, owned := c.forgetSession(rs)
+	fn, owned := c.forgetSession(rs, !info.StreamLost)
 	c.fireSessionExit(fn, owned, rs.taskID, info, rs)
+	c.mu.Lock()
+	if c.finalizing[rs.taskID] == rs {
+		delete(c.finalizing, rs.taskID)
+	}
+	c.mu.Unlock()
 }
 
 func (c *Client) sessionExitInfo(rs *RemoteSession) daemon.ExitInfo {
 	return c.exitInfoForPID(rs.taskID, rs.PID())
+}
+
+// ObservedSessionExit returns the owner's retained exit record for pid.
+func (c *Client) ObservedSessionExit(taskID string, pid int) daemon.ExitInfo {
+	if pid <= 0 {
+		return daemon.ExitInfo{StreamLost: true}
+	}
+	return c.exitInfoForPID(taskID, pid)
 }
 
 func (c *Client) exitInfoForPID(taskID string, pid int) daemon.ExitInfo {

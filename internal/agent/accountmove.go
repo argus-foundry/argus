@@ -249,6 +249,11 @@ func moveAccount(database *db.DB, runner accountMoveRunner, in AccountMoveInput,
 	if sess != nil && !sess.IsIdle() && !in.Force {
 		return nil, AccountMoveResult{}, ErrAccountMoveBusy
 	}
+	if sess != nil {
+		if err := CheckManagedRestartSupported(runner, task.ID); err != nil {
+			return nil, AccountMoveResult{}, err
+		}
+	}
 
 	RefreshSessionIDWith(database, task, RefreshKeepEmpty)
 	moved := *task

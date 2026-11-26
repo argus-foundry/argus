@@ -120,6 +120,7 @@ func replayBounceSignals(database *db.DB, dataDir string) error {
 // existence (not session liveness), so a re-attached task's row exists and its
 // hera binding survives for free — M4 composes with re-attach without change.
 func (d *Daemon) ReconcileOnStartup() {
+	d.recoverHeraReclaimExits()
 	if d.supClient != nil {
 		d.reattachSupervised()
 	} else {

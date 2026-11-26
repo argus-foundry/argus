@@ -251,6 +251,11 @@ func (g *graduationWatcher) advance(taskID, phase string) error {
 		}
 		return nil
 	}
+	if alive {
+		if err := agent.CheckManagedRestartSupported(g.runner, taskID); err != nil {
+			return err
+		}
+	}
 	delete(g.deferred, taskID)
 	if !alive {
 		if last, ok := g.lastResume[taskID]; ok && g.now().Sub(last) < graduationResumeBackoff {

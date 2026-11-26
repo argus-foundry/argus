@@ -153,6 +153,46 @@ func TestHeraReclaimConnectedRetiredRemovesWorktree(t *testing.T) {
 	testutil.ErrorIs(t, err, db.ErrTaskNotFound)
 }
 
+func TestHeraReclaimConnectedPreservesCoordinatorBinding(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		name := "retired"
+		if live {
+			name = "active"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			worktree := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+			testutil.NoError(t, os.MkdirAll(worktree, 0o750))
+			task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Worktree: worktree}
+			testutil.NoError(t, d.Add(task))
+			orch := seedHeraOrch(t, d, "outside")
+			role := seedHeraRoleOnTask(t, d, orch, "coord", db.HeraKindCoordinator, task.ID, worktree)
+			stopCalls := 0
+			runner := connectedReclaimRunner{
+				Runner: agent.NewRunner(nil),
+				stop: func(string, int) error {
+					stopCalls++
+					return nil
+				},
+			}
+			if live {
+				runner.session = &fakeKickSession{pid: 42, alive: true}
+			}
+			app := New(d, runner, true)
+
+			app.reclaimConnectedHeraTask(runner, d, task.ID)
+
+			row, err := d.Get(task.ID)
+			testutil.NoError(t, err)
+			testutil.False(t, row.Archived)
+			testutil.True(t, agent.DirExists(worktree))
+			testutil.Equal(t, stopCalls, 0)
+			_, err = d.HeraLiveBindingByRole(role.ID)
+			testutil.NoError(t, err)
+		})
+	}
+}
+
 func TestHeraReclaimConnectedTickLeavesArmedTaskInProgress(t *testing.T) {
 	d := testDB(t)
 	const pid = 42

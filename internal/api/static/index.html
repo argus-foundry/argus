@@ -2747,13 +2747,17 @@ async function attachTerminal(task) {
     // truncating history for any session that emitted more than that.
     const result = await loadStaticOutput(task.id);
     if (myGen !== attachGen) return;
+    if (result.stale || result.source === 'log') {
+      pollAndRecoverFromRerenderExit(task.id);
+      return;
+    }
     // result.ok=false (404 / 5xx / network) is intentionally NOT a gate
     // here: the SSE stream can still deliver live output even if the disk
     // fetch failed. loadStaticOutput already wrote a "(no output yet)" or
     // "(failed to load output)" placeholder into xterm; with since=0 the
     // server replays the full ring (legacy AddWriter behaviour), so the
     // user always gets *something* without a stuck "connecting…" state.
-    openStream(task.id, result.since);
+    openStream(task.id, result.since, result.pid);
   } else {
     // Non-interactive: in_progress with no live session (ghost or mid
     // kill+resume restart) or truly stopped (pending / in_review / complete). Both paths just replay the
@@ -3546,7 +3550,7 @@ function keepPlaceOnScroll() {
   postResize(currentTask.id, lastTerm.cols, lastTerm.rows);
 }
 
-function openStream(id, since) {
+function openStream(id, since, pid) {
   // EventSource doesn't support custom headers, so pass the token as a query
   // param. Auth middleware accepts both Bearer headers and ?token=.
   // `since` is the byte cursor returned by /output as X-Output-Total -- the
@@ -3557,6 +3561,9 @@ function openStream(id, since) {
   let url = API + `/api/tasks/${id}/stream?token=` + encodeURIComponent(TOKEN);
   if (typeof since === 'number' && since > 0) {
     url += '&since=' + since;
+  }
+  if (Number.isSafeInteger(pid) && pid > 0) {
+    url += '&expected_pid=' + pid;
   }
   const es = new EventSource(url);
   evtSource = es;
@@ -3617,7 +3624,8 @@ function openStream(id, since) {
       // The stream 404s when it was opened inside the restart gap (the
       // resize kick can land before openStream). EventSource won't retry an
       // HTTP error, so run the same recovery the exit event would.
-      if (restartQueue && restartQueue.taskId === id) {
+      if (evtSource === es && ((restartQueue && restartQueue.taskId === id) || pid > 0)) {
+        closeStream();
         pollAndRecoverFromRerenderExit(id);
         return;
       }
@@ -3846,6 +3854,7 @@ async function loadStaticOutput(id) {
   // Race: user navigated away before the fetch resolved.
   if (!term) return { since: 0, ok: false };
   if (!r.ok) {
+    if (r.status === 409) return { since: 0, ok: false, stale: true };
     // 404 = no log yet (Pending task that never started). "no output yet"
     // reads better than "no output available" for the common Pending case
     // since the user can still resume the task to populate it. Other errors
@@ -3870,11 +3879,13 @@ async function loadStaticOutput(id) {
   // through the URL param.
   const totalHeader = r.headers.get('X-Output-Total');
   const since = totalHeader ? Number(totalHeader) : 0;
+  const pid = Number(r.headers.get('X-Argus-Session-Pid') || 0);
+  const source = r.headers.get('X-Source') || '';
   const buf = await r.arrayBuffer();
   if (!term) return { since, ok: false };
   if (buf.byteLength === 0) {
     term.write('\x1b[2m(no output yet)\x1b[0m\r\n');
-    return { since, ok: true };
+    return { since, pid, source, ok: true };
   }
   // Defer the write until after setupTerm()'s rAF fit() has set proper
   // dimensions — writing into a default 80x24 terminal would misplace cursor
@@ -3889,7 +3900,7 @@ async function loadStaticOutput(id) {
   term.write(new Uint8Array(buf), () => {
     if (term) term.scrollToBottom();
   });
-  return { since, ok: true };
+  return { since, pid, source, ok: true };
 }
 
 function renderOverflowMenu() {

@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/argus-foundry/argus/internal/model"
 )
@@ -34,11 +35,41 @@ func (d *DB) ClearHeraReclaimStop(taskID string, pid int) error {
 // HeraReclaimStopPending reports whether cleanup still owes an exit relay
 // for this task. Check it while holding the task's session mutation lock.
 func (d *DB) HeraReclaimStopPending(taskID string) (bool, error) {
+	pid, err := d.HeraReclaimStopPID(taskID)
+	return pid != 0, err
+}
+
+// HeraReclaimStopPID returns the armed process identity, or zero if disarmed.
+func (d *DB) HeraReclaimStopPID(taskID string) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var pid int
 	err := d.conn.QueryRow(`SELECT hera_reclaim_pid FROM tasks WHERE id=?`, taskID).Scan(&pid)
-	return pid != 0, err
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
+	}
+	return pid, err
+}
+
+// PendingHeraReclaimStops lists tasks whose stop still needs an exit relay.
+// A caller must re-read the PID under the session lock before using it.
+func (d *DB) PendingHeraReclaimStops() ([]string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rows, err := d.conn.Query(`SELECT id FROM tasks WHERE hera_reclaim_pid<>0`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // ConsumeHeraReclaimStop consumes the intent for the observed owner exactly

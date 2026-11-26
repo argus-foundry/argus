@@ -3867,10 +3867,10 @@ func (a *App) refreshTasksWithIDsAndReconciliation(runningIDs, idleIDs []string,
 	// flip is the daemon's exit-driven transition, which this can only ever
 	// agree with or conservatively under-call (InReview, never Complete).
 	//
-	// Only reconcile when connected to a daemon — the daemon is the source of
-	// truth for running sessions. In-process mode has its own onFinish callback.
-	// Skip if runningIDs is nil (transient RPC failure) or during a restart.
-	if reconcile && a.daemonConnected && runningIDs != nil && !a.daemonRestarting {
+	// The remote TUI leaves inferred status changes to the daemon. Its task
+	// update endpoint cannot apply the local reclaim and PID guards below.
+	_, remote := a.db.(remoteTaskCreator)
+	if reconcile && a.daemonConnected && !remote && runningIDs != nil && !a.daemonRestarting {
 		runningSet := make(map[string]bool, len(runningIDs))
 		for _, id := range runningIDs {
 			runningSet[id] = true

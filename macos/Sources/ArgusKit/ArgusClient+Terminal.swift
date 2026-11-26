@@ -5,7 +5,7 @@ extension ArgusClient {
     /// `tailBytes` caps the body (pass nil for the server default, 32 KiB);
     /// `clean` strips ANSI control sequences. The returned ``OutputTail/total``
     /// (from `X-Output-Total`) is the `since` cursor for a gapless
-    /// ``terminalStream(taskID:since:)``.
+    /// ``terminalStream(taskID:since:expectedPID:)`` alongside the process ID.
     public func output(taskID: String, tailBytes: Int? = nil,
                        clean: Bool = false) async throws -> OutputTail {
         var q: [URLQueryItem] = []
@@ -15,7 +15,8 @@ extension ArgusClient {
         let (data, http) = try await send(req)
         let total = UInt64(http.value(forHTTPHeaderField: "X-Output-Total") ?? "") ?? 0
         let source = http.value(forHTTPHeaderField: "X-Source") ?? ""
-        return OutputTail(data: data, total: total, source: source)
+        let pid = Int(http.value(forHTTPHeaderField: "X-Argus-Session-Pid") ?? "")
+        return OutputTail(data: data, total: total, source: source, sessionPID: pid)
     }
 
     /// `POST /api/tasks/{id}/input` — writes raw bytes to the agent's PTY.

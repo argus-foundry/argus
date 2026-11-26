@@ -436,6 +436,7 @@ func New(database *db.DB) *Daemon {
 	// the onFinish wiring above); the core owns the stream registry, exit cache,
 	// and the session RPC + stream handler, all promoted onto *Daemon.
 	d.sessionCore = newSessionCore(runner, d.db.Config, d.done)
+	d.keepFinalizingInList = true
 	runner.OnRestartStarted(func(taskID string, outgoingPID, successorPID int) {
 		d.linkRestart(taskID, outgoingPID, successorPID)
 	})
@@ -483,10 +484,17 @@ func (d *Daemon) handleSessionExitOwned(taskID string, ei ExitInfo, owner agent.
 			ei.StreamLost = true
 		} else {
 			defer unlock()
+			if d.sessionExitAlreadyFinalized(taskID, ei.PID) {
+				return
+			}
 			ei.StreamLost = !d.finalizeSessionExit(taskID, ei)
 		}
 	}
+	d.publishSessionExit(taskID, ei, owner)
+}
 
+// publishSessionExit records a processed exit and delivers its lifecycle event.
+func (d *Daemon) publishSessionExit(taskID string, ei ExitInfo, owner agent.SessionHandle) {
 	pid := ei.PID
 	if pid == 0 && owner != nil {
 		pid = owner.PID()
@@ -530,6 +538,20 @@ func (d *Daemon) handleSessionExitOwned(taskID string, ei ExitInfo, owner agent.
 	})
 }
 
+func (d *Daemon) sessionExitAlreadyFinalized(taskID string, pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, entry := range d.recentExits[taskID] {
+		if entry.info.PID == pid {
+			return !entry.info.StreamLost && !entry.info.PendingRestart
+		}
+	}
+	return false
+}
+
 // finalizeSessionExit is called with exclusive ownership of the task's
 // lifecycle. Probe the supervisor directly: runner.Get may be a cached
 // stream, while the supervisor already has (or retired) a replacement.
@@ -549,11 +571,32 @@ func (d *Daemon) finalizeSessionExit(taskID string, ei ExitInfo) bool {
 		}
 	}
 
-	reclaim, err := d.db.ConsumeHeraReclaimStop(taskID, ei.PID)
-	if err != nil {
+	armedPID, err := d.db.HeraReclaimStopPID(taskID)
+	if err != nil && !errors.Is(err, db.ErrTaskNotFound) {
 		slog.Warn("session exit: could not read reclaim intent", "task", taskID, "pid", ei.PID, "err", err)
+		return false
 	}
-	d.transitionTaskOnExit(taskID, ei.CleanExit() || reclaim)
+	reclaim := ei.PID > 0 && armedPID == ei.PID
+	forceComplete := false
+	if reclaim {
+		task, err := d.db.Get(taskID)
+		if err != nil {
+			slog.Warn("session exit: could not load reclaim task", "task", taskID, "pid", ei.PID, "err", err)
+			return false
+		}
+		forceComplete = task.Archived && !task.IsResident()
+	}
+	if !d.transitionTaskOnExit(taskID, ei.CleanExit() || forceComplete) {
+		return false
+	}
+	// Clear only after the terminal transition commits. If we stop between
+	// these writes, recovery sees the same PID and an already-terminal row.
+	if reclaim {
+		if err := d.db.ClearHeraReclaimStop(taskID, ei.PID); err != nil {
+			slog.Warn("session exit: could not clear finalized reclaim intent", "task", taskID, "pid", ei.PID, "err", err)
+			return false
+		}
+	}
 	d.captureSessionIDPostExit(taskID)
 	d.clipboard.Clear(taskID)
 	return true
@@ -620,7 +663,7 @@ func (d *Daemon) captureSessionIDPostExit(taskID string) {
 // launch failure, unconfirmed stream loss) lands in InReview so the user can
 // resume rather than having a still-unfinished task silently marked done.
 // No-op if the row has already moved on (e.g., the user changed status mid-exit).
-func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
+func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) bool {
 	// Hera worker finish policy (BUG-050, locked decision #4) — the EXIT-HOOK
 	// BACKSTOP. The PRIMARY trigger is hera_status("done") in the MCP arm
 	// (Claude workers finish their report and go idle rather than exiting); this
@@ -635,19 +678,22 @@ func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
 		slog.Warn("session exit: hera worker roll failed (using default policy)", "task", taskID, "err", err)
 	} else if flipped {
 		slog.Info("session exit: hera worker rolled to in_review", "task", taskID)
-		return
+		return true
 	}
 
 	// Non-worker (or worker no longer in_progress): unchanged #707 logic.
 	t, err := d.db.Get(taskID)
-	if err != nil || t == nil || t.Status != model.StatusInProgress {
-		return
+	if err != nil {
+		return errors.Is(err, db.ErrTaskNotFound)
+	}
+	if t == nil || t.Status != model.StatusInProgress {
+		return true
 	}
 	if t.IsResident() {
 		// The resident stays in_progress permanently; the ensure-running loop
 		// (not a status flip) handles its exit.
 		residentLog("[resident] session exit task=%s clean=%t (status unchanged)", taskID, cleanExit)
-		return
+		return true
 	}
 	if cleanExit {
 		t.SetStatus(model.StatusComplete)
@@ -656,9 +702,10 @@ func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
 	}
 	if uerr := d.db.SetStatus(taskID, t.Status); uerr != nil {
 		slog.Warn("session exit: status update failed", "task", taskID, "err", uerr)
-		return
+		return false
 	}
 	slog.Info("session exit: status flipped", "task", taskID, "status", t.Status.String())
+	return true
 }
 
 // heraSpawnWorker performs the transactional born-bound worker spawn (M4). It
@@ -1366,23 +1413,36 @@ func (d *Daemon) probeUsageBudgetOnce(ctx context.Context) {
 func (d *Daemon) runHeraReclaimSweeper() {
 	ticker := time.NewTicker(heraReclaimSweepInterval)
 	defer ticker.Stop()
+	// The supervisor retains exit receipts for less than the worktree sweep
+	// interval. Recover missing relays before that evidence expires.
+	recovery := time.NewTicker(15 * time.Second)
+	defer recovery.Stop()
 
 	for {
 		select {
 		case <-d.done:
 			return
-		case <-ticker.C:
-			if sum, err := hera.ReconcileHeraReclaims(d.db, d.runner); err != nil {
-				slog.Warn("hera reclaim sweep failed", "err", err)
-			} else if sum.Candidates > 0 {
-				slog.Info("hera reclaim sweep",
-					"candidates", sum.Candidates,
-					"worktrees_retried", sum.WorktreesRetried,
-					"stacked_branches_deleted", sum.StackedBranchesDeleted,
-					"pruned", sum.Pruned,
-					"skipped_live_session", sum.SkippedLiveSession)
+		case <-recovery.C:
+			if d.recoverHeraReclaimExits() > 0 {
+				d.sweepHeraReclaims()
 			}
+		case <-ticker.C:
+			d.recoverHeraReclaimExits()
+			d.sweepHeraReclaims()
 		}
+	}
+}
+
+func (d *Daemon) sweepHeraReclaims() {
+	if sum, err := hera.ReconcileHeraReclaims(d.db, d.runner); err != nil {
+		slog.Warn("hera reclaim sweep failed", "err", err)
+	} else if sum.Candidates > 0 {
+		slog.Info("hera reclaim sweep",
+			"candidates", sum.Candidates,
+			"worktrees_retried", sum.WorktreesRetried,
+			"stacked_branches_deleted", sum.StackedBranchesDeleted,
+			"pruned", sum.Pruned,
+			"skipped_live_session", sum.SkippedLiveSession)
 	}
 }
 

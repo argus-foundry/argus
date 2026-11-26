@@ -219,6 +219,12 @@ func (s *Server) handlePatchTaskRuntime(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if req.Apply == applyRestart {
+		if sess != nil {
+			if err := agent.CheckManagedRestartSupported(s.runner, id); err != nil {
+				writeCodedErrCause(w, http.StatusConflict, err.Error(), "owner_unsupported", nil)
+				return
+			}
+		}
 		s.discoverRuntimeSession(&cand, cfg)
 		if cand.SessionID != "" {
 			if ok, err := agent.ResumableSessionAvailable(&cand, cfg); err != nil || !ok {

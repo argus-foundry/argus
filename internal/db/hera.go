@@ -677,8 +677,28 @@ func (d *DB) NukeHeraRole(id int64) error {
 // worker's nuke by anyone but the resident (HeraActorResident, its own
 // hera_delete_worker) queues the resident a notice.
 func (d *DB) NukeHeraRoleAs(id int64, actor HeraActor) error {
+	return d.nukeHeraRole(id, actor, false)
+}
+
+// NukeHeraRoleAndEndBinding records a human nuke and ends the role's live
+// binding together, so a failed nuke cannot leave a sweep candidate.
+func (d *DB) NukeHeraRoleAndEndBinding(id int64) error {
+	return d.nukeHeraRole(id, HeraActorHuman, true)
+}
+
+func (d *DB) nukeHeraRole(id int64, actor HeraActor, endBinding bool) error {
 	return d.heraRoleMutation(id, actor, ResidentNoticeNuked, func(tx *sql.Tx, cur *HeraRole) (bool, string, error) {
 		now := formatTime(time.Now())
+		if endBinding {
+			result, err := tx.Exec(`UPDATE hera_bindings SET ended_at=?, end_reason=? WHERE role_id=? AND ended_at IS NULL`,
+				now, HeraEndReasonUserDeleted, id)
+			if err != nil {
+				return false, "", fmt.Errorf("end hera role binding: %w", err)
+			}
+			if count, _ := result.RowsAffected(); count != 0 {
+				clearDeadRoleMailAfterEnd(tx, HeraEndReasonUserDeleted)
+			}
+		}
 		// The transition is nuked_at NULL -> set; the archive/pin side effects
 		// ride the same statement, and a repeat only re-asserts them.
 		res, err := tx.Exec(`UPDATE hera_roles SET nuked_at=?, archived_at=COALESCE(archived_at, ?), pinned_at=NULL WHERE id=? AND nuked_at IS NULL`, now, now, id)

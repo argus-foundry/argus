@@ -164,8 +164,13 @@ final class TerminalController {
             }
             do {
                 let tail = try await self.client.output(taskID: self.taskID)
+                guard !_Concurrency.Task.isCancelled else { return }
                 Self.log.info("[terminal] tail task=\(self.taskID, privacy: .public) bytes=\(tail.data.count) total=\(tail.total) source=\(tail.source, privacy: .public)")
-                self.apply(self.session.start(tailTotal: tail.total, tailData: tail.data))
+                if let oldPID = self.session.sessionPID, let newPID = tail.sessionPID, oldPID != newPID {
+                    self.resetTerminal()
+                }
+                let total = tail.source == "log" && tail.sessionPID == nil ? 0 : tail.total
+                self.apply(self.session.start(tailTotal: total, tailData: tail.data, sessionPID: tail.sessionPID))
             } catch {
                 Self.log.error("[terminal] tail failed task=\(self.taskID, privacy: .public) err=\(String(describing: error), privacy: .public)")
                 self.viewState = .error(AppState.describe(error))
@@ -205,10 +210,11 @@ final class TerminalController {
         session.streamOpening()
         syncViewStateFromPhase()
         do {
-            for try await ev in client.terminalStream(taskID: taskID, since: since) {
+            for try await ev in client.terminalStream(taskID: taskID, since: since, expectedPID: session.sessionPID) {
                 if _Concurrency.Task.isCancelled { return }
                 apply(session.handle(ev))
             }
+            if _Concurrency.Task.isCancelled { return }
             // Stream finished with no `exit` event (e.g. daemon bounce).
             if let action = session.streamClosed() {
                 Self.log.info("[terminal] stream drop task=\(self.taskID, privacy: .public) reconnecting from offset=\(self.session.offset)")
@@ -217,6 +223,7 @@ final class TerminalController {
         } catch is CancellationError {
             return
         } catch {
+            if _Concurrency.Task.isCancelled { return }
             Self.log.error("[terminal] stream error task=\(self.taskID, privacy: .public) err=\(String(describing: error), privacy: .public)")
             if let action = session.streamClosed(error: error) {
                 apply([action])
@@ -238,6 +245,10 @@ final class TerminalController {
                 openStream(since: since, after: nil)
             case .reconnect(let since, let after):
                 openStream(since: since, after: after)
+            case .reloadSnapshot:
+                streamTask?.cancel()
+                resetTerminal()
+                beginInitial()
             case .ended:
                 Self.log.info("[terminal] session ended task=\(self.taskID, privacy: .public)")
             case .clipboard(let text):
@@ -245,6 +256,11 @@ final class TerminalController {
             }
         }
         syncViewStateFromPhase()
+    }
+
+    private func resetTerminal() {
+        terminalView.getTerminal().resetToInitialState()
+        terminalView.needsDisplay = true
     }
 
     /// Maps the state-machine phase onto the UI state — but never clobbers a

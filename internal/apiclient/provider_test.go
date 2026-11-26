@@ -311,8 +311,14 @@ func TestSession_StreamKeepsHistoryBoundToItsPID(t *testing.T) {
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		pid := "123"
-		if calls.Add(1) > 1 {
+		switch calls.Add(1) {
+		case 2:
+			testutil.Equal(t, r.URL.Query().Get("expected_pid"), "123")
+			testutil.Equal(t, r.URL.Query().Get("since"), "3")
 			pid = "456"
+		case 3:
+			w.WriteHeader(http.StatusConflict)
+			return
 		}
 		w.Header().Set("X-Argus-Session-Pid", pid)
 		w.Header().Set("X-Argus-Session-Initial-Cols", "84")
@@ -337,6 +343,11 @@ func TestSession_StreamKeepsHistoryBoundToItsPID(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.True(t, ended)
 	testutil.Equal(t, s.PID(), 123)
+	testutil.Equal(t, string(s.RecentOutput()), "old")
+
+	ended, err = s.streamOnce()
+	testutil.NoError(t, err)
+	testutil.True(t, ended)
 	testutil.Equal(t, string(s.RecentOutput()), "old")
 }
 

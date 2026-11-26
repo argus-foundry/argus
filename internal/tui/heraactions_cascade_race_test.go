@@ -8,9 +8,77 @@ import (
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/argus-foundry/argus/internal/tui/hera"
 )
+
+func TestHeraCascadeNukeWaitsForAllTaskBindings(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{ID: "shared", Name: "shared", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	runner := newFakeReclaimRunner(task.ID)
+	app := New(d, runner, false)
+
+	first := seedHeraOrch(t, d, "first")
+	second := seedHeraOrch(t, d, "second")
+	firstRole := seedHeraRoleOnTask(t, d, first, "worker", db.HeraKindWorker, task.ID, "")
+	secondRole := seedHeraRoleOnTask(t, d, second, "worker", db.HeraKindWorker, task.ID, "")
+	subtree := []*hera.OrchView{
+		{ID: first, Roles: []hera.RoleView{{RoleID: firstRole.ID, OrchID: first, TaskID: task.ID, Live: true}}},
+		{ID: second, Roles: []hera.RoleView{{RoleID: secondRole.ID, OrchID: second, TaskID: task.ID, Live: true}}},
+	}
+
+	app.heraDoCascadeNuke(subtree, map[int64]bool{first: true, second: true}, nil)
+
+	for _, role := range []*db.HeraRole{firstRole, secondRole} {
+		_, err := d.HeraLiveBindingByRole(role.ID)
+		testutil.ErrorIs(t, err, db.ErrHeraNotFound)
+	}
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, row.Archived)
+	runner.waitStopped(t)
+}
+
+type failedRoleNukeStore struct {
+	hera.MutateStore
+	roleID int64
+}
+
+func (s failedRoleNukeStore) NukeHeraRoleAndEndBinding(id int64) error {
+	if id == s.roleID {
+		return db.ErrHeraNotFound
+	}
+	return s.MutateStore.NukeHeraRoleAndEndBinding(id)
+}
+
+func TestHeraCascadeNukePreservesTaskWhenOneRoleFails(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{ID: "shared", Name: "shared", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	app := New(d, agent.NewRunner(nil), false)
+
+	first := seedHeraOrch(t, d, "first")
+	second := seedHeraOrch(t, d, "second")
+	firstRole := seedHeraRoleOnTask(t, d, first, "worker", db.HeraKindWorker, task.ID, "")
+	secondRole := seedHeraRoleOnTask(t, d, second, "coord", db.HeraKindCoordinator, task.ID, "")
+	app.heraOps = hera.NewOps(failedRoleNukeStore{MutateStore: d, roleID: secondRole.ID})
+	subtree := []*hera.OrchView{
+		{ID: first, Roles: []hera.RoleView{{RoleID: firstRole.ID, OrchID: first, TaskID: task.ID, Live: true}}},
+		{ID: second, Roles: []hera.RoleView{{RoleID: secondRole.ID, OrchID: second, TaskID: task.ID, Live: true}}},
+	}
+
+	app.heraDoCascadeNuke(subtree, map[int64]bool{first: true, second: true}, nil)
+
+	_, err := d.HeraLiveBindingByRole(firstRole.ID)
+	testutil.ErrorIs(t, err, db.ErrHeraNotFound)
+	_, err = d.HeraLiveBindingByRole(secondRole.ID)
+	testutil.NoError(t, err)
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.False(t, row.Archived)
+}
 
 // slowStopRunner wraps a real *agent.Runner but simulates a live session for
 // every task (HasSession always true) whose Stop() takes `delay` to complete

@@ -204,6 +204,12 @@ func (s *Server) handleSwitchClaudeSession(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, map[string]string{"status": "unchanged"})
 		return
 	}
+	if sess := s.runner.Get(id); sess != nil && sess.Alive() {
+		if err := agent.CheckManagedRestartSupported(s.runner, id); err != nil {
+			writeErr(w, http.StatusConflict, err.Error(), nil)
+			return
+		}
+	}
 
 	// Persist the new SessionID BEFORE stopping/restarting: both restart
 	// paths inside performClaudeSessionSwitch (KickRerender's queued restart,

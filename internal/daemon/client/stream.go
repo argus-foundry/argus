@@ -82,6 +82,12 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 					return
 				}
 				if exit.RestartSuccessorPID == 0 {
+					if pending, err := rs.client.hasPendingRestart(rs.taskID); err == nil && pending {
+						// Prelaunch at the owner can take minutes. A confirmed
+						// pending restart gets the shortest polling delay,
+						// leaving the retry budget for transport failures.
+						attempt = 0
+					}
 					continue
 				}
 				restart = exit
@@ -331,7 +337,7 @@ func (rs *RemoteSession) isSessionAlive() (alive bool, daemonReachable bool) {
 		return false, false
 	}
 	uxlog.Log("stream: SessionStatus task=%s alive=%v pid=%d", rs.taskID, info.Alive, info.PID)
-	if pid := rs.PID(); pid > 0 && info.PID > 0 && info.PID != pid {
+	if pid := rs.PID(); pid > 0 && ((info.PID > 0 && info.PID != pid) || info.LastExitPID == pid) {
 		return false, true
 	}
 	return info.Alive, true

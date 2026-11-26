@@ -450,4 +450,19 @@ struct TerminalStreamSessionTests {
         #expect(session.phase == phaseBefore)
         #expect(session.offset == offsetBefore)
     }
+
+    @Test("a stale cursor reloads the snapshot before attaching to the replacement")
+    func reloadsStaleProcessSnapshot() {
+        var session = TerminalStreamSession()
+        _ = session.start(tailTotal: 80, sessionPID: 41)
+        _ = session.handle(.connected)
+        #expect(session.streamClosed(error: ArgusError.http(status: 409, body: #"{"code":"stale_session"}"#)) == .reloadSnapshot)
+        #expect(session.offset == 0)
+        #expect(session.sessionPID == nil)
+        #expect(session.phase == .connecting)
+        #expect(session.start(tailTotal: 4, sessionPID: 42) == [.openStream(since: 4)])
+        #expect(session.handle(.process(42)).isEmpty)
+        #expect(session.sessionPID == 42)
+        #expect(session.handle(.process(43)) == [.reloadSnapshot])
+    }
 }

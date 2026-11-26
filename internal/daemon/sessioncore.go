@@ -66,6 +66,8 @@ type sessionCore struct {
 	runner agent.SessionRunner
 	cfgFn  func() config.Config
 	done   <-chan struct{}
+	// The daemon still owns DB status while its in-process exit callback runs.
+	keepFinalizingInList bool
 
 	mu      sync.Mutex
 	streams map[string][]boundStream // taskID → connected stream clients
@@ -87,19 +89,17 @@ type boundStream struct {
 
 // rawSessionLister is the in-process runner's listing surface: it returns live
 // *agent.Session handles. *agent.Runner satisfies it; a supervisor-client does
-// not (it has no local sessions to iterate). ListSessions type-asserts to this
-// for the OFF/supervisor path so that path stays byte-identical.
+// not (it has no local sessions to iterate).
 type rawSessionLister interface {
-	Sessions() map[string]*agent.Session
-	PendingRestartIDs() []string
+	SessionsAndPendingRestarts() (map[string]*agent.Session, []string)
 }
 
 // sessionInfoLister is the supervisor-client's listing surface: it relays the
 // already-built SessionInfo (synthetic pending-restart entries included) from
 // the supervisor, because the daemon cannot iterate the supervisor's in-process
-// sessions. *client.Client satisfies it via ListSessionInfo.
+// sessions. *client.Client satisfies it via ListSessionInfoChecked.
 type sessionInfoLister interface {
-	ListSessionInfo() []SessionInfo
+	ListSessionInfoChecked() ([]SessionInfo, error)
 }
 
 // sessionProber is the supervisor-client's checked single-session probe.
@@ -453,28 +453,28 @@ func (c *sessionCore) ListSessions(_ *Empty, resp *ListResp) error {
 	// already-built SessionInfo. The daemon holds no local *agent.Session set to
 	// iterate, so the in-process path below cannot apply.
 	if lister, ok := c.runner.(sessionInfoLister); ok {
-		resp.Sessions = lister.ListSessionInfo()
-		return nil
+		var err error
+		resp.Sessions, err = lister.ListSessionInfoChecked()
+		return err
 	}
 
 	// In-process runner backend (OFF / the supervisor itself): build SessionInfo
-	// from the live *agent.Session set + synthetic pending-restart entries.
-	// Byte-identical to pre-P2.
+	// from one snapshot of handles and synthetic pending-restart entries.
 	rl, ok := c.runner.(rawSessionLister)
 	if !ok {
 		return nil
 	}
-	sessions := rl.Sessions()
-	pending := rl.PendingRestartIDs()
+	sessions, pending := rl.SessionsAndPendingRestarts()
 	resp.Sessions = make([]SessionInfo, 0, len(sessions)+len(pending))
 	for id, sess := range sessions {
 		cols, rows := sess.PTYSize()
 		initCols, initRows := sess.InitialPTYSize()
+		alive := sess.Alive()
 		resp.Sessions = append(resp.Sessions, SessionInfo{
 			BridgeGeneration: agent.SessionBridgeGeneration(sess),
 			TaskID:           id,
-			Alive:            sess.Alive(),
-			Idle:             sess.IsIdle(),
+			Alive:            alive || c.keepFinalizingInList,
+			Idle:             alive && sess.IsIdle(),
 			PID:              sess.PID(),
 			Cols:             cols,
 			Rows:             rows,
