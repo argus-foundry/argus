@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -142,7 +143,36 @@ func TestVoiceFindsMultiwordNameAfterRealCreation(t *testing.T) {
 	testutil.Equal(t, found.Ref.ID, created.ID)
 	_, err = op.Create(ctx, "Daily Review", "argus", "review again")
 	testutil.Error(t, err)
+	for _, name := range []string{"Build.Review", strings.Repeat("x", 31)} {
+		t.Run(name, func(t *testing.T) {
+			_, err := op.Create(ctx, name, "argus", "review this")
+			var rejected *voice.OpError
+			testutil.True(t, errors.As(err, &rejected))
+			testutil.Equal(t, rejected.Code, "unstable_name")
+		})
+	}
 	testutil.Equal(t, run.started, 1)
+}
+
+func TestVoiceFindDisambiguatesSpokenAliasesAcrossProjects(t *testing.T) {
+	srv, d := testServer(t)
+	raw := &model.Task{Name: "Daily Review", Project: "raw", Status: model.StatusInReview}
+	slug := &model.Task{Name: "Daily-Review", Project: "slug", Status: model.StatusInReview}
+	testutil.NoError(t, d.Add(raw))
+	testutil.NoError(t, d.Add(slug))
+	op := srv.VoiceOperator()
+	ctx := context.Background()
+	found, err := op.Find(ctx, "", "Daily Review", "")
+	testutil.NoError(t, err)
+	testutil.True(t, found.Ambiguous)
+	testutil.Equal(t, found.Matches, 2)
+	found, err = op.Find(ctx, "", "Daily Review", "slug")
+	testutil.NoError(t, err)
+	testutil.Equal(t, found.Ref.ID, slug.ID)
+	testutil.NoError(t, d.SetArchived(raw.ID, true))
+	found, err = op.Find(ctx, "", "Daily Review", "")
+	testutil.NoError(t, err)
+	testutil.Equal(t, found.Ref.ID, slug.ID)
 }
 
 func TestVoiceFindRejectsLossyAliases(t *testing.T) {
@@ -241,6 +271,76 @@ func TestVoiceStopRefusesPendingRestart(t *testing.T) {
 	testutil.Equal(t, row.Status, model.StatusInProgress)
 }
 
+func TestVoiceStopDoesNotConfirmUnregisteredLaunch(t *testing.T) {
+	srv, d := testServer(t)
+	run := agent.NewRunner(nil)
+	srv.runner = run
+	task := &model.Task{Name: "Review", Status: model.StatusInProgress, Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
+	entered := make(chan struct{})
+	t.Cleanup(agent.SetPrelaunchForTest(func(ctx context.Context, _ *model.Task, _ config.Config) error {
+		close(entered)
+		<-ctx.Done()
+		return ctx.Err()
+	}))
+	finished := make(chan error, 1)
+	go func() {
+		_, err := run.Start(task, config.DefaultConfig(), 24, 80, false)
+		finished <- err
+	}()
+	<-entered
+	err := srv.VoiceOperator().Stop(context.Background(), task.ID)
+	run.CancelPendingStarts()
+	testutil.ErrorIs(t, <-finished, context.Canceled)
+	var refused *voice.OpError
+	testutil.True(t, errors.As(err, &refused))
+	testutil.Equal(t, refused.Code, "no_session")
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Status, model.StatusInProgress)
+}
+
+func TestVoiceLaunchReportsAmbiguousOutcome(t *testing.T) {
+	srv, d := testServer(t)
+	srv.createTask = func(_, _, _, _, _, _, _ string, _ bool) (*model.Task, error) {
+		return nil, agent.ErrStartAmbiguous
+	}
+	run := &voiceRun{Runner: agent.NewRunner(nil), startErr: agent.ErrStartAmbiguous}
+	srv.runner = run
+	task := &model.Task{Name: "Review", Status: model.StatusInReview}
+	testutil.NoError(t, d.Add(task))
+	op := srv.VoiceOperator()
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{"create", func() error { _, err := op.Create(ctx, "Build", "p", "build"); return err }},
+		{"resume", func() error { return op.Resume(ctx, task.ID, false) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var unknown *voice.OpError
+			testutil.True(t, errors.As(tc.run(), &unknown))
+			testutil.Equal(t, unknown.Code, "start_ambiguous")
+			testutil.Contains(t, unknown.Speech, "before retrying")
+		})
+	}
+}
+
+func TestVoiceSendWaitsForAcknowledgement(t *testing.T) {
+	srv, d := testServer(t)
+	task := &model.Task{Name: "Review", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	sess := &ackVoiceSess{}
+	srv.runner = &voiceRun{Runner: agent.NewRunner(nil), id: task.ID, sess: sess}
+	err := srv.VoiceOperator().Send(context.Background(), task.ID, "go")
+	testutil.Equal(t, sess.acknowledged, "go\r")
+	testutil.Equal(t, len(sess.written), 0)
+	var rejected *voice.OpError
+	testutil.True(t, errors.As(err, &rejected))
+	testutil.Equal(t, rejected.Code, "send_failed")
+}
+
 func TestVoiceResumeReusesHeraCloseoutGate(t *testing.T) {
 	srv, d := testServer(t)
 	run := &voiceRun{Runner: agent.NewRunner(nil)}
@@ -304,7 +404,7 @@ func TestVoiceWatcherEmitsWithoutRESTServer(t *testing.T) {
 
 type voiceRun struct {
 	*agent.Runner
-	sess        *voiceSess
+	sess        agent.SessionHandle
 	id          string
 	running     []string
 	idle        []string
@@ -313,6 +413,7 @@ type voiceRun struct {
 	started     int
 	beforeStop  func()
 	beforeStart func(*model.Task)
+	startErr    error
 }
 
 func (r *voiceRun) Get(id string) agent.SessionHandle {
@@ -341,11 +442,24 @@ func (r *voiceRun) StartOrReattach(task *model.Task, _ config.Config, _, _ uint1
 	if r.beforeStart != nil {
 		r.beforeStart(task)
 	}
+	if r.startErr != nil {
+		return nil, false, r.startErr
+	}
 	if r.sess == nil {
 		r.sess = &voiceSess{}
 	}
 	r.id = task.ID
 	return r.sess, false, nil
+}
+
+type ackVoiceSess struct {
+	voiceSess
+	acknowledged string
+}
+
+func (s *ackVoiceSess) WriteInputAcknowledged(_ context.Context, data []byte, _ agentview.InputOrigin) (int, error) {
+	s.acknowledged = string(data)
+	return 0, io.ErrClosedPipe
 }
 
 type voiceSess struct {

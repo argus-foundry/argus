@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"sync"
@@ -63,6 +64,8 @@ func (rs *RemoteSession) ComposerDirty() bool {
 type inputItem struct {
 	data   []byte
 	origin agentview.InputOrigin
+	ctx    context.Context
+	ack    chan error
 }
 
 func newRemoteSession(taskID string, c *Client) *RemoteSession {
@@ -100,12 +103,26 @@ func (rs *RemoteSession) inputLoop() {
 		}
 		var batch inputItem
 		batch, carry = drainInput(item, rs.inputCh)
+		if batch.ack != nil && batch.ctx.Err() != nil {
+			batch.ack <- batch.ctx.Err()
+			continue
+		}
 		var resp daemon.StatusResp
-		if err := rs.client.call("Daemon.WriteInput", &daemon.WriteReq{
+		err := rs.client.call("Daemon.WriteInput", &daemon.WriteReq{
 			TaskID: rs.taskID,
 			Data:   batch.data,
 			Origin: batch.origin,
-		}, &resp); err != nil {
+		}, &resp)
+		if err == nil && resp.Error != "" {
+			err = fmt.Errorf("%s", resp.Error)
+		}
+		if batch.ack != nil {
+			if err == nil && !resp.OK {
+				err = fmt.Errorf("input write was not acknowledged")
+			}
+			batch.ack <- err
+		}
+		if err != nil {
 			uxlog.Log("[client] inputLoop WriteInput failed: task=%s err=%v", rs.taskID, err)
 		}
 	}
@@ -117,18 +134,22 @@ func (rs *RemoteSession) inputLoop() {
 // stops as soon as any of: (a) the channel has no immediately-available
 // item, (b) the batch ends with a bracketed-paste end sequence — coalescing
 // across that boundary risks merging two `\x1b[200~..\x1b[201~` cycles into
-// one PTY write, which the receiver may parse as a single paste — or (c) the
+// one PTY write, which the receiver may parse as a single paste — (c) the
 // next queued item has a DIFFERENT origin than the batch being built: origin
 // is a per-RPC attribute (WriteReq.Origin), so merging a System-origin write
 // and a User-origin write into one call would misattribute one of them —
 // e.g. a hera bounce instruction queued back-to-back with a real keystroke
-// must not stamp the keystroke's bytes (or vice versa) with the wrong origin.
+// must not stamp the keystroke's bytes (or vice versa) with the wrong origin,
+// or (d) either item requires an individual acknowledgement.
 func drainInput(initial inputItem, ch <-chan inputItem) (batch inputItem, carry *inputItem) {
+	if initial.ack != nil {
+		return initial, nil
+	}
 	buf := initial.data
 	for !bytes.HasSuffix(buf, pasteEndBytes) {
 		select {
 		case more := <-ch:
-			if more.origin != initial.origin {
+			if more.origin != initial.origin || more.ack != nil {
 				return inputItem{data: buf, origin: initial.origin}, &more
 			}
 			buf = append(buf, more.data...)
@@ -163,17 +184,46 @@ func (rs *RemoteSession) WriteInput(p []byte, origin agentview.InputOrigin) (int
 	copy(cp, p)
 	select {
 	case rs.inputCh <- inputItem{data: cp, origin: origin}:
-		now := time.Now()
-		rs.mu.Lock()
-		rs.lastInput = now
-		if origin == agentview.OriginUser {
-			rs.lastUserInput = now
-			rs.composerTyped = agentview.ComposerTyped(rs.composerTyped, cp)
-		}
-		rs.mu.Unlock()
+		rs.recordInput(cp, origin)
 		return len(p), nil
 	case <-rs.done:
 		return 0, fmt.Errorf("session closed")
+	}
+}
+
+// WriteInputAcknowledged shares the normal input queue, but waits for the
+// supervisor to confirm this individual PTY write.
+func (rs *RemoteSession) WriteInputAcknowledged(ctx context.Context, p []byte, origin agentview.InputOrigin) (int, error) {
+	item := inputItem{data: bytes.Clone(p), origin: origin, ctx: ctx, ack: make(chan error, 1)}
+	select {
+	case rs.inputCh <- item:
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-rs.done:
+		return 0, fmt.Errorf("session closed")
+	}
+	select {
+	case err := <-item.ack:
+		if err != nil {
+			return 0, err
+		}
+		rs.recordInput(item.data, item.origin)
+		return len(p), nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-rs.done:
+		return 0, fmt.Errorf("session closed")
+	}
+}
+
+func (rs *RemoteSession) recordInput(data []byte, origin agentview.InputOrigin) {
+	now := time.Now()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.lastInput = now
+	if origin == agentview.OriginUser {
+		rs.lastUserInput = now
+		rs.composerTyped = agentview.ComposerTyped(rs.composerTyped, data)
 	}
 }
 

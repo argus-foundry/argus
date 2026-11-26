@@ -60,8 +60,8 @@ func (a apiVoice) Find(ctx context.Context, taskID, name, project string) (voice
 	if err != nil {
 		return voice.FindResult{}, err
 	}
-	spokenAlias := strings.Join(strings.Fields(name), "-")
-	var exact, aliases []*model.Task
+	spokenAlias := spokenWorkflowAlias(name)
+	var matches, open []*model.Task
 	for _, t := range tasks {
 		if t == nil || t.IsResident() || t.Kind != "" {
 			continue
@@ -69,40 +69,29 @@ func (a apiVoice) Find(ctx context.Context, taskID, name, project string) (voice
 		if project != "" && !strings.EqualFold(t.Project, project) {
 			continue
 		}
-		storedName := strings.TrimSpace(t.Name)
-		switch {
-		case strings.EqualFold(storedName, name):
-			exact = append(exact, t)
-		case strings.EqualFold(storedName, spokenAlias):
-			aliases = append(aliases, t)
+		if !strings.EqualFold(spokenWorkflowAlias(t.Name), spokenAlias) {
+			continue
 		}
-	}
-	chosen := preferredVoiceMatches(exact, aliases)
-	switch len(chosen) {
-	case 0:
-		return voice.FindResult{}, nil
-	case 1:
-		return voice.FindResult{Found: true, Ref: a.ref(chosen[0])}, nil
-	default:
-		return voice.FindResult{Ambiguous: true, Matches: len(chosen)}, nil
-	}
-}
-
-func preferredVoiceMatches(exact, aliases []*model.Task) []*model.Task {
-	matches := exact
-	if len(matches) == 0 {
-		matches = aliases
-	}
-	var open []*model.Task
-	for _, t := range matches {
+		matches = append(matches, t)
 		if !t.Archived {
 			open = append(open, t)
 		}
 	}
-	if len(open) != 0 {
-		return open
+	if len(open) > 0 {
+		matches = open
 	}
-	return matches
+	switch len(matches) {
+	case 0:
+		return voice.FindResult{}, nil
+	case 1:
+		return voice.FindResult{Found: true, Ref: a.ref(matches[0])}, nil
+	default:
+		return voice.FindResult{Ambiguous: true, Matches: len(matches)}, nil
+	}
+}
+
+func spokenWorkflowAlias(name string) string {
+	return strings.Join(strings.Fields(name), "-")
 }
 
 func (a apiVoice) Create(ctx context.Context, name, project, prompt string) (voice.TaskRef, error) {
@@ -118,6 +107,9 @@ func (a apiVoice) Create(ctx context.Context, name, project, prompt string) (voi
 	if existing.Found || existing.Ambiguous {
 		return existing.Ref, &voice.OpError{Speech: voice.SpeakName(name) + " already exists.", Code: "exists"}
 	}
+	if agent.SafeName(name) != spokenWorkflowAlias(name) {
+		return voice.TaskRef{}, &voice.OpError{Speech: "Use a shorter workflow name with words separated by spaces.", Code: "unstable_name"}
+	}
 	if a.s.createTask == nil {
 		return voice.TaskRef{}, &voice.OpError{Speech: "Voice control is not available.", Code: "not_configured"}
 	}
@@ -128,6 +120,9 @@ func (a apiVoice) Create(ctx context.Context, name, project, prompt string) (voi
 	if err != nil {
 		slog.Error("[voice] start failed", "name", name, "project", project, "err", err)
 		uxlog.Log("[voice] start failed name=%q project=%q err=%v", name, project, err)
+		if errors.Is(err, agent.ErrStartAmbiguous) {
+			return voice.TaskRef{}, voiceLaunchAmbiguous(voice.SpeakName(name))
+		}
 		return voice.TaskRef{}, &voice.OpError{Speech: "I couldn't start " + voice.SpeakName(name) + ".", Code: "create_failed"}
 	}
 	slog.Info("[voice] started", "task", task.ID, "name", task.Name, "project", task.Project)
@@ -151,6 +146,9 @@ func (a apiVoice) Stop(ctx context.Context, taskID string) error {
 	if err := a.s.stopTaskSession(t, true); err != nil {
 		if errors.Is(err, errTaskRestarting) {
 			return &voice.OpError{Speech: voice.SpeakName(t.Name) + " is restarting.", Code: "agent_restarting"}
+		}
+		if errors.Is(err, agent.ErrSessionNotFound) {
+			return &voice.OpError{Speech: "I couldn't find a live session to stop.", Code: "no_session"}
 		}
 		slog.Error("[voice] stop failed", "task", taskID, "err", err)
 		uxlog.Log("[voice] stop failed task=%s err=%v", taskID, err)
@@ -190,16 +188,24 @@ func (a apiVoice) Resume(ctx context.Context, taskID string, force bool) error {
 		return &voice.OpError{Speech: "I couldn't resume " + spoken + ".", Code: gate.code}
 	}
 	if _, err := a.s.startResumedSession(task, "voice"); err != nil {
-		if gate.rollback != nil && !errors.Is(err, agent.ErrStartAmbiguous) {
+		ambiguous := errors.Is(err, agent.ErrStartAmbiguous)
+		if gate.rollback != nil && !ambiguous {
 			gate.rollback()
 		}
 		slog.Error("[voice] resume failed", "task", taskID, "err", err)
 		uxlog.Log("[voice] resume failed task=%s err=%v", taskID, err)
+		if ambiguous {
+			return voiceLaunchAmbiguous(spoken)
+		}
 		return &voice.OpError{Speech: "I couldn't resume " + spoken + ".", Code: "start_failed"}
 	}
 	slog.Info("[voice] resumed", "task", taskID)
 	uxlog.Log("[voice] resumed task=%s", taskID)
 	return nil
+}
+
+func voiceLaunchAmbiguous(spoken string) *voice.OpError {
+	return &voice.OpError{Speech: "Check " + spoken + " before retrying because it may still be starting.", Code: "start_ambiguous"}
 }
 
 func (a apiVoice) Send(ctx context.Context, taskID, text string) error {
@@ -222,10 +228,18 @@ func (a apiVoice) Send(ctx context.Context, taskID, text string) error {
 	if !strings.HasSuffix(text, "\n") && !strings.HasSuffix(text, "\r") {
 		text += "\r"
 	}
-	if _, err := sess.WriteInput([]byte(text), agentview.OriginUser); err != nil {
+	write := sess.WriteInput
+	if acknowledged, ok := sess.(interface {
+		WriteInputAcknowledged(context.Context, []byte, agentview.InputOrigin) (int, error)
+	}); ok {
+		write = func(data []byte, origin agentview.InputOrigin) (int, error) {
+			return acknowledged.WriteInputAcknowledged(ctx, data, origin)
+		}
+	}
+	if _, err := write([]byte(text), agentview.OriginUser); err != nil {
 		slog.Error("[voice] input failed", "task", taskID, "err", err)
 		uxlog.Log("[voice] input failed task=%s err=%v", taskID, err)
-		return &voice.OpError{Speech: "I couldn't send that.", Code: "send_failed"}
+		return &voice.OpError{Speech: "I couldn't confirm delivery.", Code: "send_failed"}
 	}
 	slog.Info("[voice] input", "task", taskID, "bytes", len(text))
 	uxlog.Log("[voice] input task=%s bytes=%d", taskID, len(text))

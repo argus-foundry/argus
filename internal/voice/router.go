@@ -414,7 +414,7 @@ func (r *Router) lookup(ctx context.Context, req Request) (TaskRef, Result, bool
 		return TaskRef{}, opFail(err), false
 	}
 	if found.Ambiguous {
-		return TaskRef{}, fail("More than one workflow is named "+SpeakName(req.Name)+". Name the project.", "ambiguous"), false
+		return TaskRef{}, fail("More than one workflow is named "+SpeakName(req.Name)+". Name the project or say the task id.", "ambiguous"), false
 	}
 	if !found.Found {
 		return TaskRef{}, fail("I can't find that workflow.", "not_found"), false

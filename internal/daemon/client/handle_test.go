@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"os"
 	"strings"
 	"sync"
@@ -40,6 +41,23 @@ func TestH_PidAlive(t *testing.T) {
 		t.Errorf("expected non-zero PID, got 0")
 	}
 	testutil.True(t, rs.Alive())
+}
+
+func TestH_Ack(t *testing.T) {
+	c, active := startedClient(t, "ack", "cat")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	t.Cleanup(cancel)
+	n, err := active.WriteInputAcknowledged(ctx, []byte("test\r"), agentview.OriginUser)
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 5)
+	testutil.False(t, active.LastUserInput().IsZero())
+
+	missing := newRemoteSession("ack-missing", c)
+	t.Cleanup(missing.close)
+	n, err = missing.WriteInputAcknowledged(ctx, []byte("test\r"), agentview.OriginUser)
+	testutil.Error(t, err)
+	testutil.Equal(t, n, 0)
+	testutil.True(t, missing.LastUserInput().IsZero())
 }
 
 func TestH_Done(t *testing.T) {
@@ -151,6 +169,25 @@ func TestDrainInput(t *testing.T) {
 		testutil.Equal(t, string(batch.data), "abcd")
 		testutil.Nil(t, carry)
 		testutil.Equal(t, len(ch), 0)
+	})
+
+	t.Run("acknowledged input keeps its place in the queue", func(t *testing.T) {
+		ch := make(chan inputItem, 2)
+		acknowledged := userItem("voice")
+		acknowledged.ctx = context.Background()
+		acknowledged.ack = make(chan error, 1)
+		ch <- acknowledged
+		ch <- userItem("after")
+
+		before, carry := drainInput(userItem("before"), ch)
+		testutil.Equal(t, string(before.data), "before")
+		testutil.NotNil(t, carry)
+		batch, next := drainInput(*carry, ch)
+		testutil.Equal(t, string(batch.data), "voice")
+		testutil.Equal(t, batch.ack, acknowledged.ack)
+		testutil.Nil(t, next)
+		testutil.Equal(t, len(ch), 1)
+		testutil.Equal(t, string((<-ch).data), "after")
 	})
 
 	t.Run("initial ending in paste-end never reads channel", func(t *testing.T) {

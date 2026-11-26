@@ -541,13 +541,13 @@ func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
-// stopTaskSession stops a live session, treating an already-stopped task as
-// success, and moves the row to in review. Shared by REST and voice.
+// stopTaskSession moves the row to in review after a stop. Voice requires the
+// runner to acknowledge the stop because a missing handle can be a launch.
 func (s *Server) stopTaskSession(task *model.Task, rejectPendingRestart bool) error {
 	if rejectPendingRestart && s.runner.HasPendingRestart(task.ID) {
 		return errTaskRestarting
 	}
-	if err := s.runner.Stop(task.ID); err != nil && !errors.Is(err, agent.ErrSessionNotFound) {
+	if err := s.runner.Stop(task.ID); err != nil && (rejectPendingRestart || !errors.Is(err, agent.ErrSessionNotFound)) {
 		return err
 	}
 	if rejectPendingRestart && s.runner.HasPendingRestart(task.ID) {

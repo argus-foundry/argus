@@ -295,7 +295,7 @@ func TestRouterEdges(t *testing.T) {
 		{"commands", &fakeOp{}, Request{Command: "commands"}, "Eight voice commands are available."},
 		{"long key", &fakeOp{}, Request{Command: "brief", IdempotencyKey: strings.Repeat("k", 129)}, "That idempotency key is too long."},
 		{"long name", &fakeOp{}, Request{Command: "start", Name: strings.Repeat("n", 201)}, "That name is too long."},
-		{"ambiguous", &fakeOp{find: FindResult{Ambiguous: true}}, Request{Command: "stop", Name: "Review", Confirm: true}, "Name the project."},
+		{"ambiguous", &fakeOp{find: FindResult{Ambiguous: true}}, Request{Command: "stop", Name: "Review", Confirm: true}, "Name the project or say the task id."},
 		{"archived", &fakeOp{find: FindResult{Found: true, Ref: TaskRef{Name: "Review", Archived: true}}}, Request{Command: "stop", Name: "Review", Confirm: true}, "Review is archived."},
 		{"needs input", &fakeOp{find: FindResult{Found: true, Ref: TaskRef{Name: "Review", Live: true, NeedsInput: true}}}, Request{Command: "resume", Name: "Review"}, "Review is waiting for your input."},
 		{"idle", &fakeOp{find: liveIdle()}, Request{Command: "start", Name: "Review"}, "Review is already running and idle."},
