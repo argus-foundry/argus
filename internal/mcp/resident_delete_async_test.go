@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -102,6 +103,9 @@ func TestResidentDelete_RemoteBranchDeleteAsync(t *testing.T) {
 	testutil.NoError(t, uxlog.Init(logPath))
 	t.Cleanup(uxlog.Close)
 	s, _, task, _, _, caller := busyDeleteFixture(t, false)
+	remote := t.TempDir()
+	testutil.NoError(t, exec.Command("git", "init", "--bare", remote).Run())
+	testutil.NoError(t, exec.Command("git", "-C", task.Worktree, "remote", "add", "origin", remote).Run())
 	old := residentRemoteBranchDelete
 	t.Cleanup(func() { residentRemoteBranchDelete = old })
 	started, release := make(chan struct{}), make(chan struct{})

@@ -380,7 +380,7 @@ func TestStackedDeletePreservesSuccessorAfterOldTaskDisappears(t *testing.T) {
 }
 
 func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
-	for _, name := range []string{"original origin", "changed origin", "changed remote tip", "changed local tip", "linked successor"} {
+	for _, name := range []string{"original origin", "changed origin", "changed remote tip", "changed local tip", "linked successor", "checked-out local branch", "tip moves during deletion"} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			repo := initGitRepo(t, t.TempDir())
@@ -404,6 +404,22 @@ func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
 			case "changed local tip":
 				addGitCommit(t, repo, "new.txt", "new")
 				gitRun(t, repo, "branch", "-f", branch, "HEAD")
+			case "checked-out local branch":
+				gitRun(t, repo, "worktree", "add", filepath.Join(t.TempDir(), "child"), branch)
+			case "tip moves during deletion":
+				addGitCommit(t, repo, "new.txt", "new")
+				realGit, err := exec.LookPath("git")
+				testutil.NoError(t, err)
+				bin := t.TempDir()
+				const shim = `#!/bin/sh
+if [ "$1" = update-ref ] && [ "$2" = --no-deref ]; then
+  "$ARGUS_TEST_STACK_REAL_GIT" update-ref refs/heads/argus/child HEAD || exit 1
+fi
+exec "$ARGUS_TEST_STACK_REAL_GIT" "$@"
+`
+				testutil.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(shim), 0o700))
+				t.Setenv("ARGUS_TEST_STACK_REAL_GIT", realGit)
+				t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			}
 			d, err := db.OpenInMemory()
 			testutil.NoError(t, err)
@@ -418,10 +434,14 @@ func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
 				testutil.NoError(t, d.Add(&model.Task{ID: "successor", Name: "Successor", Project: "other", Worktree: linked, Branch: branch}))
 			}
 			localDeleted := name == "original origin" || name == "changed remote tip"
-			testutil.Equal(t, DeleteStackedTaskBranch(context.Background(), d, "child", repository, branch, tip), localDeleted)
+			remoteDeleted := name == "original origin" || name == "checked-out local branch"
+			testutil.Equal(t, DeleteStackedTaskBranch(context.Background(), d, "child", repository, branch, tip), localDeleted || remoteDeleted)
 			testutil.Equal(t, gitBranchExists(repo, branch), !localDeleted)
-			testutil.Equal(t, gitBranchExists(first, branch), name != "original origin")
+			testutil.Equal(t, gitBranchExists(first, branch), !remoteDeleted)
 			testutil.True(t, gitBranchExists(second, branch))
+			if name == "tip moves during deletion" {
+				testutil.Equal(t, agent.TaskGitBranchTip(context.Background(), repo, branch), agent.TaskGitBranchTip(context.Background(), repo, "master"))
+			}
 		})
 	}
 }

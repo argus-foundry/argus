@@ -213,14 +213,36 @@ func DeleteStackedBranchContext(ctx context.Context, repoDir, branch, expectedTi
 		return false
 	}
 	remoteMatches := hasOrigin && revParseCommit(ctx, repoDir, "refs/remotes/origin/"+branch) == expectedTip
-	if out, _, err := RunTaskGit(ctx, repoDir, "branch", "-D", "--", branch); err != nil {
-		uxlog.Log("[worktree] stacked local delete failed repo=%q branch=%q err=%v output=%q", repoDir, branch, err, out)
-		return false
-	}
-	if remoteMatches {
-		if err := DeleteRemoteBranchContext(ctx, repoDir, branch, expectedTip); err != nil {
+	localDeleted := deleteStackedLocalBranch(ctx, repoDir, branch, expectedTip)
+	if remoteMatches && (localDeleted || TaskGitBranchTip(ctx, repoDir, branch) == expectedTip) {
+		if err := DeleteRemoteBranchContext(ctx, repoDir, branch, expectedTip); err == nil {
+			return true
+		} else {
 			uxlog.Log("[worktree] stacked origin delete failed repo=%q branch=%q err=%v", repoDir, branch, err)
 		}
+	}
+	return localDeleted
+}
+
+func deleteStackedLocalBranch(ctx context.Context, repoDir, branch, expectedTip string) bool {
+	ref := "refs/heads/" + branch
+	worktrees, _, err := RunTaskGit(ctx, repoDir, "worktree", "list", "--porcelain")
+	if err != nil {
+		uxlog.Log("[worktree] stacked checkout inspection failed repo=%q branch=%q err=%v", repoDir, branch, err)
+		return false
+	}
+	for line := range strings.SplitSeq(worktrees, "\n") {
+		if line == "branch "+ref {
+			uxlog.Log("[worktree] stacked local branch still checked out repo=%q branch=%q", repoDir, branch)
+			return false
+		}
+	}
+	if _, _, err := RunTaskGit(ctx, repoDir, "update-ref", "--no-deref", "-d", ref, expectedTip); err != nil {
+		uxlog.Log("[worktree] stacked local delete refused repo=%q branch=%q err=%v", repoDir, branch, err)
+		return false
+	}
+	if out, _, err := RunTaskGit(ctx, repoDir, "config", "--local", "--remove-section", "branch."+branch); err != nil && !strings.Contains(out, "no such section:") {
+		uxlog.Log("[worktree] stacked branch config removal failed repo=%q branch=%q err=%v", repoDir, branch, err)
 	}
 	return true
 }

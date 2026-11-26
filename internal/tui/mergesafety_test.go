@@ -149,6 +149,11 @@ func TestCascadeStackConfirmationUsesClassifiedRepository(t *testing.T) {
 	seedStackedBranchStack(t, d)
 	original := d.Config().Projects["p"].Path
 	other := stackFixtureRepo(t)
+	for _, repo := range []string{original, other} {
+		create := exec.Command("git", "branch", "b2")
+		create.Dir = repo
+		testutil.NoError(t, create.Run())
+	}
 	testutil.NoError(t, d.SetProject("other", config.Project{Path: other, Branch: "master"}))
 	testutil.NoError(t, d.Add(&model.Task{ID: "other-child", Name: "Other child", Project: "other", Branch: "b2", BaseBranch: "b1"}))
 	testutil.NoError(t, d.Add(&model.Task{ID: "other-tip", Name: "Other tip", Project: "other", Branch: "b3", BaseBranch: "b2"}))
@@ -163,10 +168,9 @@ func TestCascadeStackConfirmationUsesClassifiedRepository(t *testing.T) {
 		t.Fatalf("got %d stack candidates, want one from the original repository", len(extra))
 	}
 	testutil.Equal(t, extra[0].TaskID, "task2")
-	for _, repo := range []string{original, other} {
-		create := exec.Command("git", "branch", "b2")
-		create.Dir = repo
-		testutil.NoError(t, create.Run())
+	testutil.Equal(t, extra[0].Tip, agent.TaskGitBranchTip(context.Background(), original, "b2"))
+	if extra[0].Tip == "" {
+		t.Fatal("the offered branch needs a real classified tip")
 	}
 	testutil.NoError(t, d.SetProject("p", config.Project{Path: other, Branch: "master"}))
 	app.heraDeleteStackedBranches(extra)

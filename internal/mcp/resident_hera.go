@@ -225,8 +225,9 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 			}
 			return residentToolError(id, fmt.Sprintf("not safe: %v; finish it on the worker's branch, or pass force=true", err))
 		}
-		if actual := agent.ResidentCleanupRepository(ctx, task.Worktree, ""); actual != "" {
-			expected, err := agent.CaptureTaskGitRepository(ctx, agent.ResolveDir(task, cfg))
+		configured := agent.ResolveDir(task, cfg)
+		if actual := agent.ResidentCleanupRepository(ctx, task.Worktree, ""); actual != "" && configured != "" {
+			expected, err := agent.CaptureTaskGitRepository(ctx, configured)
 			identity, identityErr := agent.TaskGitRepositoryID(ctx, actual)
 			if err != nil || identityErr != nil || !agent.SamePath(identity, expected.CommonDir) {
 				return residentToolError(id, "not safe: the worker checkout and configured project resolve to different repositories")
