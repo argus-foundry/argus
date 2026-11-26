@@ -13,6 +13,10 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/ssh"
+
+	"github.com/argus-foundry/argus/internal/gitsign"
 )
 
 // The agent signing helper (add-agent-signing-key D4). Under the agent-key
@@ -119,20 +123,27 @@ func gitSignCommand(args []string, env gitSignEnv, stdout, stderr io.Writer) int
 // gitSign parses `-Y sign` options, signs the data file through the daemon,
 // and writes <file>.sig. No .sig is written on any failure.
 func gitSign(args []string, env gitSignEnv) error {
-	var namespace string
+	var namespace, keyPath string
 	var files []string
-	for i := 0; i < len(args); i++ {
-		switch a := args[i]; a {
+	// Consume args from the front so every value read is bounds-checked by
+	// the len test right before it.
+	for len(args) > 0 {
+		a := args[0]
+		args = args[1:]
+		switch a {
 		case "-n", "-f", "-O":
-			if i+1 >= len(args) {
+			if len(args) == 0 {
 				return fmt.Errorf("%s requires a value", a)
 			}
-			if a == "-n" {
-				namespace = args[i+1]
+			v := args[0]
+			args = args[1:]
+			switch a {
+			case "-n":
+				namespace = v
+			case "-f":
+				keyPath = v
 			}
-			// -f names the public key file (the daemon holds the key) and
-			// -O passes ssh-keygen options: both are accepted and ignored.
-			i++
+			// -O passes ssh-keygen signing options: accepted and ignored.
 		case "-U":
 			// "key is in an agent": irrelevant, the daemon holds the key.
 		default:
@@ -142,10 +153,23 @@ func gitSign(args []string, env gitSignEnv) error {
 			files = append(files, a)
 		}
 	}
-	if len(files) == 0 {
-		return errors.New("no data file to sign")
+	if len(files) != 1 {
+		return fmt.Errorf("-Y sign takes exactly one data file, got %d", len(files))
 	}
-	dataPath := files[len(files)-1]
+	if keyPath == "" {
+		return errors.New("no -f public key file")
+	}
+	// The session's configured key: git writes user.signingkey's key:: value
+	// to this file. Every signature is checked against it before use.
+	pubBytes, err := os.ReadFile(keyPath)
+	if err != nil {
+		return fmt.Errorf("read public key file: %w", err)
+	}
+	pub, _, _, _, err := ssh.ParseAuthorizedKey(pubBytes)
+	if err != nil {
+		return errors.New("the -f file is not an SSH public key")
+	}
+	dataPath := files[0]
 	data, err := os.ReadFile(dataPath)
 	if err != nil {
 		return fmt.Errorf("read data file: %w", err)
@@ -153,6 +177,9 @@ func gitSign(args []string, env gitSignEnv) error {
 	sig, err := requestGitSignature(env, namespace, data)
 	if err != nil {
 		return err
+	}
+	if err := gitsign.Verify(pub, gitsign.Namespace, data, sig); err != nil {
+		return fmt.Errorf("signature was not made by the session's configured key (daemon may hold a rotated-out key — restart the daemon): %w", err)
 	}
 	if err := os.WriteFile(dataPath+".sig", sig, 0o644); err != nil { //nolint:gosec // a public signature, same mode as ssh-keygen
 		return fmt.Errorf("write signature: %w", err)
@@ -162,7 +189,9 @@ func gitSign(args []string, env gitSignEnv) error {
 
 // requestGitSignature POSTs to /api/git/sign, retrying discovery and
 // connection failures until the slept total reaches env.retryFor. Any HTTP
-// response is final.
+// response is final. The budget counts sleeps only, so wall-clock time can
+// exceed it by the bounded per-attempt costs (2s dial, discovery deadline,
+// HTTP client timeout).
 func requestGitSignature(env gitSignEnv, namespace string, data []byte) ([]byte, error) {
 	body, err := json.Marshal(map[string]string{
 		"namespace": namespace,
@@ -182,7 +211,7 @@ func requestGitSignature(env gitSignEnv, namespace string, data []byte) ([]byte,
 			return nil, err
 		}
 		if slept >= env.retryFor {
-			return nil, fmt.Errorf("Argus daemon unreachable for %s: %w", env.retryFor, err)
+			return nil, fmt.Errorf("daemon unreachable for %s: %w", env.retryFor, err)
 		}
 		d := min(gitSignRetryStep, env.retryFor-slept)
 		env.sleep(d)
@@ -195,7 +224,11 @@ func requestGitSignature(env gitSignEnv, namespace string, data []byte) ([]byte,
 func postGitSign(env gitSignEnv, body []byte) (sig []byte, retryable bool, err error) {
 	baseURL, token, err := env.daemon()
 	if err != nil {
-		return nil, true, fmt.Errorf("cannot reach the Argus daemon: %w", err)
+		// Waiting cannot fix a disabled REST API, and a daemon that took the
+		// discovery call but never answered is wedged, not bouncing.
+		var ne net.Error
+		retry := !errors.Is(err, errAPIDisabled) && (!errors.As(err, &ne) || !ne.Timeout())
+		return nil, retry, fmt.Errorf("cannot reach the Argus daemon: %w", err)
 	}
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(baseURL, "/")+"/api/git/sign", bytes.NewReader(body))
 	if err != nil {

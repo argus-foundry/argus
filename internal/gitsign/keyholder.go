@@ -18,13 +18,6 @@ const policyAgentKey = "agent-key"
 // is false when the reference cannot be resolved.
 type Resolver func(source string) (string, bool)
 
-// PublicKeyRef is the 1Password field reference for the item's public key.
-func PublicKeyRef(ref string) string { return ref + "/public key" }
-
-// PrivateKeyRef is the 1Password field reference for the item's private key
-// in OpenSSH format (the default PKCS#8 form does not parse as an SSH key).
-func PrivateKeyRef(ref string) string { return ref + "/private key?ssh-format=openssh" }
-
 // KeyHolder resolves the agent signing key on first use and keeps the parsed
 // signer in memory for the life of the process. Only success is memoized: a
 // failed resolve is retried on the next call, so a 1Password recovery needs

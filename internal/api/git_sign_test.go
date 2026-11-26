@@ -44,6 +44,8 @@ func doGitSign(t *testing.T, h http.Handler, token, body string) *httptest.Respo
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/git/sign", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	// The signing helper always runs on the daemon's host.
+	req.RemoteAddr = "127.0.0.1:50000"
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

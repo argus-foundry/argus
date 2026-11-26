@@ -335,6 +335,11 @@ func secretsBootstrapStatusFor(cfg config.Config) doctor.SecretsBootstrapStatus 
 // the daemon signs with. Advisory only: never affects runDoctor's exit code.
 func gatherAgentSigningKeyStatus() gitsign.Status {
 	cfg := config.DefaultConfig()
+	// api.enabled lives in the DB unless config.toml overrides it (same
+	// effective read as gatherHostSleep). An unreadable DB leaves the default.
+	if v, found, err := db.ReadConfigValueReadOnly(db.DefaultPath(), "api.enabled"); err == nil && found {
+		cfg.API.Enabled = v == "true"
+	}
 	cfg = config.NewFileLoader(filepath.Join(db.DataDir(), config.FileName)).Apply(cfg)
 	return agentSigningKeyStatusFor(cfg, gitsign.Resolver(agent.ResolverFor(cfg.Secrets)))
 }
@@ -342,8 +347,13 @@ func gatherAgentSigningKeyStatus() gitsign.Status {
 // agentSigningKeyStatusFor reports OFF / OK / BROKEN for cfg's agent signing
 // key. Takes an explicit cfg and resolver (like secretsBootstrapStatusFor) so
 // tests never touch real 1Password or ~/.argus/config.toml. OFF resolves
-// nothing.
+// nothing. Under agent-key a disabled REST API is BROKEN: the signing helper
+// reaches the daemon only over REST. (Deliberately not a config validation
+// error: a validation failure discards the whole config.toml overlay.)
 func agentSigningKeyStatusFor(cfg config.Config, resolve gitsign.Resolver) gitsign.Status {
+	if cfg.Git.AgentCommitSigning == config.GitSigningAgentKey && !cfg.API.Enabled {
+		return gitsign.Status{State: "BROKEN", Cause: "api.enabled is false"}
+	}
 	return gitsign.Check(cfg.Git.AgentCommitSigning, strings.TrimSpace(cfg.Git.AgentSigningKey), resolve)
 }
 

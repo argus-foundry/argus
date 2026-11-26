@@ -33,7 +33,7 @@ All tests use synthetic Ed25519 keys generated in-test and a stubbed secret reso
 
 **Depends on:** Stage 3
 
-- [x] 4.0 Wire the signer into the daemon (moved from Stage 3; needs Stage 2's config field): when `[git] agent_commit_signing = "agent-key"`, build a `gitsign.KeyHolder` from `agent_signing_key` with the daemon's secret resolver and call `Server.SetGitSigner` at startup
+- [x] 4.0 Wire the signer into the daemon (moved from Stage 3; needs Stage 2's config field): always wire `Server.SetGitSigner`; on each request read the policy and `agent_signing_key` from the live config, keep one `gitsign.KeyHolder` for the current reference (built with the daemon's secret resolver), and answer the named 503 while the policy is off
 - [x] 4.1 Dispatch `os.Args[1] == "-Y"` in `cmd/argus/main.go` to the helper before any other startup work
 - [x] 4.2 Implement `-Y sign` (daemon discovery and token reuse from `artifact.go`, 30s connection retry, `.sig` write, fail-loud message) and the `ssh-keygen` passthrough
 

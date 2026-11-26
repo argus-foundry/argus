@@ -988,7 +988,7 @@ Every authenticated token has the same permissions **except** a small master-onl
 | `GET`  | `/api/tasks/{id}/artifacts`               | List artifacts the agent registered via `artifact_register` (name, title, type, size)                                |
 | `GET`  | `/api/tasks/{id}/artifacts/{filename...}` | Serve one artifact's raw bytes (`filename` may be a nested `folder/x.png`; `?thumb=1` returns a ≤320px JPEG thumbnail for images/video, 404 if none). Scoped to the registered manifest set (no path traversal); HTML served in a sandbox. |
 | `POST` | `/api/artifacts/publish`                  | Publish an HTML page to claude.ai as a configured account (what `argus artifact publish` calls). Multipart form: `account` (required), `title`, `update` (existing artifact link), `file` (the page, ≤16 MiB). `200` with `{"status":"published","url":…}` or `{"status":"unavailable","available_accounts":[…]}`; `400` invalid page / no `[artifact_tokens]` entry; `502` endpoint failure (incl. an expired token). |
-| `POST` | `/api/git/sign`                           | Sign an agent commit with the agent signing key (what the `argus -Y sign` Git signing helper calls when `[git] agent_commit_signing = "agent-key"`). JSON `{"namespace":"git","data":<base64>,"task_id":…}`. `200` with `{"signature":<armored SSHSIG>}`; `400` bad body or any namespace other than `git`; `503` signing not configured or the key is unresolved or mismatched (named cause in `error`). Logs task and outcome only. |
+| `POST` | `/api/git/sign`                           | Sign an agent commit with the agent signing key (what the `argus -Y sign` Git signing helper calls when `[git] agent_commit_signing = "agent-key"`). JSON `{"namespace":"git","data":<base64>,"task_id":…}`. `200` with `{"signature":<armored SSHSIG>}`; `400` bad body or any namespace other than `git`; `503` signing not configured or the key is unresolved or mismatched (named cause in `error`). Loopback callers with the master token only; device tokens and Tailscale or proxied callers get `403`. Logs task and outcome only. |
 
 #### Maintenance
 
@@ -1213,12 +1213,13 @@ To sign agent commits with an agent key (`agent-key`):
 
 1. In 1Password, create an SSH Key item in the `claude` vault (New Item → SSH Key → Generate, Ed25519), e.g. "Argus agent signing key". The `[secrets.op]` service account must be able to read it.
 2. On GitHub, add its public key as a **Signing Key** (Settings → SSH and GPG keys → New SSH key → Key type: Signing Key).
-3. Restart the session-supervisor FIRST (`argus session-supervisor stop`; the daemon restarts it). A stale supervisor rejects the new value and then ignores all of config.toml.
-4. Set `agent_commit_signing = "agent-key"` and `agent_signing_key = "op://claude/<item>"` under `[git]`.
-5. Run `argus doctor` and expect `Git agent signing key: OK`. `BROKEN: <cause>` names what failed.
-6. Restart or recycle agent sessions.
+3. Upgrade argus, then restart the session-supervisor FIRST (`argus session-supervisor stop`; the daemon restarts it) and restart the daemon too. A stale supervisor rejects the new value and then ignores all of config.toml; a stale daemon rejects `agent-key` and has no `/api/git/sign`.
+4. Set `api.enabled = true` (Settings → API, or config.toml). The signing helper reaches the daemon only over its REST API.
+5. Set `agent_commit_signing = "agent-key"` and `agent_signing_key = "op://claude/<item>"` under `[git]`.
+6. Run `argus doctor` and expect `Git agent signing key: OK`. `BROKEN: <cause>` names what failed, including `BROKEN: api.enabled is false`.
+7. Restart or recycle agent sessions.
 
-Signing runs in the daemon: Git calls `argus -Y sign`, which asks the daemon over its REST API and retries for 30 seconds across a daemon restart before failing the commit. Roll back by setting the policy to `unsigned` or `inherit` and restarting or recycling sessions.
+Signing runs in the daemon: Git calls `argus -Y sign`, which asks the daemon over its REST API (loopback and master token only) and retries for 30 seconds across a daemon restart before failing the commit. The helper checks every signature against the session's public key before writing it, so after rotating the key restart the daemon (it keeps the resolved key in memory) or commits fail loudly. Roll back by setting the policy to `unsigned` or `inherit` and restarting or recycling sessions.
 
 #### `[backends.<name>]`
 

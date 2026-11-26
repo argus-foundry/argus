@@ -120,7 +120,7 @@ func TestNewGitSigner(t *testing.T) {
 		testutil.ErrorIs(t, err, errGitSigningOff)
 	})
 
-	t.Run("changed key reference gets its own holder", func(t *testing.T) {
+	t.Run("changed key reference replaces the holder", func(t *testing.T) {
 		pub2, priv2 := gsKey(t)
 		ref2 := "op://claude/Other key"
 		vals := map[string]string{
@@ -137,5 +137,13 @@ func TestNewGitSigner(t *testing.T) {
 		_, err = f(context.Background(), "t1", "git", []byte("data"))
 		testutil.NoError(t, err)
 		testutil.Equal(t, e.calls[gitsign.PrivateKeyRef(ref2)], 1)
+		// Only the current reference's holder is kept: switching back
+		// resolves the first key again.
+		e.mu.Lock()
+		e.cfg.Git.AgentSigningKey = gsRef
+		e.mu.Unlock()
+		_, err = f(context.Background(), "t1", "git", []byte("data"))
+		testutil.NoError(t, err)
+		testutil.Equal(t, e.calls[gitsign.PrivateKeyRef(gsRef)], 2)
 	})
 }

@@ -26,16 +26,19 @@ var errGitSigningOff = errors.New("agent commit signing not configured (git.agen
 // therefore always wired; while the policy is off it answers the same named
 // 503 the route gives for an unset signer.
 //
-// One gitsign.KeyHolder is memoized per key reference, so the private key is
-// resolved once per reference for the life of the process (success-only, per
-// KeyHolder). A changed reference gets a fresh holder; holders for old
-// references stay cached (a handful at most) so switching back is free. The
-// holder's resolver reads [secrets] live too, so fixing the 1Password
-// bootstrap after a failed resolve needs no restart either.
+// Only the current reference's gitsign.KeyHolder is kept: its private key is
+// resolved once (success-only) and held while the reference is unchanged. A
+// changed reference replaces the holder and drops the old key. The holder's
+// resolver reads [secrets] live too, so fixing the 1Password bootstrap after
+// a failed resolve needs no restart either. Rotating the key behind an
+// UNCHANGED reference still needs a daemon restart (the key and
+// agent.Resolve's value are memoized); the helper's verify-before-write turns
+// a stale key into a loud failure.
 func newGitSigner(cfgFn func() config.Config, resolve func(config.SecretsConfig, string) (string, bool)) api.GitSignFunc {
 	var (
-		mu      sync.Mutex
-		holders = map[string]*gitsign.KeyHolder{}
+		mu        sync.Mutex
+		holderRef string
+		holder    *gitsign.KeyHolder
 	)
 	liveResolve := func(source string) (string, bool) {
 		return resolve(cfgFn().Secrets, source)
@@ -43,12 +46,10 @@ func newGitSigner(cfgFn func() config.Config, resolve func(config.SecretsConfig,
 	holderFor := func(ref string) *gitsign.KeyHolder {
 		mu.Lock()
 		defer mu.Unlock()
-		h, ok := holders[ref]
-		if !ok {
-			h = gitsign.NewKeyHolder(liveResolve, ref)
-			holders[ref] = h
+		if holder == nil || holderRef != ref {
+			holder, holderRef = gitsign.NewKeyHolder(liveResolve, ref), ref
 		}
-		return h
+		return holder
 	}
 	return func(_ context.Context, _, namespace string, data []byte) ([]byte, error) {
 		cfg := cfgFn()

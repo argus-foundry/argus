@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -452,9 +453,19 @@ var coordHookHTTPClient = &http.Client{Timeout: 5 * time.Second}
 // stopDaemon/runSupervisorStatus (rather than pulling in the heavier
 // persistent-connection internal/daemon/client.Client for a one-shot call).
 func coordHookDial() (*rpc.Client, error) {
+	return coordHookDialDeadline(time.Time{})
+}
+
+// coordHookDialDeadline is coordHookDial with an absolute deadline on the
+// whole connection (zero means none), so a daemon that accepts but never
+// answers cannot hang the caller.
+func coordHookDialDeadline(deadline time.Time) (*rpc.Client, error) {
 	conn, err := net.DialTimeout("unix", daemon.DefaultSocketPath(), 2*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("connect to daemon: %w", err)
+	}
+	if !deadline.IsZero() {
+		_ = conn.SetDeadline(deadline) // a unix conn always supports deadlines
 	}
 	if _, err := conn.Write([]byte("R")); err != nil {
 		conn.Close() //nolint:errcheck // best-effort cleanup on the failure path
@@ -463,12 +474,19 @@ func coordHookDial() (*rpc.Client, error) {
 	return jsonrpc.NewClient(conn), nil
 }
 
+// discoverAPIPortTimeout bounds the whole Daemon.Ports exchange. A test seam.
+var discoverAPIPortTimeout = 5 * time.Second
+
+// errAPIDisabled means the daemon is up but its REST API is off
+// (api.enabled = false): retrying cannot help.
+var errAPIDisabled = errors.New("daemon REST API is not running (api.enabled is false)")
+
 // discoverAPIPort asks the running daemon for its live REST API port over
 // the Unix socket (internal/daemon/rpc.go's Daemon.Ports) — neither the API
 // nor the MCP port is stable across restarts (bindWithRetry), so hardcoding
 // 7743 would silently break the moment a daemon starts on a busy port.
 func discoverAPIPort() (int, error) {
-	client, err := coordHookDial()
+	client, err := coordHookDialDeadline(time.Now().Add(discoverAPIPortTimeout))
 	if err != nil {
 		return 0, err
 	}
@@ -479,7 +497,7 @@ func discoverAPIPort() (int, error) {
 		return 0, fmt.Errorf("Daemon.Ports: %w", err)
 	}
 	if resp.APIPort == 0 {
-		return 0, fmt.Errorf("daemon REST API is not running (api.enabled=false?)")
+		return 0, errAPIDisabled
 	}
 	return resp.APIPort, nil
 }

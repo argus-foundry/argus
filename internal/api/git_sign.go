@@ -43,6 +43,11 @@ type gitSignRequest struct {
 // runs. Every request logs its task and outcome, never the data, the
 // signature, or key material.
 func (s *Server) handleGitSign(w http.ResponseWriter, r *http.Request) {
+	if cause := gitSignCallerRefusal(r); cause != "" {
+		logGitSign("-", cause)
+		writeErr(w, http.StatusForbidden, cause, nil)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxGitSignBody)
 	var req gitSignRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -79,6 +84,21 @@ func (s *Server) handleGitSign(w http.ResponseWriter, r *http.Request) {
 	}
 	logGitSign(task, "")
 	writeJSON(w, http.StatusOK, map[string]string{"signature": string(sig)})
+}
+
+// gitSignCallerRefusal returns why a caller may not sign, or "". Only the
+// local `argus -Y sign` helper signs: it runs on the daemon's host and
+// presents the master token. Per-device and plugin tokens, non-loopback peers
+// (Tailscale), and loopback requests relayed by a local reverse proxy such as
+// `tailscale serve` (which adds X-Forwarded-For) are refused.
+func gitSignCallerRefusal(r *http.Request) string {
+	if r.Header.Get("X-Argus-Auth") != "master" {
+		return "master token required"
+	}
+	if !remoteIsLoopback(r) || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("Forwarded") != "" {
+		return "local callers only"
+	}
+	return ""
 }
 
 // logGitSign records one signing outcome; an empty cause means success. It

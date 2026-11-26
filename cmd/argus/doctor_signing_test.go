@@ -40,7 +40,9 @@ func TestAgentSigningKeyStatusFor(t *testing.T) {
 	pub, priv := doctorSigningKey(t)
 	otherPub, _ := doctorSigningKey(t)
 	good := map[string]string{gitsign.PublicKeyRef(doctorSigningRef): pub, gitsign.PrivateKeyRef(doctorSigningRef): priv}
-	agentKey := config.Config{Git: config.GitConfig{AgentCommitSigning: "agent-key", AgentSigningKey: doctorSigningRef}}
+	agentKey := config.Config{Git: config.GitConfig{AgentCommitSigning: "agent-key", AgentSigningKey: doctorSigningRef}, API: config.APIConfig{Enabled: true}}
+	apiOff := agentKey
+	apiOff.API.Enabled = false
 	for _, tc := range []struct {
 		name      string
 		cfg       config.Config
@@ -53,6 +55,7 @@ func TestAgentSigningKeyStatusFor(t *testing.T) {
 		{"ok", agentKey, good, "OK", "agent signing key: OK"},
 		{"broken unresolved", agentKey, map[string]string{}, "BROKEN", "agent signing key: BROKEN: "},
 		{"broken mismatch", agentKey, map[string]string{gitsign.PublicKeyRef(doctorSigningRef): otherPub, gitsign.PrivateKeyRef(doctorSigningRef): priv}, "BROKEN", "agent signing key: BROKEN: "},
+		{"broken api disabled", apiOff, good, "BROKEN", "agent signing key: BROKEN: api.enabled is false"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := agentSigningKeyStatusFor(tc.cfg, mapResolver(tc.values))

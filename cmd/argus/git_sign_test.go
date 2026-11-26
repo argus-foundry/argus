@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,11 +17,38 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
+	"github.com/argus-foundry/argus/internal/gitsign"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
 
+// helperKey is the session's agent key for helper tests: the -f file holds
+// its public half and the fake daemon signs with it, because the helper
+// verifies every signature against the -f key before writing it.
+var helperKey = func() ssh.Signer {
+	_, sk, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	s, err := ssh.NewSignerFromKey(sk)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}()
+
+// helperSig is the (deterministic, Ed25519) signature the fake daemon
+// returns for helperData.
+var helperSig = func() string {
+	sig, err := gitsign.Sign(helperKey, "git", []byte(helperData))
+	if err != nil {
+		panic(err)
+	}
+	return string(sig)
+}()
+
 const (
-	helperSig      = "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHZmFrZQ==\n-----END SSH SIGNATURE-----\n"
 	helperData     = "tree 4b825dc6\nauthor agent\n\ncommit body\n"
 	helperTaskID   = "task-sign-1"
 	helperToken    = "daemon-master-token"
@@ -115,7 +144,7 @@ func writeSignInputs(t *testing.T) (pubPath, dataPath string) {
 	dir := t.TempDir()
 	pubPath = filepath.Join(dir, "signing_key.pub")
 	dataPath = filepath.Join(dir, "buffer")
-	testutil.NoError(t, os.WriteFile(pubPath, []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPublicOnlyFixture agent\n"), 0o600))
+	testutil.NoError(t, os.WriteFile(pubPath, ssh.MarshalAuthorizedKey(helperKey.PublicKey()), 0o600))
 	testutil.NoError(t, os.WriteFile(dataPath, []byte(helperData), 0o600))
 	return pubPath, dataPath
 }
