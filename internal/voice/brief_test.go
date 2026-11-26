@@ -47,6 +47,34 @@ func TestSpeakBrief(t *testing.T) {
 			snap: Snapshot{Counts: Counts{Running: 1}, Running: []string{"`*Review*`\n"}},
 			want: "Review is running.",
 		},
+		{
+			name: "one idle",
+			snap: Snapshot{Counts: Counts{Idle: 1}, Idle: []string{"Docs"}},
+			want: "Docs is idle.",
+		},
+		{
+			name: "many idle",
+			snap: Snapshot{Counts: Counts{Idle: 10}},
+			want: "10 tasks are idle.",
+		},
+		{
+			name: "two needs and two blocked",
+			snap: Snapshot{
+				Counts:     Counts{NeedsInput: 2, Blocked: 2},
+				NeedsInput: []string{"Review", "Docs"},
+				Blocked:    []string{"Deploy", "Ship"},
+			},
+			want: "Nothing is running. Review and Docs need your input, and Deploy and Ship are blocked.",
+		},
+		{
+			name: "three finished by name",
+			snap: Snapshot{
+				Counts:           Counts{Running: 1, RecentlyFinished: 2},
+				Running:          []string{"Api"},
+				RecentlyFinished: []string{"Docs", "Notes"},
+			},
+			want: "Api is running. Docs and Notes finished recently.",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := SpeakBrief(tc.snap)
@@ -63,6 +91,12 @@ func TestSpeakName(t *testing.T) {
 	testutil.Equal(t, SpeakName("  "), "a task")
 	long := strings.Repeat("a", 50)
 	testutil.Equal(t, len([]rune(SpeakName(long))), 40)
+	testutil.Equal(t, nameList(nil), "a task")
+	testutil.Equal(t, nameList([]string{"A", "B", "C"}), "A, B, and one more")
+	testutil.Equal(t, itoa(-12), "-12")
+	testutil.Equal(t, itoa(0), "0")
+	testutil.Equal(t, sentence(""), "")
+	testutil.Equal(t, first(nil), "")
 }
 
 func TestCommandsExcludeKnowledgeBaseWrites(t *testing.T) {

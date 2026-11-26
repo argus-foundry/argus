@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -11,18 +12,23 @@ import (
 )
 
 type fakeOp struct {
-	mu        sync.Mutex
-	find      FindResult
-	findErr   error
-	creates   int
-	stops     int
-	resumes   int
-	sends     []string
-	block     chan struct{}
-	resumeErr error
+	mu          sync.Mutex
+	find        FindResult
+	findErr     error
+	creates     int
+	stops       int
+	resumes     int
+	sends       []string
+	block       chan struct{}
+	resumeErr   error
+	panicCreate bool
+	snapErr     error
 }
 
 func (f *fakeOp) Snapshot(context.Context, time.Time) (Snapshot, error) {
+	if f.snapErr != nil {
+		return Snapshot{}, f.snapErr
+	}
 	return Snapshot{Counts: Counts{Running: 1}, Running: []string{"Review"}}, nil
 }
 
@@ -34,6 +40,9 @@ func (f *fakeOp) Find(context.Context, string, string, string) (FindResult, erro
 }
 
 func (f *fakeOp) Create(ctx context.Context, name, project, prompt string) (TaskRef, error) {
+	if f.panicCreate {
+		panic("create boom")
+	}
 	if f.block != nil {
 		select {
 		case <-f.block:
@@ -198,6 +207,26 @@ func TestRouterResumeClosedOut(t *testing.T) {
 	testutil.Equal(t, done.Speech, "Review is closed out. Confirm to revive it.")
 }
 
+func TestRouterResumesDeadWorkflow(t *testing.T) {
+	op := &fakeOp{find: FindResult{Found: true, Ref: TaskRef{ID: "t1", Name: "Review"}}}
+	r := NewRouter(op)
+	for _, cmd := range []string{"resume", "start"} {
+		got := r.Do(context.Background(), Request{Command: cmd, Name: "Review", Confirm: true})
+		deadline := time.Now().Add(time.Second)
+		var done Result
+		for time.Now().Before(deadline) {
+			done = r.Do(context.Background(), Request{Command: "wait", JobID: got.JobID, Timeout: 20 * time.Millisecond})
+			if done.State == StateDone {
+				break
+			}
+		}
+		testutil.Equal(t, done.Speech, "Review is resumed.")
+	}
+	op.mu.Lock()
+	testutil.Equal(t, op.resumes, 2)
+	op.mu.Unlock()
+}
+
 func TestRouterAlreadyRunning(t *testing.T) {
 	op := &fakeOp{find: FindResult{Found: true, Ref: TaskRef{ID: "t1", Name: "Review", Live: true}}}
 	r := NewRouter(op)
@@ -207,4 +236,103 @@ func TestRouterAlreadyRunning(t *testing.T) {
 	op.mu.Lock()
 	testutil.Equal(t, op.creates, 0)
 	op.mu.Unlock()
+}
+
+func TestRouterEdges(t *testing.T) {
+	live := FindResult{Found: true, Ref: TaskRef{ID: "t1", Name: "Review", Live: true}}
+	for _, tc := range []struct {
+		name string
+		op   *fakeOp
+		req  Request
+		want string
+	}{
+		{"empty", &fakeOp{}, Request{}, "Say a command."},
+		{"commands", &fakeOp{}, Request{Command: "commands"}, "Eight voice commands are available."},
+		{"long key", &fakeOp{}, Request{Command: "brief", IdempotencyKey: strings.Repeat("k", 129)}, "That idempotency key is too long."},
+		{"long name", &fakeOp{}, Request{Command: "start", Name: strings.Repeat("n", 201)}, "That name is too long."},
+		{"ambiguous", &fakeOp{find: FindResult{Ambiguous: true}}, Request{Command: "stop", Name: "Review", Confirm: true}, "Name the project."},
+		{"archived", &fakeOp{find: FindResult{Found: true, Ref: TaskRef{Name: "Review", Archived: true}}}, Request{Command: "stop", Name: "Review", Confirm: true}, "Review is archived."},
+		{"needs input", &fakeOp{find: FindResult{Found: true, Ref: TaskRef{Name: "Review", Live: true, NeedsInput: true}}}, Request{Command: "resume", Name: "Review"}, "Review is waiting for your input."},
+		{"idle", &fakeOp{find: liveIdle()}, Request{Command: "start", Name: "Review"}, "Review is already running and idle."},
+		{"no prompt", &fakeOp{}, Request{Command: "start", Name: "Review", Project: "argus"}, "I need a project and a prompt"},
+		{"long prompt", &fakeOp{}, Request{Command: "start", Name: "Review", Project: "argus", Prompt: strings.Repeat("p", MaxPromptBytes+1)}, "That prompt is too long."},
+		{"send name", &fakeOp{find: live}, Request{Command: "send", Name: "Review", Text: "hi"}, "Send needs a task id."},
+		{"send empty", &fakeOp{find: live}, Request{Command: "send", TaskID: "t1"}, "Say what to send."},
+		{"send long", &fakeOp{find: live}, Request{Command: "send", TaskID: "t1", Text: strings.Repeat("x", MaxTextBytes+1)}, "That message is too long."},
+		{"send dead", &fakeOp{find: FindResult{Found: true, Ref: TaskRef{ID: "t1", Name: "Review"}}}, Request{Command: "send", TaskID: "t1", Text: "hi"}, "has no live session."},
+		{"missing target", &fakeOp{}, Request{Command: "stop", Confirm: true}, "Say the task id or the workflow name."},
+		{"missing job", &fakeOp{}, Request{Command: "wait"}, "Say which job to wait for."},
+		{"unknown job", &fakeOp{}, Request{Command: "status", JobID: "job_missing"}, "I don't have that job."},
+		{"db down", &fakeOp{findErr: errors.New("db down")}, Request{Command: "stop", Name: "Review", Confirm: true}, "That command failed."},
+		{"brief down", &fakeOp{snapErr: errors.New("db down")}, Request{Command: "brief"}, "That command failed."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NewRouter(tc.op).Do(context.Background(), tc.req)
+			testutil.Contains(t, got.Speech, tc.want)
+		})
+	}
+
+	testutil.Equal(t, (*Router)(nil).Do(context.Background(), Request{Command: "brief"}).Speech, "Voice control is not available.")
+	testutil.Equal(t, (*OpError)(nil).Error(), "")
+	testutil.Equal(t, (&OpError{Speech: "no"}).Error(), "no")
+	testutil.Equal(t, opFail(&OpError{}).Speech, "That command failed.")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	blocked := &fakeOp{block: make(chan struct{})}
+	t.Cleanup(func() { close(blocked.block) })
+	r := NewRouter(blocked)
+	running := r.Do(context.Background(), Request{Command: "start", Name: "Review", Project: "argus", Prompt: "go"})
+	still := r.Do(ctx, Request{Command: "wait", JobID: running.JobID, Timeout: -1})
+	testutil.Equal(t, still.Speech, "Still running.")
+}
+
+func liveIdle() FindResult {
+	return FindResult{Found: true, Ref: TaskRef{ID: "t1", Name: "Review", Live: true, Idle: true}}
+}
+
+func TestMaxJobsDefault(t *testing.T) {
+	testutil.Equal(t, MaxJobs, 256)
+}
+
+func TestRouterJobCapAndPanic(t *testing.T) {
+	prev := MaxJobs
+	t.Cleanup(func() { MaxJobs = prev })
+	MaxJobs = 1
+
+	blocked := &fakeOp{block: make(chan struct{})}
+	r := NewRouter(blocked)
+	first := r.Do(context.Background(), Request{Command: "start", Name: "One", Project: "argus", Prompt: "a"})
+	second := r.Do(context.Background(), Request{Command: "start", Name: "Two", Project: "argus", Prompt: "b"})
+	testutil.Equal(t, second.Detail, "job_cap")
+	close(blocked.block)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if r.Do(context.Background(), Request{Command: "status", JobID: first.JobID}).State == StateDone {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	MaxJobs = 1
+	doneOp := &fakeOp{find: FindResult{Found: true, Ref: TaskRef{ID: "t1", Name: "Review", Live: true}}}
+	limited := NewRouter(doneOp)
+	a := limited.Do(context.Background(), Request{Command: "start", Name: "Review"})
+	b := limited.Do(context.Background(), Request{Command: "start", Name: "Review"})
+	testutil.Equal(t, a.State, StateDone)
+	testutil.Equal(t, b.State, StateDone)
+	testutil.Equal(t, limited.Do(context.Background(), Request{Command: "status", JobID: a.JobID}).Detail, "job_not_found")
+
+	panicky := &fakeOp{panicCreate: true}
+	pr := NewRouter(panicky)
+	job := pr.Do(context.Background(), Request{Command: "start", Name: "Review", Project: "argus", Prompt: "go"})
+	deadline = time.Now().Add(time.Second)
+	var failed Result
+	for time.Now().Before(deadline) {
+		failed = pr.Do(context.Background(), Request{Command: "wait", JobID: job.JobID, Timeout: 20 * time.Millisecond})
+		if failed.State == StateFailed {
+			break
+		}
+	}
+	testutil.Equal(t, failed.Speech, "That command failed.")
 }

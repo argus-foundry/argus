@@ -22,8 +22,6 @@ const (
 	// StateNeedsConfirm means a destructive command was refused until confirm is set.
 	StateNeedsConfirm = "needs_confirm"
 
-	// MaxJobs bounds remembered voice jobs. Completed jobs are dropped first.
-	MaxJobs = 256
 	// MaxNameRunes caps a workflow name.
 	MaxNameRunes = 200
 	// MaxPromptBytes caps a create prompt.
@@ -37,6 +35,10 @@ const (
 // MaxWait caps how long wait blocks. A longer request is shortened, and the
 // answer is "Still running." when the job has not finished. Tests may shrink it.
 var MaxWait = 3 * time.Second
+
+// MaxJobs bounds remembered voice jobs. Completed jobs are dropped first.
+// Tests may shrink it.
+var MaxJobs = 256
 
 // TaskRef is a workflow the voice router can name without a working directory.
 type TaskRef struct {

@@ -1,8 +1,10 @@
 package voice
 
 import (
+	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -122,4 +124,61 @@ func TestWebhookDoesNotFollowRedirects(t *testing.T) {
 	t.Cleanup(hook.Stop)
 	events.Emit(model.EventTypeTaskCompleted, "t", nil)
 	time.Sleep(50 * time.Millisecond)
+}
+
+func TestWebhookStatusAndNilReceiver(t *testing.T) {
+	var status atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status.Store(int32(http.StatusInternalServerError))
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	hook := NewWebhook(nil, nil)
+	hook.urlOf = func() string { return srv.URL }
+	hook.Start()
+	events.Emit(model.EventTypeTaskCompleted, "t", nil)
+	time.Sleep(50 * time.Millisecond)
+	hook.Stop()
+	hook.Stop()
+	hook.enqueue(model.Event{Type: model.EventTypeTaskCompleted, TaskID: "t"})
+	(*Webhook)(nil).Start()
+	(*Webhook)(nil).Stop()
+	testutil.Equal(t, status.Load(), int32(http.StatusInternalServerError))
+}
+
+func TestWebhookDropsWhenQueueIsFull(t *testing.T) {
+	hold := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-hold
+	}))
+	t.Cleanup(srv.Close)
+	hook := NewWebhook(func() string { return srv.URL }, func(string) string { return "Review" })
+	hook.Start()
+	t.Cleanup(func() {
+		close(hold)
+		hook.Stop()
+	})
+	events.Emit(model.EventTypeTaskCompleted, "blocked", nil)
+	time.Sleep(20 * time.Millisecond)
+	for i := 0; i < 40; i++ {
+		hook.enqueue(model.Event{Type: model.EventTypeTaskCompleted, TaskID: "q"})
+	}
+}
+
+func TestDialLoopback(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	testutil.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
+	conn, err := dialLoopback(context.Background(), "tcp", ln.Addr().String())
+	testutil.NoError(t, err)
+	conn.Close()
+
+	_, err = dialLoopback(context.Background(), "tcp", "not-a-host")
+	testutil.Error(t, err)
+	_, err = dialLoopback(context.Background(), "tcp", "1.2.3.4:1")
+	testutil.Error(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = dialLoopback(ctx, "tcp", "no-such-host.invalid:80")
+	testutil.Error(t, err)
 }
