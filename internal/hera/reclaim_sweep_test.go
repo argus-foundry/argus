@@ -380,7 +380,7 @@ func TestStackedDeletePreservesSuccessorAfterOldTaskDisappears(t *testing.T) {
 }
 
 func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
-	for _, name := range []string{"original origin", "changed origin", "changed remote tip", "changed local tip", "linked successor", "checked-out local branch", "paused rebase", "tip moves during deletion", "origin moves during push", "rewritten origin with push hook", "origin path with trailing whitespace", "ambiguous origin line break"} {
+	for _, name := range []string{"original origin", "changed origin", "changed remote tip", "changed local tip", "linked successor", "checked-out local branch", "paused rebase", "tip moves during deletion", "origin moves during push", "rewritten origin with push hook", "origin path with trailing whitespace", "ambiguous origin line break", "alternate Git config with ambiguous origin"} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			repo := initGitRepo(t, t.TempDir())
@@ -411,8 +411,13 @@ func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
 			gitRun(t, repo, "push", "origin", branch)
 			gitRun(t, repo, "push", second, branch)
 			hookMark := filepath.Join(t.TempDir(), "hook-ran")
-			if name == "ambiguous origin line break" {
+			if name == "ambiguous origin line break" || name == "alternate Git config with ambiguous origin" {
 				gitRun(t, repo, "config", "--replace-all", "remote.origin.pushurl", first+"\n"+second)
+			}
+			if name == "alternate Git config with ambiguous origin" {
+				alternate := filepath.Join(t.TempDir(), "client.gitconfig")
+				testutil.NoError(t, os.WriteFile(alternate, []byte("[remote \"origin\"]\nurl = "+first+"\n"), 0o600))
+				t.Setenv("GIT_CONFIG", alternate)
 			}
 			if name == "rewritten origin with push hook" {
 				gitRun(t, repo, "config", "--add", "url."+first+".insteadOf", "outbound-argus")
@@ -482,7 +487,7 @@ exec "$ARGUS_TEST_STACK_REAL_GIT" "$@"
 				testutil.NoError(t, d.SetProject("other", config.Project{Path: initGitRepo(t, t.TempDir())}))
 				testutil.NoError(t, d.Add(&model.Task{ID: "successor", Name: "Successor", Project: "other", Worktree: linked, Branch: branch}))
 			}
-			localDeleted := name == "original origin" || name == "changed remote tip" || name == "origin moves during push" || name == "rewritten origin with push hook" || name == "origin path with trailing whitespace" || name == "ambiguous origin line break"
+			localDeleted := name == "original origin" || name == "changed remote tip" || name == "origin moves during push" || name == "rewritten origin with push hook" || name == "origin path with trailing whitespace" || name == "ambiguous origin line break" || name == "alternate Git config with ambiguous origin"
 			remoteDeleted := name == "original origin" || name == "checked-out local branch" || name == "paused rebase" || name == "origin moves during push" || name == "rewritten origin with push hook" || name == "origin path with trailing whitespace"
 			testutil.Equal(t, DeleteStackedTaskBranch(context.Background(), d, "child", repository, branch, tip), localDeleted || remoteDeleted)
 			testutil.Equal(t, gitBranchExists(repo, branch), !localDeleted)

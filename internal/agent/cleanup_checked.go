@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -40,10 +41,16 @@ var taskGitTimeout = 15 * time.Second
 
 // RunTaskGit bounds Git and its subprocess group by the task lifetime.
 func RunTaskGit(ctx context.Context, dir string, args ...string) (string, int, error) {
-	return runTaskGitWithEnv(ctx, dir, nil, false, args...)
+	return runTaskGit(ctx, dir, taskGitOptions{}, args...)
 }
 
-func runTaskGitWithEnv(ctx context.Context, dir string, env []string, exactStdout bool, args ...string) (string, int, error) {
+type taskGitOptions struct {
+	env                   []string
+	exactStdout           bool
+	ignoreAlternateConfig bool
+}
+
+func runTaskGit(ctx context.Context, dir string, opts taskGitOptions, args ...string) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, taskGitTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // G702: fixed Git binary with structured arguments, no shell.
@@ -62,10 +69,14 @@ func runTaskGitWithEnv(ctx context.Context, dir string, env []string, exactStdou
 		}
 	}()
 	cmd.Dir = dir
-	cmd.Env = append(append(cmd.Environ(), "LC_ALL=C"), env...)
+	env := cmd.Environ()
+	if opts.ignoreAlternateConfig {
+		env = slices.DeleteFunc(env, func(value string) bool { return strings.HasPrefix(value, "GIT_CONFIG=") })
+	}
+	cmd.Env = append(append(env, "LC_ALL=C"), opts.env...)
 	var out string
 	var err error
-	if exactStdout {
+	if opts.exactStdout {
 		var raw []byte
 		raw, err = cmd.Output()
 		out = string(raw)
@@ -84,6 +95,18 @@ func runTaskGitWithEnv(ctx context.Context, dir string, env []string, exactStdou
 		code = ee.ExitCode()
 	}
 	return out, code, err
+}
+
+func taskGitPath(ctx context.Context, dir string, args ...string) (string, error) {
+	out, _, err := runTaskGit(ctx, dir, taskGitOptions{exactStdout: true}, args...)
+	if err != nil {
+		return "", err
+	}
+	path, terminated := strings.CutSuffix(out, "\n")
+	if !terminated || path == "" {
+		return "", errors.New("incomplete Git path output")
+	}
+	return path, nil
 }
 
 // TaskGitCleanupBranch resolves the same legacy branch fallback used by cleanup.

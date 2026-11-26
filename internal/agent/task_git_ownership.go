@@ -66,7 +66,7 @@ func TaskGitRepositoryID(ctx context.Context, repo string) (string, error) {
 	if repo == "" {
 		return "", nil
 	}
-	common, _, err := RunTaskGit(ctx, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	common, err := taskGitPath(ctx, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return "", fmt.Errorf("resolve Git common directory: %w", err)
 	}
@@ -153,8 +153,8 @@ func taskGitOrigin(ctx context.Context, repoDir string) (string, []string) {
 	if err != nil {
 		return "", nil
 	}
-	fetch, _, fetchErr := runTaskGitWithEnv(ctx, repoDir, nil, true, "remote", "get-url", "--all", "origin")
-	push, _, pushErr := runTaskGitWithEnv(ctx, repoDir, nil, true, "remote", "get-url", "--push", "--all", "origin")
+	fetch, _, fetchErr := runTaskGit(ctx, repoDir, taskGitOptions{exactStdout: true}, "remote", "get-url", "--all", "origin")
+	push, _, pushErr := runTaskGit(ctx, repoDir, taskGitOptions{exactStdout: true}, "remote", "get-url", "--push", "--all", "origin")
 	output, terminated := strings.CutSuffix(push, "\n")
 	if fetchErr != nil || pushErr != nil || fetch == "" || output == "" || !terminated {
 		return "", nil
@@ -175,7 +175,10 @@ func taskGitOrigin(ctx context.Context, repoDir string) (string, []string) {
 // any URL or rewrite that could contribute to that output.
 func taskGitOriginURLConfig(ctx context.Context, repoDir string) (string, error) {
 	const cfgPattern = `^(remote\.origin\.(url|pushurl)|url\..*\.(insteadof|pushinsteadof))$`
-	cfg, _, err := runTaskGitWithEnv(ctx, repoDir, nil, true, "config", "--null", "--get-regexp", cfgPattern)
+	// GIT_CONFIG redirects only the config command. Inspect the same config
+	// as remote get-url, which reads the actual repository and its includes.
+	cfg, _, err := runTaskGit(ctx, repoDir, taskGitOptions{exactStdout: true, ignoreAlternateConfig: true},
+		"config", "--null", "--get-regexp", cfgPattern)
 	if err != nil {
 		return "", err
 	}

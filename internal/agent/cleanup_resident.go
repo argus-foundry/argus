@@ -249,7 +249,7 @@ func deleteStackedLocalBranch(ctx context.Context, repoDir, branch, expectedTip 
 		uxlog.Log("[worktree] stacked local delete refused repo=%q branch=%q err=%v", repoDir, branch, err)
 		return false
 	}
-	if out, _, err := RunTaskGit(ctx, repoDir, "config", "--local", "--remove-section", "branch."+branch); err != nil && !strings.Contains(out, "no such section:") {
+	if out, _, err := runTaskGit(ctx, repoDir, taskGitOptions{ignoreAlternateConfig: true}, "config", "--local", "--remove-section", "branch."+branch); err != nil && !strings.Contains(out, "no such section:") {
 		uxlog.Log("[worktree] stacked branch config removal failed repo=%q branch=%q err=%v", repoDir, branch, err)
 	}
 	return true
@@ -261,8 +261,8 @@ func worktreeRefOperationPending(ctx context.Context, worktree string) bool {
 	if worktree == "" {
 		return true
 	}
-	gitDir, _, err := RunTaskGit(ctx, worktree, "rev-parse", "--absolute-git-dir")
-	if err != nil {
+	gitDir, err := taskGitPath(ctx, worktree, "rev-parse", "--absolute-git-dir")
+	if err != nil || !filepath.IsAbs(gitDir) {
 		return true
 	}
 	for _, marker := range []string{"rebase-apply", "rebase-merge", "BISECT_START"} {
@@ -339,9 +339,9 @@ func DeleteRemoteBranchAtOrigin(ctx context.Context, repoDir, branch, expectTip,
 	}
 	run := func(args ...string) (string, int, error) {
 		command := append(append([]string(nil), configArgs...), args...)
-		return runTaskGitWithEnv(ctx, repoDir, env, false, command...)
+		return runTaskGit(ctx, repoDir, taskGitOptions{env: env}, command...)
 	}
-	resolved, _, err := runTaskGitWithEnv(ctx, repoDir, env, true, append(configArgs, "remote", "get-url", "--push", "--all", "origin")...)
+	resolved, _, err := runTaskGit(ctx, repoDir, taskGitOptions{env: env, exactStdout: true}, append(configArgs, "remote", "get-url", "--push", "--all", "origin")...)
 	if err != nil || resolved != strings.Join(targets, "\n")+"\n" {
 		return errors.New("unable to pin original Git push destinations")
 	}
