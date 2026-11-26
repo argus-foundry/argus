@@ -312,31 +312,31 @@ func TestResidentRemoteBranchDelete(t *testing.T) {
 		gotDir, gotBranch, gotTip = dir, branch, tip
 		return nil
 	}}
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/x", "abc123")
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "argus/x", "abc123")
 	testutil.Equal(t, gotDir, "/repo")
 	testutil.Equal(t, gotBranch, "argus/x")
 	testutil.Equal(t, gotTip, "abc123")
 	testutil.True(t, hadDeadline)
 	testutil.Contains(t, logs.String(), "remote branch deleted task=w branch=argus/x")
 	gotBranch = ""
-	residentRemoteBranchDelete(opts, "w", "/repo", "", "abc123")
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "", "abc123")
 	testutil.Equal(t, gotBranch, "")
 	// No lease tip: never an unleased delete.
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/y", "")
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "argus/y", "")
 	testutil.Equal(t, gotBranch, "")
 	testutil.Contains(t, logs.String(), "remote branch left in place task=w branch=argus/y")
 	opts.RemoteBranchDelete = func(context.Context, string, string, string) error { return errors.New("offline") }
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/x", "abc123") // logged, never panics
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "argus/x", "abc123") // logged, never panics
 	testutil.Contains(t, logs.String(), "remote branch delete failed task=w branch=argus/x: offline")
 	opts.RemoteBranchDelete = func(context.Context, string, string, string) error {
 		return fmt.Errorf("%w: moved", agent.ErrRemoteBranchChanged)
 	}
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/z", "abc123")
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "argus/z", "abc123")
 	testutil.Contains(t, logs.String(), "remote branch changed on origin; left in place task=w branch=argus/z")
 	opts.RemoteBranchDelete = func(context.Context, string, string, string) error {
 		return fmt.Errorf("%w: origin has no argus/g", agent.ErrRemoteBranchGone)
 	}
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/g", "abc123")
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "argus/g", "abc123")
 	testutil.Contains(t, logs.String(), "remote branch already gone task=w branch=argus/g")
 	testutil.False(t, strings.Contains(logs.String(), "left in place task=w branch=argus/g"))
 }

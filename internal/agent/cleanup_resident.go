@@ -84,7 +84,10 @@ func WorktreeRemoteBranchLease(worktreePath, branch, repoDir string) (remoteRepo
 	}
 	dir := repoDir
 	if dir == "" {
-		dir = filepath.Dir(worktreePath)
+		dir = ResidentCleanupRepository(context.Background(), worktreePath, "")
+		if dir == "" {
+			return "", "", ""
+		}
 	}
 	// Same base-branch inference as RemoveWorktreeAndBranch.
 	actualBranch := branch
@@ -97,6 +100,62 @@ func WorktreeRemoteBranchLease(worktreePath, branch, repoDir string) (remoteRepo
 		leaseTip = revParseCommit(dir, "refs/heads/"+actualBranch)
 	}
 	return dir, actualBranch, leaseTip
+}
+
+// ResidentCleanupRepository resolves a surviving linked worktree when its
+// configured repository is unavailable. The common Git directory survives
+// removal of the linked checkout.
+func ResidentCleanupRepository(ctx context.Context, worktree, repoDir string) string {
+	if repoDir != "" {
+		if _, err := TaskGitRepositoryID(ctx, repoDir); err == nil {
+			return repoDir
+		}
+	}
+	common, err := TaskGitRepositoryID(ctx, worktree)
+	if err != nil || common == "" {
+		return ""
+	}
+	if filepath.Base(common) == ".git" {
+		return filepath.Dir(common)
+	}
+	return common
+}
+
+// VerifyResidentLocalRemoval checks the actual filesystem and ref state. The
+// best-effort removal helpers may log a failure without returning one.
+func VerifyResidentLocalRemoval(ctx context.Context, worktree, branch, repoDir string) error {
+	if worktree != "" {
+		if _, err := os.Stat(worktree); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return fmt.Errorf("verify worktree removal: %w", err)
+			}
+			return errors.New("resident worktree remains after cleanup")
+		}
+	}
+	if branch == "" {
+		return nil
+	}
+	if repoDir == "" {
+		return errors.New("repository unavailable for local branch verification")
+	}
+	_, code, err := RunTaskGit(ctx, repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if err == nil {
+		return errors.New("resident branch remains after cleanup")
+	}
+	if code != 1 {
+		return fmt.Errorf("verify local branch removal: %w", err)
+	}
+	return nil
+}
+
+// DeleteStackedBranchContext bounds Git work done while task admission is held.
+func DeleteStackedBranchContext(ctx context.Context, repoDir, branch string) {
+	if out, _, err := RunTaskGit(ctx, repoDir, "branch", "-D", "--", branch); err != nil {
+		uxlog.Log("[worktree] stacked local delete failed repo=%q branch=%q err=%v output=%q", repoDir, branch, err, out)
+	}
+	if out, _, err := RunTaskGit(ctx, repoDir, "push", "origin", ":refs/heads/"+branch); err != nil {
+		uxlog.Log("[worktree] stacked origin delete failed repo=%q branch=%q err=%v output=%q", repoDir, branch, err, out)
+	}
 }
 
 // revParseCommit resolves ref to a commit id in dir, "" when it does not.

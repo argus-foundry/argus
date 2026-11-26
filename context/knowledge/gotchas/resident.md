@@ -74,6 +74,7 @@ Memory, orientation and tool permissions are in [resident-memory.md](resident-me
 - **A checked local delete waits for the PTY to drain before rechecking the tree.** The in-process runner retains its entry until the exit callback takes the task lock. Worktree removal waits for that callback to finish.
 - **Resident cleanup captures the origin lease before committing the role nuke.** Deferred cleanup uses the saved tip after owner retirement, even if the tracking ref moved. The recovery tick revisits pending resident cleanups after an ordinary exit relay.
 - **Deferred resident cleanup verifies the worktree and branch under the Git ownership lock.** It records local settlement before network work. Stacked cleanup defers a branch owned by another task's reclaim, including a resident binding whose task row has already been pruned.
+- **A Git lease checks a commit, so check ownership again before the push.** A successor can use the same branch at the same commit. Keep the Git ownership lock through the bounded push and leave any branch or base ref still referenced by a surviving task.
 
 ## Graduation
 

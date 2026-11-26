@@ -1124,8 +1124,7 @@ func (a *App) heraDeleteStackedBranches(extra []stackedBranchCandidate) {
 				continue
 			}
 		}
-		agent.DeleteBranch(repoDir, c.Branch)
-		agent.DeleteRemoteBranch(repoDir, c.Branch)
+		agent.DeleteStackedBranchContext(context.Background(), repoDir, c.Branch)
 		unlock()
 		uxlog.Log("[hera-view] cascade: deleted stacked branch %q (task=%s)", c.Branch, c.TaskID)
 	}

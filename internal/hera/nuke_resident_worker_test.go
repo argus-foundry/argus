@@ -111,7 +111,7 @@ func TestNukeResidentWorker_FollowUpDeletesMergedStackedBranch(t *testing.T) {
 	testutil.True(t, gitBranchExists(dir, "c-branch")) // not before the follow-up
 	followUp()
 	testutil.False(t, gitBranchExists(dir, "c-branch"))
-	testutil.False(t, gitBranchExists(dir, "x-branch"))
+	testutil.True(t, gitBranchExists(dir, "x-branch")) // still a surviving task's base
 }
 
 func TestNukeFailClosedOnUnreadablePendingCheck(t *testing.T) {

@@ -670,7 +670,7 @@ func (s *Server) deleteCleanupTargets(res *storedDeleteResult) (worktree, branch
 			worktree, branch = "", ""
 			protected = true
 		}
-		if branch == "" || (branch != t.Branch && branch != strings.TrimPrefix(t.BaseBranch, "origin/") && "refs/heads/"+branch != t.BaseBranch && "refs/remotes/origin/"+branch != t.BaseBranch) {
+		if !agent.TaskReferencesGitBranch(t, branch) {
 			continue
 		}
 		repo := agent.ResolveDir(t, cfg)

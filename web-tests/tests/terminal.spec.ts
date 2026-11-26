@@ -182,13 +182,18 @@ test.describe('terminal', () => {
   for (const action of ['fork', 'rename', 'archive', 'delete']) test(`late ${action} leaves the reopened terminal view alone`, async ({ page }) => {
     let requested = false;
     let serverName: string | undefined;
+    let deletedID: string | undefined;
     let release: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
     await page.route(/\/api\/tasks(?:\?|$)/, async route => {
-      if (!serverName) return route.continue();
+      if (action !== 'delete' && !serverName) return route.continue();
       const response = await route.fetch();
       const body = await response.json();
-      body.tasks[0].name = serverName;
+      if (serverName) body.tasks[0].name = serverName;
+      if (deletedID) body.tasks = body.tasks.filter(task => task.id !== deletedID);
+      if (action === 'delete') {
+        body.tasks.push({ id: 'unrelated-task', name: 'Other task', project: 'test-proj', status: 'pending', live: false });
+      }
       await route.fulfill({ response, json: body });
     });
     await page.route(/\/api\/tasks\/[^/?]+(?:\/(?:fork|rename|archive))?$/, async route => {
@@ -197,12 +202,13 @@ test.describe('terminal', () => {
       requested = true;
       await held;
       if (action === 'rename') serverName = 'Renamed by server';
+      if (action === 'delete') deletedID = new URL(request.url()).pathname.split('/').at(-1);
       await route.fulfill({ status: 200, json: { id: 'forked-task' } }).catch(() => {});
     });
     page.on('dialog', dialog => dialog.type() === 'prompt' ? dialog.accept('Action result') : dialog.accept());
     try {
       await login(page);
-      await page.locator('.task-item').first().click();
+      await page.locator('.task-item').filter({ hasText: 'echo-bash' }).first().click();
       await expect(page.locator('.term-status.live')).toBeVisible();
       await expect(page.locator('#btn-overflow')).toBeEnabled();
       await page.evaluate(action => {
@@ -212,8 +218,10 @@ test.describe('terminal', () => {
       }, action);
       await expect.poll(() => requested).toBe(true);
       await page.locator('#detail-view .detail-back').click();
-      await page.locator('.task-item').first().click();
-      await expect(page.locator('.term-status.live')).toBeVisible();
+      if (action === 'delete') await page.locator('.task-item').filter({ hasText: 'Other task' }).click();
+      else await page.locator('.task-item').first().click();
+      await expect(page.locator('#term .xterm')).toBeVisible();
+      await expect(page.locator('#btn-overflow')).toBeEnabled();
       const title = await page.locator('#detail-title').textContent();
       await page.evaluate(() => { (window as any).reopenedTerm = (window as any).term; });
       release!();
@@ -223,6 +231,44 @@ test.describe('terminal', () => {
       });
       expect(sameTerminal).toBe(true);
       await expect(page.locator('#detail-title')).toHaveText(serverName ?? title!);
+    } finally {
+      release!();
+    }
+  });
+
+  test('successful Delete closes a reopened view of the deleted task', async ({ page }) => {
+    let deletedID: string | undefined;
+    let requested = false;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks(?:\?|$)/, async route => {
+      if (!deletedID) return route.continue();
+      const response = await route.fetch();
+      const body = await response.json();
+      body.tasks = body.tasks.filter(task => task.id !== deletedID);
+      await route.fulfill({ response, json: body });
+    });
+    await page.route(/\/api\/tasks\/[^/?]+$/, async route => {
+      if (route.request().method() !== 'DELETE') return route.continue();
+      requested = true;
+      await held;
+      deletedID = new URL(route.request().url()).pathname.split('/').at(-1);
+      await route.fulfill({ status: 200, json: { status: 'deleted' } }).catch(() => {});
+    });
+    page.on('dialog', dialog => dialog.accept());
+    try {
+      await login(page);
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('.term-status.live')).toBeVisible();
+      await page.evaluate(() => { (window as any).pendingDelete = (window as any).deleteTask(); });
+      await expect.poll(() => requested).toBe(true);
+      await page.locator('#detail-view .detail-back').click();
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('#btn-overflow')).toBeEnabled();
+      release!();
+      await page.evaluate(() => (window as any).pendingDelete);
+      await expect(page.locator('#detail-view')).not.toHaveClass(/\bopen\b/);
+      await expect(page.locator('#term .xterm')).toHaveCount(0);
     } finally {
       release!();
     }

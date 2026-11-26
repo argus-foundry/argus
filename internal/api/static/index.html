@@ -4384,7 +4384,7 @@ async function deleteTask() {
     if (!r.ok) throw new Error((await r.json()).error || 'delete failed');
     try { localStorage.removeItem(inputHistoryKey(id)); } catch {}
     inputBuffers.delete(id);
-    if (view === detailViewGen) closeDetail();
+    if (currentTask?.id === id) closeDetail();
     refresh();
   } catch(e) {
     if (view === detailViewGen) showToast('Delete failed: ' + e.message);

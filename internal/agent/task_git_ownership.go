@@ -12,8 +12,19 @@ import (
 	"time"
 
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/uxlog"
 )
+
+// TaskReferencesGitBranch matches the task's own branch and supported forms of
+// its base ref. Callers check repository identity separately.
+func TaskReferencesGitBranch(task *model.Task, branch string) bool {
+	if branch == "" {
+		return false
+	}
+	return task.Branch == branch || task.BaseBranch == branch || task.BaseBranch == "origin/"+branch ||
+		task.BaseBranch == "refs/heads/"+branch || task.BaseBranch == "refs/remotes/origin/"+branch
+}
 
 // SamePath compares filesystem identities, including case and symlink aliases.
 func SamePath(a, b string) bool {

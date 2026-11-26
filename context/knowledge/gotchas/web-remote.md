@@ -376,3 +376,5 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **Apply task action results only to the originating detail visit.** A request can still succeed after Back or a tab switch. A later view may even show the same task, so check the visit before changing its title, closing it, or opening a fork.
 
 - **Use fresh model fields to render a reopened task.** Each detail visit owns its action controls, and list refresh applies the current task's authoritative name independently of terminal reattachment.
+
+- **A successful delete applies to the task ID across visits.** If the current detail still shows that ID, close it. Leave another task's view open.

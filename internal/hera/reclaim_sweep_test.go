@@ -331,3 +331,18 @@ func TestStackedReclaimPreservesLeasedResidentBranchAfterPrune(t *testing.T) {
 		testutil.True(t, gitBranchExists(repo, worker.Branch))
 	}
 }
+
+func TestStackTasksUseSharedGitRepositoryIdentity(t *testing.T) {
+	repo := initGitRepo(t, t.TempDir())
+	otherRepo := initGitRepo(t, t.TempDir())
+	linked := filepath.Join(t.TempDir(), "linked")
+	gitRun(t, repo, "worktree", "add", "--detach", linked)
+	cfg := config.Config{Projects: map[string]config.Project{
+		"local": {Path: repo}, "linked": {Path: linked}, "other": {Path: otherRepo},
+	}}
+	same := &model.Task{ID: "same", Project: "linked", Branch: "child", BaseBranch: "base"}
+	other := &model.Task{ID: "other", Project: "other", Branch: "child", BaseBranch: "base"}
+	got := stackTasksInRepository(context.Background(), cfg, repo, []*model.Task{same, other})
+	testutil.Equal(t, len(got), 1)
+	testutil.Equal(t, got["base"], same)
+}

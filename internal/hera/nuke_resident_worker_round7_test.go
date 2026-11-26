@@ -248,6 +248,85 @@ func TestDeferredResidentReclaimPreservesReusedWorktree(t *testing.T) {
 	testutil.NoError(t, err)
 }
 
+func TestDeferredResidentReclaimWaitsForFailedLocalBranchDeletion(t *testing.T) {
+	const branch = "argus/worker"
+	task := &model.Task{ID: "worker", Name: "Worker", Project: "p", Branch: branch}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	repo := initGitRepo(t, t.TempDir())
+	remote := t.TempDir()
+	gitRun(t, remote, "init", "--bare")
+	gitRun(t, repo, "remote", "add", "origin", remote)
+	checkout := filepath.Join(t.TempDir(), "other-checkout")
+	gitRun(t, repo, "worktree", "add", "-b", branch, checkout)
+	gitRun(t, repo, "push", "origin", branch)
+	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: repo}))
+	_, err := NukeResidentWorker(d, nil, view)
+	testutil.NoError(t, err)
+	lease, err := d.HeraResidentReclaimLease(task.ID)
+	testutil.NoError(t, err)
+	if lease == nil {
+		t.Fatal("failed local cleanup lost the reclaim row")
+	}
+	testutil.False(t, lease.LocalDone)
+	sum, err := ReconcileHeraReclaims(d, &fakeSessionChecker{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, sum.Pruned, 0)
+	gitRun(t, remote, "show-ref", "--verify", "refs/heads/"+branch)
+
+	gitRun(t, repo, "worktree", "remove", checkout)
+	sum, err = ReconcileHeraReclaims(d, &fakeSessionChecker{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, sum.Pruned, 1)
+	testutil.False(t, gitBranchExists(repo, branch))
+	testutil.False(t, gitBranchExists(remote, branch))
+}
+
+func TestSettledResidentReclaimPreservesSameTipOwnedOriginRef(t *testing.T) {
+	const branch = "argus/worker"
+	task := &model.Task{ID: "original", Name: "Worker", Project: "p", Branch: branch}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	repo := initGitRepo(t, t.TempDir())
+	remote := t.TempDir()
+	gitRun(t, remote, "init", "--bare")
+	gitRun(t, repo, "remote", "add", "origin", remote)
+	gitRun(t, repo, "branch", branch)
+	gitRun(t, repo, "push", "origin", branch)
+	_, _, tip := agent.WorktreeRemoteBranchLease("", branch, repo)
+	if tip == "" {
+		t.Fatal("fixture lacks an origin branch lease")
+	}
+	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: repo}))
+	binding, err := d.HeraLiveBindingByRole(view.RoleID)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.NukeResidentWorkerBinding(view.RoleID, binding.ID, &db.HeraReclaimLease{
+		RepoDir: repo, Branch: branch, Tip: tip, LocalDone: true,
+	}))
+	newTask := &model.Task{ID: "successor", Name: "Successor", Project: "p", Branch: "argus/successor", BaseBranch: "refs/remotes/origin/" + branch}
+	testutil.NoError(t, d.Add(newTask))
+
+	sum, err := ReconcileHeraReclaims(d, &fakeSessionChecker{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, sum.Pruned, 1)
+	gitRun(t, remote, "show-ref", "--verify", "refs/heads/"+branch)
+}
+
+func TestDeferredResidentReclaimFindsUnconfiguredRepositoryFromWorktree(t *testing.T) {
+	const branch = "argus/worker"
+	repo := initGitRepo(t, t.TempDir())
+	checkout := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+	gitRun(t, repo, "worktree", "add", "-b", branch, checkout)
+	task := &model.Task{ID: "worker", Name: "Worker", Worktree: checkout, Branch: branch}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	starting := true
+	owner := nukeReclaimOwner{Runner: agent.NewRunner(nil), pending: &starting}
+	_, err := NukeResidentWorker(d, owner, view)
+	testutil.NoError(t, err)
+	sum, err := ReconcileHeraReclaims(d, &fakeSessionChecker{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, sum.Pruned, 1)
+	testutil.False(t, agent.DirExists(checkout))
+}
+
 // A session that exits on Stop but has not settled by the end of the wait is
 // refused ("had not settled"), the recheck never runs, and the worker is left
 // resumable. Covers both the wait measured from the Stop call's START (not
