@@ -57,6 +57,7 @@ type Runner struct {
 	// a graceful shutdown would wait out the full prelaunch budget.
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
+	launchesClosed bool // guarded by mu
 }
 
 // SetMCPPort updates the listener port used by future task launches.
@@ -98,6 +99,10 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 	// Start() calls for the same task ID could both pass an exists-check and
 	// overwrite each other, leaking PTY fds and sandbox cleanup closures.
 	r.mu.Lock()
+	if r.launchesClosed {
+		r.mu.Unlock()
+		return nil, context.Canceled
+	}
 	if _, exists := r.sessions[task.ID]; exists {
 		r.mu.Unlock()
 		return nil, fmt.Errorf("session already exists for task %s", task.ID)
@@ -132,6 +137,13 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		cleanup()
 		return nil, err
 	}
+	r.mu.Lock()
+	launchesClosed := r.launchesClosed
+	r.mu.Unlock()
+	if launchesClosed {
+		cleanup()
+		return nil, context.Canceled
+	}
 
 	if resume {
 		// A missing transcript can still have detached workers. Reap using
@@ -165,6 +177,15 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 	slog.Info("runner.Start: OK", "task", task.ID, "pid", sess.PID())
 
 	r.mu.Lock()
+	if r.launchesClosed {
+		delete(r.sessions, task.ID)
+		r.mu.Unlock()
+		_ = sess.Stop()
+		if sandboxCleanup != nil {
+			sandboxCleanup()
+		}
+		return nil, context.Canceled
+	}
 	r.sessions[task.ID] = sess
 	r.mu.Unlock()
 
@@ -557,15 +578,18 @@ func (r *Runner) StopScoped(taskID string, scope StopScope) error {
 	return err
 }
 
-// CancelPendingStarts cancels prelaunch work during runner shutdown before
-// its owner waits for the callers that submitted the starts.
+// CancelPendingStarts closes launch admission for daemon teardown and
+// cancels prelaunch before the daemon drains asynchronous callers.
 func (r *Runner) CancelPendingStarts() {
+	r.mu.Lock()
+	r.launchesClosed = true
+	r.mu.Unlock()
 	r.shutdownCancel()
 }
 
 // StopAll terminates all running sessions.
 func (r *Runner) StopAll() {
-	r.CancelPendingStarts()
+	r.shutdownCancel()
 
 	r.mu.Lock()
 	ids := make([]string, 0, len(r.sessions))

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"net"
 	"net/rpc"
 	"net/rpc/jsonrpc"
@@ -18,16 +19,45 @@ import (
 
 type lateStartService struct {
 	release chan struct{}
+	entered chan struct{}
 	calls   atomic.Int32
 }
 
 func (s *lateStartService) StartSession(_ *daemon.StartReq, resp *daemon.StartResp) error {
 	n := s.calls.Add(1)
 	if n == 1 {
+		if s.entered != nil {
+			close(s.entered)
+		}
 		<-s.release
 	}
 	resp.PID = 100 + int(n)
 	return nil
+}
+
+func TestStartReceipt_DisconnectAfterSupervisorReceivesRequest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		a, b := net.Pipe()
+		svc := &lateStartService{release: make(chan struct{}), entered: make(chan struct{})}
+		t.Cleanup(func() { close(svc.release) })
+		server := rpc.NewServer()
+		testutil.NoError(t, server.RegisterName("Daemon", svc))
+		go server.ServeCodec(jsonrpc.NewServerCodec(b))
+		c := &Client{rpc: jsonrpc.NewClient(a), closed: make(chan struct{})}
+		t.Cleanup(func() { _ = c.Close() })
+		task := &model.Task{ID: "accepted"}
+		finished := make(chan error, 1)
+		go func() {
+			_, err := c.Start(task, config.DefaultConfig(), 24, 80, false)
+			finished <- err
+		}()
+		<-svc.entered
+		testutil.NoError(t, c.Close())
+		testutil.ErrorIs(t, <-finished, agent.ErrStartAmbiguous)
+		_, err := c.Start(&model.Task{ID: "never-sent"}, config.DefaultConfig(), 24, 80, false)
+		testutil.ErrorIs(t, err, ErrClientClosed)
+		testutil.False(t, errors.Is(err, agent.ErrStartAmbiguous))
+	})
 }
 
 func TestStartReceipt_LateResultAndReplacement(t *testing.T) {

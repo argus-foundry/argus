@@ -28,6 +28,11 @@ func TestSpeakBrief(t *testing.T) {
 			want: "Two tasks are running and one is idle.",
 		},
 		{
+			name: "one running and one idle",
+			snap: Snapshot{Counts: Counts{Running: 1, Idle: 1}},
+			want: "One task is running and one is idle.",
+		},
+		{
 			name: "needs input and blocked and finished",
 			snap: Snapshot{
 				Counts:           Counts{NeedsInput: 1, Blocked: 1, RecentlyFinished: 1},
@@ -44,8 +49,8 @@ func TestSpeakBrief(t *testing.T) {
 		},
 		{
 			name: "markdown name",
-			snap: Snapshot{Counts: Counts{Running: 1}, Running: []string{"`*Review*`\n"}},
-			want: "Review is running.",
+			snap: Snapshot{Counts: Counts{Running: 1}, Running: []string{"> ~~`*Review!*`\n + Docs?"}},
+			want: "Review Docs is running.",
 		},
 		{
 			name: "one idle",

@@ -143,7 +143,7 @@ func prepareResume(task *model.Task, cfg config.Config, resume bool) (bool, erro
 // task is nil, has no worktree, the backend has no capture, the worktree holds no
 // conversation, or the newest transcript already equals the recorded ID. On a genuine change
 // it mutates task.SessionID in place (so the caller's immediate resume uses it)
-// AND persists via a read-modify-write on the row (mirroring the exit hook), so
+// AND persists the session ID without replacing lifecycle or metadata fields, so
 // callers that do not re-issue an Update still land the fresh ID. Errors are
 // logged via uxlog and never fatal.
 func RefreshResumeSessionID(database *db.DB, task *model.Task) {
@@ -217,16 +217,16 @@ func RefreshSessionIDWith(database *db.DB, task *model.Task, mode SessionRefresh
 		return
 	}
 	task.SessionID = sid
-	// Re-read the row before writing so we don't clobber concurrent field
-	// updates, mirroring captureSessionIDPostExit's read-modify-write.
-	t2, err := database.Get(task.ID)
-	if err != nil || t2 == nil {
-		uxlog.Log("[resume] session persist skipped task=%s (row gone): %v", task.ID, err)
+	wrote, err := database.RefreshSessionID(task.ID, old, sid)
+	if err != nil {
+		uxlog.Log("[resume] session persist failed task=%s err=%v", task.ID, err)
 		return
 	}
-	t2.SessionID = sid
-	if uerr := database.Update(t2); uerr != nil {
-		uxlog.Log("[resume] session persist failed task=%s err=%v", task.ID, uerr)
+	if !wrote {
+		if current, err := database.Get(task.ID); err == nil && current != nil {
+			task.SessionID = current.SessionID
+		}
+		uxlog.Log("[resume] session persist skipped task=%s: row changed", task.ID)
 		return
 	}
 	uxlog.Log("[resume] session refreshed task=%s %s -> %s", task.ID, old, sid)

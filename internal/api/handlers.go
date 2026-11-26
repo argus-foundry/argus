@@ -523,6 +523,8 @@ func (s *Server) handleCreateTaskMultipart(w http.ResponseWriter, r *http.Reques
 
 // --- Stop Task ---
 
+var errTaskRestarting = errors.New("agent is restarting")
+
 func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	task, err := s.db.Get(id)
@@ -531,7 +533,7 @@ func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.stopTaskSession(task); err != nil {
+	if err := s.stopTaskSession(task, false); err != nil {
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
@@ -541,12 +543,19 @@ func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 
 // stopTaskSession stops a live session, treating an already-stopped task as
 // success, and moves the row to in review. Shared by REST and voice.
-func (s *Server) stopTaskSession(task *model.Task) error {
+func (s *Server) stopTaskSession(task *model.Task, rejectPendingRestart bool) error {
+	if rejectPendingRestart && s.runner.HasPendingRestart(task.ID) {
+		return errTaskRestarting
+	}
 	if err := s.runner.Stop(task.ID); err != nil && !errors.Is(err, agent.ErrSessionNotFound) {
 		return err
 	}
-	task.SetStatus(model.StatusInReview)
-	s.db.Update(task) //nolint:errcheck
+	if rejectPendingRestart && s.runner.HasPendingRestart(task.ID) {
+		return errTaskRestarting
+	}
+	if err := s.db.SetStatus(task.ID, model.StatusInReview); err != nil {
+		uxlog.Log("[api] stop: status write failed task=%s err=%v", task.ID, err)
+	}
 	return nil
 }
 
@@ -757,6 +766,7 @@ func (s *Server) startResumedSession(task *model.Task, op string) (reattached bo
 	// Resume-time recapture: Claude re-derives the newest transcript; capture-once
 	// backends (codex/pi/opencode) recover a missing ID. Must precede resume.
 	agent.RefreshResumeSessionID(s.db, task)
+	priorSessionID := task.SessionID
 	resume := task.SessionID != ""
 	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
 	sess, reattached, err := s.runner.StartOrReattach(task, cfg, 24, 80, resume)
@@ -764,9 +774,10 @@ func (s *Server) startResumedSession(task *model.Task, op string) (reattached bo
 		uxlog.Log("[api] %s: start failed task=%s status=%s err=%v", op, task.ID, prevStatus, err)
 		return false, err
 	}
-	task.SetStatus(model.StatusInProgress)
 	task.AgentPID = sess.PID()
-	s.db.Update(task) //nolint:errcheck
+	if err := s.db.RecordResumedSession(task.ID, task.AgentPID, priorSessionID, task.SessionID); err != nil {
+		uxlog.Log("[api] %s: resume state write failed task=%s err=%v", op, task.ID, err)
+	}
 	if reattached {
 		uxlog.Log("[api] %s: healed task=%s pre_status=%s pid=%d", op, task.ID, prevStatus, task.AgentPID)
 	} else {

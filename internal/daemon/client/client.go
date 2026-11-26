@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/rpc"
@@ -299,6 +300,9 @@ func (c *Client) checkResidentSupported(task *model.Task) error {
 
 // Start requests the daemon to start a session and opens a stream for its output.
 func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, error) {
+	if c.isClosed() {
+		return nil, ErrClientClosed
+	}
 	if task.ResumeOnly {
 		c.mu.Lock()
 		peer := c.peerProtocol
@@ -366,15 +370,13 @@ func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		}
 	}); err != nil {
 		uxlog.Log("client.Start: RPC FAILED task=%s err=%v", task.ID, err)
-		// A timeout specifically means we stopped waiting, not that the
-		// daemon-side start failed — callWithTimeout's dispatch goroutine
-		// keeps it running to completion regardless. Any other error here
-		// (a dead connection, a closed client) means the RPC genuinely can't
-		// complete. Only the timeout case is ambiguous enough that a caller
-		// like agent.CreateAndStart must not treat it as grounds to unwind
-		// (delete) a freshly created worktree/task the daemon might still
-		// finish starting.
-		if errors.Is(err, ErrRPCTimeout) {
+		// A timeout or interrupted connection can lose the reply after the
+		// supervisor received the request. Preserve the task and worktree
+		// because the supervisor can still finish the launch.
+		var transportErr *net.OpError
+		if errors.Is(err, ErrRPCTimeout) || errors.Is(err, io.ErrUnexpectedEOF) ||
+			errors.Is(err, io.ErrClosedPipe) || errors.As(err, &transportErr) ||
+			(errors.Is(err, rpc.ErrShutdown) && c.isClosed()) {
 			return nil, fmt.Errorf("%w: %w", agent.ErrStartAmbiguous, err)
 		}
 		return nil, err
@@ -405,6 +407,15 @@ func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 	rs.pid = resp.PID
 	rs.mu.Unlock()
 	return rs, nil
+}
+
+func (c *Client) isClosed() bool {
+	select {
+	case <-c.closed:
+		return true
+	default:
+		return false
+	}
 }
 
 // Get returns a SessionHandle for the task, or nil if not found.
@@ -459,6 +470,9 @@ func (c *Client) StopScoped(taskID string, scope agent.StopScope) error {
 			return c.StopScoped(taskID, agent.StopAgentOnly)
 		}
 		return err
+	}
+	if resp.Error == agent.ErrSessionNotFound.Error() {
+		return agent.ErrSessionNotFound
 	}
 	if resp.Error != "" {
 		return fmt.Errorf("%s", resp.Error)

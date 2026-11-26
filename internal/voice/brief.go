@@ -77,7 +77,7 @@ func activityClause(s Snapshot) string {
 	case rn == 0:
 		return qty(idle) + " " + plural(idle, "task", "tasks") + " are idle"
 	default:
-		return qty(rn) + " " + plural(rn, "task", "tasks") + " are running and " + qty(idle) + " " + plural(idle, "is", "are") + " idle"
+		return qty(rn) + " " + plural(rn, "task is", "tasks are") + " running and " + qty(idle) + " " + plural(idle, "is", "are") + " idle"
 	}
 }
 
@@ -123,7 +123,7 @@ func finishedClause(s Snapshot) string {
 // sentence: no control characters, no markdown markers, collapsed whitespace.
 func SpeakName(name string) string {
 	name = strings.Map(func(r rune) rune {
-		if r < 32 || strings.ContainsRune("`*_#[]", r) {
+		if unicode.IsControl(r) || strings.ContainsRune("`*_#[]<>~\\|+-!?.", r) {
 			return ' '
 		}
 		return r

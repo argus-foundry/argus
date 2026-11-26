@@ -238,3 +238,5 @@ Both new fields (`App.needsInputLogStat`, `App.needsInputRawSignals`) are thread
 ## Voice listeners must not block Emit
 
 - **`events.Subscribe` runs on the emitter's goroutine after the sink returns, so a listener has to enqueue and return.** The voice webhook logs queue drops from its worker because even logging from the callback can stall `db.Update`. Run one needs-input detector per daemon, with the webhook-only watcher taking over when the REST watcher is absent.
+- **Close the screen renderer's response pipe and wait for its reader before closing the emulator.** The upstream read checks the emulator's closed flag without a lock.
+- **Lifecycle writes after a runner call must preserve concurrent task edits.** A voice operation's REST task lock cannot serialize an archive or rename written by another client directly through the database.

@@ -761,6 +761,14 @@ func TestC_StartErr(t *testing.T) {
 	testutil.Error(t, err)
 }
 
+func TestC_StopMissing(t *testing.T) {
+	_, sockPath, _ := testSetup(t)
+	c, err := Connect(sockPath)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	testutil.ErrorIs(t, c.Stop("missing"), agent.ErrSessionNotFound)
+}
+
 // TestC_StartRPCErr covers Start's RPC-failure branch. A closed transport is
 // a definitive failure (not an ambiguous timeout) — the RPC can't possibly
 // still be running daemon-side, so this must NOT wrap agent.ErrStartAmbiguous;

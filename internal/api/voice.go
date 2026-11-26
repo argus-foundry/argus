@@ -60,7 +60,7 @@ func (a apiVoice) Find(ctx context.Context, taskID, name, project string) (voice
 	if err != nil {
 		return voice.FindResult{}, err
 	}
-	safeName := agent.SafeName(name)
+	spokenAlias := strings.Join(strings.Fields(name), "-")
 	var exact, aliases []*model.Task
 	for _, t := range tasks {
 		if t == nil || t.IsResident() || t.Kind != "" {
@@ -73,7 +73,7 @@ func (a apiVoice) Find(ctx context.Context, taskID, name, project string) (voice
 		switch {
 		case strings.EqualFold(storedName, name):
 			exact = append(exact, t)
-		case strings.EqualFold(storedName, safeName):
+		case strings.EqualFold(storedName, spokenAlias):
 			aliases = append(aliases, t)
 		}
 	}
@@ -89,21 +89,20 @@ func (a apiVoice) Find(ctx context.Context, taskID, name, project string) (voice
 }
 
 func preferredVoiceMatches(exact, aliases []*model.Task) []*model.Task {
-	for _, matches := range [][]*model.Task{exact, aliases} {
-		var open []*model.Task
-		for _, t := range matches {
-			if !t.Archived {
-				open = append(open, t)
-			}
-		}
-		if len(open) != 0 {
-			return open
+	matches := exact
+	if len(matches) == 0 {
+		matches = aliases
+	}
+	var open []*model.Task
+	for _, t := range matches {
+		if !t.Archived {
+			open = append(open, t)
 		}
 	}
-	if len(exact) != 0 {
-		return exact
+	if len(open) != 0 {
+		return open
 	}
-	return aliases
+	return matches
 }
 
 func (a apiVoice) Create(ctx context.Context, name, project, prompt string) (voice.TaskRef, error) {
@@ -149,7 +148,10 @@ func (a apiVoice) Stop(ctx context.Context, taskID string) error {
 	if t.Archived {
 		return &voice.OpError{Speech: voice.SpeakName(t.Name) + " is archived.", Code: "archived"}
 	}
-	if err := a.s.stopTaskSession(t); err != nil {
+	if err := a.s.stopTaskSession(t, true); err != nil {
+		if errors.Is(err, errTaskRestarting) {
+			return &voice.OpError{Speech: voice.SpeakName(t.Name) + " is restarting.", Code: "agent_restarting"}
+		}
 		slog.Error("[voice] stop failed", "task", taskID, "err", err)
 		uxlog.Log("[voice] stop failed task=%s err=%v", taskID, err)
 		return &voice.OpError{Speech: "I couldn't stop " + voice.SpeakName(t.Name) + ".", Code: "stop_failed"}

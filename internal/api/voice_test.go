@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -144,6 +145,22 @@ func TestVoiceFindsMultiwordNameAfterRealCreation(t *testing.T) {
 	testutil.Equal(t, run.started, 1)
 }
 
+func TestVoiceFindRejectsLossyAliases(t *testing.T) {
+	srv, d := testServer(t)
+	for _, tc := range []struct{ name, requested, stored string }{
+		{"empty slug fallback", "?!", "task"},
+		{"truncation", strings.Repeat("x", 31), strings.Repeat("x", 30)},
+		{"punctuation substitution", "Build?Review", "Build-Review"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testutil.NoError(t, d.Add(&model.Task{Name: tc.stored, Project: tc.name, Status: model.StatusInReview}))
+			got, err := srv.VoiceOperator().Find(context.Background(), "", tc.requested, tc.name)
+			testutil.NoError(t, err)
+			testutil.False(t, got.Found)
+		})
+	}
+}
+
 func TestVoiceMutationsRecheckArchivedTask(t *testing.T) {
 	srv, d := testServer(t)
 	run := &voiceRun{Runner: agent.NewRunner(nil)}
@@ -160,6 +177,68 @@ func TestVoiceMutationsRecheckArchivedTask(t *testing.T) {
 	testutil.Equal(t, op.Resume(ctx, task.ID, true).Error(), "Review is archived.")
 	testutil.Equal(t, len(run.stopped), 0)
 	testutil.Equal(t, run.started, 0)
+}
+
+func TestVoiceLifecycleWritesPreserveConcurrentArchiveAndRename(t *testing.T) {
+	for _, command := range []string{"stop", "resume"} {
+		t.Run(command, func(t *testing.T) {
+			srv, d := testServer(t)
+			initialStatus := model.StatusInReview
+			wantStatus := model.StatusInProgress
+			if command == "stop" {
+				initialStatus, wantStatus = wantStatus, initialStatus
+			}
+			task := &model.Task{Name: "Review", Status: initialStatus, SessionID: "prior"}
+			testutil.NoError(t, d.Add(task))
+			ctx := context.Background()
+			op := srv.VoiceOperator()
+			run := &voiceRun{Runner: agent.NewRunner(nil)}
+			srv.runner = run
+			concurrentEdit := func() {
+				testutil.NoError(t, d.SetArchived(task.ID, true))
+				testutil.NoError(t, d.Rename(task.ID, "Edited"))
+				_, err := d.ReplaceSessionID(task.ID, "newer")
+				testutil.NoError(t, err)
+			}
+			if command == "stop" {
+				run.beforeStop = concurrentEdit
+				testutil.NoError(t, op.Stop(ctx, task.ID))
+			} else {
+				run.beforeStart = func(snapshot *model.Task) {
+					concurrentEdit()
+					snapshot.SessionID = "launched"
+				}
+				testutil.NoError(t, op.Resume(ctx, task.ID, false))
+			}
+			row, err := d.Get(task.ID)
+			testutil.NoError(t, err)
+			testutil.True(t, row.Archived)
+			testutil.Equal(t, row.Name, "Edited")
+			testutil.Equal(t, row.SessionID, "newer")
+			testutil.Equal(t, row.Status, wantStatus)
+			if command == "resume" {
+				testutil.Equal(t, row.AgentPID, 7)
+			}
+		})
+	}
+}
+
+func TestVoiceStopRefusesPendingRestart(t *testing.T) {
+	srv, d := testServer(t)
+	run := &voiceRun{Runner: agent.NewRunner(nil)}
+	srv.runner = run
+	task := &model.Task{Name: "Review", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	run.SetPendingRestartForTest(task.ID, true)
+	router := voice.NewRouter(srv.VoiceOperator())
+	ctx := context.Background()
+	started := router.Do(ctx, voice.Request{Command: "stop", TaskID: task.ID, Confirm: true})
+	done := router.Do(ctx, voice.Request{Command: "wait", JobID: started.JobID, Timeout: time.Second})
+	testutil.Equal(t, done.Detail, "agent_restarting")
+	testutil.Equal(t, len(run.stopped), 0)
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Status, model.StatusInProgress)
 }
 
 func TestVoiceResumeReusesHeraCloseoutGate(t *testing.T) {
@@ -225,13 +304,15 @@ func TestVoiceWatcherEmitsWithoutRESTServer(t *testing.T) {
 
 type voiceRun struct {
 	*agent.Runner
-	sess    *voiceSess
-	id      string
-	running []string
-	idle    []string
-	needs   []string
-	stopped []string
-	started int
+	sess        *voiceSess
+	id          string
+	running     []string
+	idle        []string
+	needs       []string
+	stopped     []string
+	started     int
+	beforeStop  func()
+	beforeStart func(*model.Task)
 }
 
 func (r *voiceRun) Get(id string) agent.SessionHandle {
@@ -246,6 +327,9 @@ func (r *voiceRun) NeedsInputIDs() []string              { return r.needs }
 func (r *voiceRun) SetNeedsInputIDs([]string)            {}
 func (r *voiceRun) Stop(id string) error {
 	r.stopped = append(r.stopped, id)
+	if r.beforeStop != nil {
+		r.beforeStop()
+	}
 	return nil
 }
 func (r *voiceRun) Start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, error) {
@@ -254,6 +338,9 @@ func (r *voiceRun) Start(task *model.Task, cfg config.Config, rows, cols uint16,
 }
 func (r *voiceRun) StartOrReattach(task *model.Task, _ config.Config, _, _ uint16, _ bool) (agent.SessionHandle, bool, error) {
 	r.started++
+	if r.beforeStart != nil {
+		r.beforeStart(task)
+	}
 	if r.sess == nil {
 		r.sess = &voiceSess{}
 	}
