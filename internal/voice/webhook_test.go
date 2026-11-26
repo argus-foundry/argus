@@ -168,7 +168,11 @@ func TestWebhookDropsWhenQueueIsFull(t *testing.T) {
 func TestDialLoopback(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	testutil.NoError(t, err)
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() {
+		if err := ln.Close(); err != nil {
+			t.Errorf("listener close: %v", err)
+		}
+	})
 	conn, err := dialLoopback(context.Background(), "tcp", ln.Addr().String())
 	testutil.NoError(t, err)
 	conn.Close()
