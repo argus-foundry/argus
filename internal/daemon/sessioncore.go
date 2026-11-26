@@ -370,20 +370,27 @@ func (c *sessionCore) StopAll(_ *Empty, resp *StatusResp) error {
 
 // SessionStatus returns info about a single session.
 func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
-	defer func() {
-		if resp.LastExitPID == 0 {
-			resp.LastExitPID = c.latestExitPID(req.TaskID)
-		}
-	}()
 	var sess agent.SessionHandle
 	if runner, ok := c.runner.(*agent.Runner); ok {
+		// Hold the exit cache across the owner observation so an exit
+		// from the observed reservation cannot become its baseline.
+		c.mu.Lock()
 		local, starting, predecessor := runner.ObserveSessionLaunch(req.TaskID)
+		resp.LastExitPID = c.latestExitPIDLocked(req.TaskID)
+		c.mu.Unlock()
 		if local == nil {
 			resp.TaskID, resp.Alive, resp.RestartFromPID = req.TaskID, starting, predecessor
 			return nil
 		}
 		sess = local
 	} else {
+		defer func() {
+			if resp.LastExitPID == 0 {
+				c.mu.Lock()
+				resp.LastExitPID = c.latestExitPIDLocked(req.TaskID)
+				c.mu.Unlock()
+			}
+		}()
 		sess = c.runner.Get(req.TaskID)
 	}
 	if sess == nil {
@@ -451,9 +458,7 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 	return nil
 }
 
-func (c *sessionCore) latestExitPID(taskID string) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *sessionCore) latestExitPIDLocked(taskID string) int {
 	if latest := c.exitInfos[taskID].info; !latest.StreamLost {
 		return latest.PID
 	}
@@ -481,8 +486,18 @@ func (c *sessionCore) ListSessions(_ *Empty, resp *ListResp) error {
 	if !ok {
 		return nil
 	}
+	c.mu.Lock()
 	sessions, pending := rl.SessionsAndPendingLaunches()
 	resp.Sessions = make([]SessionInfo, 0, len(sessions)+len(pending))
+	for id, predecessor := range pending {
+		resp.Sessions = append(resp.Sessions, SessionInfo{
+			TaskID:         id,
+			Alive:          true,
+			RestartFromPID: predecessor,
+			LastExitPID:    c.latestExitPIDLocked(id),
+		})
+	}
+	c.mu.Unlock()
 	for id, sess := range sessions {
 		cols, rows := sess.PTYSize()
 		initCols, initRows := sess.InitialPTYSize()
@@ -499,16 +514,6 @@ func (c *sessionCore) ListSessions(_ *Empty, resp *ListResp) error {
 			InitialRows:      initRows,
 			WorkDir:          sess.WorkDir(),
 			TotalWritten:     sess.TotalWritten(),
-		})
-	}
-	// Synthetic entries for the kick-restart gap. Mirrors SessionStatus's
-	// Alive=true synthetic when a single-task lookup hits the same window.
-	for id, predecessor := range pending {
-		resp.Sessions = append(resp.Sessions, SessionInfo{
-			TaskID:         id,
-			Alive:          true,
-			RestartFromPID: predecessor,
-			LastExitPID:    c.latestExitPID(id),
 		})
 	}
 	return nil

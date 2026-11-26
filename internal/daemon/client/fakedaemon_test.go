@@ -29,9 +29,10 @@ type fakeDaemon struct {
 	mu        sync.Mutex
 	sock      string
 	ln        net.Listener
-	zeroExit  bool   // GetExitInfo answers an all-zero ExitInfo (old server, nothing recorded)
-	alive     bool   // SessionStatus.Alive value
-	statusPID int    // SessionStatus.PID value (0 = unset)
+	zeroExit  bool // GetExitInfo answers an all-zero ExitInfo (old server, nothing recorded)
+	alive     bool // SessionStatus.Alive value
+	statusPID int  // SessionStatus.PID value (0 = unset)
+	exitReads map[int][]daemon.ExitInfo
 	dropAfter int    // how many bytes to send before dropping the stream
 	streamMsg []byte // bytes to send on stream before drop
 
@@ -160,9 +161,14 @@ func (s *FakeRPCService) Hello(_ *daemon.Empty, resp *daemon.HelloResp) error {
 // a successful, clean exit (StreamLost=false). Tests that need to exercise the
 // RPC-FAILURE branch of removeSession close the client transport instead, which
 // makes the call error out without reaching this handler.
-func (s *FakeRPCService) GetExitInfo(_ *daemon.TaskIDReq, resp *daemon.ExitInfo) error {
+func (s *FakeRPCService) GetExitInfo(req *daemon.TaskIDReq, resp *daemon.ExitInfo) error {
 	s.fd.mu.Lock()
 	defer s.fd.mu.Unlock()
+	if scripted := s.fd.exitReads[req.ExpectedPID]; len(scripted) != 0 {
+		*resp = scripted[0]
+		s.fd.exitReads[req.ExpectedPID] = scripted[1:]
+		return nil
+	}
 	if s.fd.zeroExit { // old server: "nothing recorded" as an empty record
 		*resp = daemon.ExitInfo{}
 		return nil
@@ -170,6 +176,28 @@ func (s *FakeRPCService) GetExitInfo(_ *daemon.TaskIDReq, resp *daemon.ExitInfo)
 	// A genuine exit always carries the PTY's final output tail.
 	*resp = daemon.ExitInfo{LastOutput: []byte("bye\r\n")}
 	return nil
+}
+
+func TestStreamWaitsExit(t *testing.T) {
+	fd := newFakeDaemon(t)
+	fd.mu.Lock()
+	fd.alive = false
+	fd.statusPID = 124
+	fd.exitReads = map[int][]daemon.ExitInfo{
+		124: {{StreamLost: true}, {PID: 124, Stopped: true}},
+	}
+	fd.mu.Unlock()
+	c := fakeClient(t, fd)
+	relayed := make(chan daemon.ExitInfo, 1)
+	c.OnSessionExit(func(_ string, info daemon.ExitInfo) { relayed <- info })
+	c.AttachObservedSession(daemon.SessionInfo{TaskID: "reserved", Alive: true, LastExitPID: 123})
+	select {
+	case exit := <-relayed:
+		testutil.Equal(t, exit.PID, 124)
+		testutil.False(t, exit.StreamLost)
+	case <-time.After(4 * time.Second):
+		t.Fatal("reserved launch exit receipt was not relayed")
+	}
 }
 
 // Shutdown returns a daemon-side error so the client wrapper hits the

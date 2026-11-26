@@ -2717,7 +2717,7 @@ async function openDetail(id) {
 // terminal.
 let attachGen = 0;
 
-async function attachTerminal(task) {
+async function attachTerminal(task, recovering = false) {
   closeStream();
   destroyTerm();
 
@@ -2746,10 +2746,10 @@ async function attachTerminal(task) {
     // the disk replay and only got the 256KB ring buffer via SSE, silently
     // truncating history for any session that emitted more than that.
     const result = await loadStaticOutput(task.id);
-    if (myGen !== attachGen) return;
+    if (myGen !== attachGen) return false;
     if (result.stale || result.source === 'log') {
-      pollAndRecoverFromRerenderExit(task.id);
-      return;
+      if (!recovering) pollAndRecoverFromRerenderExit(task.id);
+      return false;
     }
     // result.ok=false (404 / 5xx / network) is intentionally NOT a gate
     // here: the SSE stream can still deliver live output even if the disk
@@ -2770,6 +2770,7 @@ async function attachTerminal(task) {
     document.getElementById('term-status').style.display = 'none';
     await loadStaticOutput(task.id);
   }
+  return myGen === attachGen;
 }
 
 // isCtrlZ reports whether a KeyboardEvent is a bare Ctrl+Z — the SIGTSTP
@@ -3689,7 +3690,10 @@ async function recoverFromRerenderExit(id) {
         if (isInteractive(t)) {
           currentTask = t;
           window.currentTask = t;
-          attachTerminal(t);
+          if (!await attachTerminal(t, true)) {
+            await new Promise(r => setTimeout(r, 250));
+            continue;
+          }
           // Recovery is done; the new stream's onopen flushes (after a live
           // check). Hand the deadline back to the watchdog so a stream that
           // never opens can't strand the queue.

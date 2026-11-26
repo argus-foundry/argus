@@ -934,6 +934,10 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	// above. Only on success do we stop the session and remove its log and
 	// artifacts, so a refusal never leaves a stopped session / deleted log.
 	if err := s.db.Delete(id); err != nil {
+		if errors.Is(err, db.ErrHeraReclaimInProgress) {
+			writeCodedErrCause(w, http.StatusConflict, "", "reclaim_pending", err)
+			return
+		}
 		if errors.Is(err, db.ErrGraduationPending) {
 			uxlog.Log("[resident] api delete refused task=%s: graduation pending (raced the pre-check)", id)
 			writeErr(w, http.StatusConflict, "", err)
@@ -1879,13 +1883,13 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		sess = s.runner.Get(id)
-	}
-	if sess == nil {
 		if s.runner.HasPendingRestart(id) {
 			writeCodedErrCause(w, http.StatusConflict, "session has not published a process", "stale_session", nil)
 			return
 		}
+		sess = s.runner.Get(id)
+	}
+	if sess == nil {
 		writeErr(w, http.StatusNotFound, "no active session", nil)
 		return
 	}
@@ -2013,8 +2017,7 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 			// SSE delivery. Daemon already evaluated HasPendingRestart
 			// for its own skip-transition decision; surface it here too.
 			exitPayload := `{"rerendering":false}`
-			if current := s.runner.Get(id); s.runner.HasPendingRestart(id) ||
-				(current != nil && current.Alive() && current.PID() > 0 && current.PID() != pid) {
+			if terminalStreamHasSuccessor(s.runner, id, pid) {
 				exitPayload = `{"rerendering":true}`
 			}
 			fmt.Fprintf(w, "event: exit\ndata: %s\n\n", exitPayload) //nolint:errcheck
@@ -2024,6 +2027,18 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func terminalStreamHasSuccessor(runner agent.SessionProvider, id string, pid int) bool {
+	if runner.HasPendingRestart(id) {
+		return true
+	}
+	current := runner.Get(id)
+	if current == nil || !current.Alive() {
+		return false
+	}
+	currentPID := current.PID()
+	return currentPID > 0 && currentPID != pid
 }
 
 // clipEvent bundles the text and presence flag for a clipboard SSE update so

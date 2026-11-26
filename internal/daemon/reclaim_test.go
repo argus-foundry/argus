@@ -48,6 +48,7 @@ func TestRecoverHeraReclaimExitValidatesOwner(t *testing.T) {
 		{name: "replacement became live", info: SessionInfo{Alive: true, PID: pid + 1}, exit: ExitInfo{PID: pid, Stopped: true}},
 		{name: "replacement already retired", info: SessionInfo{LastExitPID: pid + 1}, exit: ExitInfo{PID: pid, Stopped: true}},
 		{name: "unconfirmed relay", exit: ExitInfo{PID: pid, StreamLost: true}},
+		{name: "expired payload with confirmed PID", info: SessionInfo{LastExitPID: pid}, exit: ExitInfo{StreamLost: true}, recovered: true},
 		{name: "different receipt", exit: ExitInfo{PID: pid + 1, Stopped: true}},
 		{name: "pending restart receipt", exit: ExitInfo{PID: pid, PendingRestart: true}},
 		{name: "matching receipt", exit: ExitInfo{PID: pid, Stopped: true}, recovered: true},

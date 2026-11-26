@@ -250,3 +250,5 @@
 - **A PID-zero session can represent an owner reservation.** Keep startup attachment active while the owner confirms the reservation. Once an exit receipt identifies a managed restart, follow its scoped successor chain even if the successor has already exited.
 
 - **Startup attachment uses the supervisor’s listed process or reservation directly.** The next status probe can arrive after an immediate exit. A managed reservation carries its predecessor so even a failure on that same PID settles correctly.
+
+- **Take the session slot and last-exit baseline together.** A fresh relay may see a dead registered PID before its receipt is cached. Retry that scoped receipt before treating the stream as lost.

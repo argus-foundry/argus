@@ -10,6 +10,22 @@ import (
 
 var ErrHeraReclaimInProgress = errors.New("task reclaim is in progress")
 
+const heraNukeBindingSQL = `SELECT argus_task_id FROM hera_bindings WHERE end_reason='` + HeraEndReasonUserDeleted + `'`
+
+const heraReclaimOwnsTaskSQL = `(hera_reclaim_pid<>0 OR (archived=1 AND id IN (` + heraNukeBindingSQL + `)
+	AND id NOT IN (SELECT argus_task_id FROM hera_bindings WHERE ended_at IS NULL)))`
+
+func heraReclaimAdmissionGuard(q rowQuerier, taskID string) error {
+	var blocked bool
+	if err := q.QueryRow(`SELECT EXISTS (SELECT 1 FROM tasks WHERE id=? AND `+heraReclaimOwnsTaskSQL+`)`, taskID).Scan(&blocked); err != nil {
+		return err
+	}
+	if blocked {
+		return ErrHeraReclaimInProgress
+	}
+	return nil
+}
+
 // lockHeraTaskAdmission coordinates restoration and role binding with reclaim.
 func (d *DB) lockHeraTaskAdmission(taskID string) (func(), error) {
 	unlock, acquired, err := d.TryLockHeraReclaim(taskID)
@@ -21,13 +37,9 @@ func (d *DB) lockHeraTaskAdmission(taskID string) (func(), error) {
 	}
 	d.mu.Lock()
 	var blocked bool
-	err = d.conn.QueryRow(`SELECT
-		EXISTS (SELECT 1 FROM tasks WHERE id=? AND hera_reclaim_pid<>0)
-		OR (EXISTS (SELECT 1 FROM hera_bindings WHERE argus_task_id=? AND end_reason=?)
-		  AND (NOT EXISTS (SELECT 1 FROM tasks WHERE id=?)
-		    OR (EXISTS (SELECT 1 FROM tasks WHERE id=? AND archived=1)
-		      AND NOT EXISTS (SELECT 1 FROM hera_bindings WHERE argus_task_id=? AND ended_at IS NULL))))`,
-		taskID, taskID, HeraEndReasonUserDeleted, taskID, taskID, taskID).Scan(&blocked)
+	err = d.conn.QueryRow(`SELECT EXISTS (SELECT 1 FROM tasks WHERE id=? AND `+heraReclaimOwnsTaskSQL+`)
+		OR (NOT EXISTS (SELECT 1 FROM tasks WHERE id=?) AND ? IN (`+heraNukeBindingSQL+`))`,
+		taskID, taskID, taskID).Scan(&blocked)
 	d.mu.Unlock()
 	if err != nil || blocked {
 		unlock()

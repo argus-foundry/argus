@@ -87,6 +87,47 @@ func TestHeraBindingAdmissionWaitsForReclaimExit(t *testing.T) {
 	testutil.NoError(t, err)
 }
 
+func TestNukedTaskReclaimOwnsLaunchAndPrune(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{ID: "nuked", Name: "Nuked", Status: model.StatusComplete}
+	testutil.NoError(t, d.Add(task))
+	orch, err := d.CreateHeraOrchestrator("reclaim", "")
+	testutil.NoError(t, err)
+	role, _, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{
+		OrchestratorID: orch.ID, Name: "worker", Kind: HeraKindWorker,
+	}, task.ID, "")
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(role.ID))
+	testutil.NoError(t, d.SetArchived(task.ID, true))
+
+	checkGenericOperations := func() {
+		t.Helper()
+		unlock, acquired, err := d.TryLockSessionLaunch(task.ID)
+		if acquired {
+			unlock()
+		}
+		testutil.ErrorIs(t, err, ErrHeraReclaimInProgress)
+		testutil.ErrorIs(t, d.Delete(task.ID), ErrHeraReclaimInProgress)
+		pruned, skipped, err := d.PruneCompleted()
+		testutil.NoError(t, err)
+		testutil.Equal(t, len(pruned), 0)
+		testutil.Equal(t, skipped, 1)
+	}
+	checkGenericOperations()
+	armed, err := d.ArmHeraReclaimStop(task.ID, 42)
+	testutil.NoError(t, err)
+	testutil.True(t, armed)
+	checkGenericOperations()
+	pruned, _, err := d.PruneHeraReclaimedTask(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(pruned), 0)
+	testutil.NoError(t, d.ClearHeraReclaimStop(task.ID, 42))
+	checkGenericOperations()
+	pruned, _, err = d.PruneHeraReclaimedTask(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(pruned), 1)
+}
+
 func TestReconcileMissingSessionPreservesArmedReclaim(t *testing.T) {
 	d := testDB(t)
 	const pid = 41

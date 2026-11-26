@@ -1939,6 +1939,23 @@ func TestTerminalStreamRefusesPendingProcesslessRelay(t *testing.T) {
 	testutil.Contains(t, w.Body.String(), "stale_session")
 }
 
+type publishingTerminalRunner struct {
+	*agent.Runner
+	pending bool
+}
+
+func (r *publishingTerminalRunner) Get(string) agent.SessionHandle {
+	r.pending = false
+	return nil
+}
+
+func (r *publishingTerminalRunner) HasPendingRestart(string) bool { return r.pending }
+
+func TestTerminalStreamChecksPendingBeforeLookingUpSuccessor(t *testing.T) {
+	runner := &publishingTerminalRunner{Runner: agent.NewRunner(nil), pending: true}
+	testutil.True(t, terminalStreamHasSuccessor(runner, "process", 31))
+}
+
 func TestTerminalOutputCursorRejectsReplacement(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	s, _ := testServer(t)

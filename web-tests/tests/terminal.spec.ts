@@ -30,6 +30,23 @@ test.describe('terminal', () => {
     await expect(page.locator('#term-status-text')).toHaveText('live');
   });
 
+  test('terminal waits between stale replacement snapshots', async ({ page }) => {
+    const requestedAt: number[] = [];
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      requestedAt.push(Date.now());
+      if (requestedAt.length <= 2) {
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+      } else {
+        await route.continue();
+      }
+    });
+    await login(page);
+    await page.locator('.task-item').first().click();
+    await expect(page.locator('.term-status.live')).toBeVisible({ timeout: 5000 });
+    expect(requestedAt.length).toBeGreaterThanOrEqual(3);
+    expect(requestedAt[2] - requestedAt[1]).toBeGreaterThanOrEqual(200);
+  });
+
   test('typing forwards to PTY and echoes back', async ({ page }) => {
     await login(page);
     await page.locator('.task-item').first().click();

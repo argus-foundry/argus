@@ -490,7 +490,7 @@ func reclaimResidentWorkerTask(d *db.DB, runner NukeRunner, t *model.Task, repoL
 			return remoteDir, remoteBranch, leaseTip
 		}
 	}
-	pruned, _, err := d.PruneTasks([]string{t.ID})
+	pruned, _, err := d.PruneHeraReclaimedTask(t.ID)
 	switch {
 	case err != nil:
 		residentDeleteLog("[resident] delete: prune failed task=%s: %v", t.ID, err)

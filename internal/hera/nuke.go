@@ -88,6 +88,12 @@ func PreviewNukeSubtree(d *db.DB, subtree []*heramodel.OrchView) NukePreview {
 
 // archiveNukedTask archives a reclaimed task (in_review advances to complete).
 func archiveNukedTask(d *db.DB, taskID string) {
+	releaseSession, acquired, err := d.TryLockSessionMutation(taskID)
+	if err != nil || !acquired {
+		uxlog.Log("[hera] nuke: archive session lock unavailable task=%s err=%v", taskID, err)
+		return
+	}
+	defer releaseSession()
 	unlock, acquired, err := d.TryLockHeraReclaim(taskID)
 	if err != nil || !acquired {
 		uxlog.Log("[hera] nuke: archive deferred task=%s err=%v", taskID, err)
@@ -261,7 +267,38 @@ func stopNukedTask(d *db.DB, runner NukeRunner, taskID string) {
 		return
 	}
 	defer release()
-	if !archiveNukedTaskLocked(d, taskID) {
+	if archiveNukedTaskLocked(d, taskID) {
+		requestNukeStopLocked(d, runner, taskID)
+	}
+}
+
+// RetryArchivedNukeStop replays a deferred nuke after owner prelaunch settles.
+// The periodic daemon pass leaves contended operations to the next tick.
+func RetryArchivedNukeStop(d *db.DB, runner NukeRunner, taskID string) {
+	unlock, acquired, err := d.TryLockSessionMutation(taskID)
+	if err != nil || !acquired {
+		return
+	}
+	defer unlock()
+	release, acquired, err := d.TryLockHeraReclaim(taskID)
+	if err != nil || !acquired {
+		return
+	}
+	defer release()
+	task, err := d.Get(taskID)
+	if err != nil || !task.Archived {
+		return
+	}
+	bindings, err := d.ListHeraLiveBindingsByTask(taskID)
+	if err != nil || len(bindings) != 0 || CheckNukeTask(d, taskID) != nil {
+		return
+	}
+	requestNukeStopLocked(d, runner, taskID)
+}
+
+func requestNukeStopLocked(d *db.DB, runner NukeRunner, taskID string) {
+	pending, err := d.HeraReclaimStopPending(taskID)
+	if err != nil || pending {
 		return
 	}
 	provider, providerOK := runner.(agent.SessionProvider)

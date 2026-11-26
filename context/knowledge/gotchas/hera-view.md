@@ -494,3 +494,5 @@ M6a scaffolds the native Hera view: a `HeraPage` (rail | coordinator pane | agen
 - **Restore and pin share the reclaim fence.** A task already selected for archived nuke cleanup remains owned by cleanup until its worktree is reclaimed. Standalone cleanup holds binding admission through stop and removal.
 
 - **A scoped stop is pending until the retiring owner confirms its exit.** The task’s workflow status can already be complete while its PTY is live. Resume and restart consult the durable marker under the session lock.
+
+- **An archived, unbound nuke candidate owns cleanup before arming and after receipt settlement.** Generic prune skips it. The reclaim path can prune after owner retirement and worktree removal.

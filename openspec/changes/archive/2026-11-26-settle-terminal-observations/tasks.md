@@ -1,0 +1,5 @@
+- [x] Observe slot and exit identity atomically and wait for an exact delayed receipt.
+- [x] Preserve SSE handoff hints and keep PWA snapshot recovery bounded.
+- [x] Fence relaunch and generic prune for archived nuke candidates.
+- [x] Retry pending archived reclaim and settle aged exact exit evidence.
+- [x] Run regression checks and archive the spec.

@@ -362,3 +362,5 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **Theia must compare the snapshot PID before appending cached scrollback.** The remote TUI retains a retired pane handle during replacement and swaps it to a fresh ring after verifying the new PID.
 
 - **Recorded output without a PID has no live cursor.** Refresh the cached display from the recorded snapshot. A stale-session conflict during replacement keeps the remote pane waiting even when the task’s workflow status is already in review.
+
+- **The PWA recovery loop awaits each terminal attach.** A stale snapshot stays within that loop and its delay and deadline.

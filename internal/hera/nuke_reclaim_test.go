@@ -18,15 +18,23 @@ func (nukeReclaimSession) PID() int { return 42 }
 
 type nukeReclaimOwner struct {
 	*agent.Runner
-	stop func(string, int) error
+	stop    func(string, int) error
+	pending *bool
 }
 
 func (r nukeReclaimOwner) AttachableSession(string) (agent.SessionHandle, error) {
+	if *r.pending {
+		return nil, agent.ErrSessionStarting
+	}
 	return nukeReclaimSession{}, nil
 }
 
 func (r nukeReclaimOwner) StopTreeForPID(taskID string, pid int) error {
 	return r.stop(taskID, pid)
+}
+
+func (r nukeReclaimOwner) CheckReclaimSessionRetired(string) error {
+	return agent.ErrSessionStarting
 }
 
 func TestNukeRoleArmsScopedStopForReviewTask(t *testing.T) {
@@ -45,8 +53,10 @@ func TestNukeRoleArmsScopedStopForReviewTask(t *testing.T) {
 	testutil.NoError(t, err)
 
 	called := false
+	pending := true
 	owner := nukeReclaimOwner{
-		Runner: agent.NewRunner(nil),
+		Runner:  agent.NewRunner(nil),
+		pending: &pending,
 		stop: func(id string, pid int) error {
 			called = true
 			testutil.Equal(t, id, task.ID)
@@ -64,6 +74,9 @@ func TestNukeRoleArmsScopedStopForReviewTask(t *testing.T) {
 
 	background := NukeSingleRole(d, owner, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})
 	background()
+	testutil.False(t, called)
+	pending = false
+	RetryArchivedNukeStop(d, owner, task.ID)
 	testutil.True(t, called)
 	row, err := d.Get(task.ID)
 	testutil.NoError(t, err)

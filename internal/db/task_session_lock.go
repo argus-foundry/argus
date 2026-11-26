@@ -57,17 +57,13 @@ func (d *DB) TryLockSessionLaunch(taskID string) (func(), bool, error) {
 	if err != nil || !acquired {
 		return unlock, acquired, err
 	}
-	pending, err := d.HeraReclaimStopPending(taskID)
-	if errors.Is(err, ErrTaskNotFound) {
-		err = nil
-	}
-	if err == nil && !pending {
+	d.mu.Lock()
+	err = heraReclaimAdmissionGuard(d.conn, taskID)
+	d.mu.Unlock()
+	if err == nil {
 		return unlock, true, nil
 	}
 	unlock()
-	if err == nil {
-		err = ErrHeraReclaimInProgress
-	}
 	return nil, false, err
 }
 

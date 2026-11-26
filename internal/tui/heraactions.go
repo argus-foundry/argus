@@ -696,17 +696,6 @@ func (a *App) reclaimConnectedHeraTask(runner agent.SessionProvider, database *d
 		uxlog.Log("[hera-view] nuke: reclaim already pending task=%s pending=%t err=%v", taskID, pending, err)
 		return
 	}
-	sess, err := agent.AttachableSession(runner, taskID)
-	if err != nil {
-		uxlog.Log("[hera-view] nuke: session owner check failed task=%s: %v", taskID, err)
-		return
-	}
-	if sess == nil {
-		if err := owner.CheckReclaimSessionRetired(taskID); err != nil {
-			uxlog.Log("[hera-view] nuke: retirement not confirmed task=%s: %v", taskID, err)
-			return
-		}
-	}
 	bindings, err := database.ListHeraLiveBindingsByTask(taskID)
 	if err != nil || len(bindings) != 0 {
 		uxlog.Log("[hera-view] nuke: reclaim binding guard task=%s live=%d err=%v", taskID, len(bindings), err)
@@ -721,7 +710,16 @@ func (a *App) reclaimConnectedHeraTask(runner agent.SessionProvider, database *d
 			uxlog.Log("[hera-view] nuke: complete task failed task=%s: %v", taskID, err)
 		}
 	}
+	sess, err := agent.AttachableSession(runner, taskID)
+	if err != nil {
+		uxlog.Log("[hera-view] nuke: scoped stop deferred task=%s: %v", taskID, err)
+		return
+	}
 	if sess == nil {
+		if err := owner.CheckReclaimSessionRetired(taskID); err != nil {
+			uxlog.Log("[hera-view] nuke: retirement not confirmed task=%s: %v", taskID, err)
+			return
+		}
 		a.removeHeraReclaimedWorktree(task)
 		return
 	}
@@ -765,7 +763,7 @@ func (a *App) heraPruneReclaimedTask(taskID string) {
 	if !ok {
 		return
 	}
-	pruned, skipped, err := d.PruneTasks([]string{taskID})
+	pruned, skipped, err := d.PruneHeraReclaimedTask(taskID)
 	if err != nil {
 		uxlog.Log("[hera-view] nuke: prune task failed task=%s: %v", taskID, err)
 		return

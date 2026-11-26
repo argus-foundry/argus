@@ -157,7 +157,7 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 		agent.DeleteBranch(repoDir, t.Branch)
 		agent.DeleteRemoteBranch(repoDir, t.Branch)
 	}
-	pruned, _, err := d.PruneTasks([]string{id})
+	pruned, _, err := d.PruneHeraReclaimedTask(id)
 	if err != nil {
 		uxlog.Log("[hera] reclaim sweep: prune failed task=%s: %v", id, err)
 		return

@@ -104,10 +104,29 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 					continue
 				}
 				if !info.Alive {
-					rs.finishUnattachedLaunch(launch, info)
-					return
+					pid := info.PID
+					if pid == 0 {
+						pid = info.LastExitPID
+					}
+					if pid == 0 || pid == launch.LastExitPID {
+						rs.close()
+						rs.client.removeSessionStreamLost(rs)
+						return
+					}
+					exit := rs.client.exitInfoForPID(rs.taskID, pid)
+					if exit.StreamLost || exit.PID != pid {
+						// The owner may still have the retired handle
+						// registered while its exit callback publishes.
+						continue
+					}
+					if !exit.PendingRestart {
+						rs.client.finishSession(rs, exit)
+						return
+					}
+					restart = exit
+				} else {
+					rs.updateInfo(info)
 				}
-				rs.updateInfo(info)
 				waitingForLaunch = false
 			}
 		}
@@ -219,19 +238,6 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 
 	// Exhausted retries — stream lost, not a confirmed process exit.
 	uxlog.Log("stream: gave up after %d retries task=%s, treating as stream lost", maxStreamRetries, rs.taskID)
-	rs.close()
-	rs.client.removeSessionStreamLost(rs)
-}
-
-func (rs *RemoteSession) finishUnattachedLaunch(initial, current daemon.SessionInfo) {
-	pid := current.LastExitPID
-	if pid > 0 && pid != initial.LastExitPID {
-		exit := rs.client.exitInfoForPID(rs.taskID, pid)
-		if !exit.StreamLost && !exit.PendingRestart {
-			rs.client.finishSession(rs, exit)
-			return
-		}
-	}
 	rs.close()
 	rs.client.removeSessionStreamLost(rs)
 }

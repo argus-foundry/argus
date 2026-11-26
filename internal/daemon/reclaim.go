@@ -4,6 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/hera"
 )
 
 type reclaimExitOwner interface {
@@ -56,6 +57,19 @@ func (d *Daemon) recoverHeraReclaimExits() int {
 			recovered++
 		}
 	}
+	candidates, err := d.db.HeraNukeReclaimCandidates()
+	if err != nil {
+		slog.Warn("hera reclaim: read deferred stops failed", "err", err)
+		return recovered
+	}
+	for _, task := range candidates {
+		if d.exitCtx.Err() != nil {
+			break
+		}
+		if task.Archived {
+			hera.RetryArchivedNukeStop(d.db, d.runner, task.ID)
+		}
+	}
 	return recovered
 }
 
@@ -82,6 +96,9 @@ func (d *Daemon) recoverHeraReclaimExit(owner reclaimExitOwner, taskID string) b
 		return false
 	}
 	exit := owner.ObservedSessionExit(taskID, pid)
+	if exit.StreamLost && info.LastExitPID == pid {
+		return d.settleExpiredReclaimExit(taskID, pid)
+	}
 	if exit.PID != pid || exit.StreamLost || exit.PendingRestart {
 		slog.Info("hera reclaim: exit recovery awaits scoped receipt", "task", taskID, "pid", pid)
 		return false
@@ -91,6 +108,26 @@ func (d *Daemon) recoverHeraReclaimExit(owner reclaimExitOwner, taskID string) b
 	}
 	d.publishSessionExit(taskID, exit, nil)
 	slog.Info("hera reclaim: recovered observed exit", "task", taskID, "pid", pid)
+	return true
+}
+
+// When only the owner's exact last retired PID remains, apply the archived
+// cleanup intent without publishing a fabricated process exit payload.
+func (d *Daemon) settleExpiredReclaimExit(taskID string, pid int) bool {
+	task, err := d.db.Get(taskID)
+	if err != nil || !task.Archived || task.IsResident() {
+		return false
+	}
+	bindings, err := d.db.ListHeraLiveBindingsByTask(taskID)
+	if err != nil || len(bindings) != 0 || !d.transitionTaskOnExit(taskID, true) {
+		return false
+	}
+	if err := d.db.ClearHeraReclaimStop(taskID, pid); err != nil {
+		slog.Warn("hera reclaim: could not clear retired stop", "task", taskID, "pid", pid, "err", err)
+		return false
+	}
+	d.clipboard.Clear(taskID)
+	slog.Info("hera reclaim: retired owner confirmed after payload expiration", "task", taskID, "pid", pid)
 	return true
 }
 

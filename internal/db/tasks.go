@@ -721,6 +721,9 @@ func (d *DB) Delete(id string) error {
 		if err := graduationPendingGuard(tx, id); err != nil {
 			return err
 		}
+		if err := heraReclaimAdmissionGuard(tx, id); err != nil {
+			return err
+		}
 		res, err := tx.Exec(`DELETE FROM tasks WHERE id=?`, id)
 		if err != nil {
 			return err
@@ -800,7 +803,7 @@ func (d *DB) PruneCompleted() (pruned []*model.Task, skippedHeraBound int, err e
 	if err != nil {
 		return nil, 0, err
 	}
-	return d.pruneTasksLocked(ids)
+	return d.pruneTasksLocked(ids, false)
 }
 
 // PruneTasks deletes exactly the given task IDs, re-verifying at delete time
@@ -816,7 +819,15 @@ func (d *DB) PruneCompleted() (pruned []*model.Task, skippedHeraBound int, err e
 func (d *DB) PruneTasks(ids []string) (pruned []*model.Task, skippedHeraBound int, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.pruneTasksLocked(ids)
+	return d.pruneTasksLocked(ids, false)
+}
+
+// PruneHeraReclaimedTask is for reclaim callers after verifying owner
+// retirement and removing the worktree. The durable stop must be settled.
+func (d *DB) PruneHeraReclaimedTask(id string) (pruned []*model.Task, skippedHeraBound int, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.pruneTasksLocked([]string{id}, true)
 }
 
 // StuckTaskCandidate pairs a task matching the merge-safety review's
@@ -938,7 +949,7 @@ func (d *DB) taskIDsWhereLocked(whereSQL string) ([]string, error) {
 // pruneTasksLocked assumes d.mu is already held. It selects, from exactly
 // the given ids, those with no live Hera binding, returns them, and deletes
 // them in the same pass every existing caller relies on for atomicity.
-func (d *DB) pruneTasksLocked(ids []string) (pruned []*model.Task, skippedHeraBound int, err error) {
+func (d *DB) pruneTasksLocked(ids []string, reclaim bool) (pruned []*model.Task, skippedHeraBound int, err error) {
 	if len(ids) == 0 {
 		return nil, 0, nil
 	}
@@ -952,11 +963,20 @@ func (d *DB) pruneTasksLocked(ids []string) (pruned []*model.Task, skippedHeraBo
 	inClause := `kind='' AND id IN (` + strings.Join(placeholders, ",") + `)`
 	// A pending graduate is also kept: deleting it would drop the restart intent
 	// (see graduationPendingGuard).
-	const notLiveHeraBound = `id NOT IN (SELECT argus_task_id FROM hera_bindings WHERE ended_at IS NULL) AND id NOT IN (SELECT task_id FROM task_meta WHERE namespace='hera' AND key='` + HeraMetaKeyGraduationPendingRestart + `')`
+	notLiveHeraBound := `hera_reclaim_pid=0 AND id NOT IN (SELECT argus_task_id FROM hera_bindings WHERE ended_at IS NULL) AND id NOT IN (SELECT task_id FROM task_meta WHERE namespace='hera' AND key='` + HeraMetaKeyGraduationPendingRestart + `')`
+	if !reclaim {
+		notLiveHeraBound += ` AND NOT ` + heraReclaimOwnsTaskSQL
+	}
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck
 
 	//nolint:gosec // G202: inClause is a fixed list of `?` literals and notLiveHeraBound is a constant; ids are bound parameters.
 	selectQ := `SELECT ` + taskColumns + ` FROM tasks WHERE ` + inClause + ` AND ` + notLiveHeraBound
-	rows, err := d.conn.Query(selectQ, args...)
+	rows, err := tx.Query(selectQ, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -966,10 +986,13 @@ func (d *DB) pruneTasksLocked(ids []string) (pruned []*model.Task, skippedHeraBo
 		}
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
 
 	//nolint:gosec // G202: inClause is a fixed list of `?` literals and notLiveHeraBound is a constant; ids are bound parameters.
 	countQ := `SELECT COUNT(*) FROM tasks WHERE ` + inClause + ` AND NOT (` + notLiveHeraBound + `)`
-	if err := d.conn.QueryRow(countQ, args...).Scan(&skippedHeraBound); err != nil {
+	if err := tx.QueryRow(countQ, args...).Scan(&skippedHeraBound); err != nil {
 		return nil, 0, err
 	}
 
@@ -977,11 +1000,6 @@ func (d *DB) pruneTasksLocked(ids []string) (pruned []*model.Task, skippedHeraBo
 		return nil, skippedHeraBound, nil
 	}
 
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return nil, 0, err
-	}
-	defer tx.Rollback() //nolint:errcheck
 	//nolint:gosec // G202: predicates contain constants and placeholders; IDs are bound.
 	deleteLinksQ := `DELETE FROM task_pr_links WHERE task_id IN (SELECT id FROM tasks WHERE ` + inClause + ` AND ` + notLiveHeraBound + `)`
 	if _, err := tx.Exec(deleteLinksQ, args...); err != nil {
