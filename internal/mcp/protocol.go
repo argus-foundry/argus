@@ -14,6 +14,9 @@ type Request struct {
 	// and kept only when the per-launch resident token verifies
 	// (verifiedCaller). Empty for unbound connections. See toolTaskRecycle.
 	caller string
+	// voiceAuth comes only from the HTTP Authorization header.
+	voiceAuth  string
+	voiceLocal bool
 }
 
 // Response is a JSON-RPC 2.0 response.

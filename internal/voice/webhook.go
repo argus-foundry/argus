@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/events"
@@ -27,11 +28,13 @@ type Webhook struct {
 	client *http.Client
 
 	ch       chan model.Event
-	stop     chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
 	done     chan struct{}
-	unsub    func()
-	start    sync.Once
+	mu       sync.Mutex
+	unsub    func() // guarded by mu, non-nil once started
 	stopOnce sync.Once
+	dropped  atomic.Uint64
 
 	badMu  sync.Mutex
 	badURL string
@@ -46,7 +49,11 @@ func NewWebhook(urlOf func() string, nameOf func(string) string) *Webhook {
 	if nameOf == nil {
 		nameOf = func(string) string { return "" }
 	}
-	return &Webhook{urlOf: urlOf, nameOf: nameOf, client: newWebhookClient()}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Webhook{
+		urlOf: urlOf, nameOf: nameOf, client: newWebhookClient(),
+		ch: make(chan model.Event, 32), ctx: ctx, cancel: cancel, done: make(chan struct{}),
+	}
 }
 
 // Start subscribes to the event bus and delivers in the background.
@@ -54,13 +61,12 @@ func (w *Webhook) Start() {
 	if w == nil {
 		return
 	}
-	w.start.Do(func() {
-		w.ch = make(chan model.Event, 32)
-		w.stop = make(chan struct{})
-		w.done = make(chan struct{})
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.unsub == nil && w.ctx.Err() == nil {
 		w.unsub = events.Subscribe(w.enqueue)
 		go w.loop()
-	})
+	}
 }
 
 // Stop unsubscribes and waits for the delivery loop to finish.
@@ -69,13 +75,14 @@ func (w *Webhook) Stop() {
 		return
 	}
 	w.stopOnce.Do(func() {
+		w.mu.Lock()
+		w.cancel()
+		started := w.unsub != nil
 		if w.unsub != nil {
 			w.unsub()
 		}
-		if w.stop != nil {
-			close(w.stop)
-		}
-		if w.done != nil {
+		w.mu.Unlock()
+		if started {
 			select {
 			case <-w.done:
 			case <-time.After(3 * time.Second):
@@ -89,23 +96,26 @@ func (w *Webhook) enqueue(ev model.Event) {
 		return
 	}
 	select {
-	case <-w.stop:
+	case <-w.ctx.Done():
 		return
 	case w.ch <- ev:
 	default:
-		slog.Warn("[voice] webhook queue full", "type", ev.Type, "task", ev.TaskID)
-		uxlog.Log("[voice] webhook dropped type=%s task=%s", ev.Type, ev.TaskID)
+		w.dropped.Add(1)
 	}
 }
 
 func (w *Webhook) loop() {
 	defer close(w.done)
-	for {
+	for w.ctx.Err() == nil {
 		select {
-		case <-w.stop:
+		case <-w.ctx.Done():
 			return
 		case ev := <-w.ch:
 			w.deliver(ev)
+			if dropped := w.dropped.Swap(0); dropped > 0 {
+				slog.Warn("[voice] webhook queue full", "dropped", dropped)
+				uxlog.Log("[voice] webhook queue full dropped=%d", dropped)
+			}
 		}
 	}
 }
@@ -140,16 +150,20 @@ func (w *Webhook) deliver(ev model.Event) {
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(w.ctx, 2*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, raw, bytes.NewReader(body))
 	if err != nil {
-		slog.Warn("[voice] webhook request", "err", err)
+		slog.Warn("[voice] webhook request could not be constructed")
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := w.client.Do(req)
 	if err != nil {
+		var requestErr *url.Error
+		if errors.As(err, &requestErr) {
+			err = requestErr.Err
+		}
 		slog.Warn("[voice] webhook post failed", "type", ev.Type, "task", ev.TaskID, "err", err)
 		uxlog.Log("[voice] webhook failed type=%s task=%s err=%v", ev.Type, ev.TaskID, err)
 		return
@@ -255,5 +269,12 @@ func dialLoopback(ctx context.Context, network, addr string) (net.Conn, error) {
 		}
 	}
 	var d net.Dialer
-	return d.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+	for _, ip := range ips {
+		var conn net.Conn
+		conn, err = d.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+	}
+	return nil, err
 }

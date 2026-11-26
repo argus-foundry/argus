@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -266,6 +267,7 @@ type Server struct {
 	apiGet                  APIGetter    // optional; set via SetAPIGetter (argus_api_get)
 	voiceMu                 sync.RWMutex // guards voice (set after the listener is serving)
 	voice                   *voice.Router
+	voiceToken              string // guarded by voiceMu
 	// accountMover backs task_move_account; set via SetAccountMover.
 	accountMover accountMoverSlot
 	createMu     sync.Mutex
@@ -415,10 +417,14 @@ func (s *Server) ListenAndServe() (int, error) {
 // shutdownCancel is always set in New(), so no nil guard is needed.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.shutdownCancel()
-	if s.httpSrv == nil {
-		return nil
+	var drainErr error
+	if router := s.voiceRouter(); router != nil {
+		drainErr = router.Shutdown(ctx)
 	}
-	return s.httpSrv.Shutdown(ctx)
+	if s.httpSrv == nil {
+		return drainErr
+	}
+	return errors.Join(drainErr, s.httpSrv.Shutdown(ctx))
 }
 
 // sseKeepaliveInterval is how often the GET/SSE handler emits comment-only
@@ -525,6 +531,8 @@ func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.caller = s.verifiedCaller(r)
+	req.voiceAuth = r.Header.Get("Authorization")
+	req.voiceLocal = localVoiceRequest(r)
 
 	if !hasID {
 		// Notification: dispatch for any side effect; the returned
@@ -1361,7 +1369,7 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	case "argus_api_get":
 		return s.toolAPIGet(req.ID, params.Arguments)
 	case "argus_brief", "argus_command", "argus_commands":
-		return s.toolVoice(req.ID, params.Name, params.Arguments)
+		return s.toolVoice(req, params.Name, params.Arguments)
 	case "todo_create":
 		if !s.todoToolsActive() {
 			return errorResp(req.ID, -32601, "unknown tool: "+params.Name)

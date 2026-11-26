@@ -63,10 +63,13 @@ func (f *fakeOp) Stop(context.Context, string) error {
 	return nil
 }
 
-func (f *fakeOp) Resume(context.Context, string, bool) error {
+func (f *fakeOp) Resume(_ context.Context, _ string, force bool) error {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.resumes++
-	f.mu.Unlock()
+	if force {
+		return nil
+	}
 	return f.resumeErr
 }
 
@@ -188,23 +191,65 @@ func TestRouterSendByTaskID(t *testing.T) {
 	testutil.Equal(t, done.Speech, "Sent that to Review.")
 }
 
-func TestRouterResumeClosedOut(t *testing.T) {
-	op := &fakeOp{
-		find:      FindResult{Found: true, Ref: TaskRef{ID: "t1", Name: "Review"}},
-		resumeErr: &OpError{Speech: "Review is closed out. Confirm to revive it.", Code: "hera_closeout"},
-	}
+func TestRouterReplaysSendAfterSessionExits(t *testing.T) {
+	op := &fakeOp{find: FindResult{Found: true, Ref: TaskRef{ID: "t1", Name: "Review", Live: true}}}
 	r := NewRouter(op)
-	got := r.Do(context.Background(), Request{Command: "resume", Name: "Review"})
-	testutil.Equal(t, got.State, StateRunning)
-	deadline := time.Now().Add(time.Second)
-	var done Result
-	for time.Now().Before(deadline) {
-		done = r.Do(context.Background(), Request{Command: "wait", JobID: got.JobID, Timeout: 20 * time.Millisecond})
-		if done.State == StateFailed {
-			break
-		}
+	ctx := context.Background()
+	req := Request{Command: "send", TaskID: "t1", Text: "hello", IdempotencyKey: "turn"}
+	first := r.Do(ctx, req)
+	testutil.True(t, first.JobID != "")
+	done := r.Do(ctx, Request{Command: "wait", JobID: first.JobID, Timeout: time.Second})
+	testutil.Equal(t, done.State, StateDone)
+
+	op.find.Ref.Live = false
+	req.Prompt = "unused"
+	testutil.DeepEqual(t, r.Do(ctx, req), done)
+	req.Text = "different message"
+	testutil.Equal(t, r.Do(ctx, req).Detail, "idempotency_conflict")
+	testutil.DeepEqual(t, op.sends, []string{"hello"})
+}
+
+func TestRouterResumeClosedOut(t *testing.T) {
+	for _, command := range []string{"resume", "start"} {
+		t.Run(command, func(t *testing.T) {
+			op := &fakeOp{
+				find:      FindResult{Found: true, Ref: TaskRef{ID: "t1", Name: "Review"}},
+				resumeErr: &OpError{Speech: "Review is closed out. Confirm to revive it.", Code: "hera_closeout"},
+			}
+			r := NewRouter(op)
+			ctx := context.Background()
+			req := Request{Command: command, Name: "Review", IdempotencyKey: "revive"}
+			first := r.Do(ctx, req)
+			testutil.Equal(t, first.State, StateRunning)
+			refused := r.Do(ctx, Request{Command: "wait", JobID: first.JobID, Timeout: time.Second})
+			testutil.Equal(t, refused.State, StateNeedsConfirm)
+			testutil.Equal(t, refused.Speech, "Review is closed out. Confirm to revive it.")
+
+			req.Confirm = true
+			next := r.Do(ctx, req)
+			testutil.Equal(t, next.State, StateRunning)
+			testutil.True(t, next.JobID != first.JobID)
+			done := r.Do(ctx, Request{Command: "wait", JobID: next.JobID, Timeout: time.Second})
+			testutil.Equal(t, done.State, StateDone)
+			testutil.Equal(t, op.resumes, 2)
+			testutil.DeepEqual(t, r.Do(ctx, Request{Command: "status", JobID: first.JobID}), refused)
+		})
 	}
-	testutil.Equal(t, done.Speech, "Review is closed out. Confirm to revive it.")
+}
+
+func TestRouterShutdownDrainsAcceptedWork(t *testing.T) {
+	op := &fakeOp{block: make(chan struct{})}
+	r := NewRouter(op)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	req := Request{Command: "start", Name: "Review", Project: "argus", Prompt: "ship it"}
+	got := r.Do(ctx, req)
+	testutil.Equal(t, got.State, StateRunning)
+	cancel()
+	testutil.NoError(t, r.Shutdown(context.Background()))
+	done := r.Do(ctx, Request{Command: "status", JobID: got.JobID})
+	testutil.Equal(t, done.State, StateFailed)
+	testutil.Equal(t, r.Do(context.Background(), req).Detail, "canceled")
 }
 
 func TestRouterResumesDeadWorkflow(t *testing.T) {

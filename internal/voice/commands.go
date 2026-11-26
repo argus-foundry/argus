@@ -35,11 +35,12 @@ func Commands() []CommandSpec {
 			Name:    "start",
 			Summary: "Start a workflow by name. An existing one is resumed. A new one needs a project and a prompt.",
 			Args: []ArgSpec{
-				{Name: "name", Type: "string", Required: true, Description: "Workflow name."},
+				{Name: "name", Type: "string", Description: "Workflow name. Use this or task id."},
 				{Name: "project", Type: "string", Description: "Project. Required when creating."},
 				{Name: "prompt", Type: "string", Description: "Instructions. Required when creating."},
 				{Name: "task_id", Type: "string", Description: "Task id. Wins over name."},
 				{Name: "confirm", Type: "boolean", Description: "Revive a closed-out workflow."},
+				{Name: "force", Type: "boolean", Description: "Same as confirm for a closed-out workflow."},
 				key,
 			},
 		},
@@ -88,7 +89,7 @@ func Commands() []CommandSpec {
 			Summary: "Wait briefly for a job. Times out with still running instead of blocking.",
 			Args: []ArgSpec{
 				{Name: "job_id", Type: "string", Required: true, Description: "Job handle."},
-				{Name: "timeout_ms", Type: "number", Description: "How long to wait, capped at 3000 milliseconds. Zero checks once."},
+				{Name: "timeout_ms", Type: "integer", Description: "How long to wait, capped at 3000 milliseconds. Zero checks once."},
 			},
 		},
 	}

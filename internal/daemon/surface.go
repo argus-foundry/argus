@@ -626,7 +626,7 @@ const (
 	SpawnSurfaceDigest = "d5dc8e881ff9ce381a59e01eb592ab9b44cf02d1d1b44fe96001a8e2aed737e3"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
-	StreamSurfaceDigest = "6db616d49b2aae4049a1e16f5eeb7c4b16aa724b7451c2faab7c0302ef5fd83d"
+	StreamSurfaceDigest = "7c59b8c412a377177159569596eb1599ce8fa200ffd483fa7a4006b943651990"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

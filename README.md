@@ -911,9 +911,9 @@ Each result is JSON. The `speech` field is the only part to read aloud: one or a
 | `argus_commands` | The named commands and their argument schemas. |
 | `argus_command` | Run one command: `brief`, `commands`, `start`, `stop`, `resume`, `send`, `status`, `wait`. |
 
-`start` takes a workflow `name`. An existing task is left alone when it is already live, and resumed when it is not. Creating a new one needs `project` and `prompt`. `stop` does nothing until `confirm` is true. `resume` with `confirm` or `force` revives a closed-out Hera worker. `send` types into a live session by `task_id` and submits with a return. `start`, `stop`, `resume`, and `send` return immediately with a `job_id` and a one-sentence confirmation. `status` and `wait` read that job. `wait` accepts `timeout_ms` and never blocks longer than 3 seconds; if the job is unfinished the speech is `Still running.`
+`start` takes a workflow `name` or `task_id`. An existing task is left alone when it is already live and resumed when it has stopped. Creating a new one needs `name`, `project`, and `prompt`. `stop` requires `confirm: true`. `resume` with `confirm` or `force` revives a closed-out Hera worker. `send` types into a live session by `task_id` and submits with a return. These four commands require the Argus API master token in the `Authorization: Bearer` header on a loopback MCP request. They return a `job_id` and a one-sentence confirmation. `status` and `wait` read that job. `wait` accepts `timeout_ms` and returns `Still running.` if the job is unfinished at the deadline, up to 3 seconds.
 
-Pass `idempotency_key` to make a retry return the same job instead of starting another. The same key with different arguments is rejected. A stop that was refused for lack of confirm is not stored, so the confirmed retry can reuse the key.
+Pass `idempotency_key` to make a retry return the same job. Reusing its key with different arguments is rejected while the job is retained. When Argus asks for confirmation, the confirmed retry can reuse the key.
 
 `kb_ingest` and `kb_delete` are not voice commands. Asking for either returns an error and changes nothing. The ordinary knowledge-base tools stay available to agents that call them by name.
 
@@ -926,6 +926,7 @@ curl -s http://127.0.0.1:7742/mcp \
 ```bash
 curl -s http://127.0.0.1:7742/mcp \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${ARGUS_VOICE_API_TOKEN}" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"argus_command","arguments":{"command":"stop","name":"review","confirm":true,"idempotency_key":"turn-7"}}}'
 ```
 
@@ -936,7 +937,7 @@ To hear about changes without polling, set a loopback URL:
 webhook_url = "http://127.0.0.1:8787/argus"
 ```
 
-Argus POSTs `{"type","task_id","task_name","speech"}` when a session begins needing input (`session.needs_input` with `needs_input: true`) and when a task completes (`task.completed`). Clearing needs-input does not post. The URL has to be `localhost`, `127.0.0.1`, or another loopback address. Redirects are not followed. The TUI, web app, and macOS app do not grow a voice screen for this; Lumi is the client.
+Argus POSTs `{"type","task_id","task_name","speech"}` when a session begins needing input (`session.needs_input` with `needs_input: true`) and when a task completes (`task.completed`). The webhook delivers both events even with REST disabled. The URL has to be `localhost`, `127.0.0.1`, or another loopback address. Argus declines redirects.
 
 ### Agent-facing skills
 

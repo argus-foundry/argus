@@ -423,6 +423,7 @@ var risReset = []byte("\x1bc")
 // goroutine).
 type ScreenRenderer struct {
 	emu        *xvt.SafeEmulator
+	drained    chan struct{}
 	cols, rows int
 	renders    uint64
 }
@@ -434,6 +435,20 @@ type ScreenRenderer struct {
 const screenScrapeScrollback = 1
 
 func (r *ScreenRenderer) RenderCount() uint64 { return r.renders }
+
+// Close releases the renderer's response pipe. Close the pipe before the
+// emulator so its reader exits before x/vt sets its unsynchronized closed flag.
+func (r *ScreenRenderer) Close() {
+	if r.emu == nil {
+		return
+	}
+	if pipe, ok := r.emu.InputPipe().(io.Closer); ok {
+		_ = pipe.Close()
+		<-r.drained
+		_ = r.emu.Close()
+		r.emu = nil
+	}
+}
 
 // render writes tail through the emulator sized to cols×rows and returns the
 // visible screen as plain text. Non-positive dimensions fall back to the
@@ -458,7 +473,11 @@ func (r *ScreenRenderer) render(tail []byte, cols, rows int) string {
 		// One drain goroutine for the renderer's lifetime: x/vt writes query
 		// responses (DA/DSR/cursor-position) to an internal io.Pipe that blocks
 		// Write until read — Claude's output stream contains such queries.
-		go io.Copy(io.Discard, r.emu) //nolint:errcheck
+		r.drained = make(chan struct{})
+		go func(emu *xvt.SafeEmulator, drained chan struct{}) {
+			defer close(drained)
+			_, _ = io.Copy(io.Discard, emu)
+		}(r.emu, r.drained)
 	} else {
 		// Reset to a clean blank screen, then re-size if this session differs
 		// from the last one rendered (RIS preserves dimensions).

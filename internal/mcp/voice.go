@@ -1,7 +1,11 @@
 package mcp
 
 import (
+	"crypto/subtle"
 	"encoding/json"
+	"net"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/voice"
@@ -32,6 +36,7 @@ var voiceToolDefs = []Tool{
 		Description: `Run one voice command by name. No working directory. Returns JSON. The speech field is the only text to read aloud: a short plain sentence, or Still running when a job has not finished.
 
 Commands: brief, commands, start, stop, resume, send, status, wait.
+start, stop, resume, and send require the Argus API master token in the Authorization bearer header.
 start names a workflow. An existing one is resumed. A new one needs project and prompt.
 stop requires confirm true.
 resume accepts confirm or force to revive a closed-out workflow.
@@ -51,7 +56,7 @@ idempotency_key repeats the same job. A different command with the same key is r
 				"confirm":         map[string]interface{}{"type": "boolean", "description": "Required true for stop. Revives a closed-out workflow on resume or start."},
 				"force":           map[string]interface{}{"type": "boolean", "description": "Revives a closed-out workflow on resume or start."},
 				"job_id":          map[string]interface{}{"type": "string", "description": "Job handle returned by start, stop, resume, or send."},
-				"timeout_ms":      map[string]interface{}{"type": "number", "description": "Wait budget in milliseconds. Capped at 3000. Zero checks once."},
+				"timeout_ms":      map[string]interface{}{"type": "integer", "description": "Wait budget in milliseconds. Capped at 3000. Zero checks once."},
 			},
 			"required": []string{"command"},
 		},
@@ -60,9 +65,10 @@ idempotency_key repeats the same job. A different command with the same key is r
 
 // SetVoice wires the voice command router. Safe to call after the listener is
 // already serving. Nil clears the tools.
-func (s *Server) SetVoice(r *voice.Router) {
+func (s *Server) SetVoice(r *voice.Router, token string) {
 	s.voiceMu.Lock()
 	s.voice = r
+	s.voiceToken = token
 	s.voiceMu.Unlock()
 }
 
@@ -72,8 +78,24 @@ func (s *Server) voiceRouter() *voice.Router {
 	return s.voice
 }
 
-func (s *Server) toolVoice(id interface{}, name string, args json.RawMessage) *Response {
-	r := s.voiceRouter()
+func localVoiceRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		host = strings.Trim(r.Host, "[]")
+	}
+	ip := net.ParseIP(host)
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	return origin == "" || strings.EqualFold(origin, "http://"+r.Host)
+}
+
+func (s *Server) toolVoice(call *Request, name string, args json.RawMessage) *Response {
+	s.voiceMu.RLock()
+	r, token := s.voice, s.voiceToken
+	s.voiceMu.RUnlock()
+	id := call.ID
 	if r == nil {
 		return toolError(id, "Voice control is not available.")
 	}
@@ -86,6 +108,12 @@ func (s *Server) toolVoice(id interface{}, name string, args json.RawMessage) *R
 		req, errText := decodeVoiceCommand(args)
 		if errText != "" {
 			return toolError(id, errText)
+		}
+		if voice.IsMutation(req.Command) && (!call.voiceLocal || token == "" ||
+			subtle.ConstantTimeCompare([]byte(call.voiceAuth), []byte("Bearer "+token)) != 1) {
+			return voiceToolResult(id, voice.Result{
+				State: voice.StateFailed, Detail: "unauthorized", Speech: "That command needs the Argus API token.",
+			})
 		}
 		return voiceToolResult(id, r.Do(s.shutdownCtx, req))
 	default:
@@ -128,13 +156,11 @@ func decodeVoiceCommand(args json.RawMessage) (voice.Request, string) {
 	if len(raw.TimeoutMS) == 0 || string(raw.TimeoutMS) == "null" {
 		return req, ""
 	}
-	var ms int
+	var ms int64
 	if err := json.Unmarshal(raw.TimeoutMS, &ms); err != nil {
 		return voice.Request{}, "timeout_ms must be a whole number of milliseconds."
 	}
-	if ms < 0 {
-		ms = 0
-	}
+	ms = min(max(ms, 0), int64(voice.MaxWait/time.Millisecond))
 	req.Timeout = time.Duration(ms) * time.Millisecond
 	return req, ""
 }

@@ -91,39 +91,49 @@ func TestWebhookPostsNeedsInputAndCompleted(t *testing.T) {
 	testutil.Equal(t, bodies[1]["type"], model.EventTypeTaskCompleted)
 }
 
+type webhookTransportFunc func(*http.Request) (*http.Response, error)
+
+func (f webhookTransportFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestWebhookSkipsEmptyAndPublicURL(t *testing.T) {
-	var called atomic.Bool
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called.Store(true) }))
-	t.Cleanup(srv.Close)
-
-	var rawURL atomic.Value
-	rawURL.Store("")
-	hook := NewWebhook(func() string {
-		s, _ := rawURL.Load().(string)
-		return s
-	}, nil)
-	hook.Start()
-	t.Cleanup(hook.Stop)
-	events.Emit(model.EventTypeTaskCompleted, "t", nil)
-	time.Sleep(30 * time.Millisecond)
-	testutil.False(t, called.Load())
-
-	rawURL.Store("https://example.com/hook")
-	events.Emit(model.EventTypeTaskCompleted, "t", nil)
-	time.Sleep(30 * time.Millisecond)
-	testutil.False(t, called.Load())
+	for _, tc := range []struct{ name, raw string }{
+		{"empty", ""},
+		{"public", "https://example.com/hook"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hook := NewWebhook(func() string { return tc.raw }, nil)
+			t.Cleanup(hook.Stop)
+			calls := 0
+			hook.client.Transport = webhookTransportFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return nil, context.Canceled
+			})
+			hook.deliver(model.Event{Type: model.EventTypeTaskCompleted, TaskID: "t"})
+			testutil.Equal(t, calls, 0)
+		})
+	}
 }
 
 func TestWebhookDoesNotFollowRedirects(t *testing.T) {
+	var first, second atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		second.Add(1)
+	}))
+	t.Cleanup(target.Close)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://example.com/nope", http.StatusFound)
+		if r.Method == http.MethodPost {
+			first.Add(1)
+		}
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 	}))
 	t.Cleanup(srv.Close)
 	hook := NewWebhook(func() string { return srv.URL }, func(string) string { return "Review" })
-	hook.Start()
 	t.Cleanup(hook.Stop)
-	events.Emit(model.EventTypeTaskCompleted, "t", nil)
-	time.Sleep(50 * time.Millisecond)
+	hook.deliver(model.Event{Type: model.EventTypeTaskCompleted, TaskID: "t"})
+	testutil.Equal(t, first.Load(), int32(1))
+	testutil.Equal(t, second.Load(), int32(0))
 }
 
 func TestWebhookStatusAndNilReceiver(t *testing.T) {
@@ -148,7 +158,12 @@ func TestWebhookStatusAndNilReceiver(t *testing.T) {
 
 func TestWebhookDropsWhenQueueIsFull(t *testing.T) {
 	hold := make(chan struct{})
+	entered := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
 		<-hold
 	}))
 	t.Cleanup(srv.Close)
@@ -159,10 +174,15 @@ func TestWebhookDropsWhenQueueIsFull(t *testing.T) {
 		hook.Stop()
 	})
 	events.Emit(model.EventTypeTaskCompleted, "blocked", nil)
-	time.Sleep(20 * time.Millisecond)
-	for i := 0; i < 40; i++ {
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("webhook request never reached the receiver")
+	}
+	for i := 0; i < cap(hook.ch)+1; i++ {
 		hook.enqueue(model.Event{Type: model.EventTypeTaskCompleted, TaskID: "q"})
 	}
+	testutil.Equal(t, hook.dropped.Load(), uint64(1))
 }
 
 func TestDialLoopback(t *testing.T) {

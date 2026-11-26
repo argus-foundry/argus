@@ -3,7 +3,10 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,7 +44,7 @@ func TestVoiceToolsHiddenUntilWired(t *testing.T) {
 	testutil.Equal(t, text, "Voice control is not available.")
 	testutil.True(t, toolIsError(t, resp))
 
-	s.SetVoice(voice.NewRouter(mcpVoiceOp{}))
+	s.SetVoice(voice.NewRouter(mcpVoiceOp{}), "test-token")
 	names = listedToolNames(t, s)
 	testutil.True(t, names["argus_brief"])
 	testutil.True(t, names["argus_command"])
@@ -66,6 +69,72 @@ func TestVoiceToolsHiddenUntilWired(t *testing.T) {
 	testutil.NoError(t, json.Unmarshal([]byte(toolText(t, brief)), &parsed))
 	testutil.Equal(t, parsed.Speech, "Review is running.")
 	testutil.Equal(t, parsed.Counts.Running, 1)
+}
+
+type countedVoiceOp struct {
+	mcpVoiceOp
+	findCalls atomic.Int32
+}
+
+func (o *countedVoiceOp) Find(context.Context, string, string, string) (voice.FindResult, error) {
+	o.findCalls.Add(1)
+	return voice.FindResult{Found: true, Ref: voice.TaskRef{ID: "t1", Name: "Review", Live: true}}, nil
+}
+
+func TestVoiceMutationAuthorizationAtHTTPBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, host, origin, bearer, query string
+		allowed                           bool
+	}{
+		{name: "absent", host: "127.0.0.1:7742"},
+		{name: "wrong token", host: "127.0.0.1:7742", bearer: "Bearer wrong"},
+		{name: "query token", host: "127.0.0.1:7742", query: "?token=test-token"},
+		{name: "wrong origin", host: "127.0.0.1:7742", origin: "https://example.com", bearer: "Bearer test-token"},
+		{name: "wrong host", host: "example.com", bearer: "Bearer test-token"},
+		{name: "authorized local", host: "127.0.0.1:7742", bearer: "Bearer test-token", allowed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testServer()
+			op := &countedVoiceOp{}
+			s.SetVoice(voice.NewRouter(op), "test-token")
+			t.Cleanup(func() { testutil.NoError(t, s.Shutdown(context.Background())) })
+			body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"argus_command","arguments":{"command":" Send ","task_id":"t1","text":"hello"}}}`
+			req := httptest.NewRequest(http.MethodPost, "http://"+tc.host+"/mcp"+tc.query, strings.NewReader(body))
+			req.Header.Set("Authorization", tc.bearer)
+			req.Header.Set("Origin", tc.origin)
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, req)
+			var resp Response
+			testutil.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+			var got voice.Result
+			testutil.NoError(t, json.Unmarshal([]byte(toolText(t, &resp)), &got))
+			if tc.allowed {
+				testutil.Equal(t, op.findCalls.Load(), int32(1))
+				testutil.True(t, got.JobID != "")
+			} else {
+				testutil.Equal(t, op.findCalls.Load(), int32(0))
+				testutil.Equal(t, got.Detail, "unauthorized")
+				testutil.Equal(t, got.JobID, "")
+			}
+		})
+	}
+}
+
+func TestVoiceWaitDecodingClampsBeforeDurationConversion(t *testing.T) {
+	for _, tc := range []struct {
+		name, ms string
+		want     time.Duration
+	}{
+		{"within cap", "125", 125 * time.Millisecond},
+		{"above cap", "9223372036854775807", 3 * time.Second},
+		{"below zero", "-1", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, errText := decodeVoiceCommand(json.RawMessage(`{"command":"wait","timeout_ms":` + tc.ms + `}`))
+			testutil.Equal(t, errText, "")
+			testutil.Equal(t, req.Timeout, tc.want)
+		})
+	}
 }
 
 func listedToolNames(t *testing.T, s *Server) map[string]bool {

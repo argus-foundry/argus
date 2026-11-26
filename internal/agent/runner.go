@@ -557,13 +557,15 @@ func (r *Runner) StopScoped(taskID string, scope StopScope) error {
 	return err
 }
 
+// CancelPendingStarts cancels prelaunch work during runner shutdown before
+// its owner waits for the callers that submitted the starts.
+func (r *Runner) CancelPendingStarts() {
+	r.shutdownCancel()
+}
+
 // StopAll terminates all running sessions.
 func (r *Runner) StopAll() {
-	// Cancel the shutdown context first so any in-flight prelaunch
-	// (ollama brew start / cold model load) unblocks immediately. Doing
-	// this before iterating sessions means daemon shutdown doesn't sit
-	// on a 6-minute prelaunch budget waiting for the model to load.
-	r.shutdownCancel()
+	r.CancelPendingStarts()
 
 	r.mu.Lock()
 	ids := make([]string, 0, len(r.sessions))

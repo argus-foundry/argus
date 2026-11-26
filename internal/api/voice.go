@@ -60,29 +60,24 @@ func (a apiVoice) Find(ctx context.Context, taskID, name, project string) (voice
 	if err != nil {
 		return voice.FindResult{}, err
 	}
-	var matches []*model.Task
+	safeName := agent.SafeName(name)
+	var exact, aliases []*model.Task
 	for _, t := range tasks {
 		if t == nil || t.IsResident() || t.Kind != "" {
-			continue
-		}
-		if !strings.EqualFold(strings.TrimSpace(t.Name), name) {
 			continue
 		}
 		if project != "" && !strings.EqualFold(t.Project, project) {
 			continue
 		}
-		matches = append(matches, t)
-	}
-	var open []*model.Task
-	for _, t := range matches {
-		if !t.Archived {
-			open = append(open, t)
+		storedName := strings.TrimSpace(t.Name)
+		switch {
+		case strings.EqualFold(storedName, name):
+			exact = append(exact, t)
+		case strings.EqualFold(storedName, safeName):
+			aliases = append(aliases, t)
 		}
 	}
-	chosen := matches
-	if len(open) > 0 {
-		chosen = open
-	}
+	chosen := preferredVoiceMatches(exact, aliases)
 	switch len(chosen) {
 	case 0:
 		return voice.FindResult{}, nil
@@ -93,21 +88,42 @@ func (a apiVoice) Find(ctx context.Context, taskID, name, project string) (voice
 	}
 }
 
+func preferredVoiceMatches(exact, aliases []*model.Task) []*model.Task {
+	for _, matches := range [][]*model.Task{exact, aliases} {
+		var open []*model.Task
+		for _, t := range matches {
+			if !t.Archived {
+				open = append(open, t)
+			}
+		}
+		if len(open) != 0 {
+			return open
+		}
+	}
+	if len(exact) != 0 {
+		return exact
+	}
+	return aliases
+}
+
 func (a apiVoice) Create(ctx context.Context, name, project, prompt string) (voice.TaskRef, error) {
 	if err := ctx.Err(); err != nil {
 		return voice.TaskRef{}, &voice.OpError{Speech: "That was canceled.", Code: "canceled"}
 	}
 	a.s.voiceCreateMu.Lock()
 	defer a.s.voiceCreateMu.Unlock()
-	existing, err := a.s.db.FindByNameProject(name, project)
+	existing, err := a.Find(ctx, "", name, project)
 	if err != nil {
 		return voice.TaskRef{}, err
 	}
-	if existing != nil {
-		return a.ref(existing), &voice.OpError{Speech: voice.SpeakName(existing.Name) + " already exists.", Code: "exists"}
+	if existing.Found || existing.Ambiguous {
+		return existing.Ref, &voice.OpError{Speech: voice.SpeakName(name) + " already exists.", Code: "exists"}
 	}
 	if a.s.createTask == nil {
 		return voice.TaskRef{}, &voice.OpError{Speech: "Voice control is not available.", Code: "not_configured"}
+	}
+	if err := ctx.Err(); err != nil {
+		return voice.TaskRef{}, &voice.OpError{Speech: "That was canceled.", Code: "canceled"}
 	}
 	task, err := a.s.createTask(name, prompt, project, "", "", "", "", false)
 	if err != nil {
@@ -130,6 +146,9 @@ func (a apiVoice) Stop(ctx context.Context, taskID string) error {
 	if err != nil || t == nil {
 		return &voice.OpError{Speech: "I can't find that workflow.", Code: "not_found"}
 	}
+	if t.Archived {
+		return &voice.OpError{Speech: voice.SpeakName(t.Name) + " is archived.", Code: "archived"}
+	}
 	if err := a.s.stopTaskSession(t); err != nil {
 		slog.Error("[voice] stop failed", "task", taskID, "err", err)
 		uxlog.Log("[voice] stop failed task=%s err=%v", taskID, err)
@@ -151,6 +170,9 @@ func (a apiVoice) Resume(ctx context.Context, taskID string, force bool) error {
 		return &voice.OpError{Speech: "I can't find that workflow.", Code: "not_found"}
 	}
 	spoken := voice.SpeakName(task.Name)
+	if task.Archived {
+		return &voice.OpError{Speech: spoken + " is archived.", Code: "archived"}
+	}
 	if sess := a.s.runner.Get(task.ID); sess != nil && !sess.IsIdle() {
 		return &voice.OpError{Speech: spoken + " is already running.", Code: "task_running"}
 	}

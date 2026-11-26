@@ -237,4 +237,4 @@ Both new fields (`App.needsInputLogStat`, `App.needsInputRawSignals`) are thread
 
 ## Voice listeners must not block Emit
 
-- **`events.Subscribe` runs on the emitter's goroutine after the sink returns, so a listener has to enqueue and return.** The voice webhook does only that. A slow POST inside the listener would stall every `db.Update`. Empty `voice.webhook_url` still subscribes; delivery no-ops until a loopback URL is configured, and a non-loopback URL is dropped before dial (the dialer checks the resolved address again and ignores `HTTP_PROXY`). `session.needs_input` is posted only when the payload says `needs_input: true`. A confirm refusal is not stored under an idempotency key, so the confirmed retry can reuse it. `wait` never blocks past 3 seconds; it says "Still running."
+- **`events.Subscribe` runs on the emitter's goroutine after the sink returns, so a listener has to enqueue and return.** The voice webhook logs queue drops from its worker because even logging from the callback can stall `db.Update`. Run one needs-input detector per daemon, with the webhook-only watcher taking over when the REST watcher is absent.

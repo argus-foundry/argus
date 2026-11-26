@@ -3,6 +3,7 @@ package voice
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -119,16 +120,19 @@ type Result struct {
 // Router dispatches the voice allowlist. It remembers jobs so a retried call
 // with the same idempotency key does not start a second workflow.
 type Router struct {
-	op    Operator
-	mu    sync.Mutex
-	jobs  map[string]*job
-	byKey map[string]*job
-	order []string
+	op      Operator
+	mu      sync.Mutex
+	jobs    map[string]*job
+	byKey   map[string]*job
+	order   []string
+	closed  bool
+	pending int
+	drained chan struct{}
 }
 
 type job struct {
 	id       string
-	fp       string
+	fp       [sha256.Size]byte
 	key      string
 	speech   string
 	state    string
@@ -142,9 +146,39 @@ type job struct {
 // NewRouter returns a router bound to op.
 func NewRouter(op Operator) *Router {
 	return &Router{
-		op:    op,
-		jobs:  map[string]*job{},
-		byKey: map[string]*job{},
+		op:      op,
+		jobs:    map[string]*job{},
+		byKey:   map[string]*job{},
+		drained: make(chan struct{}),
+	}
+}
+
+// Shutdown stops admitting work and waits for accepted jobs to leave the
+// task operator. The owner cancels its job context before draining.
+func (r *Router) Shutdown(ctx context.Context) error {
+	r.mu.Lock()
+	if !r.closed {
+		r.closed = true
+		if r.pending == 0 {
+			close(r.drained)
+		}
+	}
+	r.mu.Unlock()
+	select {
+	case <-r.drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// IsMutation reports whether the command changes a task or its session.
+func IsMutation(command string) bool {
+	switch strings.ToLower(strings.TrimSpace(command)) {
+	case "start", "stop", "resume", "send":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -162,6 +196,23 @@ func (r *Router) Do(ctx context.Context, req Request) Result {
 	if len(req.IdempotencyKey) > MaxIdempotencyKey {
 		return fail("That idempotency key is too long.", "idempotency_key")
 	}
+	if IsMutation(req.Command) {
+		if replay, ok := r.replay(req); ok {
+			return replay
+		}
+		if ctx.Err() != nil {
+			return fail("That was canceled.", "canceled")
+		}
+		result := r.mutate(ctx, req)
+		if result.JobID == "" {
+			// A concurrent call may have reserved the key and changed
+			// the target while this call was looking it up.
+			if replay, ok := r.replay(req); ok {
+				return replay
+			}
+		}
+		return result
+	}
 	switch req.Command {
 	case "":
 		return fail("Say a command.", "command_required")
@@ -171,6 +222,17 @@ func (r *Router) Do(ctx context.Context, req Request) Result {
 		return r.brief(ctx, req)
 	case "commands":
 		return listResult()
+	case "status":
+		return r.jobStatus(req)
+	case "wait":
+		return r.wait(ctx, req)
+	default:
+		return fail("I don't know that command.", "unknown_command")
+	}
+}
+
+func (r *Router) mutate(ctx context.Context, req Request) Result {
+	switch req.Command {
 	case "start":
 		return r.start(ctx, req)
 	case "stop":
@@ -179,10 +241,6 @@ func (r *Router) Do(ctx context.Context, req Request) Result {
 		return r.resume(ctx, req)
 	case "send":
 		return r.send(ctx, req)
-	case "status":
-		return r.jobStatus(req)
-	case "wait":
-		return r.wait(ctx, req)
 	default:
 		return fail("I don't know that command.", "unknown_command")
 	}
@@ -429,7 +487,10 @@ func (r *Router) begin(ctx context.Context, req Request, speech, taskID, taskNam
 				r.finish(j, Result{OK: false, State: StateFailed, Speech: "That command failed.", JobID: j.id, TaskID: taskID, TaskName: taskName, Detail: "panic"})
 			}
 		}()
-		res := fn(ctx)
+		res := fail("That was canceled.", "canceled")
+		if ctx.Err() == nil {
+			res = fn(ctx)
+		}
 		if res.State == "" {
 			if res.OK {
 				res.State = StateDone
@@ -479,13 +540,11 @@ func (r *Router) reserve(req Request, speech, taskID, taskName string) (j *job, 
 	fp := fingerprint(req)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if key != "" {
-		if existing := r.byKey[key]; existing != nil {
-			if existing.fp != fp {
-				return nil, Result{}, fail("That idempotency key was already used for a different command.", "idempotency_conflict")
-			}
-			return existing, r.viewLocked(existing), Result{}
-		}
+	if result, ok := r.replayLocked(key, fp); ok {
+		return nil, result, Result{}
+	}
+	if r.closed {
+		return nil, Result{}, fail("That was canceled.", "canceled")
 	}
 	if !r.evictLocked() {
 		return nil, Result{}, fail("Too many voice jobs are in flight.", "job_cap")
@@ -505,7 +564,31 @@ func (r *Router) reserve(req Request, speech, taskID, taskName string) (j *job, 
 		r.byKey[key] = j
 	}
 	r.order = append(r.order, j.id)
+	r.pending++
 	return j, Result{}, Result{}
+}
+
+// Check before lookup, so a task changing state cannot invalidate a retry.
+// reserve also checks under the same lock before starting work.
+func (r *Router) replay(req Request) (Result, bool) {
+	if req.IdempotencyKey == "" {
+		return Result{}, false
+	}
+	fp := fingerprint(req)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.replayLocked(req.IdempotencyKey, fp)
+}
+
+func (r *Router) replayLocked(key string, fp [sha256.Size]byte) (Result, bool) {
+	j := r.byKey[key]
+	if j == nil {
+		return Result{}, false
+	}
+	if j.fp != fp {
+		return fail("That idempotency key was already used for a different command.", "idempotency_conflict"), true
+	}
+	return r.viewLocked(j), true
 }
 
 func (r *Router) finish(j *job, res Result) {
@@ -517,7 +600,14 @@ func (r *Router) finish(j *job, res Result) {
 	j.finished = true
 	j.final = res
 	j.state = res.State
+	if res.State == StateNeedsConfirm && r.byKey[j.key] == j {
+		delete(r.byKey, j.key)
+	}
 	close(j.done)
+	r.pending--
+	if r.closed && r.pending == 0 {
+		close(r.drained)
+	}
 }
 
 func (r *Router) viewLocked(j *job) Result {
@@ -563,7 +653,7 @@ func (r *Router) evictLocked() bool {
 	return true
 }
 
-func fingerprint(req Request) string {
+func fingerprint(req Request) [sha256.Size]byte {
 	body := struct {
 		Command string `json:"command"`
 		Name    string `json:"name"`
@@ -573,7 +663,6 @@ func fingerprint(req Request) string {
 		Text    string `json:"text"`
 		Confirm bool   `json:"confirm"`
 		Force   bool   `json:"force"`
-		JobID   string `json:"job_id"`
 	}{
 		Command: req.Command,
 		Name:    strings.TrimSpace(req.Name),
@@ -583,10 +672,21 @@ func fingerprint(req Request) string {
 		Text:    req.Text,
 		Confirm: req.Confirm,
 		Force:   req.Force,
-		JobID:   strings.TrimSpace(req.JobID),
+	}
+	switch req.Command {
+	case "send":
+		body.Name, body.Project, body.Prompt = "", "", ""
+		body.Confirm, body.Force = false, false
+	case "stop":
+		body.Text, body.Prompt = "", ""
+		body.Force = false
+	case "resume":
+		body.Text, body.Prompt = "", ""
+	case "start":
+		body.Text = ""
 	}
 	b, _ := json.Marshal(body)
-	return string(b)
+	return sha256.Sum256(b)
 }
 
 func newJobID() string {
@@ -606,7 +706,11 @@ func fail(speech, detail string) Result {
 func opFail(err error) Result {
 	var oe *OpError
 	if errors.As(err, &oe) && oe != nil && oe.Speech != "" {
-		return Result{OK: false, State: StateFailed, Speech: oe.Speech, Detail: oe.Code}
+		state := StateFailed
+		if oe.Code == "hera_closeout" {
+			state = StateNeedsConfirm
+		}
+		return Result{OK: false, State: state, Speech: oe.Speech, Detail: oe.Code}
 	}
 	slog.Error("[voice] command failed", "err", err)
 	return Result{OK: false, State: StateFailed, Speech: "That command failed.", Detail: "operator"}

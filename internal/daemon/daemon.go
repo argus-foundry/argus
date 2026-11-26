@@ -192,6 +192,7 @@ type Daemon struct {
 	kbIndexer          *kb.Indexer       // set when KB is enabled, stopped in cleanup
 	apiServer          *api.Server       // set when API is enabled, shut down in cleanup
 	voiceHook          *voice.Webhook    // optional loopback notify-back; stopped in cleanup
+	voiceWatchDone     chan struct{}     // detector when the API server is absent
 	runtimeSource      api.RuntimeSource // wired by main before Serve; backs /api/runtime
 	restoreBridgeUsage func()
 	scheduler          *scheduler.Scheduler // recurring scheduled-task firer; always started
@@ -1871,7 +1872,7 @@ func (d *Daemon) Serve(sockPath string) error {
 			if d.mcpServer != nil {
 				d.mcpServer.SetAPIGetter(apiSrv.ReadOnlyGet)
 				d.mcpServer.SetAccountMover(apiSrv.MoveTaskAccount)
-				d.mcpServer.SetVoice(voice.NewRouter(apiSrv.VoiceOperator()))
+				d.mcpServer.SetVoice(voice.NewRouter(apiSrv.VoiceOperator()), token)
 			}
 			// Wire the events.Sink to the API server's event bus so emission
 			// sites (db, orch, runner, this file) feed /api/events/stream.
@@ -1895,6 +1896,16 @@ func (d *Daemon) Serve(sockPath string) error {
 				}
 			}
 		}
+	}
+
+	if d.apiServer == nil {
+		d.voiceWatchDone = make(chan struct{})
+		go func() {
+			defer close(d.voiceWatchDone)
+			api.WatchVoiceNeedsInput(d.done, func() bool {
+				return strings.TrimSpace(d.cfgFn().Voice.WebhookURL) != ""
+			}, d.db, d.runner)
+		}()
 	}
 
 	// Resident agent ensure-running loop (add-resident-agent D3). Runs after
@@ -2007,8 +2018,23 @@ func (d *Daemon) Shutdown() {
 // the cleanup goroutine and leaving zombie agent processes + stale files.
 func (d *Daemon) cleanup() {
 	slog.Info("daemon shutting down")
+	// Voice jobs share the runner. Drain them before stopping sessions or
+	// detaching from the supervisor.
+	if d.mcpServer != nil {
+		if runner, ok := d.runner.(*agent.Runner); ok {
+			runner.CancelPendingStarts()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := d.mcpServer.Shutdown(ctx); err != nil {
+			slog.Error("mcp server shutdown", "err", err)
+		}
+		cancel()
+	}
 	if d.voiceHook != nil {
 		d.voiceHook.Stop()
+	}
+	if d.voiceWatchDone != nil {
+		<-d.voiceWatchDone
 	}
 
 	// Shut down the API HTTP server if running.
@@ -2075,15 +2101,6 @@ func (d *Daemon) cleanup() {
 	// Stop the KB indexer if running.
 	if d.kbIndexer != nil {
 		d.kbIndexer.Stop()
-	}
-
-	// Shut down the MCP HTTP server if running.
-	if d.mcpServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := d.mcpServer.Shutdown(ctx); err != nil {
-			slog.Error("mcp server shutdown", "err", err)
-		}
 	}
 
 	// Only clean up socket and PID files if we still own them.
