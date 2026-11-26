@@ -362,7 +362,7 @@ func (d *Daemon) BootInfo() (BootInfoResp, error) {
 
 // New creates a new Daemon.
 func New(database *db.DB) *Daemon {
-	exitCtx, endExits := context.WithCancel(context.Background())
+	exitCtx, endExits := context.WithCancel(context.Background()) //nolint:gosec // G118: Shutdown calls endExits
 	d := &Daemon{
 		db:        database,
 		done:      make(chan struct{}),
