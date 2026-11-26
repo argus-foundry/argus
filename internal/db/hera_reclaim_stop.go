@@ -4,21 +4,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/argus-foundry/argus/internal/model"
 )
 
 var ErrHeraReclaimInProgress = errors.New("task reclaim is in progress")
 
-const heraReclaimSettledKey = "reclaim_settled_binding"
-
 const heraNukeBindingSQL = `SELECT argus_task_id FROM hera_bindings deleted
 	WHERE end_reason='` + HeraEndReasonUserDeleted + `' AND id > COALESCE((
-		SELECT CAST(value AS INTEGER) FROM task_meta
-		WHERE task_id=deleted.argus_task_id AND namespace='hera' AND key='` + heraReclaimSettledKey + `'),0)`
+		SELECT hera_reclaim_settled_binding FROM tasks WHERE id=deleted.argus_task_id),0)`
 
-const heraReclaimOwnsTaskSQL = `(hera_reclaim_pid<>0 OR (archived=1 AND id IN (` + heraNukeBindingSQL + `)
+const heraReclaimOwnsTaskSQL = `(hera_reclaim_pid<>0 OR (id IN (` + heraNukeBindingSQL + `
+	AND (tasks.archived=1 OR EXISTS (SELECT 1 FROM hera_roles WHERE id=deleted.role_id AND nuked_at IS NOT NULL)))
 	AND id NOT IN (SELECT argus_task_id FROM hera_bindings WHERE ended_at IS NULL)))`
 
 func heraReclaimAdmissionGuard(q rowQuerier, taskID string) error {
@@ -68,13 +65,21 @@ func (d *DB) TryLockTaskOutsideReclaim(taskID string) (func(), error) {
 func (d *DB) MarkHeraReclaimCleaned(taskID string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	_, err := d.conn.Exec(`INSERT INTO task_meta (task_id,namespace,key,value,updated_at)
-		SELECT ?, 'hera', ?, CAST(MAX(id) AS TEXT), ? FROM hera_bindings
-		WHERE argus_task_id=? AND end_reason=?
-		HAVING COUNT(*) > 0
-		ON CONFLICT(task_id,namespace,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
-		taskID, heraReclaimSettledKey, formatTime(time.Now()), taskID, HeraEndReasonUserDeleted)
+	_, err := d.conn.Exec(`UPDATE tasks SET hera_reclaim_settled_binding=MAX(hera_reclaim_settled_binding, COALESCE((
+		SELECT MAX(id) FROM hera_bindings WHERE argus_task_id=tasks.id AND end_reason=?),0))
+		WHERE id=? AND archived=1 AND hera_reclaim_pid=0
+		AND NOT EXISTS (SELECT 1 FROM hera_bindings WHERE argus_task_id=tasks.id AND ended_at IS NULL)`,
+		HeraEndReasonUserDeleted, taskID)
 	return err
+}
+
+// HasUnsettledHeraNuke revalidates a sweep candidate after acquiring task locks.
+func (d *DB) HasUnsettledHeraNuke(taskID string) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var unsettled bool
+	err := d.conn.QueryRow(`SELECT ? IN (`+heraNukeBindingSQL+`)`, taskID).Scan(&unsettled)
+	return unsettled, err
 }
 
 // ArmHeraReclaimStop records the outgoing PTY of an archived, active task.

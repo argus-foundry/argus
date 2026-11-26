@@ -366,3 +366,5 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **The PWA recovery loop awaits each terminal attach.** A stale snapshot stays within that loop and its delay and deadline.
 
 - **PWA recovery owns one attachment generation.** Superseding that attachment cancels its reads and discards late rendering. The deadline continues through the snapshot body and paint.
+
+- **All exits from detail cancel the terminal attachment.** The PWA keeps recovery pending through xterm’s write callback and EventSource acceptance. HTTP rejection retries within the original deadline.

@@ -498,3 +498,5 @@ M6a scaffolds the native Hera view: a `HeraPage` (rail | coordinator pane | agen
 - **An archived, unbound nuke candidate owns cleanup before arming and after receipt settlement.** Generic prune skips it. The reclaim path can prune after owner retirement and worktree removal.
 
 - **An ended nuke binding survives a contended archive.** Periodic recovery rechecks unarchived candidates under both task locks. A standalone cleanup that deliberately keeps an archived task records the last settled nuke binding so a future, newer nuke can still claim it.
+
+- **Recheck the ended binding after taking the reclaim locks.** A standalone cleanup can settle the candidate between enumeration and the lock. Store the settlement in the task row so an ordinary archive or metadata write cannot reopen it.

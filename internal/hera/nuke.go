@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
@@ -104,6 +105,10 @@ func archiveNukedTask(d *db.DB, taskID string) {
 }
 
 func archiveNukedTaskLocked(d *db.DB, taskID string) bool {
+	pending, err := d.HasUnsettledHeraNuke(taskID)
+	if err != nil || !pending {
+		return false
+	}
 	bindings, err := d.ListHeraLiveBindingsByTask(taskID)
 	if err != nil || len(bindings) != 0 {
 		uxlog.Log("[hera] nuke: archive binding guard task=%s live=%d err=%v", taskID, len(bindings), err)
@@ -171,6 +176,8 @@ func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (re
 	}
 	ids := subtreeIDSet(d, subtree)
 	seen := make(map[string]bool)
+	var operationErr error
+	blockedTasks := make(map[string]bool)
 	for _, o := range subtree {
 		if residentOrchestrator(d, o.ID) {
 			continue
@@ -185,41 +192,45 @@ func NukeSubtree(d *db.DB, runner NukeRunner, subtree []*heramodel.OrchView) (re
 			if r.Live {
 				if err := d.NukeHeraRoleAndEndBindingAs(r.RoleID, db.HeraActorHuman); err != nil {
 					uxlog.Log("[hera] nuke subtree: nuke role %d failed: %v", r.RoleID, err)
+					operationErr = errors.Join(operationErr, fmt.Errorf("nuke role %d: %w", r.RoleID, err))
+					blockedTasks[r.TaskID] = true
 				}
 			}
 			if reclaim != "" {
 				reclaimed = append(reclaimed, reclaim)
 			}
 		}
-		if err := d.NukeHeraOrchestrator(o.ID); err != nil {
-			uxlog.Log("[hera] nuke subtree: nuke orchestrator %d failed: %v", o.ID, err)
-		}
 	}
+	reclaimed = slices.DeleteFunc(reclaimed, func(taskID string) bool { return blockedTasks[taskID] })
 	for _, id := range reclaimed {
 		archiveNukedTask(d, id)
 	}
-	return reclaimed, reclaimBackground(d, runner, reclaimed), nil
+	background = reclaimBackground(d, runner, reclaimed)
+	if operationErr != nil {
+		return reclaimed, background, operationErr
+	}
+	for _, o := range subtree {
+		if !ids[o.ID] {
+			continue
+		}
+		if err := d.NukeHeraOrchestrator(o.ID); err != nil {
+			uxlog.Log("[hera] nuke subtree: nuke orchestrator %d failed: %v", o.ID, err)
+			operationErr = errors.Join(operationErr, fmt.Errorf("nuke orchestrator %d: %w", o.ID, err))
+		}
+	}
+	return reclaimed, background, operationErr
 }
 
 // NukeSingleRole nukes one role. Its task is reclaimed only when it is solely
 // bound to this role; a multi-bound task is preserved untouched.
-func NukeSingleRole(d *db.DB, runner NukeRunner, r *heramodel.RoleView) (background func()) {
-	return NukeSingleRoleAs(d, runner, r, db.HeraActorHuman)
-}
-
-// NukeSingleRoleAs is NukeSingleRole with the acting party named: the
-// resident's own hera_delete_worker passes db.HeraActorResident so the
-// resident is not told about its own delete (6.4), everything else is human.
-func NukeSingleRoleAs(d *db.DB, runner NukeRunner, r *heramodel.RoleView, actor db.HeraActor) (background func()) {
+func NukeSingleRole(d *db.DB, runner NukeRunner, r *heramodel.RoleView) (background func(), err error) {
 	if t, err := d.Get(r.TaskID); err == nil && t.IsResident() {
-		return func() {}
+		return func() {}, db.ErrResidentProtected
 	}
 
-	// Callers that need to REPORT the refusal run CheckNukeTask first; this
-	// no-op closure is only the defense-in-depth backstop.
 	if err := CheckNukeTask(d, r.TaskID); err != nil {
 		uxlog.Log("[resident] nuke role %d refused: %v", r.RoleID, err)
-		return func() {}
+		return func() {}, err
 	}
 
 	var reclaimed []string
@@ -229,13 +240,14 @@ func NukeSingleRoleAs(d *db.DB, runner NukeRunner, r *heramodel.RoleView, actor 
 			reclaimed = []string{r.TaskID}
 		}
 	}
-	if err := d.NukeHeraRoleAndEndBindingAs(r.RoleID, actor); err != nil {
+	if err := d.NukeHeraRoleAndEndBindingAs(r.RoleID, db.HeraActorHuman); err != nil {
 		uxlog.Log("[hera] nuke role %d failed: %v", r.RoleID, err)
+		return func() {}, err
 	}
 	for _, id := range reclaimed {
 		archiveNukedTask(d, id)
 	}
-	return reclaimBackground(d, runner, reclaimed)
+	return reclaimBackground(d, runner, reclaimed), nil
 }
 
 func reclaimBackground(d *db.DB, runner NukeRunner, taskIDs []string) func() {

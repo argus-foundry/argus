@@ -2359,8 +2359,7 @@ function showOffline() {
   // Tear down terminal/SSE so we don't leave the EventSource auto-reconnecting
   // in the background while the offline view is showing. The detail view also
   // closes so the user lands on the task list when reconnect succeeds.
-  closeStream();
-  destroyTerm();
+  detachTaskTerminal();
   closeOverflowMenu();
   closePromptModal();
   closeInputsModal();
@@ -2369,7 +2368,6 @@ function showOffline() {
   closeArtifactsView();
   const dv = document.getElementById('detail-view');
   if (dv) { dv.classList.remove('open'); dv.style.transform = ''; }
-  currentTask = null;
   document.getElementById('main-app').style.display = 'none';
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('offline-screen').classList.add('shown');
@@ -2716,9 +2714,15 @@ async function openDetail(id) {
 // attach an SSE stream for the previous task on top of the new task's
 // terminal.
 let attachGen = 0;
+let attachmentAbort = null;
 
 async function attachTerminal(task, recovery = null) {
   if (!recovery) cancelTerminalRecovery();
+  attachmentAbort?.abort();
+  attachmentAbort = new AbortController();
+  const signal = recovery
+    ? AbortSignal.any([attachmentAbort.signal, recovery.controller.signal])
+    : attachmentAbort.signal;
   closeStream();
   destroyTerm();
 
@@ -2747,8 +2751,8 @@ async function attachTerminal(task, recovery = null) {
     // then attaches live -- no gap, no duplicate. The previous path skipped
     // the disk replay and only got the 256KB ring buffer via SSE, silently
     // truncating history for any session that emitted more than that.
-    const result = await loadStaticOutput(task.id, recovery?.controller.signal);
-    if (myGen !== attachGen) return false;
+    const result = await loadStaticOutput(task.id, signal);
+    if (myGen !== attachGen || currentTask?.id !== task.id || !term) return false;
     if (result.stale || result.source === 'log') {
       if (!recovery) pollAndRecoverFromRerenderExit(task.id);
       return false;
@@ -2759,7 +2763,8 @@ async function attachTerminal(task, recovery = null) {
     // "(failed to load output)" placeholder into xterm; with since=0 the
     // server replays the full ring (legacy AddWriter behaviour), so the
     // user always gets *something* without a stuck "connecting…" state.
-    openStream(task.id, result.since, result.pid);
+    const accepted = openStream(task.id, result.since, result.pid, recovery?.controller.signal);
+    if (recovery && !await accepted) return false;
   } else {
     // Non-interactive: in_progress with no live session (ghost or mid
     // kill+resume restart) or truly stopped (pending / in_review / complete). Both paths just replay the
@@ -2770,7 +2775,7 @@ async function attachTerminal(task, recovery = null) {
     // the overflow menu when applicable, which is enough recovery surface
     // and avoids a jarring modal every time the user enters the view.
     document.getElementById('term-status').style.display = 'none';
-    await loadStaticOutput(task.id);
+    await loadStaticOutput(task.id, signal);
   }
   return myGen === attachGen;
 }
@@ -3553,7 +3558,7 @@ function keepPlaceOnScroll() {
   postResize(currentTask.id, lastTerm.cols, lastTerm.rows);
 }
 
-function openStream(id, since, pid) {
+function openStream(id, since, pid, recoverySignal) {
   // EventSource doesn't support custom headers, so pass the token as a query
   // param. Auth middleware accepts both Bearer headers and ?token=.
   // `since` is the byte cursor returned by /output as X-Output-Total -- the
@@ -3570,13 +3575,28 @@ function openStream(id, since, pid) {
   }
   const es = new EventSource(url);
   evtSource = es;
+  let awaitingAcceptance = Boolean(recoverySignal);
+  let resolveAcceptance;
+  const accepted = new Promise(resolve => { resolveAcceptance = resolve; });
+  const settleAcceptance = value => {
+    awaitingAcceptance = false;
+    recoverySignal?.removeEventListener('abort', abortAttempt);
+    resolveAcceptance(value);
+  };
+  const abortAttempt = () => {
+    if (evtSource === es) closeStream();
+    settleAcceptance(false);
+  };
+  recoverySignal?.addEventListener('abort', abortAttempt, { once: true });
   es.onopen = () => {
+    if (evtSource !== es) return;
+    settleAcceptance(true);
     showTermStatus('live', 'live');
     // See flushRestartQueueWhenLive for why this isn't an unconditional flush.
     if (restartQueue && restartQueue.taskId === id) flushRestartQueueWhenLive(id);
   };
   es.onmessage = (e) => {
-    if (!term) return;
+    if (evtSource !== es || !term) return;
     try {
       const bytes = b64ToBytes(e.data);
       bufferOrWrite(bytes);
@@ -3585,6 +3605,7 @@ function openStream(id, since, pid) {
     }
   };
   es.addEventListener('exit', (e) => {
+    if (evtSource !== es) return;
     closeStream();
     // Two signals indicate a rerender restart is in flight:
     //   1. The exit event payload's `rerendering` field — the daemon
@@ -3611,6 +3632,7 @@ function openStream(id, since, pid) {
     }
   });
   es.addEventListener('clipboard', (e) => {
+    if (evtSource !== es) return;
     try {
       const payload = JSON.parse(e.data);
       if (payload.cleared) {
@@ -3623,7 +3645,13 @@ function openStream(id, since, pid) {
     }
   });
   es.onerror = () => {
+    if (evtSource !== es) return;
     if (es.readyState === EventSource.CLOSED) {
+      if (awaitingAcceptance) {
+        closeStream();
+        settleAcceptance(false);
+        return;
+      }
       // The stream 404s when it was opened inside the restart gap (the
       // resize kick can land before openStream). EventSource won't retry an
       // HTTP error, so run the same recovery the exit event would.
@@ -3638,6 +3666,7 @@ function openStream(id, since, pid) {
     }
     // EventSource auto-reconnects unless we explicitly close. Let it.
   };
+  return accepted;
 }
 
 function closeStream() {
@@ -3645,6 +3674,18 @@ function closeStream() {
     try { evtSource.close(); } catch(e) {}
     evtSource = null;
   }
+}
+
+function detachTaskTerminal() {
+  ++attachGen;
+  attachmentAbort?.abort();
+  attachmentAbort = null;
+  cancelTerminalRecovery();
+  closeStream();
+  dropRestartQueue();
+  destroyTerm();
+  currentTask = null;
+  window.currentTask = null;
 }
 
 // After an SSE `event: exit` triggered by a daemon-initiated rerender, poll
@@ -3914,7 +3955,13 @@ async function loadStaticOutput(id, signal) {
   const since = totalHeader ? Number(totalHeader) : 0;
   const pid = Number(r.headers.get('X-Argus-Session-Pid') || 0);
   const source = r.headers.get('X-Source') || '';
-  const buf = await r.arrayBuffer();
+  let buf;
+  try {
+    buf = await r.arrayBuffer();
+  } catch (e) {
+    if (current()) target.write('\x1b[31m(failed to load output)\x1b[0m\r\n');
+    return { since: 0, ok: false };
+  }
   if (!current()) return { since, ok: false };
   if (buf.byteLength === 0) {
     target.write('\x1b[2m(no output yet)\x1b[0m\r\n');
@@ -3925,15 +3972,27 @@ async function loadStaticOutput(id, signal) {
   // moves in the replay. fetch + arrayBuffer are typically 5+ms even on
   // localhost which usually wins the race, but the explicit double-rAF makes
   // it deterministic.
-  await new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
+  await waitForTerminalRender(done => requestAnimationFrame(() => requestAnimationFrame(done)), signal);
   if (!current()) return { since, ok: false };
   // Uint8Array (not string) preserves raw bytes — high-byte content in status
   // bars round-trips through JS's UTF-8 string path otherwise. Same pattern as
   // the SSE write path (see web-remote gotcha "base64 SSE chunks → Uint8Array").
-  target.write(new Uint8Array(buf), () => {
-    if (current()) target.scrollToBottom();
-  });
+  await waitForTerminalRender(done => target.write(new Uint8Array(buf), done), signal);
+  if (!current()) return { since, ok: false };
+  target.scrollToBottom();
   return { since, pid, source, ok: true };
+}
+
+function waitForTerminalRender(schedule, signal) {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise(resolve => {
+    const canceled = () => resolve();
+    signal?.addEventListener('abort', canceled, { once: true });
+    schedule(() => {
+      signal?.removeEventListener('abort', canceled);
+      resolve();
+    });
+  });
 }
 
 function renderOverflowMenu() {
@@ -4312,11 +4371,7 @@ async function deleteTask() {
 }
 
 function closeDetail() {
-  ++attachGen;
-  cancelTerminalRecovery();
-  closeStream();
-  dropRestartQueue();
-  destroyTerm();
+  detachTaskTerminal();
   closeOverflowMenu();
   closeFilesView();
   closeArtifactsView();
@@ -4328,8 +4383,6 @@ function closeDetail() {
   // so the next opened task gets a fresh field.
   const ci = document.getElementById('compose-input');
   if (ci) ci.value = '';
-  currentTask = null;
-  window.currentTask = null;
   const dv = document.getElementById('detail-view');
   dv.classList.remove('open');
   dv.style.transform = '';
@@ -5959,8 +6012,7 @@ function switchTab(tab) {
   closeInputsModal();
   closeLinksModal();
   closeHotkeysModal();
-  closeStream();
-  destroyTerm();
+  detachTaskTerminal();
   stopSystemMetrics(); // halt the metrics poller; loadSettings restarts it for the Settings tab
   stopProviderUsage();
   if (tab === 'tasks') refresh();

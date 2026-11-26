@@ -78,6 +78,9 @@ func TestHeraCascadeNukePreservesTaskWhenOneRoleFails(t *testing.T) {
 	row, err := d.Get(task.ID)
 	testutil.NoError(t, err)
 	testutil.False(t, row.Archived)
+	orch, err := d.HeraOrchestrator(second)
+	testutil.NoError(t, err)
+	testutil.Nil(t, orch.NukedAt)
 }
 
 // slowStopRunner wraps a real *agent.Runner but simulates a live session for

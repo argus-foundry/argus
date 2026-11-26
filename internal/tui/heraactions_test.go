@@ -392,7 +392,7 @@ func TestHeraActions_NukeArchivedRoleSoleBound(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for {
-		err = d.Delete("tw")
+		err = d.SetArchived("tw", false)
 		if err == nil {
 			break
 		}
@@ -402,6 +402,11 @@ func TestHeraActions_NukeArchivedRoleSoleBound(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	testutil.NoError(t, d.SetArchived("tw", true))
+	candidates, err := d.HeraNukeReclaimCandidates()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(candidates), 0)
+	testutil.NoError(t, d.Delete("tw"))
 }
 
 // TestHeraActions_NukeArchivedRoleMultiBoundPreservesTask verifies a task bound

@@ -80,18 +80,53 @@ test.describe('terminal', () => {
     }
   });
 
-  test('a stalled replacement snapshot reaches the terminal recovery deadline', async ({ page }) => {
-    await page.addInitScript(() => {
+  test('leaving the terminal tab cancels a pending recovery snapshot', async ({ page }) => {
+    let requests = 0;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      if (++requests === 1) {
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+        return;
+      }
+      await held;
+      await route.continue().catch(() => {});
+    });
+    try {
+      await login(page);
+      await page.locator('.task-item').first().click();
+      await expect.poll(() => requests).toBe(2);
+      await page.evaluate(() => (window as any).switchTab('settings'));
+      release!();
+      await page.waitForTimeout(350);
+      await expect(page.locator('#settings-view')).toBeVisible();
+      expect(await page.evaluate(() => (window as any).term == null)).toBe(true);
+      expect(requests).toBe(2);
+    } finally {
+      release!();
+    }
+  });
+
+  for (const stage of ['body', 'render']) test(`a stalled replacement snapshot ${stage} reaches the terminal recovery deadline`, async ({ page }) => {
+    await page.addInitScript(stage => {
       const original = window.fetch.bind(window);
       let snapshots = 0;
       window.fetch = async (...args) => {
         const response = await original(...args);
         if (/\/api\/tasks\/[^/]+\/output(?:\?|$)/.test(response.url) && ++snapshots === 2) {
-          response.arrayBuffer = () => new Promise(() => {});
+          if (stage === 'body') {
+            response.arrayBuffer = () => new Promise(() => {});
+          } else {
+            const terminal = (window as any).term;
+            const write = terminal.write.bind(terminal);
+            terminal.write = (data: unknown, callback?: () => void) => {
+              if (!(data instanceof Uint8Array) || !callback) write(data, callback);
+            };
+          }
         }
         return response;
       };
-    });
+    }, stage);
     let initial = true;
     await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
       if (initial) {
@@ -104,6 +139,24 @@ test.describe('terminal', () => {
     await login(page);
     await page.locator('.task-item').first().click();
     await expect(page.locator('#term-status-text')).toHaveText('session ended', { timeout: 17_000 });
+  });
+
+  test('terminal waits between refused replacement streams', async ({ page }) => {
+    const requestedAt: number[] = [];
+    await page.route(/\/api\/tasks\/[^/]+\/stream(?:\?|$)/, async route => {
+      requestedAt.push(Date.now());
+      if (requestedAt.length <= 3) {
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+      } else {
+        await route.continue();
+      }
+    });
+    await login(page);
+    await page.locator('.task-item').first().click();
+    await expect(page.locator('.term-status.live')).toBeVisible({ timeout: 5000 });
+    expect(requestedAt.length).toBeGreaterThanOrEqual(4);
+    expect(requestedAt[2] - requestedAt[1]).toBeGreaterThanOrEqual(200);
+    expect(requestedAt[3] - requestedAt[2]).toBeGreaterThanOrEqual(200);
   });
 
   test('typing forwards to PTY and echoes back', async ({ page }) => {

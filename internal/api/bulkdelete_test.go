@@ -271,7 +271,6 @@ func TestBulkDelete_SkipsDeferredHeraReclaimBeforeSideEffects(t *testing.T) {
 	}, task.ID, task.Worktree)
 	testutil.NoError(t, err)
 	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(role.ID))
-	testutil.NoError(t, d.SetArchived(task.ID, true))
 	logPath := agent.SessionLogPath(task.ID)
 	testutil.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o700))
 	testutil.NoError(t, os.WriteFile(logPath, []byte("keep"), 0o600))

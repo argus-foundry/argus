@@ -114,6 +114,11 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 	}
 	defer releaseReclaim()
 
+	pendingNuke, err := d.HasUnsettledHeraNuke(id)
+	if err != nil || !pendingNuke {
+		uxlog.Log("[hera] reclaim sweep: candidate settled task=%s err=%v", id, err)
+		return
+	}
 	t, err := d.Get(id)
 	if err != nil {
 		uxlog.Log("[hera] reclaim sweep: task reload failed task=%s err=%v", id, err)

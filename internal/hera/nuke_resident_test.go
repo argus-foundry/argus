@@ -29,7 +29,9 @@ func TestResidentExcludedFromNuke(t *testing.T) {
 	testutil.NoError(t, nerr)
 	background()
 	testutil.Equal(t, len(ids), 0)
-	NukeSingleRole(d, nil, view)()
+	bg, err := NukeSingleRole(d, nil, view)
+	testutil.ErrorIs(t, err, db.ErrResidentProtected)
+	bg()
 	after, err := d.HeraLiveBindingByTask(res.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, after.ID, b.ID)
@@ -51,7 +53,9 @@ func TestNukeStaleWorkerPreservesGraduate(t *testing.T) {
 	graduated, err := d.GraduateHeraWorker(b.ID)
 	testutil.NoError(t, err)
 	live := graduated.NewBinding
-	NukeSingleRole(d, nil, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})()
+	bg, err := NukeSingleRole(d, nil, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})
+	testutil.ErrorIs(t, err, db.ErrGraduationPending)
+	bg()
 	after, err := d.Get(task.ID)
 	testutil.NoError(t, err)
 	testutil.False(t, after.Archived)
@@ -89,7 +93,9 @@ func TestNukeSkipsPendingGraduate(t *testing.T) {
 		testutil.True(t, d.GraduationPending(task.ID))
 	}
 
-	NukeSingleRole(d, nil, view)()
+	blocked, err := NukeSingleRole(d, nil, view)
+	testutil.ErrorIs(t, err, db.ErrGraduationPending)
+	blocked()
 	assertIntact(t)
 	testutil.ErrorIs(t, CheckNukeTask(d, task.ID), db.ErrGraduationPending)
 	ids, bg, nerr := NukeSubtree(d, nil, []*heramodel.OrchView{orch})
@@ -124,7 +130,9 @@ func TestNukeSkipsPendingGraduate(t *testing.T) {
 	orch.Roles = orch.Roles[:1]
 
 	testutil.NoError(t, d.CompleteHeraGraduation(task.ID, "orientation"))
-	NukeSingleRole(d, nil, view)()
+	accepted, err := NukeSingleRole(d, nil, view)
+	testutil.NoError(t, err)
+	accepted()
 	after, err := d.Get(task.ID)
 	testutil.NoError(t, err)
 	testutil.True(t, after.Archived)

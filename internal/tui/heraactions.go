@@ -1025,6 +1025,7 @@ func (a *App) heraDoCascadeNuke(subtree []*hera.OrchView, subtreeIDs map[int64]b
 	}
 	reclaimable := make(map[string]bool)
 	var candidates []string
+	var operationErr error
 	for _, o := range subtree {
 		for i := range o.Roles {
 			r := &o.Roles[i]
@@ -1038,23 +1039,31 @@ func (a *App) heraDoCascadeNuke(subtree []*hera.OrchView, subtreeIDs map[int64]b
 			if err := a.heraOps.NukeRole(r); err != nil {
 				uxlog.Log("[hera-view] cascade: nuke role %d failed: %v", r.RoleID, err)
 				reclaimable[r.TaskID] = false
+				operationErr = err
 			}
 		}
-		if err := a.heraOps.NukeOrchestrator(o.ID); err != nil {
-			a.statusbar.SetError("Nuke sub-team failed: " + err.Error())
-			for _, role := range o.Roles {
-				if role.Live {
-					reclaimable[role.TaskID] = false
+	}
+	if operationErr == nil {
+		for _, o := range subtree {
+			if err := a.heraOps.NukeOrchestrator(o.ID); err != nil {
+				operationErr = err
+				for _, role := range o.Roles {
+					if role.Live {
+						reclaimable[role.TaskID] = false
+					}
 				}
 			}
 		}
+	}
+	if operationErr != nil {
+		a.statusbar.SetError("Nuke sub-team failed: " + operationErr.Error())
 	}
 	for _, taskID := range candidates {
 		if reclaimable[taskID] {
 			a.heraReclaimAndArchiveTask(taskID)
 		}
 	}
-	if len(extra) > 0 {
+	if operationErr == nil && len(extra) > 0 {
 		heraGoSafe("cascade: delete stacked branches", func() {
 			a.heraDeleteStackedBranches(extra)
 		})
