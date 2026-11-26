@@ -192,6 +192,22 @@ func (c *sessionCore) StopSession(req *StopReq, resp *StatusResp) error {
 	return nil
 }
 
+// StopSettledSession rejects the operation if a launch or a restart is in
+// flight. The runner makes that decision before it claims the stop target.
+func (c *sessionCore) StopSettledSession(req *TaskIDReq, resp *StatusResp) error {
+	stopper, ok := c.runner.(agent.SettledSessionStopper)
+	if !ok {
+		resp.Error = "settled session stop is unavailable"
+		return nil
+	}
+	if err := stopper.StopSettled(req.TaskID); err != nil {
+		resp.Error = err.Error()
+		return nil
+	}
+	resp.OK = true
+	return nil
+}
+
 // StopRerender is a separate capability so older peers reject the request
 // instead of treating its unknown scope as StopTree. Callers must pass the
 // resumable-transcript guard before requesting this stop.

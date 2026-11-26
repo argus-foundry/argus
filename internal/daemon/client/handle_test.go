@@ -60,6 +60,28 @@ func TestH_Ack(t *testing.T) {
 	testutil.True(t, missing.LastUserInput().IsZero())
 }
 
+func TestAcknowledgedInputPreservesNewerDraft(t *testing.T) {
+	handle := &RemoteSession{inputCh: make(chan inputItem, 2), done: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	finished := make(chan error, 1)
+	go func() {
+		_, err := handle.WriteInputAcknowledged(ctx, []byte("go\r"), agentview.OriginUser)
+		finished <- err
+	}()
+	var voiceInput inputItem
+	select {
+	case voiceInput = <-handle.inputCh:
+	case <-ctx.Done():
+		t.Fatal("voice write was not queued")
+	}
+	_, err := handle.WriteInput([]byte("next"), agentview.OriginUser)
+	testutil.NoError(t, err)
+	voiceInput.ack <- nil
+	testutil.NoError(t, <-finished)
+	testutil.True(t, handle.ComposerDirty())
+}
+
 func TestH_Done(t *testing.T) {
 	_, rs := startedClient(t, "t-h-done", "sleep 60")
 	select {

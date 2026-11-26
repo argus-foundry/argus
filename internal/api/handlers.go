@@ -523,8 +523,6 @@ func (s *Server) handleCreateTaskMultipart(w http.ResponseWriter, r *http.Reques
 
 // --- Stop Task ---
 
-var errTaskRestarting = errors.New("agent is restarting")
-
 func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	task, err := s.db.Get(id)
@@ -544,14 +542,16 @@ func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 // stopTaskSession moves the row to in review after a stop. Voice requires the
 // runner to acknowledge the stop because a missing handle can be a launch.
 func (s *Server) stopTaskSession(task *model.Task, rejectPendingRestart bool) error {
-	if rejectPendingRestart && s.runner.HasPendingRestart(task.ID) {
-		return errTaskRestarting
-	}
-	if err := s.runner.Stop(task.ID); err != nil && (rejectPendingRestart || !errors.Is(err, agent.ErrSessionNotFound)) {
+	if rejectPendingRestart {
+		stopper, ok := s.runner.(agent.SettledSessionStopper)
+		if !ok {
+			return errors.New("settled session stop is unavailable")
+		}
+		if err := stopper.StopSettled(task.ID); err != nil {
+			return err
+		}
+	} else if err := s.runner.Stop(task.ID); err != nil && !errors.Is(err, agent.ErrSessionNotFound) {
 		return err
-	}
-	if rejectPendingRestart && s.runner.HasPendingRestart(task.ID) {
-		return errTaskRestarting
 	}
 	if err := s.db.SetStatus(task.ID, model.StatusInReview); err != nil {
 		uxlog.Log("[api] stop: status write failed task=%s err=%v", task.ID, err)

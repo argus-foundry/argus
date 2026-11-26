@@ -30,14 +30,17 @@ type Attachment struct {
 // Only Name and Project are required. Backend defaults to cfg.Defaults.Backend.
 // Rows/Cols default to 24/80 — agents auto-resize when the TUI attaches.
 type CreateInput struct {
-	Name       string
-	Prompt     string
-	Project    string
-	Backend    string // optional; empty = cfg.Defaults.Backend
-	Model      string // optional; overrides the backend's default model for this task
-	Archetype  string // optional; diligence-profile resolution key (add-diligence-profiles)
-	Profile    string // optional; per-spawn profile override — overrides the project's bound profile for this one spawn; empty = use project binding
-	BaseBranch string // optional; overrides projCfg.Branch for this task
+	Name string
+	// DisplayName preserves a caller-facing name when Git adds a suffix to
+	// the worktree name. Callers that leave it empty use Git's chosen name.
+	DisplayName string
+	Prompt      string
+	Project     string
+	Backend     string // optional; empty = cfg.Defaults.Backend
+	Model       string // optional; overrides the backend's default model for this task
+	Archetype   string // optional; diligence-profile resolution key (add-diligence-profiles)
+	Profile     string // optional; per-spawn profile override — overrides the project's bound profile for this one spawn; empty = use project binding
+	BaseBranch  string // optional; overrides projCfg.Branch for this task
 
 	// BranchNamespace optionally namespaces the created branch as
 	// "argus/<namespace>/<name>" instead of "argus/<name>"
@@ -386,8 +389,12 @@ func CreateAndStart(database *db.DB, runner SessionProvider, input CreateInput) 
 	// — rather than blindly stamping cfg.Defaults.Backend, which previously
 	// made both the project-level override and the tier list unreachable for
 	// any task created with no explicit backend.
+	displayName := input.DisplayName
+	if displayName == "" {
+		displayName = finalName
+	}
 	task := &model.Task{
-		Name:            finalName,
+		Name:            displayName,
 		Status:          model.StatusPending,
 		Project:         input.Project,
 		Prompt:          prompt,

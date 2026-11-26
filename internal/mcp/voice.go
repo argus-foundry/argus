@@ -42,12 +42,12 @@ stop requires confirm true.
 resume accepts confirm or force to revive a closed-out workflow.
 send requires task_id and text.
 status and wait take job_id. wait also takes timeout_ms, capped at 3000, and returns Still running instead of blocking past that.
-idempotency_key repeats the same job. A different command with the same key is rejected. kb_ingest and kb_delete are refused.`,
+idempotency_key repeats the same retained job. Different arguments with a retained key are rejected. Argus keeps up to 256 jobs in memory. kb_ingest and kb_delete are refused.`,
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"command":         map[string]interface{}{"type": "string", "description": "brief, commands, start, stop, resume, send, status, or wait."},
-				"idempotency_key": map[string]interface{}{"type": "string", "description": "Retry token, at most 128 characters. Same key and arguments return the same job."},
+				"idempotency_key": map[string]interface{}{"type": "string", "description": "Retry token, at most 128 bytes. Same key and arguments return the original job while it is retained."},
 				"name":            map[string]interface{}{"type": "string", "description": "Workflow name for start, stop, or resume."},
 				"project":         map[string]interface{}{"type": "string", "description": "Project. Required to create. Also disambiguates a name."},
 				"prompt":          map[string]interface{}{"type": "string", "description": "Instructions for a new workflow."},

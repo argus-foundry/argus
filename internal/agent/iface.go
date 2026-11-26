@@ -53,6 +53,12 @@ type SessionProvider interface {
 	HasPendingRestart(taskID string) bool
 }
 
+// SettledSessionStopper atomically refuses stops while a launch or replacement
+// owns the session slot. Implemented by the runner and the supervisor client.
+type SettledSessionStopper interface {
+	StopSettled(taskID string) error
+}
+
 // SessionRunner is the full in-daemon session-management surface: SessionProvider
 // plus the kick-rerender / reattach / needs-input extras that the daemon's API
 // server and resize/resume paths drive. Both *Runner (in-process) and the

@@ -913,7 +913,9 @@ Each result is JSON. The `speech` field is the only part to read aloud: one or a
 
 `start` takes a workflow `name` or `task_id`. An existing task is left alone when it is already live and resumed when it has stopped. Creating a new one needs `name`, `project`, and `prompt`. Use a short name that fits a worktree, such as `Daily Review`. `stop` requires `confirm: true` and a live session. `resume` with `confirm` or `force` revives a closed-out Hera worker. `send` types into a live session by `task_id`, submits with a return, and reports success after the write is acknowledged. These four commands require the Argus API master token in the `Authorization: Bearer` header on a loopback MCP request. They return a `job_id` and a one-sentence confirmation. `status` and `wait` read that job. `wait` accepts `timeout_ms` and returns `Still running.` if the job is unfinished at the deadline, up to 3 seconds.
 
-Pass `idempotency_key` to make a retry return the same job. Reusing its key with different arguments is rejected while the job is retained. When Argus asks for confirmation, the confirmed retry can reuse the key.
+Pass `idempotency_key` to make a retry return the same retained job. Reusing a retained job's key with different arguments is rejected. Argus keeps up to 256 jobs in memory and evicts finished jobs to admit new ones. When Argus asks for confirmation, the confirmed retry can reuse the key.
+
+Voice stop requires a current session supervisor. The supervisor checks whether a launch or restart is in progress before it selects the session to stop.
 
 `kb_ingest` and `kb_delete` are not voice commands. Asking for either returns an error and changes nothing. The ordinary knowledge-base tools stay available to agents that call them by name.
 

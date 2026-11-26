@@ -36,17 +36,18 @@ type RemoteSession struct {
 	taskID string
 	client *Client
 
-	mu            sync.Mutex
-	buf           *agent.RingBuffer // local ring buffer, populated by stream reader
-	writers       []io.Writer       // stream reader tees output to all attached writers (see fan-out note below)
-	pid           int
-	info          daemon.SessionInfo // cached session info
-	done          chan struct{}      // closed when stream EOF
-	closeOnce     sync.Once          // guards close(done) — see close()
-	inputCh       chan inputItem     // async input channel for WriteInput
-	lastInput     time.Time          // wall-clock time of last input write (either origin)
-	lastUserInput time.Time          // wall-clock time of last agentview.OriginUser write — BUG-034 clear-on-input source
-	composerTyped bool               // user typed since the last submit through THIS handle (see ComposerDirty)
+	mu                 sync.Mutex
+	buf                *agent.RingBuffer // local ring buffer, populated by stream reader
+	writers            []io.Writer       // stream reader tees output to all attached writers (see fan-out note below)
+	pid                int
+	info               daemon.SessionInfo // cached session info
+	done               chan struct{}      // closed when stream EOF
+	closeOnce          sync.Once          // guards close(done) — see close()
+	inputCh            chan inputItem     // async input channel for WriteInput
+	lastInput          time.Time          // wall-clock time of last input write (either origin)
+	lastUserInput      time.Time          // wall-clock time of last agentview.OriginUser write — BUG-034 clear-on-input source
+	composerTyped      bool               // user typed since the last submit through THIS handle (see ComposerDirty)
+	composerGeneration uint64             // advances with recorded user input
 }
 
 // ComposerDirty reports whether the user has typed through this handle since
@@ -184,7 +185,7 @@ func (rs *RemoteSession) WriteInput(p []byte, origin agentview.InputOrigin) (int
 	copy(cp, p)
 	select {
 	case rs.inputCh <- inputItem{data: cp, origin: origin}:
-		rs.recordInput(cp, origin)
+		rs.recordInput(cp, origin, nil)
 		return len(p), nil
 	case <-rs.done:
 		return 0, fmt.Errorf("session closed")
@@ -194,6 +195,9 @@ func (rs *RemoteSession) WriteInput(p []byte, origin agentview.InputOrigin) (int
 // WriteInputAcknowledged shares the normal input queue, but waits for the
 // supervisor to confirm this individual PTY write.
 func (rs *RemoteSession) WriteInputAcknowledged(ctx context.Context, p []byte, origin agentview.InputOrigin) (int, error) {
+	rs.mu.Lock()
+	composerGeneration := rs.composerGeneration
+	rs.mu.Unlock()
 	item := inputItem{data: bytes.Clone(p), origin: origin, ctx: ctx, ack: make(chan error, 1)}
 	select {
 	case rs.inputCh <- item:
@@ -207,7 +211,7 @@ func (rs *RemoteSession) WriteInputAcknowledged(ctx context.Context, p []byte, o
 		if err != nil {
 			return 0, err
 		}
-		rs.recordInput(item.data, item.origin)
+		rs.recordInput(item.data, item.origin, &composerGeneration)
 		return len(p), nil
 	case <-ctx.Done():
 		return 0, ctx.Err()
@@ -216,14 +220,18 @@ func (rs *RemoteSession) WriteInputAcknowledged(ctx context.Context, p []byte, o
 	}
 }
 
-func (rs *RemoteSession) recordInput(data []byte, origin agentview.InputOrigin) {
+func (rs *RemoteSession) recordInput(data []byte, origin agentview.InputOrigin, queuedGeneration *uint64) {
 	now := time.Now()
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.lastInput = now
 	if origin == agentview.OriginUser {
 		rs.lastUserInput = now
-		rs.composerTyped = agentview.ComposerTyped(rs.composerTyped, data)
+		// An earlier acknowledgement must not clear a newer typed draft.
+		if queuedGeneration == nil || *queuedGeneration == rs.composerGeneration {
+			rs.composerTyped = agentview.ComposerTyped(rs.composerTyped, data)
+		}
+		rs.composerGeneration++
 	}
 }
 

@@ -19,7 +19,7 @@ type ArgSpec struct {
 // Commands is the voice allowlist. kb_ingest and kb_delete are intentionally
 // absent; the router refuses those names even if a caller asks for them.
 func Commands() []CommandSpec {
-	key := ArgSpec{Name: "idempotency_key", Type: "string", Description: "Retry token. The same key and arguments return the same job. A different command with that key is rejected. A confirm refusal is not stored, so adding confirm can reuse the key."}
+	key := ArgSpec{Name: "idempotency_key", Type: "string", Description: "Retry token. The same key and arguments return the original job while it is retained. Different arguments with a retained key are rejected. A confirmed retry can reuse the key after a request for confirmation."}
 	return []CommandSpec{
 		{
 			Name:    "brief",

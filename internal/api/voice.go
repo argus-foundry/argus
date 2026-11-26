@@ -19,10 +19,16 @@ import (
 // VoiceOperator is the voice command backend. It reuses status counting,
 // stop, resume, and session input.
 func (s *Server) VoiceOperator() voice.Operator {
-	return apiVoice{s}
+	return apiVoice{s: s, create: func(input agent.CreateInput) (*model.Task, error) {
+		task, _, err := agent.CreateAndStart(s.db, s.runner, input)
+		return task, err
+	}}
 }
 
-type apiVoice struct{ s *Server }
+type apiVoice struct {
+	s      *Server
+	create func(agent.CreateInput) (*model.Task, error)
+}
 
 func (a apiVoice) Snapshot(ctx context.Context, now time.Time) (voice.Snapshot, error) {
 	if err := ctx.Err(); err != nil {
@@ -110,13 +116,12 @@ func (a apiVoice) Create(ctx context.Context, name, project, prompt string) (voi
 	if agent.SafeName(name) != spokenWorkflowAlias(name) {
 		return voice.TaskRef{}, &voice.OpError{Speech: "Use a shorter workflow name with words separated by spaces.", Code: "unstable_name"}
 	}
-	if a.s.createTask == nil {
-		return voice.TaskRef{}, &voice.OpError{Speech: "Voice control is not available.", Code: "not_configured"}
-	}
 	if err := ctx.Err(); err != nil {
 		return voice.TaskRef{}, &voice.OpError{Speech: "That was canceled.", Code: "canceled"}
 	}
-	task, err := a.s.createTask(name, prompt, project, "", "", "", "", false)
+	task, err := a.create(agent.CreateInput{
+		Name: name, DisplayName: spokenWorkflowAlias(name), Prompt: prompt, Project: project,
+	})
 	if err != nil {
 		slog.Error("[voice] start failed", "name", name, "project", project, "err", err)
 		uxlog.Log("[voice] start failed name=%q project=%q err=%v", name, project, err)
@@ -143,9 +148,17 @@ func (a apiVoice) Stop(ctx context.Context, taskID string) error {
 	if t.Archived {
 		return &voice.OpError{Speech: voice.SpeakName(t.Name) + " is archived.", Code: "archived"}
 	}
+	if t.Status == model.StatusPending {
+		// The task row is visible before the launch finishes. A pending
+		// row can already have a PTY, but its start still owns the status.
+		if !a.s.voiceCreateMu.TryLock() {
+			return &voice.OpError{Speech: voice.SpeakName(t.Name) + " is still starting.", Code: "agent_starting"}
+		}
+		defer a.s.voiceCreateMu.Unlock()
+	}
 	if err := a.s.stopTaskSession(t, true); err != nil {
-		if errors.Is(err, errTaskRestarting) {
-			return &voice.OpError{Speech: voice.SpeakName(t.Name) + " is restarting.", Code: "agent_restarting"}
+		if errors.Is(err, agent.ErrSessionStarting) {
+			return &voice.OpError{Speech: voice.SpeakName(t.Name) + " is starting or restarting.", Code: "agent_restarting"}
 		}
 		if errors.Is(err, agent.ErrSessionNotFound) {
 			return &voice.OpError{Speech: "I couldn't find a live session to stop.", Code: "no_session"}

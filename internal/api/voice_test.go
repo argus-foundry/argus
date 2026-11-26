@@ -7,7 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -70,7 +73,9 @@ func TestVoiceOperatorStartStopSendResume(t *testing.T) {
 	sess := &voiceSess{}
 	run := &voiceRun{Runner: agent.NewRunner(nil), sess: sess}
 	srv.runner = run
-	op := srv.VoiceOperator()
+	op := apiVoice{s: srv, create: func(input agent.CreateInput) (*model.Task, error) {
+		return srv.createTask(input.DisplayName, input.Prompt, input.Project, "", "", "", "", false)
+	}}
 	ctx := context.Background()
 
 	created, err := op.Create(ctx, "Review", "argus", "ship it")
@@ -129,15 +134,15 @@ func TestVoiceFindsMultiwordNameAfterRealCreation(t *testing.T) {
 	srv.runner = run
 	testutil.NoError(t, d.SetBackend("plain", config.Backend{Command: "cat"}))
 	testutil.NoError(t, d.SetProject("argus", config.Project{Path: wtRepo(t), Backend: "plain"}))
-	srv.createTask = func(name, prompt, project, _, _, _, _ string, _ bool) (*model.Task, error) {
-		task, _, err := agent.CreateAndStart(d, run, agent.CreateInput{Name: name, Prompt: prompt, Project: project})
-		return task, err
-	}
+	testutil.NoError(t, os.MkdirAll(agent.WorktreeDir("argus", "Daily-Review"), 0o700))
 	ctx := context.Background()
 	op := srv.VoiceOperator()
 	created, err := op.Create(ctx, "Daily Review", "argus", "review this")
 	testutil.NoError(t, err)
 	testutil.Equal(t, created.Name, "Daily-Review")
+	row, err := d.Get(created.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, filepath.Base(row.Worktree), "Daily-Review-1")
 	found, err := op.Find(ctx, "", "Daily Review", "")
 	testutil.NoError(t, err)
 	testutil.Equal(t, found.Ref.ID, created.ID)
@@ -294,22 +299,64 @@ func TestVoiceStopDoesNotConfirmUnregisteredLaunch(t *testing.T) {
 	testutil.ErrorIs(t, <-finished, context.Canceled)
 	var refused *voice.OpError
 	testutil.True(t, errors.As(err, &refused))
-	testutil.Equal(t, refused.Code, "no_session")
+	testutil.Equal(t, refused.Code, "agent_restarting")
 	row, err := d.Get(task.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, row.Status, model.StatusInProgress)
 }
 
+func TestVoiceStopRefusesCreationFinalization(t *testing.T) {
+	srv, d := testServer(t)
+	run := &voiceRun{Runner: agent.NewRunner(nil)}
+	srv.runner = run
+	testutil.NoError(t, d.SetBackend("plain", config.Backend{Command: "cat"}))
+	testutil.NoError(t, d.SetProject("argus", config.Project{Path: wtRepo(t), Backend: "plain"}))
+	entered := make(chan string, 1)
+	resume := make(chan struct{})
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(resume) }) })
+	run.afterStart = func(task *model.Task) {
+		entered <- task.ID
+		<-resume
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	op := srv.VoiceOperator()
+	finished := make(chan error, 1)
+	go func() {
+		_, err := op.Create(ctx, "Daily Review", "argus", "review this")
+		finished <- err
+	}()
+	var id string
+	select {
+	case id = <-entered:
+	case err := <-finished:
+		t.Fatalf("create did not reach the launched state: %v", err)
+	case <-ctx.Done():
+		t.Fatal("create did not publish its session")
+	}
+	var busy *voice.OpError
+	testutil.True(t, errors.As(op.Stop(ctx, id), &busy))
+	testutil.Equal(t, busy.Code, "agent_starting")
+	testutil.Equal(t, len(run.stopped), 0)
+
+	release.Do(func() { close(resume) })
+	testutil.NoError(t, <-finished)
+	testutil.NoError(t, op.Stop(ctx, id))
+	row, err := d.Get(id)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Status, model.StatusInReview)
+}
+
 func TestVoiceLaunchReportsAmbiguousOutcome(t *testing.T) {
 	srv, d := testServer(t)
-	srv.createTask = func(_, _, _, _, _, _, _ string, _ bool) (*model.Task, error) {
-		return nil, agent.ErrStartAmbiguous
-	}
 	run := &voiceRun{Runner: agent.NewRunner(nil), startErr: agent.ErrStartAmbiguous}
 	srv.runner = run
 	task := &model.Task{Name: "Review", Status: model.StatusInReview}
 	testutil.NoError(t, d.Add(task))
-	op := srv.VoiceOperator()
+	op := apiVoice{s: srv, create: func(agent.CreateInput) (*model.Task, error) {
+		return nil, agent.ErrStartAmbiguous
+	}}
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name string
@@ -413,6 +460,7 @@ type voiceRun struct {
 	started     int
 	beforeStop  func()
 	beforeStart func(*model.Task)
+	afterStart  func(*model.Task)
 	startErr    error
 }
 
@@ -433,8 +481,17 @@ func (r *voiceRun) Stop(id string) error {
 	}
 	return nil
 }
+func (r *voiceRun) StopSettled(id string) error {
+	if r.HasPendingRestart(id) {
+		return agent.ErrSessionStarting
+	}
+	return r.Stop(id)
+}
 func (r *voiceRun) Start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, error) {
 	sess, _, err := r.StartOrReattach(task, cfg, rows, cols, resume)
+	if err == nil && r.afterStart != nil {
+		r.afterStart(task)
+	}
 	return sess, err
 }
 func (r *voiceRun) StartOrReattach(task *model.Task, _ config.Config, _, _ uint16, _ bool) (agent.SessionHandle, bool, error) {

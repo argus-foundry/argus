@@ -421,6 +421,10 @@ func (r *Runner) kickRerender(task *model.Task, cfg config.Config, rows, cols ui
 		r.mu.Unlock()
 		return fmt.Errorf("kick already pending for task %s", task.ID)
 	}
+	if r.stopped[task.ID] || !sess.Alive() {
+		r.mu.Unlock()
+		return ErrSessionNotFound
+	}
 	oldID := task.SessionID
 	// Publish a recovered ID only after reserving the pending restart.
 	task.SessionID = restartTask.SessionID
@@ -481,6 +485,10 @@ func (r *Runner) Recycle(task *model.Task, cfg config.Config, rows, cols uint16)
 	if _, exists := r.pendingRestart[task.ID]; exists {
 		r.mu.Unlock()
 		return fmt.Errorf("restart already pending for task %s", task.ID)
+	}
+	if r.stopped[task.ID] || !sess.Alive() {
+		r.mu.Unlock()
+		return ErrSessionNotFound
 	}
 	r.pendingRestart[task.ID] = &pendingRestart{
 		task:   task,
@@ -559,8 +567,20 @@ func (r *Runner) Stop(taskID string) error { return r.StopScoped(taskID, StopTre
 
 // StopScoped stops a running session with the given scope (see StopScope).
 func (r *Runner) StopScoped(taskID string, scope StopScope) error {
+	return r.stopScoped(taskID, scope, false)
+}
+
+func (r *Runner) StopSettled(taskID string) error {
+	return r.stopScoped(taskID, StopTree, true)
+}
+
+func (r *Runner) stopScoped(taskID string, scope StopScope, settled bool) error {
 	r.mu.Lock()
-	sess := r.sessions[taskID]
+	sess, reserved := r.sessions[taskID]
+	if settled && (r.pendingRestart[taskID] != nil || (reserved && sess == nil)) {
+		r.mu.Unlock()
+		return ErrSessionStarting
+	}
 	if sess == nil {
 		r.mu.Unlock()
 		return ErrSessionNotFound
@@ -569,6 +589,13 @@ func (r *Runner) StopScoped(taskID string, scope StopScope) error {
 	r.mu.Unlock()
 	slog.Info("runner.Stop", "task", taskID, "pid", sess.PID(), "scope", scope.String())
 	err := sess.StopScoped(scope)
+	if err != nil {
+		r.mu.Lock()
+		if r.sessions[taskID] == sess && r.pendingRestart[taskID] == nil {
+			delete(r.stopped, taskID)
+		}
+		r.mu.Unlock()
+	}
 	// Best-effort cleanup for a session that already detached itself to
 	// Claude Code's own background-session supervisor (see
 	// context/knowledge/gotchas/daemon-rpc.md) — the SIGTERM above can never

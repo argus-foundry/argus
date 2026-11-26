@@ -43,6 +43,8 @@ The system SHALL provide a brief whose speech is one to three plain sentences co
 
 Starting, stopping, resuming, and sending input SHALL reuse the existing task create, stop, resume, and session-input paths. Each accepted call SHALL return a job handle and a one-sentence confirmation without waiting for a long-running start to finish. `wait` and `status` SHALL report that job. `wait` SHALL accept a timeout and SHALL NOT block longer than three seconds. When the job is unfinished at the deadline, the speech SHALL be `Still running.` Sending input SHALL require a task id. Stop SHALL NOT run unless confirm is true. Resuming a closed-out workflow SHALL NOT force revival unless confirm or force is set.
 
+The session owner SHALL arbitrate a confirmed stop against pending starts and restarts before selecting the stop target. During a launch, the call SHALL either wait for a usable session or report that it cannot stop the session yet.
+
 #### Scenario: Stop without confirm does nothing
 
 - **WHEN** stop is requested without confirm
@@ -65,7 +67,7 @@ Starting, stopping, resuming, and sending input SHALL reuse the existing task cr
 
 ### Requirement: Idempotency keys replay the same job
 
-An idempotency key plus the same command arguments SHALL return the original job and SHALL NOT run the operation again. The same key with different arguments SHALL be rejected. A confirm refusal SHALL NOT be stored, so a later confirmed call MAY reuse the key.
+While a job is retained in the daemon's bounded 256-job store, its idempotency key plus the same command arguments SHALL return the original job without running the operation again. The same key with different arguments SHALL be rejected while the job is retained. Finished jobs MAY be evicted to admit new jobs. A confirm refusal SHALL NOT be stored, so a later confirmed call MAY reuse the key.
 
 #### Scenario: A retried start does not create a second task
 

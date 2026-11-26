@@ -769,6 +769,12 @@ func TestC_StopMissing(t *testing.T) {
 	testutil.ErrorIs(t, c.Stop("missing"), agent.ErrSessionNotFound)
 }
 
+func TestC_StopSettled(t *testing.T) {
+	c, rs := startedClient(t, "settled", "sleep 60")
+	testutil.NoError(t, c.StopSettled(rs.taskID))
+	testutil.ErrorIs(t, c.StopSettled("missing"), agent.ErrSessionNotFound)
+}
+
 // TestC_StartRPCErr covers Start's RPC-failure branch. A closed transport is
 // a definitive failure (not an ambiguous timeout) — the RPC can't possibly
 // still be running daemon-side, so this must NOT wrap agent.ErrStartAmbiguous;

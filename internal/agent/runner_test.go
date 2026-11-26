@@ -28,6 +28,41 @@ func runnerTestConfig() config.Config {
 	}
 }
 
+func TestStopSettledFencesRecycleBeforeSignaling(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	run := NewRunner(nil)
+	cfg := runnerTestConfig()
+	cfg.Backends["test"] = config.Backend{Command: "sleep 60"}
+	task := &model.Task{ID: "settled-stop", Name: "test", Worktree: t.TempDir()}
+	sess, err := run.Start(task, cfg, 24, 80, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(run.StopAll)
+	entered, release := make(chan struct{}), make(chan struct{})
+	original := cleanupSessionBrowsers
+	var once sync.Once
+	cleanupSessionBrowsers = func(string) {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- run.StopSettled(task.ID) }()
+	select {
+	case <-entered:
+		testutil.ErrorIs(t, run.Recycle(task, cfg, 24, 80), ErrSessionNotFound)
+		testutil.Equal(t, run.Get(task.ID), sess)
+		testutil.False(t, run.HasPendingRestart(task.ID))
+	case <-time.After(time.Second):
+		t.Error("stop did not reach the browser cleanup before sending its signal")
+	}
+	close(release)
+	testutil.NoError(t, <-finished)
+	cleanupSessionBrowsers = original
+}
+
 func TestRunner_StartAndGet(t *testing.T) {
 	finished := make(chan string, 1)
 	r := NewRunner(func(taskID string, err error, stopped bool, _ []byte) {

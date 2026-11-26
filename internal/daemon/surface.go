@@ -367,7 +367,9 @@ const (
 	// v19: resident PTY startup output best-effort logs fallback notices once
 	// to the supervisor log within 64 KiB/60s, preserving ANSI/UTF-8 boundaries.
 	// v20: full session stops also snapshot and clean detached task browsers.
-	SupervisorStreamSurface = 20
+	// v21: StopSettledSession arbitrates a voice stop against starting and
+	// restarting the target session under the runner lock.
+	SupervisorStreamSurface = 21
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -596,6 +598,7 @@ var SupervisorStreamPaths = []string{
 	"internal/agent/ringbuffer.go",            // the ring the sole readLoop tees into
 	"internal/claudeagents/claudeagents.go",   // `claude agents`/`claude stop` under the session's config dir
 	"internal/agent/runner.go",                // live session map, pendingRestart, Stop/StopAll, KickRerender
+	"internal/agent/errors.go",                // typed stop refusal sent across the R/S boundary
 	"internal/agent/session.go",               // the single readLoop: PTY read → ring + writers, session log
 	"internal/agent/resident_auto.go",         // resident native permission fallback diagnostics
 	"internal/agent/terminal_color.go",        // PTY startup OSC color-query replies and duplicate filtering
@@ -626,7 +629,7 @@ const (
 	SpawnSurfaceDigest = "d5dc8e881ff9ce381a59e01eb592ab9b44cf02d1d1b44fe96001a8e2aed737e3"
 	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
 	// changed daemon-side comments; neither changes supervisor stream behavior.
-	StreamSurfaceDigest = "d733c47723b3ef54fd6bd8a08920a287984f8bebf4ed2224e53718b4a603ed66"
+	StreamSurfaceDigest = "34d709521a313d4637c5ee5345b1a97cd91d6fc68a034063d4a77ef27cec7973"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

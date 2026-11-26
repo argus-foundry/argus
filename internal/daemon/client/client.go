@@ -454,6 +454,17 @@ func (c *Client) ProbeSession(taskID string) (daemon.SessionInfo, error) {
 // Stop stops a session via RPC (full tree stop).
 func (c *Client) Stop(taskID string) error { return c.StopScoped(taskID, agent.StopTree) }
 
+func (c *Client) StopSettled(taskID string) error {
+	var resp daemon.StatusResp
+	if err := c.call("Daemon.StopSettledSession", &daemon.TaskIDReq{TaskID: taskID}, &resp); err != nil {
+		return err
+	}
+	if resp.Error == agent.ErrSessionStarting.Error() {
+		return agent.ErrSessionStarting
+	}
+	return stopReplyError(resp)
+}
+
 // StopScoped stops a session via RPC with the given scope.
 func (c *Client) StopScoped(taskID string, scope agent.StopScope) error {
 	var resp daemon.StatusResp
@@ -471,6 +482,10 @@ func (c *Client) StopScoped(taskID string, scope agent.StopScope) error {
 		}
 		return err
 	}
+	return stopReplyError(resp)
+}
+
+func stopReplyError(resp daemon.StatusResp) error {
 	if resp.Error == agent.ErrSessionNotFound.Error() {
 		return agent.ErrSessionNotFound
 	}
