@@ -40,6 +40,10 @@ var taskGitTimeout = 15 * time.Second
 
 // RunTaskGit bounds Git and its subprocess group by the task lifetime.
 func RunTaskGit(ctx context.Context, dir string, args ...string) (string, int, error) {
+	return runTaskGitWithEnv(ctx, dir, nil, args...)
+}
+
+func runTaskGitWithEnv(ctx context.Context, dir string, env []string, args ...string) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, taskGitTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // G702: fixed Git binary with structured arguments, no shell.
@@ -58,7 +62,7 @@ func RunTaskGit(ctx context.Context, dir string, args ...string) (string, int, e
 		}
 	}()
 	cmd.Dir = dir
-	cmd.Env = append(cmd.Environ(), "LC_ALL=C")
+	cmd.Env = append(append(cmd.Environ(), "LC_ALL=C"), env...)
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		uxlog.Log("[worktree] git interrupted dir=%q err=%v", dir, ctx.Err())

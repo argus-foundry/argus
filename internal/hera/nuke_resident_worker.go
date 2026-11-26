@@ -390,6 +390,11 @@ func residentRemoteBranchDeleteOwned(ctx context.Context, d *db.DB, opts Residen
 		residentDeleteLog("[resident] delete: original origin unavailable or changed task=%s branch=%s", taskID, branch)
 		return nil
 	}
+	if opts.RemoteBranchDelete == nil && lease.OriginStamp != "" {
+		opts.RemoteBranchDelete = func(ctx context.Context, dir, branch, tip string) error {
+			return agent.DeleteRemoteBranchAtOrigin(ctx, dir, branch, tip, lease.OriginStamp)
+		}
+	}
 	residentRemoteBranchDelete(ctx, opts, taskID, repoDir, branch, lease.Tip)
 	return nil
 }

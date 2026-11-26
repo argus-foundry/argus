@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -139,16 +140,21 @@ func CaptureTaskGitRepository(ctx context.Context, directory string) (TaskGitRep
 // TaskGitOriginStamp fingerprints the fetch and push destinations without
 // persisting or logging URLs that may carry credentials.
 func TaskGitOriginStamp(ctx context.Context, repoDir string) string {
+	stamp, _ := taskGitOrigin(ctx, repoDir)
+	return stamp
+}
+
+func taskGitOrigin(ctx context.Context, repoDir string) (string, []string) {
 	if repoDir == "" {
-		return ""
+		return "", nil
 	}
 	fetch, _, fetchErr := RunTaskGit(ctx, repoDir, "remote", "get-url", "--all", "origin")
 	push, _, pushErr := RunTaskGit(ctx, repoDir, "remote", "get-url", "--push", "--all", "origin")
 	if fetchErr != nil || pushErr != nil || fetch == "" || push == "" {
-		return ""
+		return "", nil
 	}
 	hash := sha256.Sum256([]byte(fetch + "\x00" + push))
-	return hex.EncodeToString(hash[:])
+	return hex.EncodeToString(hash[:]), strings.Split(push, "\n")
 }
 
 // LockTaskGitOwnership fences creation and cleanup across TUI and daemon

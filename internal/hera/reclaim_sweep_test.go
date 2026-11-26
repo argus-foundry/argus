@@ -380,7 +380,7 @@ func TestStackedDeletePreservesSuccessorAfterOldTaskDisappears(t *testing.T) {
 }
 
 func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
-	for _, name := range []string{"original origin", "changed origin", "changed remote tip", "changed local tip", "linked successor", "checked-out local branch", "tip moves during deletion"} {
+	for _, name := range []string{"original origin", "changed origin", "changed remote tip", "changed local tip", "linked successor", "checked-out local branch", "paused rebase", "tip moves during deletion", "origin moves during push"} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			repo := initGitRepo(t, t.TempDir())
@@ -390,6 +390,19 @@ func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
 			gitRun(t, repo, "remote", "add", "origin", first)
 			const branch = "argus/child"
 			gitRun(t, repo, "branch", branch)
+			if name == "paused rebase" {
+				linked := filepath.Join(t.TempDir(), "rebasing checkout")
+				gitRun(t, repo, "worktree", "add", linked, branch)
+				addGitCommit(t, linked, "topic.txt", "topic")
+				addGitCommit(t, repo, "base.txt", "base")
+				rebase := exec.Command("git", "-C", linked, "rebase", "--exec", "false", "master")
+				out, err := rebase.CombinedOutput()
+				testutil.Error(t, err)
+				testutil.Contains(t, string(out), "execution failed")
+				if err := exec.Command("git", "-C", linked, "branch", "-D", "--", branch).Run(); err == nil {
+					t.Fatal("Git must protect the branch while a linked checkout is rebasing")
+				}
+			}
 			gitRun(t, repo, "push", "origin", branch)
 			gitRun(t, repo, "push", second, branch)
 			repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
@@ -406,6 +419,20 @@ func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
 				gitRun(t, repo, "branch", "-f", branch, "HEAD")
 			case "checked-out local branch":
 				gitRun(t, repo, "worktree", "add", filepath.Join(t.TempDir(), "child"), branch)
+			case "origin moves during push":
+				realGit, err := exec.LookPath("git")
+				testutil.NoError(t, err)
+				bin := t.TempDir()
+				const shim = `#!/bin/sh
+case "$*" in
+  *":refs/heads/argus/child"*) "$ARGUS_TEST_STACK_REAL_GIT" remote set-url origin "$ARGUS_TEST_STACK_REDIRECT" || exit 1 ;;
+esac
+exec "$ARGUS_TEST_STACK_REAL_GIT" "$@"
+`
+				testutil.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(shim), 0o700))
+				t.Setenv("ARGUS_TEST_STACK_REAL_GIT", realGit)
+				t.Setenv("ARGUS_TEST_STACK_REDIRECT", second)
+				t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			case "tip moves during deletion":
 				addGitCommit(t, repo, "new.txt", "new")
 				realGit, err := exec.LookPath("git")
@@ -433,12 +460,15 @@ exec "$ARGUS_TEST_STACK_REAL_GIT" "$@"
 				testutil.NoError(t, d.SetProject("other", config.Project{Path: initGitRepo(t, t.TempDir())}))
 				testutil.NoError(t, d.Add(&model.Task{ID: "successor", Name: "Successor", Project: "other", Worktree: linked, Branch: branch}))
 			}
-			localDeleted := name == "original origin" || name == "changed remote tip"
-			remoteDeleted := name == "original origin" || name == "checked-out local branch"
+			localDeleted := name == "original origin" || name == "changed remote tip" || name == "origin moves during push"
+			remoteDeleted := name == "original origin" || name == "checked-out local branch" || name == "paused rebase" || name == "origin moves during push"
 			testutil.Equal(t, DeleteStackedTaskBranch(context.Background(), d, "child", repository, branch, tip), localDeleted || remoteDeleted)
 			testutil.Equal(t, gitBranchExists(repo, branch), !localDeleted)
 			testutil.Equal(t, gitBranchExists(first, branch), !remoteDeleted)
 			testutil.True(t, gitBranchExists(second, branch))
+			if remoteDeleted {
+				testutil.False(t, gitBranchExists(repo, "origin/"+branch))
+			}
 			if name == "tip moves during deletion" {
 				testutil.Equal(t, agent.TaskGitBranchTip(context.Background(), repo, branch), agent.TaskGitBranchTip(context.Background(), repo, "master"))
 			}

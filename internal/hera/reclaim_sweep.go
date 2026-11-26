@@ -502,7 +502,7 @@ func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID string, repo 
 		uxlog.Log("[hera] stacked branch origin changed task=%s branch=%q", taskID, branch)
 		return false
 	}
-	return agent.DeleteStackedBranchContext(ctx, repoDir, branch, expectedTip, repo.Origin != "")
+	return agent.DeleteStackedBranchContext(ctx, repoDir, branch, expectedTip, repo.Origin)
 }
 
 // StackMergeSafetyContext accepts project defaults only from the repository

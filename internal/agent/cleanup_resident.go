@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -208,14 +209,14 @@ func TaskGitBranchTip(ctx context.Context, repoDir, branch string) string {
 
 // DeleteStackedBranchContext removes a stack link whose classified tip is
 // unchanged. Leave origin alone unless the same commit was tracked there.
-func DeleteStackedBranchContext(ctx context.Context, repoDir, branch, expectedTip string, hasOrigin bool) bool {
+func DeleteStackedBranchContext(ctx context.Context, repoDir, branch, expectedTip, originStamp string) bool {
 	if expectedTip == "" || TaskGitBranchTip(ctx, repoDir, branch) != expectedTip {
 		return false
 	}
-	remoteMatches := hasOrigin && revParseCommit(ctx, repoDir, "refs/remotes/origin/"+branch) == expectedTip
+	remoteMatches := originStamp != "" && revParseCommit(ctx, repoDir, "refs/remotes/origin/"+branch) == expectedTip
 	localDeleted := deleteStackedLocalBranch(ctx, repoDir, branch, expectedTip)
 	if remoteMatches && (localDeleted || TaskGitBranchTip(ctx, repoDir, branch) == expectedTip) {
-		if err := DeleteRemoteBranchContext(ctx, repoDir, branch, expectedTip); err == nil {
+		if err := DeleteRemoteBranchAtOrigin(ctx, repoDir, branch, expectedTip, originStamp); err == nil {
 			return true
 		} else {
 			uxlog.Log("[worktree] stacked origin delete failed repo=%q branch=%q err=%v", repoDir, branch, err)
@@ -226,14 +227,20 @@ func DeleteStackedBranchContext(ctx context.Context, repoDir, branch, expectedTi
 
 func deleteStackedLocalBranch(ctx context.Context, repoDir, branch, expectedTip string) bool {
 	ref := "refs/heads/" + branch
-	worktrees, _, err := RunTaskGit(ctx, repoDir, "worktree", "list", "--porcelain")
+	worktrees, _, err := RunTaskGit(ctx, repoDir, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
 		uxlog.Log("[worktree] stacked checkout inspection failed repo=%q branch=%q err=%v", repoDir, branch, err)
 		return false
 	}
-	for line := range strings.SplitSeq(worktrees, "\n") {
-		if line == "branch "+ref {
-			uxlog.Log("[worktree] stacked local branch still checked out repo=%q branch=%q", repoDir, branch)
+	var worktree string
+	for field := range strings.SplitSeq(worktrees, "\x00") {
+		if path, ok := strings.CutPrefix(field, "worktree "); ok {
+			worktree = path
+		}
+		// Rebase and bisect detach HEAD while retaining use of a branch.
+		// A pending rebase can also be updating other branch refs.
+		if field == "branch "+ref || (field == "detached" && worktreeRefOperationPending(ctx, worktree)) {
+			uxlog.Log("[worktree] stacked local branch still in use repo=%q branch=%q", repoDir, branch)
 			return false
 		}
 	}
@@ -245,6 +252,24 @@ func deleteStackedLocalBranch(ctx context.Context, repoDir, branch, expectedTip 
 		uxlog.Log("[worktree] stacked branch config removal failed repo=%q branch=%q err=%v", repoDir, branch, err)
 	}
 	return true
+}
+
+// worktreeRefOperationPending refuses deletion when Git could still need
+// a branch ref from a detached checkout.
+func worktreeRefOperationPending(ctx context.Context, worktree string) bool {
+	if worktree == "" {
+		return true
+	}
+	gitDir, _, err := RunTaskGit(ctx, worktree, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return true
+	}
+	for _, marker := range []string{"rebase-apply", "rebase-merge", "BISECT_START"} {
+		if _, err := os.Stat(filepath.Join(gitDir, marker)); !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	return false
 }
 
 // revParseCommit resolves ref to a commit id in dir, "" when it does not.
@@ -275,14 +300,55 @@ var ErrRemoteBranchGone = errors.New("remote branch already gone")
 // re-created branch). It does not take the repo lock: a slow push must never
 // block a later local removal in the same repo.
 func DeleteRemoteBranchContext(ctx context.Context, repoDir, branch, expectTip string) error {
-	if branch == "" || repoDir == "" {
+	if repoDir == "" {
+		return nil
+	}
+	return deleteLeasedRemoteBranch(ctx, func(args ...string) (string, int, error) {
+		return RunTaskGit(ctx, repoDir, args...)
+	}, "origin", branch, expectTip, true)
+}
+
+// DeleteRemoteBranchAtOrigin pins verified destinations so Git cannot resolve
+// a newly configured origin between the identity check and the push.
+func DeleteRemoteBranchAtOrigin(ctx context.Context, repoDir, branch, expectTip, expectedOrigin string) error {
+	stamp, targets := taskGitOrigin(ctx, repoDir)
+	if stamp == "" || stamp != expectedOrigin {
+		return errors.New("original origin changed or is unavailable")
+	}
+	const urlEnv = "ARGUS_RECLAIM_VERIFIED_PUSH_URL"
+	remote := "argus-reclaim-" + rand.Text()
+	configArgs := []string{
+		"--config-env=remote." + remote + ".url=" + urlEnv,
+		"--config-env=remote." + remote + ".pushurl=" + urlEnv,
+	}
+	refspecs, _, _ := RunTaskGit(ctx, repoDir, "config", "--null", "--get-all", "remote.origin.fetch")
+	for spec := range strings.SplitSeq(refspecs, "\x00") {
+		if spec != "" {
+			configArgs = append(configArgs, "-c", "remote."+remote+".fetch="+spec)
+		}
+	}
+	var result error
+	for _, url := range targets {
+		run := func(args ...string) (string, int, error) {
+			command := append(append([]string(nil), configArgs...), args...)
+			return runTaskGitWithEnv(ctx, repoDir, []string{urlEnv + "=" + url}, command...)
+		}
+		result = errors.Join(result, deleteLeasedRemoteBranch(ctx, run, remote, branch, expectTip, false))
+	}
+	return result
+}
+
+type taskGitCommand func(...string) (string, int, error)
+
+func deleteLeasedRemoteBranch(ctx context.Context, run taskGitCommand, remote, branch, expectTip string, includeGitOutput bool) error {
+	if branch == "" {
 		return nil
 	}
 	if expectTip == "" {
 		return fmt.Errorf("delete origin branch %s: no expected tip to lease on; left in place", branch)
 	}
 	ref := "refs/heads/" + branch
-	msg, _, err := RunTaskGit(ctx, repoDir, "push", "--force-with-lease="+ref+":"+expectTip, "origin", ":"+ref)
+	msg, _, err := run("push", "--force-with-lease="+ref+":"+expectTip, remote, ":"+ref)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("git push origin --delete %s: %w", branch, ctxErr)
@@ -291,7 +357,8 @@ func DeleteRemoteBranchContext(ctx context.Context, repoDir, branch, expectTip s
 		// from origin, as "stale info"; some versions report the gone case as
 		// "remote ref does not exist". Either way ls-remote classifies it.
 		if strings.Contains(msg, "stale info") || strings.Contains(msg, "remote ref does not exist") {
-			present, lsErr := remoteBranchExists(ctx, repoDir, ref)
+			_, code, lsErr := run("ls-remote", "--exit-code", remote, ref)
+			present, lsErr := remoteRefExists(code, lsErr)
 			switch {
 			case lsErr == nil && !present:
 				return fmt.Errorf("%w: origin has no %s", ErrRemoteBranchGone, branch)
@@ -299,6 +366,9 @@ func DeleteRemoteBranchContext(ctx context.Context, repoDir, branch, expectTip s
 				return fmt.Errorf("%w: origin %s is no longer at %s (could not confirm it still exists: %w)", ErrRemoteBranchChanged, branch, expectTip, lsErr)
 			}
 			return fmt.Errorf("%w: origin %s is no longer at %s", ErrRemoteBranchChanged, branch, expectTip)
+		}
+		if !includeGitOutput {
+			return fmt.Errorf("git push origin --delete %s: %w", branch, err)
 		}
 		return fmt.Errorf("git push origin --delete %s: %w: %s", branch, err, msg)
 	}
@@ -310,6 +380,10 @@ func DeleteRemoteBranchContext(ctx context.Context, repoDir, branch, expectTip s
 // delete.
 func remoteBranchExists(ctx context.Context, repoDir, ref string) (bool, error) {
 	_, code, err := RunTaskGit(ctx, repoDir, "ls-remote", "--exit-code", "origin", ref)
+	return remoteRefExists(code, err)
+}
+
+func remoteRefExists(code int, err error) (bool, error) {
 	switch {
 	case err == nil:
 		return true, nil

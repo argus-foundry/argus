@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/argus-foundry/argus/internal/app/agentview"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -181,12 +182,21 @@ func TestResidentAutoFallbackFromPTY(t *testing.T) {
 			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 			t.Cleanup(func() { slog.SetDefault(prev) })
 			// No uxlog.Init: the production supervisor initializes slog only.
-			cmd := exec.Command("printf", "%s\n", "auto mode is unavailable for your plan", "Manual session ready")
+			cmd := exec.Command("sh", "-c", `printf '%s\n' 'auto mode is unavailable for your plan' 'Manual session ready'; read -r release`)
 			cmd.Env = os.Environ()
 			if resident {
 				cmd.Env = append(cmd.Env, ResidentEnvMarker+"=1")
 			}
 			sess, err := StartSession("solo", cmd, 24, 80)
+			testutil.NoError(t, err)
+			t.Cleanup(func() { _ = sess.Stop() })
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+				if strings.Contains(string(sess.RecentOutput()), "Manual session ready") {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			_, err = sess.WriteInput([]byte("\r"), agentview.OriginSystem)
 			testutil.NoError(t, err)
 			select {
 			case <-sess.Done():

@@ -149,11 +149,9 @@ func TestCascadeStackConfirmationUsesClassifiedRepository(t *testing.T) {
 	seedStackedBranchStack(t, d)
 	original := d.Config().Projects["p"].Path
 	other := stackFixtureRepo(t)
-	for _, repo := range []string{original, other} {
-		create := exec.Command("git", "branch", "b2")
-		create.Dir = repo
-		testutil.NoError(t, create.Run())
-	}
+	testutil.NoError(t, exec.Command("git", "-C", original, "branch", "b2").Run())
+	testutil.NoError(t, exec.Command("git", "-C", other, "fetch", original, "b2").Run())
+	testutil.NoError(t, exec.Command("git", "-C", other, "branch", "b2", "FETCH_HEAD").Run())
 	testutil.NoError(t, d.SetProject("other", config.Project{Path: other, Branch: "master"}))
 	testutil.NoError(t, d.Add(&model.Task{ID: "other-child", Name: "Other child", Project: "other", Branch: "b2", BaseBranch: "b1"}))
 	testutil.NoError(t, d.Add(&model.Task{ID: "other-tip", Name: "Other tip", Project: "other", Branch: "b3", BaseBranch: "b2"}))
@@ -173,6 +171,7 @@ func TestCascadeStackConfirmationUsesClassifiedRepository(t *testing.T) {
 		t.Fatal("the offered branch needs a real classified tip")
 	}
 	testutil.NoError(t, d.SetProject("p", config.Project{Path: other, Branch: "master"}))
+	testutil.NoError(t, d.Delete("other-child"))
 	app.heraDeleteStackedBranches(extra)
 	for _, repo := range []string{original, other} {
 		verify := exec.Command("git", "show-ref", "--verify", "refs/heads/b2")
