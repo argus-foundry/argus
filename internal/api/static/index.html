@@ -4276,52 +4276,60 @@ async function resumeTask() {
 
 async function renameTask() {
   if (!currentTask) return;
+  const { id } = currentTask;
+  const view = detailViewGen;
   const next = prompt('Rename task', currentTask.name);
   if (!next || next === currentTask.name) return;
   try {
-    const r = await api(`/api/tasks/${currentTask.id}/rename`, {
+    const r = await api(`/api/tasks/${id}/rename`, {
       method: 'POST',
       body: JSON.stringify({ name: next }),
     });
     if (!r.ok) throw new Error((await r.json()).error || 'rename failed');
-    currentTask.name = next;
-    document.getElementById('detail-title').textContent = next;
+    if (view === detailViewGen) {
+      currentTask.name = next;
+      document.getElementById('detail-title').textContent = next;
+    }
     refresh();
-  } catch(e) { showToast('Rename failed: ' + e.message); }
+  } catch(e) { if (view === detailViewGen) showToast('Rename failed: ' + e.message); }
 }
 
 async function forkTask() {
   if (!currentTask) return;
+  const { id } = currentTask;
+  const view = detailViewGen;
   const name = prompt('Fork name', currentTask.name + '-fork');
   if (!name) return;
   try {
-    const r = await api(`/api/tasks/${currentTask.id}/fork`, {
+    const r = await api(`/api/tasks/${id}/fork`, {
       method: 'POST',
       body: JSON.stringify({ name }),
     });
     if (!r.ok) throw new Error((await r.json()).error || 'fork failed');
     const created = await r.json();
-    closeDetail();
     await refresh();
-    if (created.id) openDetail(created.id);
-  } catch(e) { showToast('Fork failed: ' + e.message); }
+    if (view !== detailViewGen) return;
+    if (created.id && tasks.some(task => task.id === created.id)) openDetail(created.id);
+    else closeDetail();
+  } catch(e) { if (view === detailViewGen) showToast('Fork failed: ' + e.message); }
 }
 
 async function setArchive(archived) {
   if (!currentTask) return;
+  const { id } = currentTask;
+  const view = detailViewGen;
   try {
     const path = archived ? 'archive' : 'unarchive';
-    const r = await api(`/api/tasks/${currentTask.id}/${path}`, { method: 'POST' });
+    const r = await api(`/api/tasks/${id}/${path}`, { method: 'POST' });
     if (!r.ok) {
       // A hera-bound task can be refused (409) with the hera verdict's reason.
       let msg = 'archive failed';
       try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (_) {}
       throw new Error(msg);
     }
-    currentTask.archived = archived;
-    closeDetail();
+    if (view === detailViewGen) closeDetail();
     refresh();
-  } catch(e) { showToast(e.message); }
+  } catch(e) { if (view === detailViewGen) showToast(e.message); }
 }
 
 function setListFilter(f) {
@@ -4362,18 +4370,20 @@ function clearTaskSearch() {
 }
 
 async function deleteTask() {
-  if (actionBusy) return;
+  if (actionBusy || !currentTask) return;
+  const { id } = currentTask;
+  const view = detailViewGen;
   if (!confirm('Delete task "' + currentTask.name + '"?')) return;
   setActionButtons(true);
   try {
-    const id = currentTask.id;
-    await api(`/api/tasks/${id}`, { method: 'DELETE' });
+    const r = await api(`/api/tasks/${id}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error((await r.json()).error || 'delete failed');
     try { localStorage.removeItem(inputHistoryKey(id)); } catch {}
     inputBuffers.delete(id);
-    closeDetail();
+    if (view === detailViewGen) closeDetail();
     refresh();
   } catch(e) {
-    showToast('Delete failed: ' + e.message);
+    if (view === detailViewGen) showToast('Delete failed: ' + e.message);
   } finally {
     setActionButtons(false);
   }

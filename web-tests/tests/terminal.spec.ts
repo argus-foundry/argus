@@ -178,6 +178,45 @@ test.describe('terminal', () => {
     }
   });
 
+  for (const action of ['fork', 'rename', 'archive', 'delete']) test(`late ${action} leaves the reopened terminal view alone`, async ({ page }) => {
+    let requested = false;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks\/[^/?]+(?:\/(?:fork|rename|archive))?$/, async route => {
+      const request = route.request();
+      if (request.method() === 'GET' || !['POST', 'DELETE'].includes(request.method())) return route.continue();
+      requested = true;
+      await held;
+      await route.fulfill({ status: 200, json: { id: 'forked-task' } }).catch(() => {});
+    });
+    page.on('dialog', dialog => dialog.type() === 'prompt' ? dialog.accept('Action result') : dialog.accept());
+    try {
+      await login(page);
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('.term-status.live')).toBeVisible();
+      await page.evaluate(action => {
+        const app = window as any;
+        const mutate = { fork: app.forkTask, rename: app.renameTask, archive: () => app.setArchive(true), delete: app.deleteTask };
+        app.pendingAction = mutate[action]();
+      }, action);
+      await expect.poll(() => requested).toBe(true);
+      await page.locator('#detail-view .detail-back').click();
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('.term-status.live')).toBeVisible();
+      const title = await page.locator('#detail-title').textContent();
+      await page.evaluate(() => { (window as any).reopenedTerm = (window as any).term; });
+      release!();
+      const sameTerminal = await page.evaluate(async () => {
+        await (window as any).pendingAction;
+        return (window as any).term === (window as any).reopenedTerm;
+      });
+      expect(sameTerminal).toBe(true);
+      await expect(page.locator('#detail-title')).toHaveText(title!);
+    } finally {
+      release!();
+    }
+  });
+
   for (const stage of ['body', 'render']) test(`a stalled replacement snapshot ${stage} reaches the terminal recovery deadline`, async ({ page }) => {
     await page.addInitScript(stage => {
       const original = window.fetch.bind(window);
@@ -186,9 +225,9 @@ test.describe('terminal', () => {
         const response = await original(...args);
         if (/\/api\/tasks\/[^/]+\/output(?:\?|$)/.test(response.url) && ++snapshots === 2) {
           if (stage === 'body') {
-            const read = response.arrayBuffer.bind(response);
-            response.arrayBuffer = () => new Promise((resolve, reject) => {
-              (window as any).releaseSnapshot = () => read().then(resolve, reject).catch(() => {});
+            const bytes = await response.arrayBuffer();
+            response.arrayBuffer = () => new Promise(resolve => {
+              (window as any).releaseSnapshot = () => resolve(bytes);
             });
           } else {
             const terminal = (window as any).term;
@@ -228,6 +267,15 @@ test.describe('terminal', () => {
   });
 
   test('list refresh keeps an active recovery deadline through stream admission', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.EventSource = new Proxy(window.EventSource, {
+        construct(target, args) {
+          const source = Reflect.construct(target, args);
+          if (String(args[0]).includes('/stream?')) (window as any).recoverySource = source;
+          return source;
+        },
+      });
+    });
     let detailPolled = false;
     let refreshLive = true;
     let snapshots = 0;
@@ -273,6 +321,7 @@ test.describe('terminal', () => {
       detailReleased!();
       await expect.poll(() => streamRequests).toBe(1);
       await expect(page.locator('#term-status-text')).toHaveText('session ended', { timeout: 17_000 });
+      expect(await page.evaluate(() => (window as any).recoverySource?.readyState)).toBe(2);
       streamReleased!();
       await expect(page.locator('#term-status-text')).toHaveText('session ended');
     } finally {

@@ -33,6 +33,7 @@ func TestStartRespectsQueuedReplacement(t *testing.T) {
 	t.Cleanup(run.StopAll)
 	task := &model.Task{ID: "reserved-replacement", Worktree: t.TempDir()}
 	run.SetPendingRestartForTest(task.ID, true)
+	testutil.True(t, run.HasLiveOrStartingProcess(task.ID))
 	sess, err := run.Start(task, runnerTestConfig(), 24, 80, false)
 	testutil.ErrorIs(t, err, ErrSessionStarting)
 	testutil.Nil(t, sess)
@@ -93,6 +94,7 @@ func TestLateStopDoesNotMarkNextSession(t *testing.T) {
 	select {
 	case <-entered:
 		testutil.ErrorIs(t, run.StopSettled(task.ID), ErrSessionNotFound)
+		testutil.False(t, run.HasLiveOrStartingProcess(task.ID))
 		// The ordinary stop path still accepts the exited slot and can
 		// set its marker before onFinish returns.
 		testutil.NoError(t, run.Stop(task.ID))

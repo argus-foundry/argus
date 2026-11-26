@@ -290,15 +290,21 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 	if err != nil {
 		return residentToolError(id, fmt.Sprintf("worker nuke did not complete: %v", err))
 	}
-	s.runResidentFleetReconcile(d, runner, role.Name, followUp)
 	updated, err := d.HeraRole(role.ID)
 	if err != nil || updated.NukedAt == nil {
 		return residentToolError(id, "worker nuke did not complete")
 	}
-	uxlog.Log("[resident] deleted worker=%s task=%s force=%t", role.Name, task.ID, p.Force)
-	slog.Info("[resident] deleted worker", "worker", role.Name, "task", task.ID, "force", p.Force)
+	lease, leaseErr := d.HeraResidentReclaimLease(task.ID)
+	cleanupPending := lease != nil || leaseErr != nil
+	s.runResidentFleetReconcile(d, runner, role.Name, followUp)
+	uxlog.Log("[resident] nuked worker=%s task=%s force=%t cleanup_pending=%t err=%v", role.Name, task.ID, p.Force, cleanupPending, leaseErr)
+	slog.Info("[resident] nuked worker", "worker", role.Name, "task", task.ID, "force", p.Force, "cleanup_pending", cleanupPending, "err", leaseErr)
 	var out strings.Builder
-	fmt.Fprintf(&out, "Deleted worker %s.\n", role.Name)
+	if cleanupPending {
+		fmt.Fprintf(&out, "Nuked worker %s. Session and worktree cleanup is pending.\n", role.Name)
+	} else {
+		fmt.Fprintf(&out, "Deleted worker %s.\n", role.Name)
+	}
 	if p.Force {
 		raw, _ := json.MarshalIndent(summary, "", "  ")
 		fmt.Fprintf(&out, "\nUnmerged summary (REPORT to Aaron now):\n%s\n", raw)

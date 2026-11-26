@@ -677,7 +677,7 @@ func (d *DB) NukeHeraRole(id int64) error {
 // worker's nuke by anyone but the resident (HeraActorResident, its own
 // hera_delete_worker) queues the resident a notice.
 func (d *DB) NukeHeraRoleAs(id int64, actor HeraActor) error {
-	return d.nukeHeraRole(id, actor, false, 0, nil)
+	return d.nukeHeraRole(id, actor, false, 0, nil, "")
 }
 
 // NukeHeraRoleAndEndBinding records a human nuke and ends the role's live
@@ -709,16 +709,22 @@ func (d *DB) NukeHeraRoleAndEndBindingAs(id int64, actor HeraActor) error {
 		}
 		defer unlock()
 	}
-	return d.nukeHeraRole(id, actor, true, bindingID, nil)
+	return d.nukeHeraRole(id, actor, true, bindingID, nil, "")
 }
 
 // NukeResidentWorkerBinding commits a resident nuke under the caller's task
 // locks, provided its live binding and shared ownership still match preflight.
-func (d *DB) NukeResidentWorkerBinding(id, bindingID int64, reclaim bool) error {
-	return d.nukeHeraRole(id, HeraActorResident, true, bindingID, &reclaim)
+// A non-nil lease authorizes local reclaim and records its remote policy.
+func (d *DB) NukeResidentWorkerBinding(id, bindingID int64, lease *HeraReclaimLease) error {
+	reclaim := lease != nil
+	leaseJSON, err := encodeHeraReclaimLease(lease)
+	if err != nil {
+		return err
+	}
+	return d.nukeHeraRole(id, HeraActorResident, true, bindingID, &reclaim, leaseJSON)
 }
 
-func (d *DB) nukeHeraRole(id int64, actor HeraActor, endBinding bool, bindingID int64, expectedReclaim *bool) error {
+func (d *DB) nukeHeraRole(id int64, actor HeraActor, endBinding bool, bindingID int64, expectedReclaim *bool, lease string) error {
 	return d.heraRoleMutation(id, actor, ResidentNoticeNuked, func(tx *sql.Tx, cur *HeraRole) (bool, string, error) {
 		now := formatTime(time.Now())
 		if endBinding {
@@ -750,8 +756,8 @@ func (d *DB) nukeHeraRole(id int64, actor HeraActor, endBinding bool, bindingID 
 				}
 				_, err := tx.Exec(`UPDATE hera_bindings
 					SET end_reason=CASE WHEN ended_at IS NULL THEN ? ELSE end_reason END,
-						ended_at=COALESCE(ended_at,?), nuke_reclaim=?
-					WHERE id=?`, HeraEndReasonUserDeleted, now, outcome, currentID)
+						ended_at=COALESCE(ended_at,?), nuke_reclaim=?, resident_reclaim_lease=?
+					WHERE id=?`, HeraEndReasonUserDeleted, now, outcome, lease, currentID)
 				if err != nil {
 					return false, "", fmt.Errorf("end hera role binding: %w", err)
 				}

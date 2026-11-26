@@ -142,6 +142,84 @@ func TestNukeResidentWorkerRefusesWhileTaskSessionIsChanging(t *testing.T) {
 	testutil.NoError(t, err)
 }
 
+func TestCheckedResidentNukeObservesExitBeforeLocalCallbackFinishes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	task := &model.Task{ID: "local-exit", Name: "Worker", Status: model.StatusInProgress, Worktree: t.TempDir()}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	finished := make(chan error, 1)
+	runner := agent.NewRunner(func(id string, _ error, _ bool, _ []byte) {
+		unlock, err := d.LockSessionMutation(ctx, id)
+		if err == nil {
+			unlock()
+		}
+		finished <- err
+	})
+	t.Cleanup(runner.StopAll)
+	cfg := config.Config{Defaults: config.Defaults{Backend: "test"}, Backends: map[string]config.Backend{"test": {Command: "sleep 60"}}}
+	_, err := runner.Start(task, cfg, 24, 80, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := false
+	_, err = NukeResidentWorkerChecked(d, runner, view, ResidentDeleteOptions{
+		Wait: StopWait{Max: 2 * time.Second, Poll: 10 * time.Millisecond},
+		Recheck: func(*model.Task) error {
+			checked = true
+			testutil.True(t, runner.HasSession(task.ID))
+			testutil.False(t, runner.HasLiveOrStartingProcess(task.ID))
+			return nil
+		},
+	})
+	testutil.NoError(t, err)
+	testutil.True(t, checked)
+	select {
+	case err := <-finished:
+		testutil.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("local exit callback did not finish")
+	}
+}
+
+func TestDeferredResidentReclaimUsesOriginalRemoteTip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initGitRepo(t, t.TempDir())
+	remote := t.TempDir()
+	gitRun(t, remote, "init", "--bare")
+	gitRun(t, repo, "remote", "add", "origin", remote)
+	const branch = "argus/worker"
+	worktree := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+	gitRun(t, repo, "worktree", "add", "-b", branch, worktree)
+	gitRun(t, worktree, "push", "origin", branch)
+	task := &model.Task{ID: "w", Name: "Worker", Status: model.StatusInProgress, Project: "p", Worktree: worktree, Branch: branch}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: repo}))
+	starting := true
+	owner := nukeReclaimOwner{Runner: agent.NewRunner(nil), pending: &starting}
+	_, err := NukeResidentWorker(d, owner, view)
+	testutil.NoError(t, err)
+	lease, err := d.HeraResidentReclaimLease(task.ID)
+	testutil.NoError(t, err)
+	if lease == nil || lease.Tip == "" {
+		t.Fatal("the deferred claim lacks an origin lease")
+	}
+	pending, err := d.HasPendingResidentReclaims()
+	testutil.NoError(t, err)
+	testutil.True(t, pending)
+	addGitCommit(t, repo, "successor.txt", "new branch tip\n")
+	gitRun(t, repo, "push", "origin", "HEAD:refs/heads/"+branch)
+
+	result, err := ReconcileHeraReclaims(d, &fakeSessionChecker{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, result.Pruned, 1)
+	testutil.False(t, agent.DirExists(worktree))
+	gitRun(t, remote, "show-ref", "--verify", "refs/heads/"+branch)
+	pending, err = d.HasPendingResidentReclaims()
+	testutil.NoError(t, err)
+	testutil.False(t, pending)
+}
+
 // A session that exits on Stop but has not settled by the end of the wait is
 // refused ("had not settled"), the recheck never runs, and the worker is left
 // resumable. Covers both the wait measured from the Stop call's START (not

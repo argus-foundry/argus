@@ -149,16 +149,30 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 		uxlog.Log("[hera] reclaim sweep: retirement not confirmed task=%s err=%v", id, err)
 		return
 	}
+	lease, err := d.HeraResidentReclaimLease(id)
+	if err != nil {
+		uxlog.Log("[resident] reclaim sweep: unreadable lease task=%s err=%v", id, err)
+		return
+	}
 
 	repoDir := agent.ResolveDir(t, cfg)
 	if t.Worktree != "" && agent.DirExists(t.Worktree) {
-		agent.RemoveWorktreeAndBranch(t.Worktree, t.Branch, repoDir)
+		if lease != nil {
+			if lease.RepoDir != "" {
+				repoDir = lease.RepoDir
+			}
+			agent.RemoveWorktreeAndLocalBranch(t.Worktree, t.Branch, repoDir)
+		} else {
+			agent.RemoveWorktreeAndBranch(t.Worktree, t.Branch, repoDir)
+		}
 		sum.WorktreesRetried++
 		uxlog.Log("[hera] reclaim sweep: retried worktree+branch removal task=%s", id)
 	}
 
 	sum.StackedBranchesDeleted += reconcileStackedBranches(ctx, d, cfg, byBaseBranch, t, tipVerdicts)
-	if t.Archived && t.Worktree == "" && t.Branch != "" && repoDir != "" {
+	if lease != nil {
+		residentRemoteBranchDelete(ResidentDeleteOptions{}, id, lease.RepoDir, lease.Branch, lease.Tip)
+	} else if t.Archived && t.Worktree == "" && t.Branch != "" && repoDir != "" {
 		agent.DeleteBranch(repoDir, t.Branch)
 		agent.DeleteRemoteBranch(repoDir, t.Branch)
 	}

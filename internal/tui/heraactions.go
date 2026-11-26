@@ -585,6 +585,12 @@ func (a *App) reclaimStandaloneHeraTask(runner agent.SessionProvider, taskID str
 			release()
 			return false
 		}
+		lease, err := database.HeraResidentReclaimLease(taskID)
+		if err != nil || lease != nil {
+			uxlog.Log("[hera-view] nuke: standalone deferred resident cleanup task=%s err=%v", taskID, err)
+			release()
+			return false
+		}
 		bindings, err := database.ListHeraLiveBindingsByTask(taskID)
 		if err != nil || len(bindings) != 0 {
 			uxlog.Log("[hera-view] nuke: standalone binding guard task=%s live=%d err=%v", taskID, len(bindings), err)
@@ -703,6 +709,11 @@ func (a *App) reclaimConnectedHeraTask(runner agent.SessionProvider, database *d
 	allowed, err := database.HasUnsettledHeraNuke(taskID)
 	if err != nil || !allowed {
 		uxlog.Log("[hera-view] nuke: reclaim guard task=%s allowed=%t err=%v", taskID, allowed, err)
+		return
+	}
+	lease, err := database.HeraResidentReclaimLease(taskID)
+	if err != nil || lease != nil {
+		uxlog.Log("[hera-view] nuke: deferred resident cleanup task=%s err=%v", taskID, err)
 		return
 	}
 	task, err := database.Get(taskID)

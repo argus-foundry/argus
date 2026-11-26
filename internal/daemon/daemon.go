@@ -1423,7 +1423,12 @@ func (d *Daemon) runHeraReclaimSweeper() {
 		case <-d.done:
 			return
 		case <-recovery.C:
-			if d.recoverHeraReclaimExits() > 0 {
+			recovered := d.recoverHeraReclaimExits()
+			pending, err := d.db.HasPendingResidentReclaims()
+			if err != nil {
+				slog.Warn("hera reclaim: read pending resident cleanup", "err", err)
+			}
+			if recovered > 0 || pending {
 				d.sweepHeraReclaims()
 			}
 		case <-ticker.C:

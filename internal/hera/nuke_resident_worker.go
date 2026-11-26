@@ -264,6 +264,11 @@ func lockResidentRepo(repoDir string, opts ResidentDeleteOptions, roleID int64, 
 // lock (always so when a worktree is reclaimed).
 func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView, t *model.Task, bindingID int64, reclaim bool, opts ResidentDeleteOptions, repoLocked bool) (followUp func(), err error) {
 	noop := func() {}
+	var lease *db.HeraReclaimLease
+	if reclaim {
+		repoDir, branch, tip := agent.WorktreeRemoteBranchLease(t.Worktree, t.Branch, agent.ResolveDir(t, d.Config()))
+		lease = &db.HeraReclaimLease{RepoDir: repoDir, Branch: branch, Tip: tip}
+	}
 	if reclaim && opts.Recheck != nil {
 		guard := armStopCloseoutGuard(d, t.ID)
 		stopped, err := stopResidentWorkerSession(runner, t, opts.Wait.withDefaults(), opts.Clock, opts.GiveUpBy)
@@ -278,7 +283,7 @@ func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView
 			return noop, err
 		}
 	}
-	if err := d.NukeResidentWorkerBinding(r.RoleID, bindingID, reclaim); err != nil {
+	if err := d.NukeResidentWorkerBinding(r.RoleID, bindingID, lease); err != nil {
 		residentDeleteLog("[resident] delete role %d: nuke failed task=%s: %v", r.RoleID, t.ID, err)
 		return noop, fmt.Errorf("nuke role %d: %w", r.RoleID, err)
 	}
@@ -304,9 +309,9 @@ func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView
 	} else if !stopResidentWorkerBeforeReclaim(runner, t.ID) {
 		return noop, nil
 	}
-	remoteDir, remoteBranch, leaseTip := reclaimResidentWorkerTask(d, runner, t, repoLocked)
+	reclaimResidentWorkerTask(d, runner, t, repoLocked)
 	return func() {
-		residentRemoteBranchDelete(opts, t.ID, remoteDir, remoteBranch, leaseTip)
+		residentRemoteBranchDelete(opts, t.ID, lease.RepoDir, lease.Branch, lease.Tip)
 		residentWorkerStackFollowUp(d, t)
 	}, nil
 }
@@ -446,6 +451,13 @@ func readyToCloseStamped(d *db.DB, taskID string) (bool, error) {
 	return false, nil
 }
 
+func residentWorkerProcessPresent(runner NukeRunner, taskID string) (bool, error) {
+	if local, ok := runner.(*agent.Runner); ok {
+		return local.HasLiveOrStartingProcess(taskID), nil
+	}
+	return SessionPresent(runner, taskID)
+}
+
 // stopResidentWorkerSession stops t's session ahead of the recheck and waits
 // for it to exit. Presence comes from SessionPresent, and an unreadable
 // presence (a supervisor RPC error or timeout) always counts as PRESENT: it
@@ -465,7 +477,7 @@ func stopResidentWorkerSession(runner NukeRunner, t *model.Task, wait StopWait, 
 	if runner == nil {
 		return true, nil
 	}
-	present, perr := SessionPresent(runner, t.ID)
+	present, perr := residentWorkerProcessPresent(runner, t.ID)
 	if perr == nil && !present {
 		return true, nil
 	}
@@ -477,7 +489,11 @@ func stopResidentWorkerSession(runner NukeRunner, t *model.Task, wait StopWait, 
 	if !giveUpBy.IsZero() && giveUpBy.Before(limit) {
 		limit = giveUpBy
 	}
-	stopErr := runner.Stop(t.ID)
+	stop := runner.Stop
+	if owner, ok := runner.(agent.SettledSessionStopper); ok {
+		stop = owner.StopSettled
+	}
+	stopErr := stop(t.ID)
 	if errors.Is(stopErr, agent.ErrSessionNotFound) {
 		stopErr = nil
 	}
@@ -486,7 +502,7 @@ func stopResidentWorkerSession(runner NukeRunner, t *model.Task, wait StopWait, 
 		residentDeleteLog("[resident] delete: stop failed task=%s after %s: %v (waiting to see whether it took)", t.ID, returned.Sub(start).Round(time.Millisecond), stopErr)
 	}
 	for {
-		present, perr := SessionPresent(runner, t.ID)
+		present, perr := residentWorkerProcessPresent(runner, t.ID)
 		gone := perr == nil && !present
 		now := clk.Now()
 		if gone && stopErr != nil {
@@ -518,23 +534,22 @@ func stopResidentWorkerSession(runner NukeRunner, t *model.Task, wait StopWait, 
 
 // reclaimResidentWorkerTask is ReconcileHeraReclaims' per-candidate body for
 // exactly one task, minus the stacked-branch re-discovery and the origin
-// branch delete (both in followUp), so it is local and bounded. It returns
-// the repo dir and branch to delete on origin. The caller confirms session
-// retirement before invoking it and keeps both task locks held.
-func reclaimResidentWorkerTask(d *db.DB, runner NukeRunner, t *model.Task, repoLocked bool) (remoteDir, remoteBranch, leaseTip string) {
+// branch delete (both in followUp), so it is local and bounded. The caller
+// confirms session retirement before invoking it and keeps both locks held.
+func reclaimResidentWorkerTask(d *db.DB, runner NukeRunner, t *model.Task, repoLocked bool) {
 	if t.Worktree != "" && agent.DirExists(t.Worktree) {
 		remove := agent.RemoveWorktreeAndLocalBranch
 		if repoLocked {
 			remove = agent.RemoveWorktreeAndLocalBranchLocked
 		}
-		remoteDir, remoteBranch, leaseTip = remove(t.Worktree, t.Branch, agent.ResolveDir(t, d.Config()))
+		remove(t.Worktree, t.Branch, agent.ResolveDir(t, d.Config()))
 		residentDeleteLog("[resident] delete: removed worktree+local branch task=%s (origin branch delete runs in the background)", t.ID)
 	}
 	if runner != nil {
 		present, perr := SessionPresent(runner, t.ID)
 		if perr != nil || present {
 			residentDeleteLog("[resident] delete: prune deferred to reclaim sweep task=%s (session live or unreadable: %v)", t.ID, perr)
-			return remoteDir, remoteBranch, leaseTip
+			return
 		}
 	}
 	pruned, _, err := d.PruneHeraReclaimedTask(t.ID)
@@ -546,7 +561,6 @@ func reclaimResidentWorkerTask(d *db.DB, runner NukeRunner, t *model.Task, repoL
 	default:
 		residentDeleteLog("[resident] delete: pruned task row %s", t.ID)
 	}
-	return remoteDir, remoteBranch, leaseTip
 }
 
 func residentWorkerStackFollowUp(d *db.DB, x *model.Task) {
