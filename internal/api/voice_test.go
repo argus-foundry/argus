@@ -403,6 +403,60 @@ func TestVoiceStopDuringSharedCreationPreservesFinalStatus(t *testing.T) {
 	testutil.Equal(t, row.Status, model.StatusInReview)
 }
 
+func TestRESTStopBeforeSessionRegistrationPreservesPendingLaunch(t *testing.T) {
+	srv, d := testServer(t)
+	run := agent.NewRunner(nil)
+	srv.runner = run
+	t.Cleanup(run.StopAll)
+	testutil.NoError(t, d.SetBackend("plain", config.Backend{Command: "sleep 60"}))
+	testutil.NoError(t, d.SetProject("argus", config.Project{Path: wtRepo(t), Backend: "plain"}))
+	ready := make(chan string, 1)
+	release := make(chan struct{})
+	done := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(func() {
+		unblock()
+		<-done
+	})
+	var launchErr error
+	go func() {
+		defer close(done)
+		_, _, launchErr = agent.CreateAndStart(d, run, agent.CreateInput{
+			Name: "Review", Project: "argus",
+			AfterPersist: func(task *model.Task) (func(), error) {
+				ready <- task.ID
+				<-release
+				return nil, nil
+			},
+		})
+	}()
+	var id string
+	select {
+	case id = <-ready:
+	case <-done:
+		t.Fatalf("launch finished before its session reservation: %v", launchErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("task was not persisted")
+	}
+	handler := authMiddleware(srv.token, d, nil, srv.routes())
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, authedReq(http.MethodPost, "/api/tasks/"+id+"/stop", ""))
+	testutil.Equal(t, w.Code, http.StatusConflict)
+	testutil.Contains(t, w.Body.String(), "agent_restarting")
+	pending, err := d.Get(id)
+	testutil.NoError(t, err)
+	testutil.Equal(t, pending.Status, model.StatusPending)
+
+	unblock()
+	<-done
+	testutil.NoError(t, launchErr)
+	live, err := d.Get(id)
+	testutil.NoError(t, err)
+	testutil.Equal(t, live.Status, model.StatusInProgress)
+	testutil.NotNil(t, run.Get(id))
+}
+
 func TestVoiceLaunchReportsAmbiguousOutcome(t *testing.T) {
 	srv, d := testServer(t)
 	run := &voiceRun{Runner: agent.NewRunner(nil), startErr: agent.ErrStartAmbiguous}
@@ -425,6 +479,42 @@ func TestVoiceLaunchReportsAmbiguousOutcome(t *testing.T) {
 			testutil.True(t, errors.As(tc.run(), &unknown))
 			testutil.Equal(t, unknown.Code, "start_ambiguous")
 			testutil.Contains(t, unknown.Speech, "before retrying")
+		})
+	}
+}
+
+func TestRESTResumePinsFreshSessionWhenBackendSupportsPinning(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		pinned bool
+	}{
+		{"started", nil, http.StatusOK, true},
+		{"ambiguous", agent.ErrStartAmbiguous, http.StatusServiceUnavailable, true},
+		{"rejected", errors.New("spawn failed"), http.StatusInternalServerError, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, d := testServer(t)
+			testutil.NoError(t, d.SetBackend("claude", config.Backend{Command: "claude"}))
+			task := &model.Task{Name: "Review", Backend: "claude", Status: model.StatusInReview}
+			testutil.NoError(t, d.Add(task))
+			var launchID string
+			srv.runner = &voiceRun{
+				Runner: agent.NewRunner(nil), startErr: tc.err,
+				beforeStart: func(launch *model.Task) { launchID = launch.SessionID },
+			}
+			w := httptest.NewRecorder()
+			srv.routes().ServeHTTP(w, authedReq(http.MethodPost, "/api/tasks/"+task.ID+"/resume", ""))
+			testutil.Equal(t, w.Code, tc.status)
+			testutil.True(t, launchID != "")
+			row, err := d.Get(task.ID)
+			testutil.NoError(t, err)
+			if tc.pinned {
+				testutil.Equal(t, row.SessionID, launchID)
+			} else {
+				testutil.Equal(t, row.SessionID, "")
+			}
 		})
 	}
 }

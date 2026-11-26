@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/events"
 	"github.com/argus-foundry/argus/internal/model"
@@ -13,21 +14,63 @@ import (
 // edits made while the runner was starting. A newer session ID wins over
 // the ID the launch read before calling the runner.
 func (d *DB) RecordResumedSession(id string, pid int, priorID, launchedID string) error {
-	_, err := d.recordSessionLaunch(id, pid, priorID, launchedID, false)
+	_, err := d.recordSessionLaunch(id, pid, priorID, launchedID, false, nil)
 	return err
+}
+
+// RecordResumedSessionIfUnstopped returns the persisted row, or nil if a
+// successful stop has superseded this launch even when the task status did
+// not change. Capture stopGeneration before calling the runner.
+func (d *DB) RecordResumedSessionIfUnstopped(id string, pid int, priorID, launchedID string, stopGeneration int64) (*model.Task, error) {
+	return d.recordSessionLaunch(id, pid, priorID, launchedID, false, &stopGeneration)
+}
+
+// RecordFailedResumeIfUnstopped rolls back a failed TUI launch while
+// preserving later stops and any session ID recorded by another writer.
+func (d *DB) RecordFailedResumeIfUnstopped(id, generatedID string, stopGeneration int64) (*model.Task, error) {
+	return d.recordSessionChange(id, &stopGeneration, func(task *model.Task) bool {
+		task.SetStatus(model.StatusPending)
+		task.StartedAt = time.Time{}
+		if generatedID != "" && task.SessionID == generatedID {
+			task.SessionID = ""
+		}
+		return true
+	})
 }
 
 // RecordInitialSession promotes a Pending row when its first session starts.
 // If a stop or another lifecycle action has already advanced the row, it
 // returns that state instead of overwriting it.
 func (d *DB) RecordInitialSession(id string, pid int, priorID, launchedID string) (*model.Task, error) {
-	return d.recordSessionLaunch(id, pid, priorID, launchedID, true)
+	return d.recordSessionLaunch(id, pid, priorID, launchedID, true, nil)
 }
 
-func (d *DB) recordSessionLaunch(id string, pid int, priorID, launchedID string, initial bool) (*model.Task, error) {
+func (d *DB) recordSessionLaunch(id string, pid int, priorID, launchedID string, initial bool, stopGeneration *int64) (*model.Task, error) {
+	return d.recordSessionChange(id, stopGeneration, func(task *model.Task) bool {
+		if initial && task.Status != model.StatusPending {
+			return false
+		}
+		task.SetStatus(model.StatusInProgress)
+		task.AgentPID = pid
+		if task.SessionID == priorID {
+			task.SessionID = launchedID
+		}
+		return true
+	})
+}
+
+func (d *DB) recordSessionChange(id string, stopGeneration *int64, change func(*model.Task) bool) (*model.Task, error) {
 	var old, current *model.Task
 	err := d.WithTx(func(tx *sql.Tx) error {
-		var err error
+		// Acquire write intent before reading the task. With WAL, upgrading
+		// a read transaction can fail immediately if another handle writes.
+		generation, err := scanStopGeneration(id, tx.QueryRow(`UPDATE tasks SET stop_generation=stop_generation WHERE id=? RETURNING stop_generation`, id))
+		if err != nil {
+			return err
+		}
+		if stopGeneration != nil && generation != *stopGeneration {
+			return nil
+		}
 		old, err = scanTask(tx.QueryRow(`SELECT `+taskColumns+` FROM tasks WHERE id=?`, id))
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
@@ -35,17 +78,12 @@ func (d *DB) recordSessionLaunch(id string, pid int, priorID, launchedID string,
 		if err != nil {
 			return err
 		}
-		if initial && old.Status != model.StatusPending {
+		row := *old
+		if !change(&row) {
 			current = old
 			return nil
 		}
-		row := *old
 		current = &row
-		current.SetStatus(model.StatusInProgress)
-		current.AgentPID = pid
-		if current.SessionID == priorID {
-			current.SessionID = launchedID
-		}
 		if err := residentUpdateGuard(old, current); err != nil {
 			return err
 		}
@@ -67,6 +105,50 @@ func (d *DB) recordSessionLaunch(id string, pid int, priorID, launchedID string,
 	}
 	events.EmitTaskUpdated(id, model.ChangedTaskFields(old, current)...)
 	return current, nil
+}
+
+// SessionStopGeneration returns the stop counter for a task. Read it before
+// launch to distinguish a subsequent stop from an unchanged InReview status.
+func (d *DB) SessionStopGeneration(id string) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return scanStopGeneration(id, d.conn.QueryRow(`SELECT stop_generation FROM tasks WHERE id=?`, id))
+}
+
+func scanStopGeneration(id string, row *sql.Row) (int64, error) {
+	var generation int64
+	err := row.Scan(&generation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	}
+	return generation, err
+}
+
+// RecordSessionStop records a confirmed stop and advances its generation even
+// if the session was stopped while its task was already InReview.
+func (d *DB) RecordSessionStop(id string) error {
+	var previous, kind string
+	err := d.WithTx(func(tx *sql.Tx) error {
+		err := tx.QueryRow(`UPDATE tasks SET stop_generation=stop_generation+1 WHERE id=? RETURNING status, kind`, id).Scan(&previous, &kind)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+		}
+		if err != nil {
+			return err
+		}
+		if kind == model.KindResident {
+			return fmt.Errorf("%w (task %s)", ErrResidentProtected, id)
+		}
+		_, err = tx.Exec(`UPDATE tasks SET status=? WHERE id=?`, model.StatusInReview.String(), id)
+		return err
+	})
+	if err == nil && previous != model.StatusInReview.String() {
+		events.Emit(model.EventTypeTaskStatusChanged, id, map[string]string{
+			"from": previous, "to": model.StatusInReview.String(),
+		})
+		events.EmitTaskUpdated(id, model.TaskFieldStatus)
+	}
+	return err
 }
 
 // SetSessionIDIfEmpty records a backend-minted session ID only while the task

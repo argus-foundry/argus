@@ -147,3 +147,27 @@ func TestCreateTaskTransactional_LocalUsesCreateAndStart(t *testing.T) {
 		t.Fatal("expected CreateAndStart to fail on an unconfigured project")
 	}
 }
+
+func TestSmoke_OpenCreatedTaskDoesNotRestartAfterStop(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{
+		ID: "stopped-after-create", Name: "Review",
+		Status: model.StatusInReview, SessionID: "previous-session",
+	}
+	testutil.NoError(t, d.Add(task))
+	runner := &recordStartRunner{Runner: agent.NewRunner(nil), started: make(chan *model.Task, 1)}
+	app := New(d, runner, false)
+	_, stop := wireApp(t, app)
+	defer stop()
+
+	readUI(t, app.tapp, func() {
+		app.openCreatedTask(task)
+		testutil.Equal(t, app.agentState.TaskID, task.ID)
+		testutil.Equal(t, app.mode, modeAgent)
+	})
+
+	testutil.Equal(t, len(runner.started), 0)
+	stored, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, stored.Status, model.StatusInReview)
+}

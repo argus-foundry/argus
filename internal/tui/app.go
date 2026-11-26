@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -2704,18 +2705,6 @@ func (a *App) handleSessionExitUI(taskID string, cleanExit, pendingRestart bool)
 			a.statusbar.ClearInfo()
 		} else if t, err := a.db.Get(taskID); err == nil && t != nil {
 			uxlog.Log("[tui] rerender: restarting task=%s session=%s", t.ID, t.SessionID)
-			// Force the resumed task back into InProgress; either the daemon's
-			// onFinish callback or this function's StatusInProgress branch
-			// above has just flipped it to InReview.
-			//
-			// Stays on full-row db.Update (not the name-safe db.SetStatus the
-			// other status flips use): startSession on the next line immediately
-			// writes the same struct again with SessionID+AgentPID, so a partial
-			// status setter here would be pointless — name-safety for this path
-			// hinges on startSession's multi-field write, which is the
-			// pre-existing out-of-scope case.
-			t.SetStatus(model.StatusInProgress)
-			a.db.Update(t) //nolint:errcheck
 			// startSession attaches the fresh session via SetSession alone;
 			// ResetVT here clears whatever emulator/replay/scroll-anchor state
 			// the OUTGOING session left behind so it can't bleed into the
@@ -7174,15 +7163,17 @@ func (a *App) handleNewTaskKey(event *tcell.EventKey) {
 					return
 				}
 
-				// Complete the transition: session is already live, so
-				// onTaskSelect sees it via runner.Get and wires up the pane
-				// without re-invoking runner.Start.
-				a.agentHeader.SetTaskName(created.Name)
-				a.tasklist.SelectByID(created.ID)
-				a.onTaskSelect(created, true)
+				a.openCreatedTask(created)
 			})
 		}()
 	}
+}
+
+// openCreatedTask displays a task after its creation path has already started
+// its session. A stop that arrives before this callback must stay in effect.
+func (a *App) openCreatedTask(task *model.Task) {
+	a.tasklist.SelectByID(task.ID)
+	a.onTaskSelect(task, false)
 }
 
 // remoteTaskCreator is satisfied by *apistore.Store. In --remote mode the TUI
@@ -7539,9 +7530,9 @@ func (a *App) resolveSession(taskID string) agentview.TerminalAdapter {
 	return sess
 }
 
-// startSession writes task status/SessionID/AgentPID through a.db at several
-// points below (session-ID generation, start failure, start success) — every
-// one of them is invalidateTasksChangeGate'd (add-tasks-fetch-dirty-check),
+// startSession writes native task lifecycle state at several points below
+// (session-ID generation, start failure, start success). Every one of them
+// invalidates the task change gate (add-tasks-fetch-dirty-check),
 // since startSession is called from several sites (Enter-to-restart, the
 // auto-start path, hera's Enter-reattach, switchSession's dead-session
 // branch) that don't ALL separately force a refetch of their own afterward.
@@ -7561,6 +7552,8 @@ func (a *App) startSessionFill(task *model.Task, mode agent.SessionRefresh) {
 	defer a.setRerendering(task.ID, false)
 	cfg := a.db.Config()
 	rows, cols := a.spawnPTYSize(task.ID)
+	localDB, _ := a.db.(*db.DB)
+	_, remote := a.db.(remoteTaskCreator)
 
 	a.refreshSessionIDBeforeStart(task, mode) // must precede the resume decision
 	resume := task.SessionID != ""
@@ -7572,19 +7565,52 @@ func (a *App) startSessionFill(task *model.Task, mode agent.SessionRefresh) {
 	// branch below only clears IDs it created — preserving any pre-existing
 	// ID across restart failures (daemon restart cascade, transient RPC error)
 	// so the next retry can still --resume the conversation.
-	generatedSessionID := false
-	if !resume {
+	generatedSessionID := ""
+	if !resume && !remote {
 		backend, berr := agent.ResolveBackend(task, cfg)
 		if berr == nil && agent.FamilyOf(backend.Command).PinsSessionID {
-			task.SessionID = model.GenerateSessionID()
-			generatedSessionID = true
-			a.db.Update(task) //nolint:errcheck
+			candidate := model.GenerateSessionID()
+			if localDB != nil {
+				wrote, err := localDB.RefreshSessionID(task.ID, "", candidate)
+				if err != nil {
+					a.sessionStartFailed(task.ID, err)
+					return
+				}
+				if wrote {
+					generatedSessionID = candidate
+					task.SessionID = candidate
+				} else {
+					current, err := localDB.Get(task.ID)
+					if err != nil {
+						a.sessionStartFailed(task.ID, err)
+						return
+					}
+					task.SessionID = current.SessionID
+					resume = task.SessionID != ""
+				}
+			} else {
+				generatedSessionID = candidate
+				task.SessionID = candidate
+				a.db.Update(task) //nolint:errcheck
+			}
 			a.invalidateTasksChangeGate()
-			uxlog.Log("[tui] generated session ID %s for task %s", task.SessionID, task.ID)
+			if generatedSessionID != "" {
+				uxlog.Log("[tui] generated session ID %s for task %s", generatedSessionID, task.ID)
+			}
 		}
 	}
 
 	a.refreshResumeSessionID(task, resume)
+	priorSessionID := task.SessionID
+	var stopGeneration int64
+	if localDB != nil {
+		var err error
+		stopGeneration, err = localDB.SessionStopGeneration(task.ID)
+		if err != nil {
+			a.sessionStartFailed(task.ID, err)
+			return
+		}
+	}
 
 	// Bump generation BEFORE the RPC so any tick that captured runningIDs
 	// before this session exists will detect the change and skip reconciliation.
@@ -7601,12 +7627,28 @@ func (a *App) startSessionFill(task *model.Task, mode agent.SessionRefresh) {
 	// fire until this point, making the post-bump always visible.
 	a.startGen.Add(1)
 	if err != nil {
-		uxlog.Log("[tui] failed to start session: %v", err)
-		a.statusbar.SetError("Start failed: " + err.Error())
-		if routing, ok := a.inlineSpawnReservations[task.ID]; ok {
-			agent.ReleaseTaskRouting(routing)
+		if localDB != nil && errors.Is(err, agent.ErrStartAmbiguous) {
+			// The supervisor may still start the session. Keep its ID
+			// and routing reservation available for reconciliation.
 			delete(a.inlineSpawnReservations, task.ID)
-			uxlog.Log("[routing] inline spawn failed; reservation released task=%s backend=%q account=%q", task.ID, routing.ReservedBackend, routing.ReservedAccount)
+			uxlog.Log("[tui] session start unconfirmed task=%s: %v", task.ID, err)
+			a.statusbar.SetInfo("Session start unconfirmed")
+			return
+		}
+		a.sessionStartFailed(task.ID, err)
+		if remote {
+			// REST owns launch persistence, including recovery after errors.
+			return
+		}
+		if localDB != nil {
+			current, err := localDB.RecordFailedResumeIfUnstopped(task.ID, generatedSessionID, stopGeneration)
+			a.invalidateTasksChangeGate()
+			if err != nil {
+				uxlog.Log("[tui] failed to record launch failure task=%s: %v", task.ID, err)
+			} else if current != nil {
+				task.Status, task.SessionID, task.StartedAt = current.Status, current.SessionID, current.StartedAt
+			}
+			return
 		}
 		// Revert to pending so the task isn't left in a ghost state.
 		task.SetStatus(model.StatusPending)
@@ -7615,7 +7657,7 @@ func (a *App) startSessionFill(task *model.Task, mode agent.SessionRefresh) {
 		// failures so the user's next retry can --resume the conversation.
 		// Wiping it here was the cause of the "fresh session with original
 		// prompt re-injected after daemon+TUI reboot" bug.
-		if generatedSessionID {
+		if generatedSessionID != "" {
 			task.SessionID = ""
 		}
 		task.StartedAt = time.Time{}
@@ -7625,19 +7667,38 @@ func (a *App) startSessionFill(task *model.Task, mode agent.SessionRefresh) {
 	}
 
 	delete(a.inlineSpawnReservations, task.ID)
-	task.SetStatus(model.StatusInProgress)
-	task.AgentPID = sess.PID()
+	if localDB != nil {
+		current, err := localDB.RecordResumedSessionIfUnstopped(task.ID, sess.PID(), priorSessionID, task.SessionID, stopGeneration)
+		a.invalidateTasksChangeGate()
+		if err != nil {
+			uxlog.Log("[tui] failed to record session start task=%s: %v", task.ID, err)
+			a.statusbar.SetError("Could not save session start: " + err.Error())
+			return
+		}
+		if current == nil {
+			uxlog.Log("[tui] session stop superseded launch task=%s", task.ID)
+			a.statusbar.SetInfo("Session stopped during start")
+			return
+		}
+		task.Status, task.AgentPID, task.SessionID = current.Status, current.AgentPID, current.SessionID
+		task.StartedAt, task.EndedAt = current.StartedAt, current.EndedAt
+	} else {
+		task.SetStatus(model.StatusInProgress)
+		task.AgentPID = sess.PID()
+		if !remote {
+			a.db.Update(task) //nolint:errcheck
+			a.invalidateTasksChangeGate()
+		}
+	}
 	delete(a.committedCols, task.ID) // only a successful new start reconciles history
 	delete(a.committedColsPID, task.ID)
 	a.recentStarts[task.ID] = time.Now() // grace period: protect from false reconciliation
-	a.db.Update(task)                    //nolint:errcheck
-	a.invalidateTasksChangeGate()
 
 	// Attach to the terminal pane and start the PTY sync loop only if the
 	// agent view is active for this task. When startSession is called from
 	// the background (user navigated away during worktree creation), the
 	// pane isn't visible — onTaskSelect will attach when the user returns.
-	if (a.mode == modeAgent || a.tasksRailViewing) && a.agentState.TaskID == task.ID {
+	if sess.Alive() && (a.mode == modeAgent || a.tasksRailViewing) && a.agentState.TaskID == task.ID {
 		a.agentPane.SetSession(sess)
 		// Force a PTY resize repost on the next Draw. Covers the auto-start
 		// path (pending view → session starts while user is watching) where
@@ -7645,6 +7706,16 @@ func (a *App) startSessionFill(task *model.Task, mode agent.SessionRefresh) {
 		// its launch size.
 		a.agentPane.ForceResyncPTY()
 		a.startAgentPTYSyncLoop(task.ID, sess)
+	}
+}
+
+func (a *App) sessionStartFailed(taskID string, err error) {
+	uxlog.Log("[tui] failed to start session: %v", err)
+	a.statusbar.SetError("Start failed: " + err.Error())
+	if routing, ok := a.inlineSpawnReservations[taskID]; ok {
+		agent.ReleaseTaskRouting(routing)
+		delete(a.inlineSpawnReservations, taskID)
+		uxlog.Log("[routing] inline spawn failed; reservation released task=%s backend=%q account=%q", taskID, routing.ReservedBackend, routing.ReservedAccount)
 	}
 }
 
@@ -8489,8 +8560,7 @@ func (a *App) executeFork(source *model.Task, targetProject string) {
 			a.recentStarts[created.ID] = time.Now()
 			uxlog.Log("[fork] created task %s (%s) forked from %s", created.ID, created.Name, source.ID)
 			a.refreshTasksLocal()
-			a.tasklist.SelectByID(created.ID)
-			a.onTaskSelect(created, true)
+			a.openCreatedTask(created)
 		})
 	}()
 }
@@ -8541,8 +8611,7 @@ func (a *App) executeForkRemote(source *model.Task, project, forkName string) {
 		// to a local context-rich one.
 		a.statusbar.SetInfo("Forked (remote: source context not carried)")
 		a.refreshTasksLocal()
-		a.tasklist.SelectByID(created.ID)
-		a.onTaskSelect(created, true)
+		a.openCreatedTask(created)
 	})
 }
 

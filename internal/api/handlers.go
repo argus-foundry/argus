@@ -525,6 +525,12 @@ func (s *Server) handleCreateTaskMultipart(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	unlock, lockErr := s.lockTaskMutation(r.Context(), id)
+	if lockErr != nil {
+		writeErr(w, http.StatusServiceUnavailable, "task operation canceled", nil)
+		return
+	}
+	defer unlock()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeErr(w, http.StatusNotFound, "task not found", nil)
@@ -532,6 +538,10 @@ func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.stopTaskSession(task, false); err != nil {
+		if errors.Is(err, agent.ErrSessionStarting) {
+			writeCodedErrCause(w, http.StatusConflict, "agent is starting or restarting", "agent_restarting", nil)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
@@ -550,11 +560,27 @@ func (s *Server) stopTaskSession(task *model.Task, rejectPendingRestart bool) er
 		if err := stopper.StopSettled(task.ID); err != nil {
 			return err
 		}
-	} else if err := s.runner.Stop(task.ID); err != nil && !errors.Is(err, agent.ErrSessionNotFound) {
-		return err
+	} else if err := s.runner.Stop(task.ID); err != nil {
+		if !errors.Is(err, agent.ErrSessionNotFound) {
+			return err
+		}
+		if task.Status == model.StatusPending {
+			uxlog.Log("[api] stop refused before session registration task=%s", task.ID)
+			return agent.ErrSessionStarting
+		}
+		// Preserve the legacy repair for an already missing session. It
+		// does not fence a launch because no session received a stop.
+		if err := s.db.SetStatus(task.ID, model.StatusInReview); err != nil {
+			uxlog.Log("[api] stop: status write failed task=%s err=%v", task.ID, err)
+		}
+		return nil
 	}
-	if err := s.db.SetStatus(task.ID, model.StatusInReview); err != nil {
+	if task.IsResident() {
+		return nil // A manual stop leaves the resident's persisted status fixed.
+	}
+	if err := s.db.RecordSessionStop(task.ID); err != nil {
 		uxlog.Log("[api] stop: status write failed task=%s err=%v", task.ID, err)
+		return err
 	}
 	return nil
 }
@@ -768,11 +794,24 @@ func (s *Server) startResumedSession(task *model.Task, op string) (reattached bo
 	agent.RefreshResumeSessionID(s.db, task)
 	priorSessionID := task.SessionID
 	resume := task.SessionID != ""
+	var freshSessionID string
+	if !resume {
+		freshSessionID = agent.FreshSessionID(task, cfg)
+		task.SessionID = freshSessionID
+	}
 	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
 	sess, reattached, err := s.runner.StartOrReattach(task, cfg, 24, 80, resume)
 	if err != nil {
+		if freshSessionID != "" && errors.Is(err, agent.ErrStartAmbiguous) {
+			if _, persistErr := s.db.RefreshSessionID(task.ID, priorSessionID, freshSessionID); persistErr != nil {
+				uxlog.Log("[api] %s: ambiguous launch session write failed task=%s err=%v", op, task.ID, persistErr)
+			}
+		}
 		uxlog.Log("[api] %s: start failed task=%s status=%s err=%v", op, task.ID, prevStatus, err)
 		return false, err
+	}
+	if reattached && freshSessionID != "" {
+		task.SessionID = priorSessionID
 	}
 	task.AgentPID = sess.PID()
 	if err := s.db.RecordResumedSession(task.ID, task.AgentPID, priorSessionID, task.SessionID); err != nil {
