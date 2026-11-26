@@ -26,6 +26,7 @@ func TestFileCountsAttributesFailure(t *testing.T) {
 }
 
 func TestFileCountsUntrackedAttributePolicy(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, dir, "f", "raw\n")
 	t.Run("binary before conversion", func(t *testing.T) {

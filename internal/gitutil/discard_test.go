@@ -42,6 +42,7 @@ func discardRepo(t *testing.T) string {
 }
 
 func TestDiscardFile(t *testing.T) {
+	t.Parallel()
 	t.Run("restores unstaged and staged edits only for that path", func(t *testing.T) {
 		dir := discardRepo(t)
 		write(t, dir, "a.txt", "unstaged\n")
@@ -104,6 +105,7 @@ func TestDiscardFile(t *testing.T) {
 }
 
 func TestValidateWorktreePath(t *testing.T) {
+	t.Parallel()
 	dir := discardRepo(t)
 	outside := t.TempDir()
 	write(t, outside, "secret.txt", "s")
@@ -132,6 +134,7 @@ func TestValidateWorktreePath(t *testing.T) {
 }
 
 func TestAbsoluteGitDir(t *testing.T) {
+	t.Parallel()
 	dir := discardRepo(t)
 	gd, err := AbsoluteGitDir(dir)
 	testutil.NoError(t, err)
@@ -143,6 +146,7 @@ func TestAbsoluteGitDir(t *testing.T) {
 }
 
 func TestParsePorcelainZ(t *testing.T) {
+	t.Parallel()
 	es := parsePorcelainZ("R  new.txt\x00old.txt\x00?? u.txt\x00 M m.txt\x00")
 	testutil.Equal(t, len(es), 3)
 	testutil.Equal(t, es[0].orig, "old.txt")

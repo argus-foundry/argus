@@ -114,3 +114,104 @@ test('suspended cached output releases its source and resumes without replay dup
     assert.deepEqual(written,replace?[]:[[12,13,14]]);assert.deepEqual(replaced,replace?[[10,11,12,13,14]]:[]);abort.abort();
   });
 });
+
+test('cached output is replaced when the snapshot PID changes', async t => {
+  const requests = [];
+  const original = globalThis.EventSource;
+  globalThis.EventSource = class {
+    constructor(url) { requests.push(url); }
+    addEventListener() {}
+    close() {}
+  };
+  const controller = new AbortController();
+  t.after(() => { controller.abort(); globalThis.EventSource = original; });
+  const task = { id: 'replacement', status: 'in_progress', live: true };
+  const size = { cols: 80, rows: 24 };
+  const adjustments = [];
+  let pid = 31, history = 'old';
+  const api = {
+    json: async path => path.endsWith('/size') ? size : task,
+    request: async () => new Response(history, { headers: {
+      'X-Argus-Session-Pid': String(pid),
+      'X-Output-Total': String(history.length),
+      'X-Source': 'live',
+    } }),
+    streamUrl: path => path,
+  };
+  const stream = new TerminalStream(api, task, controller.signal, {
+    state() {}, currentSize: () => size,
+    write: async bytes => adjustments.push(['write', new TextDecoder().decode(bytes)]),
+    replace: async bytes => adjustments.push(['replace', new TextDecoder().decode(bytes)]),
+  });
+  await stream.start();
+  stream.suspend();
+  pid = 32;
+  history = 'successor';
+  await stream.resume();
+  assert.deepEqual(adjustments, [['write', 'old'], ['replace', 'successor']]);
+  assert.deepEqual(requests, [
+    '/api/tasks/replacement/stream?since=3&expected_pid=31',
+    '/api/tasks/replacement/stream?since=9&expected_pid=32',
+  ]);
+});
+
+test('cached recorded output refreshes before reuse without a process cursor', async t => {
+  const task = { id: 'recorded', status: 'complete', live: false };
+  const size = { cols: 80, rows: 24 };
+  const adjustments = [];
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  let history = 'old';
+  const api = {
+    json: async path => path.endsWith('/size') ? size : task,
+    request: async () => new Response(history, { headers: {
+      'X-Source': 'log', 'X-Output-Total': String(history.length),
+    } }),
+  };
+  const stream = new TerminalStream(api, task, controller.signal, {
+    state() {}, currentSize: () => size,
+    write: async bytes => adjustments.push(['write', new TextDecoder().decode(bytes)]),
+    replace: async bytes => adjustments.push(['replace', new TextDecoder().decode(bytes)]),
+  });
+  await stream.start();
+  stream.suspend();
+  history = 'finished output';
+  await stream.resume();
+  assert.deepEqual(adjustments, [['write', 'old'], ['replace', 'finished output']]);
+  assert.equal(stream.cursor, 0);
+});
+
+for (const cached of [false, true]) test(`live attachment retries ownerless recorded output (${cached ? 'cached' : 'initial'})`, async t => {
+  const original = globalThis.EventSource;
+  const opened = [], painted = [];
+  globalThis.EventSource = class {
+    constructor(url) { opened.push(url); }
+    addEventListener() {}
+    close() {}
+  };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const controller = new AbortController();
+  t.after(() => { controller.abort(); globalThis.EventSource = original; });
+  const task = { id: 'recover-recorded', status: 'in_progress', live: true };
+  let recorded = true;
+  const api = {
+    json: async path => path.endsWith('/size') ? { cols: 80, rows: 24 } : task,
+    request: async () => new Response(recorded ? 'old' : 'new', { headers: recorded
+      ? { 'X-Source': 'log', 'X-Output-Total': '3' }
+      : { 'X-Argus-Session-Pid': '44', 'X-Output-Total': '3' } }),
+    streamUrl: url => url,
+  };
+  const stream = new TerminalStream(api, task, controller.signal, {
+    state() {}, write: async bytes => painted.push(new TextDecoder().decode(bytes)),
+    replace: async bytes => painted.push(new TextDecoder().decode(bytes)),
+  });
+  if (cached) { stream.suspend(); await stream.resume(); }
+  else await stream.start();
+  assert.deepEqual(opened, []);
+  assert.deepEqual(painted, []);
+  recorded = false;
+  t.mock.timers.tick(500);
+  await new Promise(setImmediate);
+  assert.deepEqual(painted, ['new']);
+  assert.deepEqual(opened, ['/api/tasks/recover-recorded/stream?since=3&expected_pid=44']);
+});

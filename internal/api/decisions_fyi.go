@@ -50,7 +50,7 @@ func (s *Server) handleAggregateDecisionLink(w http.ResponseWriter, r *http.Requ
 		role = rows[0].RoleID
 	}
 	for _, row := range rows {
-		if row.Decisions+row.FYIs > 0 {
+		if row.Decisions+row.FYIs+row.Actions+row.Todos > 0 {
 			role = row.RoleID
 			break
 		}

@@ -11,6 +11,7 @@ import (
 )
 
 func TestUntrackedSymlinkPatchParity(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		mnemonic string
@@ -48,6 +49,7 @@ func TestUntrackedSymlinkPatchParity(t *testing.T) {
 }
 
 func TestCapturedSymlinkLiteralPathspec(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	testutil.NoError(t, os.WriteFile(filepath.Join(dir, "target"), []byte("target\n"), 0o600))
 	path := ":(exclude)*.txt"
@@ -59,6 +61,7 @@ func TestCapturedSymlinkLiteralPathspec(t *testing.T) {
 }
 
 func TestUntrackedSymlinkLeavesExistingObjectUntouched(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	testutil.NoError(t, os.WriteFile(filepath.Join(dir, "target"), []byte("target\n"), 0o600))
 	testutil.NoError(t, os.Symlink("target", filepath.Join(dir, "tracked-link")))

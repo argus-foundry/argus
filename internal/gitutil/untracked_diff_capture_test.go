@@ -11,6 +11,7 @@ import (
 )
 
 func TestUntrackedSnapshotSwapBeforeOpen(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	inside := filepath.Join(dir, "inside")
 	testutil.NoError(t, os.Mkdir(inside, 0o700))
@@ -33,6 +34,7 @@ func TestUntrackedSnapshotSwapBeforeOpen(t *testing.T) {
 }
 
 func TestUntrackedSnapshotRejectsSpecialFiles(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	testutil.NoError(t, syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o600))
 	root, err := os.OpenRoot(dir)
@@ -53,6 +55,7 @@ func TestUntrackedSnapshotRejectsSpecialFiles(t *testing.T) {
 }
 
 func TestUntrackedFinalEntryTransitions(t *testing.T) {
+	t.Parallel()
 	for _, before := range []string{"file", "directory", "link"} {
 		for _, after := range []string{"file", "directory", "link", "outside-link"} {
 			t.Run(before+"/"+after, func(t *testing.T) {

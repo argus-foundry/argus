@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -283,6 +286,27 @@ func TestNukeResidentWorkerChecked_HostBusyChangesNothing(t *testing.T) {
 	}
 }
 
+func TestResidentLeaseCaptureRespectsMutationDeadline(t *testing.T) {
+	task := &model.Task{ID: "worker", Name: "Worker", Project: "p", Branch: "argus/worker"}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	repo := initGitRepo(t, t.TempDir())
+	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: repo}))
+	bin := t.TempDir()
+	testutil.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nexec sleep 10\n"), 0700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var events []string
+	runner := &recordingNukeRunner{live: map[string]bool{task.ID: true}, events: &events}
+
+	_, err := NukeResidentWorkerChecked(d, runner, view, ResidentDeleteOptions{
+		Recheck:  func(*model.Task) error { return nil },
+		MutateBy: time.Now().Add(200 * time.Millisecond),
+	})
+	testutil.ErrorIs(t, err, ErrHostBusy)
+	testutil.Equal(t, len(events), 0)
+	_, err = d.HeraLiveBindingByTask(task.ID)
+	testutil.NoError(t, err)
+}
+
 // GiveUpBy caps the exit wait below Max so the recheck and local nuke still
 // fit the caller's deadline.
 func TestNukeResidentWorkerChecked_GiveUpByCapsWait(t *testing.T) {
@@ -312,31 +336,31 @@ func TestResidentRemoteBranchDelete(t *testing.T) {
 		gotDir, gotBranch, gotTip = dir, branch, tip
 		return nil
 	}}
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/x", "abc123")
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "argus/x", "abc123")
 	testutil.Equal(t, gotDir, "/repo")
 	testutil.Equal(t, gotBranch, "argus/x")
 	testutil.Equal(t, gotTip, "abc123")
 	testutil.True(t, hadDeadline)
 	testutil.Contains(t, logs.String(), "remote branch deleted task=w branch=argus/x")
 	gotBranch = ""
-	residentRemoteBranchDelete(opts, "w", "/repo", "", "abc123")
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "", "abc123")
 	testutil.Equal(t, gotBranch, "")
 	// No lease tip: never an unleased delete.
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/y", "")
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "argus/y", "")
 	testutil.Equal(t, gotBranch, "")
 	testutil.Contains(t, logs.String(), "remote branch left in place task=w branch=argus/y")
 	opts.RemoteBranchDelete = func(context.Context, string, string, string) error { return errors.New("offline") }
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/x", "abc123") // logged, never panics
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "argus/x", "abc123") // logged, never panics
 	testutil.Contains(t, logs.String(), "remote branch delete failed task=w branch=argus/x: offline")
 	opts.RemoteBranchDelete = func(context.Context, string, string, string) error {
 		return fmt.Errorf("%w: moved", agent.ErrRemoteBranchChanged)
 	}
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/z", "abc123")
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "argus/z", "abc123")
 	testutil.Contains(t, logs.String(), "remote branch changed on origin; left in place task=w branch=argus/z")
 	opts.RemoteBranchDelete = func(context.Context, string, string, string) error {
 		return fmt.Errorf("%w: origin has no argus/g", agent.ErrRemoteBranchGone)
 	}
-	residentRemoteBranchDelete(opts, "w", "/repo", "argus/g", "abc123")
+	residentRemoteBranchDelete(context.Background(), opts, "w", "/repo", "argus/g", "abc123")
 	testutil.Contains(t, logs.String(), "remote branch already gone task=w branch=argus/g")
 	testutil.False(t, strings.Contains(logs.String(), "left in place task=w branch=argus/g"))
 }

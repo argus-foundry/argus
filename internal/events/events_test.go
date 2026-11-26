@@ -146,3 +146,51 @@ func TestMarkResident_EmptyIDIgnored(t *testing.T) {
 	Emit(model.EventTypeSessionIdle, "", nil)
 	testutil.Equal(t, sink.events()[0].Type, model.EventTypeSessionIdle)
 }
+
+func TestSubscribe_DeliversWithoutSink(t *testing.T) {
+	prev := SetSink(nil)
+	t.Cleanup(func() { SetSink(prev) })
+
+	var got []model.Event
+	unsub := Subscribe(func(ev model.Event) { got = append(got, ev) })
+	t.Cleanup(unsub)
+
+	Emit(model.EventTypeTaskCompleted, "t1", nil)
+	testutil.Equal(t, len(got), 1)
+	testutil.Equal(t, got[0].Type, model.EventTypeTaskCompleted)
+	testutil.Equal(t, got[0].TaskID, "t1")
+	testutil.False(t, got[0].At.IsZero())
+}
+
+func TestSubscribe_UnsubscribeStopsDelivery(t *testing.T) {
+	prev := SetSink(nil)
+	t.Cleanup(func() { SetSink(prev) })
+	unsub := Subscribe(func(model.Event) {})
+	testutil.True(t, listenerCount() >= 1)
+	unsub()
+	testutil.Equal(t, listenerCount(), 0)
+	Emit(model.EventTypeTaskCompleted, "t1", nil)
+}
+
+func TestSubscribe_PanicDoesNotStopSinkOrLaterListener(t *testing.T) {
+	sink := &recordingSink{}
+	prev := SetSink(sink)
+	t.Cleanup(func() { SetSink(prev) })
+
+	unsubA := Subscribe(func(model.Event) { panic("listener boom") })
+	t.Cleanup(unsubA)
+	var second int
+	unsubB := Subscribe(func(model.Event) { second++ })
+	t.Cleanup(unsubB)
+
+	Emit(model.EventTypeTaskCreated, "t2", map[string]string{"name": "x"})
+	testutil.Equal(t, len(sink.events()), 1)
+	testutil.Equal(t, second, 1)
+}
+
+func TestSubscribe_NilIsNoop(t *testing.T) {
+	before := listenerCount()
+	unsub := Subscribe(nil)
+	unsub()
+	testutil.Equal(t, listenerCount(), before)
+}

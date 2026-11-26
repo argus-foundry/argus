@@ -268,7 +268,7 @@ var heraToolDefs = []Tool{
 	},
 	{
 		Name:        "hera_archive",
-		Description: "Archive roles whose work is done so they leave the live views (add-hera-auto-archive, add-hera-handoff-archive). Two normal paths. MERGED: the task is complete, the role is not blocked, no not-yet-done plan node depends on it, a sub-coordinator has all child roles archived and no open decision board items (open fyi items are pushed to your board), the role has sent no mail its recipient has not read, and its git work is confirmed landed with a clean worktree. HANDED OFF (no merge needed): the PR is open (draft ok) and its CI is not failing, the branch is pushed with local tip == remote tip == PR head, the worktree is clean, and the task is in_review or complete; the PR and the batch own the work from then on, the daemon keeps watching the PR (merge settles it; a close WITHOUT merge un-archives the role and posts a decision item on your board), and hera_unarchive hands it back. Unread mail to the role no longer blocks: it is marked read and ONE digest (sender + first line each) is forwarded to your inbox. Anything unconfirmed is refused with a reason (fail closed). Archiving marks the task archived, hides the role, and stops an IDLE session (a busy session is refused); it never deletes the worktree or branch. Omit role_name to sweep every role you coordinate; pass dry_run to only report. ESCAPE HATCH: force=true with a non-empty reason (single named role only, never a sweep) overrides the done/handoff/mail/dependent checks and records the reason durably; coordinators, pinned roles, resident roles, standing-team members and tasks bound to another live role stay refused. Top-level coordinators are not archivable here. Coordinator-only.",
+		Description: "Archive roles whose work is done so they leave the live views (add-hera-auto-archive, add-hera-handoff-archive). Two normal paths. MERGED: the task is complete, the role is not blocked, no not-yet-done plan node depends on it, a sub-coordinator has all child roles archived and no open decision/action/todo board items (open fyi items are pushed to your board), the role has sent no mail its recipient has not read, and its git work is confirmed landed with a clean worktree. HANDED OFF (no merge needed): the PR is open (draft ok) and its CI is not failing, the branch is pushed with local tip == remote tip == PR head, the worktree is clean, and the task is in_review or complete; the PR and the batch own the work from then on, the daemon keeps watching the PR (merge settles it; a close WITHOUT merge un-archives the role and posts a decision item on your board), and hera_unarchive hands it back. Unread mail to the role no longer blocks: it is marked read and ONE digest (sender + first line each) is forwarded to your inbox. Anything unconfirmed is refused with a reason (fail closed). Archiving marks the task archived, hides the role, and stops an IDLE session (a busy session is refused); it never deletes the worktree or branch. Omit role_name to sweep every role you coordinate; pass dry_run to only report. ESCAPE HATCH: force=true with a non-empty reason (single named role only, never a sweep) overrides the done/handoff/mail/dependent checks and records the reason durably; coordinators, pinned roles, resident roles, standing-team members and tasks bound to another live role stay refused. Top-level coordinators are not archivable here. Coordinator-only.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -748,6 +748,14 @@ func (s *Server) toolHeraNewOrchestrator(id interface{}, args json.RawMessage) *
 		}
 	}
 
+	// An omitted prompt keeps the caller's own task prompt as the role mission,
+	// so a later recycle seed's "Original prompt" section is not blank
+	// (keep-coordinator-orientation-on-recycle D5).
+	rolePrompt := p.Prompt
+	if rolePrompt == "" {
+		rolePrompt = task.Prompt
+	}
+
 	role, binding, err := s.heraStore.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
 		OrchestratorID: orch.ID,
 		Name:           p.CoordinatorRoleName,
@@ -756,7 +764,7 @@ func (s *Server) toolHeraNewOrchestrator(id interface{}, args json.RawMessage) *
 		// downstream spawn/adopt can default a worker's project without a
 		// task lookup. Historical rows may be empty; consumers tolerate that.
 		ArgusProject: task.Project,
-		Prompt:       p.Prompt,
+		Prompt:       rolePrompt,
 	}, task.ID, task.Worktree)
 	if err != nil {
 		return toolError(id, fmt.Sprintf("create coordinator role: %v", err))
@@ -775,6 +783,12 @@ func (s *Server) toolHeraNewOrchestrator(id interface{}, args json.RawMessage) *
 	fmt.Fprintf(&b, "- **kind**: coordinator\n")
 	fmt.Fprintf(&b, "- **binding_id**: %d\n", binding.ID)
 	fmt.Fprintf(&b, "- **argus_task_id**: %s\n", task.ID)
+	// Deliver the coordinator rules now: this path has no spawn prompt to carry
+	// them. The same text returns on every recycle (keep-coordinator-
+	// orientation-on-recycle D3).
+	if orientation := hera.CoordinatorOrientation(s.heraStore, role, task.ID); orientation != "" {
+		fmt.Fprintf(&b, "\n## Coordinator orientation\n\n%s\n", orientation)
+	}
 	return toolResult(id, b.String())
 }
 

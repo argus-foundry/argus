@@ -135,6 +135,28 @@ func TestHeraNukeRole(t *testing.T) {
 	testutil.True(t, r.NukedAt != nil)
 }
 
+func TestHeraNukeContentionKeepsRoleReachable(t *testing.T) {
+	srv, d := testServer(t)
+	orch, roles, tasks := seedOrch(t, d, "overlap", db.HeraKindCoordinator, db.HeraKindWorker)
+	unlock, acquired, err := d.TryLockHeraReclaim(tasks[1].ID)
+	testutil.NoError(t, err)
+	testutil.True(t, acquired)
+	defer unlock()
+
+	for _, path := range []string{
+		idp("roles", roles[1].ID, "nuke"),
+		idp("orchestrators", orch.ID, "nuke"),
+	} {
+		w := heraPost(srv, path, "", "master")
+		testutil.Equal(t, w.Code, http.StatusConflict)
+		_, err := d.HeraLiveBindingByRole(roles[1].ID)
+		testutil.NoError(t, err)
+		parent, err := d.HeraOrchestrator(orch.ID)
+		testutil.NoError(t, err)
+		testutil.Nil(t, parent.NukedAt)
+	}
+}
+
 func TestHeraArchiveUnarchive(t *testing.T) {
 	srv, d := testServer(t)
 	orch, roles, _ := seedOrch(t, d, "o1", db.HeraKindCoordinator, db.HeraKindWorker)

@@ -49,6 +49,7 @@ func wantCounts(t *testing.T, f FileChange, add, del int) {
 }
 
 func TestFileChanges_ScopesMatchFileDiff(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	writeFile(t, dir, "committed.txt", "a\nb\nc\n")
 	writeFile(t, dir, "staged.txt", "1\n2\n")
@@ -81,6 +82,7 @@ func TestFileChanges_ScopesMatchFileDiff(t *testing.T) {
 }
 
 func TestFileChanges_SpecialPaths(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	writeFile(t, dir, "old name.txt", "l1\nl2\nl3\nl4\n")
 	writeFile(t, dir, "bin.dat", "\x00\x01\x02")
@@ -121,6 +123,7 @@ func TestFileChanges_SpecialPaths(t *testing.T) {
 }
 
 func TestFileChanges_FailureIsNotZero(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	gitRun(t, dir, "init", "-b", "master")
 	writeFile(t, dir, "x.txt", "x\n")
@@ -136,6 +139,7 @@ func TestFileChanges_FailureIsNotZero(t *testing.T) {
 }
 
 func TestFileChanges_CleanAndEmptyWorktree(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	msg := FetchGitStatus("t", dir, Options{})
 	if msg.Files == nil || len(msg.Files) != 0 {

@@ -499,6 +499,17 @@ func (s *Server) preflightDeleteTask(task *model.Task, pre bulkDeletePreconditio
 
 func (s *Server) removeTaskRecord(task *model.Task, pre bulkDeletePreconditions, ops deleteOps, res *storedDeleteResult) {
 	id := task.ID
+	unlock, err := s.db.TryLockTaskOutsideReclaim(id)
+	if errors.Is(err, db.ErrHeraReclaimInProgress) {
+		skipDeleteTask(res, "reclaim_pending")
+		return
+	}
+	if err != nil {
+		res.State = deleteTaskFailed
+		res.Error = deleteErrorPtr("reclaim check failed")
+		return
+	}
+	defer unlock()
 	handle := s.runner.Get(id)
 	if s.runner.HasPendingRestart(id) {
 		res.State = deleteTaskFailed
@@ -543,17 +554,21 @@ func (s *Server) removeTaskRecord(task *model.Task, pre bulkDeletePreconditions,
 			return
 		}
 	}
-	os.Remove(agent.SessionLogPath(id)) //nolint:errcheck,gosec // G304: id came from db.Get; SessionLogPath roots at ~/.argus/sessions
-	if _, derr := s.db.DeleteArtifactsForTask(id); derr != nil {
-		uxlog.Log("[api] bulk-delete: artifact row cleanup failed: id=%s err=%v", id, derr)
-	}
-	os.RemoveAll(agent.ArtifactsDir(id)) //nolint:errcheck,gosec // G304: id came from db.Get
 	if err := s.db.Delete(id); err != nil && !errors.Is(err, db.ErrTaskNotFound) {
+		if errors.Is(err, db.ErrHeraReclaimInProgress) {
+			skipDeleteTask(res, "reclaim_pending")
+			return
+		}
 		uxlog.Log("[api] bulk-delete: record delete failed: id=%s err=%v", id, err)
 		res.State = deleteTaskFailed
 		res.Error = deleteErrorPtr("record delete failed")
 		return
 	}
+	os.Remove(agent.SessionLogPath(id)) //nolint:errcheck,gosec // G304: id came from db.Get; SessionLogPath roots at ~/.argus/sessions
+	if _, derr := s.db.DeleteArtifactsForTask(id); derr != nil {
+		uxlog.Log("[api] bulk-delete: artifact row cleanup failed: id=%s err=%v", id, derr)
+	}
+	os.RemoveAll(agent.ArtifactsDir(id)) //nolint:errcheck,gosec // G304: id came from db.Get
 	res.RecordDeleted = true
 	events.Emit(model.EventTypeTaskDeleted, id, nil)
 	s.invalidateColsCache(id)
@@ -655,7 +670,7 @@ func (s *Server) deleteCleanupTargets(res *storedDeleteResult) (worktree, branch
 			worktree, branch = "", ""
 			protected = true
 		}
-		if branch == "" || (branch != t.Branch && branch != strings.TrimPrefix(t.BaseBranch, "origin/") && "refs/heads/"+branch != t.BaseBranch && "refs/remotes/origin/"+branch != t.BaseBranch) {
+		if !agent.TaskReferencesGitBranch(t, branch) {
 			continue
 		}
 		repo := agent.ResolveDir(t, cfg)

@@ -21,7 +21,7 @@ A persistent daemon keeps PTY sessions alive across TUI restarts and reboots. An
 - **`make fmt`** runs goimports over the tree; **`make fmt-check`** fails CI if anything is unformatted (the most common CI miss).
 - **`make lint-pr`** uses `--new-from-rev=origin/master`, so it only flags issues your diff introduces. Fix them; do not add blanket `//nolint`.
 
-Common targets: `make build`, `make vet`, `make test` (`-race -count=1 ./...`), `make test-pkg PKG=...`, `make test-cover`, `make test-watch`.
+Common targets: `make build`, `make vet`, `make test` (race suite, `-count=1`; Makefile `RACE_FLAGS` excludes only SQLite's C core), `make test-pkg PKG=...`, `make test-cover`, `make test-watch`.
 
 ## Testing norms
 

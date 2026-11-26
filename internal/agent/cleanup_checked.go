@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -35,9 +36,22 @@ func (r GitCleanupResult) Failed() bool {
 	return r.Worktree == CleanupFailed || r.LocalBranch == CleanupFailed || r.RemoteBranch == CleanupFailed
 }
 
+// taskGitTimeout is the per-invocation Git deadline; tests shorten it.
+var taskGitTimeout = 15 * time.Second
+
 // RunTaskGit bounds Git and its subprocess group by the task lifetime.
 func RunTaskGit(ctx context.Context, dir string, args ...string) (string, int, error) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	return runTaskGit(ctx, dir, taskGitOptions{}, args...)
+}
+
+type taskGitOptions struct {
+	env                   []string
+	exactStdout           bool
+	ignoreAlternateConfig bool
+}
+
+func runTaskGit(ctx context.Context, dir string, opts taskGitOptions, args ...string) (string, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, taskGitTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // G702: fixed Git binary with structured arguments, no shell.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -55,17 +69,44 @@ func RunTaskGit(ctx context.Context, dir string, args ...string) (string, int, e
 		}
 	}()
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	env := cmd.Environ()
+	if opts.ignoreAlternateConfig {
+		env = slices.DeleteFunc(env, func(value string) bool { return strings.HasPrefix(value, "GIT_CONFIG=") })
+	}
+	cmd.Env = append(append(env, "LC_ALL=C"), opts.env...)
+	var out string
+	var err error
+	if opts.exactStdout {
+		var raw []byte
+		raw, err = cmd.Output()
+		out = string(raw)
+	} else {
+		var combined []byte
+		combined, err = cmd.CombinedOutput()
+		out = strings.TrimSpace(string(combined))
+	}
 	if ctx.Err() != nil {
 		uxlog.Log("[worktree] git interrupted dir=%q err=%v", dir, ctx.Err())
-		return strings.TrimSpace(string(out)), -1, ctx.Err()
+		return out, -1, ctx.Err()
 	}
 	code := 0
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		code = ee.ExitCode()
 	}
-	return strings.TrimSpace(string(out)), code, err
+	return out, code, err
+}
+
+func taskGitPath(ctx context.Context, dir string, args ...string) (string, error) {
+	out, _, err := runTaskGit(ctx, dir, taskGitOptions{exactStdout: true}, args...)
+	if err != nil {
+		return "", err
+	}
+	path, terminated := strings.CutSuffix(out, "\n")
+	if !terminated || path == "" {
+		return "", errors.New("incomplete Git path output")
+	}
+	return path, nil
 }
 
 // TaskGitCleanupBranch resolves the same legacy branch fallback used by cleanup.

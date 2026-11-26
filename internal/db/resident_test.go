@@ -288,10 +288,15 @@ func TestResident_SweepFiltersExcludeResidentRow(t *testing.T) {
 	t.Run("PruneCompleted", func(t *testing.T) {
 		_, err := d.conn.Exec(`UPDATE tasks SET status='complete' WHERE id IN (?, ?)`, r.ID, ctl.ID)
 		testutil.NoError(t, err)
-		pruned, _, err := d.PruneCompleted()
+		ordinary := &model.Task{ID: "ordinary", Name: "Ordinary", Status: model.StatusComplete}
+		testutil.NoError(t, d.Add(ordinary))
+		pruned, skipped, err := d.PruneCompleted()
 		testutil.NoError(t, err)
 		testutil.Equal(t, len(pruned), 1)
-		testutil.Equal(t, pruned[0].ID, ctl.ID)
+		if len(pruned) == 1 {
+			testutil.Equal(t, pruned[0].ID, ordinary.ID)
+		}
+		testutil.Equal(t, skipped, 1)
 		if got, _ := d.Get(r.ID); got == nil {
 			t.Fatal("resident row must survive PruneCompleted")
 		}

@@ -22,7 +22,9 @@ in the TUI's second tab, and agents drive it entirely through the `mcp__argus__h
 tools. State lives in the same `~/.argus/data.sql` (the `hera_*` tables). You never touch the
 plumbing; you call the tools.
 
-Board feedback includes COMMENT and DELETION annotations with quoted text and comments: address every annotation. DELETION is a suggestion, never an applied board edit; comment-only decisions remain open. Retrieve full shortened feedback at authenticated `GET /api/hera/roles/{role_id}/board/fyi-actions/{action_id}` through the API proxy (master/device only, never a page session). This receipt route includes decision responses as well as FYIs. Keep settled follow-up reflected on the board.
+Use `decision` for a human choice, `fyi` for information only, `action` for a step only Aaron can perform, and board `todo` for future team work Aaron does nothing about now. On action posts explicitly set `blocking: true` when work is stuck until he acts, or `blocking: false` for a deferred step. Supply an exact copyable `command` (shell command or UI step) if known; the board never executes it. Action/todo `trigger` is optional plain text; on post it defaults to `trigger_pending: true`. Verify the condition and explicitly set `trigger_pending: false` when ready. Pending items and all board todos stay visible without human-attention badges or jumps. Blocking actions sort first. Omitted update metadata is preserved; changing kind clears incompatible fields. Actions resolve with `outcome: "done"`; board todos resolve with `"done"` or `"dropped"`, with optional `note` (omitting outcome defaults to done). Both create durable completion notices. Settle or explicitly transfer open actions/todos before normal sub-coordinator archive. Board `todo` is separate from Things 3 `internal/todo` and `todo_*` tools: do not sync with that backend. Historical reclassification, Things sync and native macOS board parity are follow-ups.
+
+Board feedback includes COMMENT and DELETION annotations with quoted text and comments: address every annotation. DELETION is a suggestion, never an applied board edit; comment-only decisions remain open. Retrieve full shortened feedback at authenticated `GET /api/hera/roles/{role_id}/board/fyi-actions/{action_id}` through the API proxy (master/device only, never a page session). This receipt route includes decision responses as well as FYIs and action/todo completion receipts. Keep settled follow-up reflected on the board.
 
 ## 1. When this applies (and when it does NOT)
 
@@ -197,7 +199,7 @@ Live Claude bridges with `bridge.delivery` enabled deliver doorbells as plugin-f
   roles so they leave the live views. Two normal paths, both fail-closed (anything unconfirmed is refused
   with a reason):
   - **merged (done-done):** task `complete`, role not blocked, no not-yet-done plan node depends on it,
-    a sub-coordinator has all child roles archived and no open `decision` board items (open `fyi` items
+    a sub-coordinator has all child roles archived and no open `decision`, `action` or `todo` board items (open `fyi` items
     are pushed to your board), nothing the role sent is still unread, and its git work is confirmed
     landed with a clean worktree.
   - **handed off (no merge needed):** the role's PR is open (draft ok) and its CI is not failing, the

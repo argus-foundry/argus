@@ -20,6 +20,8 @@ import (
 )
 
 type boardView struct {
+	allItems     []*db.HeraBoardItem
+	tab          int
 	items        []*db.HeraBoardItem
 	cursor       int
 	offset       int
@@ -28,7 +30,7 @@ type boardView struct {
 	rect         widget.InnerRect
 }
 
-func newBoardView() *boardView { return &boardView{} }
+func newBoardView() *boardView { return &boardView{tab: 4} }
 
 func (p *HeraPage) SetBoardAuto(enabled bool) {
 	p.boardAuto = enabled
@@ -88,11 +90,11 @@ func (p *HeraPage) updateBoard(o *heramodel.OrchView) {
 	// plan must survive ordinary refreshes of the same open reminders.
 	if p.residentMode && p.boardAuto && !p.showBoard && c != nil {
 		for _, item := range c.BoardItems {
-			if item.Read {
+			if !heramodel.BoardAttention(item) {
 				continue
 			}
 			known := false
-			for _, old := range p.board.items {
+			for _, old := range p.board.sourceItems() {
 				if old.ID == item.ID && !old.Read && old.UpdatedAt.Equal(item.UpdatedAt) {
 					known = true
 					break
@@ -105,24 +107,38 @@ func (p *HeraPage) updateBoard(o *heramodel.OrchView) {
 			}
 		}
 	}
-	p.board.items = nil
+	p.board.allItems = []*db.HeraBoardItem{}
 	if c != nil {
-		p.board.items = c.BoardItems
-	}
-	expandedPresent := false
-	for n, i := range p.board.items {
-		if i.ID == selected {
-			p.board.cursor = n
-		}
-		if i.ID == p.board.expandedID {
-			expandedPresent = true
+		// The model already sorts; sorting again keeps injected/remote models
+		// in the shared order (blocking, ordinary, quiet) at no cost.
+		heramodel.SortBoardItems(c.BoardItems)
+		for _, item := range c.BoardItems {
+			if !item.Resolved {
+				p.board.allItems = append(p.board.allItems, item)
+			}
 		}
 	}
-	if !expandedPresent && p.board.expandedID != 0 {
-		uxlog.Log("[board] expansion cleared orch=%d item=%d: no longer open", o.ID, p.board.expandedID)
-		p.board.expandedID = 0
+	if p.boardTabs == nil {
+		p.boardTabs = make(map[int64]int)
 	}
-	p.board.cursor = max(0, min(p.board.cursor, len(p.board.items)-1))
+	if tab, ok := p.boardTabs[o.ID]; ok {
+		p.board.tab = tab
+	} else {
+		p.board.tab = 4
+		counts := p.board.counts()
+		for n, count := range counts[:4] {
+			if count > 0 {
+				p.board.tab = n
+				break
+			}
+		}
+		p.boardTabs[o.ID] = p.board.tab
+	}
+	expandedID := p.board.expandedID
+	p.board.filter(selected)
+	if expandedID != 0 && p.board.expandedID == 0 {
+		uxlog.Log("[board] expansion cleared orch=%d item=%d: no longer visible", o.ID, expandedID)
+	}
 }
 
 func (b *boardView) selected() *db.HeraBoardItem {
@@ -146,8 +162,8 @@ func (p *HeraPage) boardTitle() string {
 		return " Plan "
 	}
 	unread := 0
-	for _, i := range p.board.items {
-		if !i.Read {
+	for _, i := range p.board.sourceItems() {
+		if heramodel.BoardAttention(i) {
 			unread++
 		}
 	}
@@ -157,20 +173,29 @@ func (p *HeraPage) boardTitle() string {
 func boardHint(keys *keymap.Keymap, focused bool) string {
 	label := func(act keymap.Action) string {
 		binding, _ := keys.BindingFor(keymap.CtxHeraBoard, act)
+		if binding.String() == "left" {
+			return "←"
+		}
+		if binding.String() == "right" {
+			return "→"
+		}
 		return binding.String()
 	}
 	if !focused {
 		return "⌘→ open board · " + label(keymap.ActBoardToggle) + " plan"
 	}
-	return fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s dismiss · %s decide · %s plan · ctrl+q back",
+	return label(keymap.ActBoardTabPrev) + "/" + label(keymap.ActBoardTabNext) + " tabs · " + fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s clear · %s copy · %s decide · %s plan · ctrl+q back",
 		label(keymap.ActBoardDown), label(keymap.ActBoardUp), label(keymap.ActBoardReply),
-		label(keymap.ActBoardDismiss), label(keymap.ActBoardDecide), label(keymap.ActBoardToggle))
+		label(keymap.ActBoardDismiss), label(keymap.ActBoardCopy),
+		label(keymap.ActBoardDecide), label(keymap.ActBoardToggle))
 }
 
 type boardLine struct {
 	text           string
 	bold, selected bool
 	boldRunes      []bool
+	// tone colors a header: "blocking" stands out, "quiet" dims deferred work.
+	tone string
 }
 
 // boardBold removes only paired, nonempty bold markers. Other syntax stays literal.
@@ -278,7 +303,14 @@ func (l boardLine) draw(screen tcell.Screen, x, y, width int, focused bool) {
 		if col+w > width {
 			break
 		}
-		style := theme.StyleNormal.Bold(l.bold || (index < len(l.boldRunes) && l.boldRunes[index])).Reverse(l.selected && focused)
+		base := theme.StyleNormal
+		switch l.tone {
+		case boardToneBlocking:
+			base = theme.StyleNeedsInput
+		case boardToneQuiet:
+			base = theme.StyleDimmed
+		}
+		style := base.Bold(l.bold || (index < len(l.boldRunes) && l.boldRunes[index])).Reverse(l.selected && focused)
 		if w > 0 {
 			screen.SetContent(x+col, y, runes[0], runes[1:], style)
 		}
@@ -345,6 +377,13 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 		b.offset = 0
 		return
 	}
+	b.drawTabs(screen, inner.X, inner.Y, inner.W)
+	inner.Y++
+	inner.H--
+	if inner.H == 0 {
+		b.offset = 0
+		return
+	}
 	var lines []boardLine
 	selectedStart := 0
 	for n, i := range b.items {
@@ -363,8 +402,9 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 				unread = "•"
 			}
 		}
-		prefix := boardText(fmt.Sprintf("%s [%s] #%d ", marker, i.Kind, i.ID))
+		prefix := boardText(fmt.Sprintf("%s [%s] #%d ", marker, boardKindLabel(i), i.ID))
 		subject := boardText(i.Subject)
+		tone := boardTone(i)
 		if b.expandedID == i.ID {
 			// Leave room for a wide subject rune even in very narrow panels.
 			prefix = runewidth.Truncate(prefix, max(0, inner.W-runewidth.StringWidth(unread)-2), "")
@@ -372,7 +412,7 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 			markerOnly := unread != "" && inner.W-runewidth.StringWidth(unread) < 2
 			wrapWidth := max(1, inner.W-len(indent)-runewidth.StringWidth(unread))
 			if markerOnly {
-				lines = append(lines, boardLine{text: unread, bold: true, selected: selected})
+				lines = append(lines, boardLine{text: unread, bold: true, selected: selected, tone: tone})
 				wrapWidth = inner.W
 			}
 			for n, wrapped := range widget.WrapPreservingLines(subject, wrapWidth) {
@@ -380,19 +420,20 @@ func (b *boardView) draw(screen tcell.Screen, x, y, w, h int, title string, focu
 				if n == 0 && !markerOnly {
 					header = prefix + wrapped + unread
 				}
-				lines = append(lines, boardLine{text: header, bold: true, selected: selected && n == 0 && !markerOnly})
+				lines = append(lines, boardLine{text: header, bold: true, selected: selected && n == 0 && !markerOnly, tone: tone})
 			}
 			if i.ResidentApproval {
 				lines = append(lines, approvalBodyLines(i.Body, inner.W)...)
 			} else {
 				lines = append(lines, boardBodyLines(boardItemBody(i), inner.W)...)
+				lines = append(lines, boardMetaLines(i, inner.W)...)
 			}
 		} else {
 			header := runewidth.Truncate(prefix+subject, max(0, inner.W-runewidth.StringWidth(unread)), "…") + unread
 			if inner.W <= runewidth.StringWidth(unread) {
 				header = unread
 			}
-			lines = append(lines, boardLine{text: header, bold: true, selected: selected})
+			lines = append(lines, boardLine{text: header, bold: true, selected: selected, tone: tone})
 		}
 	}
 	if len(lines) == 0 {
@@ -437,6 +478,10 @@ func (b *boardView) handleMouse(action tview.MouseAction, event *tcell.EventMous
 func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Primitive)) {
 	act, _ := p.keys().Resolve(keymap.CtxHeraBoard, event)
 	switch {
+	case act == keymap.ActBoardTabPrev:
+		p.changeBoardTab(p.board.tab - 1)
+	case act == keymap.ActBoardTabNext:
+		p.changeBoardTab(p.board.tab + 1)
 	case act == keymap.ActBoardDecide:
 		if p.IsRemote() {
 			return
@@ -464,9 +509,9 @@ func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Pri
 		p.board.cursor = max(0, p.board.cursor-1)
 		p.board.followCursor = true
 	case event.Key() == tcell.KeyPgDn:
-		p.board.offset += max(1, p.boardHeight-3)
+		p.board.offset += max(1, p.boardHeight-4)
 	case event.Key() == tcell.KeyPgUp:
-		p.board.offset = max(0, p.board.offset-max(1, p.boardHeight-3))
+		p.board.offset = max(0, p.board.offset-max(1, p.boardHeight-4))
 	default:
 		i := p.board.selected()
 		if i == nil {
@@ -491,11 +536,19 @@ func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Pri
 				p.replyToBoard(i)
 			}
 		case act == keymap.ActBoardDismiss:
-			if i.ResidentApproval {
+			switch {
+			case i.ResidentApproval:
 				p.decideBoardApproval(i, false)
-			} else if p.OnBoardDismiss != nil {
+			case i.Kind == "todo" || i.Kind == "action":
+				p.completeBoardItem(i, "done")
+			case p.OnBoardDismiss != nil:
+				uxlog.Log("[board] clear role=%d item=%d kind=%s outcome=dismiss", i.RoleID, i.ID, i.Kind)
 				p.OnBoardDismiss(i.RoleID, i.ID)
+			default:
+				uxlog.Log("[board] clear skipped item=%d kind=%s: no dismiss handler", i.ID, i.Kind)
 			}
+		case act == keymap.ActBoardCopy:
+			p.copyBoardCommand(i)
 		}
 	}
 }
@@ -520,6 +573,7 @@ func (p *HeraPage) decideBoardApproval(i *db.HeraBoardItem, approve bool) {
 		return
 	}
 	if p.OnApprovalDecision != nil {
+		uxlog.Log("[board] approval requested role=%d item=%d approve=%v", i.RoleID, i.ID, approve)
 		p.OnApprovalDecision(i, approve)
 	}
 }
@@ -582,4 +636,88 @@ func boardItemBody(i *db.HeraBoardItem) string {
 		fmt.Fprintf(&b, "\n**Recommendation:** %s", i.Structured.Reason)
 	}
 	return b.String()
+}
+
+const (
+	boardToneBlocking = "blocking"
+	boardToneQuiet    = "quiet"
+)
+
+// boardKindLabel names the item's kind, marking blocking actions and deferred
+// (trigger-pending) work so the state is readable without expanding the row.
+func boardKindLabel(i *db.HeraBoardItem) string {
+	switch {
+	case i.Kind == "action" && i.Blocking:
+		return "action BLOCKING"
+	case (i.Kind == "action" || i.Kind == "todo") && i.TriggerPending:
+		return i.Kind + " deferred"
+	}
+	return i.Kind
+}
+
+func boardTone(i *db.HeraBoardItem) string {
+	switch {
+	case i.Kind == "action" && i.Blocking:
+		return boardToneBlocking
+	case heramodel.BoardQuiet(i):
+		return boardToneQuiet
+	}
+	return ""
+}
+
+// boardMetaLines renders trigger/readiness and the exact step for action and
+// todo items. The command is literal data (never Markdown-parsed) so the text
+// shown is the text Copy puts on the clipboard.
+func boardMetaLines(i *db.HeraBoardItem, width int) []boardLine {
+	if i.Kind != "action" && i.Kind != "todo" {
+		return nil
+	}
+	var lines []boardLine
+	if t := strings.TrimSpace(i.Trigger); t != "" {
+		state := "ready"
+		if i.TriggerPending {
+			state = "deferred"
+		}
+		lines = append(lines, boardBodyLines(fmt.Sprintf("**Trigger (%s):** %s", state, t), width)...)
+	}
+	if i.Command != "" {
+		lines = append(lines, boardLine{text: "  Step:", bold: true})
+		lines = append(lines, approvalBodyLines(i.Command, width)...)
+	}
+	return lines
+}
+
+func (p *HeraPage) info(msg string) {
+	if p.OnInfo != nil {
+		p.OnInfo(msg)
+	}
+}
+
+// completeBoardItem requests Done for the selected action/todo at its
+// visible revision. Pending items stay completable: Aaron
+// may finish deferred work early.
+func (p *HeraPage) completeBoardItem(i *db.HeraBoardItem, outcome string) {
+	if (i.Kind != "action" && i.Kind != "todo") || i.Resolved {
+		uxlog.Log("[board] complete skipped item=%d kind=%s: not an open action/todo", i.ID, i.Kind)
+		p.info("Done applies to open actions and todos")
+		return
+	}
+	if p.OnBoardComplete == nil {
+		uxlog.Log("[board] complete skipped item=%d: no handler (remote)", i.ID)
+		return
+	}
+	uxlog.Log("[board] clear role=%d item=%d kind=%s outcome=%s", i.RoleID, i.ID, i.Kind, outcome)
+	p.OnBoardComplete(i, outcome)
+}
+
+func (p *HeraPage) copyBoardCommand(i *db.HeraBoardItem) {
+	if i.Kind != "action" || i.Command == "" {
+		uxlog.Log("[board] copy skipped item=%d kind=%s: no step", i.ID, i.Kind)
+		p.info("Nothing to copy: this item has no command or step")
+		return
+	}
+	if p.OnBoardCopy == nil {
+		return
+	}
+	p.OnBoardCopy(i)
 }

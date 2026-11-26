@@ -95,7 +95,13 @@ Prefer `t.Cleanup` over `defer` inside helpers — runs LIFO at end of test, sur
 
 ### Parallelism
 
-Pure-logic tests should call `t.Parallel()`. Tests that use `t.Setenv`, modify global state, or share files **must not** parallelize — `t.Setenv` panics under parallel. UI smoke tests are sequential.
+Pure-logic tests should call `t.Parallel()` (all of `internal/gitutil` does; it cut that package 79s -> 26s). Before parallelizing a file, grep it for `t.Setenv`, `Chdir`, and assignments to package-level seams (`prRunner`, `handoffGit`, `runGitHook`, ...). Tests that use `t.Setenv`, modify global state, or share files **must not** parallelize — `t.Setenv` panics under parallel. UI smoke tests are sequential.
+
+### Slow tests: shrink the boundary, don't skip the test
+
+When a test is slow because its input is big (multi-MB logs, 4 MiB headers, an 81 MP image, a real 15s deadline), **inject the limit through an unexported package var and scale the input down to the same side-of-the-boundary cases** (just under, just over). Pin the production default in a one-line test (`TestReplayReadWindowDefaults`, `TestThumbnail_ProductionPixelLimit`) so the shrunken value can never become the real one. Tests that write such a var must not be `t.Parallel` (parallel tests only resume after the serial phase, so a serial writer with a `t.Cleanup` restore cannot race them).
+
+**A shrunken fixture must still be a valid input that would pass without the guard.** A header-patched/truncated PNG is rejected by the decoder anyway, so the size-guard mutation survived; a real 40x40 image over a 1000-pixel limit (with a 30x30 sibling that must succeed) kills it. Always run the mutation (break the guard, confirm FAIL) before trusting a speed-up. Same-flavor limits: fd-leak cycle tests need only enough cycles for the before/after equality to bite (8, not 30); scroll-traversal tests keep consecutive views overlapping (step 19 in a 24-row pane) rather than stepping one screen-fraction at a time.
 
 ## Environment hermeticity
 
@@ -108,7 +114,7 @@ Pure-logic tests should call `t.Parallel()`. Tests that use `t.Setenv`, modify g
 
 ## Concurrency Testing
 
-- **`-race -count=1`** on every CI run (already wired).
+- **`-race -count=1`** on every CI run (already wired). Makefile `RACE_FLAGS` and CI's Test step exclude only `modernc.org/sqlite/lib`, `modernc.org/libc/...`, and `modernc.org/memory` via separate `-gcflags=<pattern>=-race=false` arguments. This avoids expensive race instrumentation in SQLite's machine-translated C core; it gives up detection of races inside that core only. Argus, `database/sql`, and the Go driver `modernc.org/sqlite` remain instrumented, including driver reads of caller-owned byte slices. Never widen the exclusion to `modernc.org/sqlite/...`: that hides races when a caller mutates a slice during a query. Repeated `-gcflags` arguments combine for these distinct package patterns; they do not replace one another.
 - **`testing/synctest`** (stable in Go 1.25) for any test that previously used `time.Sleep` for synchronization. `synctest.Test(t, func(t *testing.T) {...})` runs in a bubble where `time.Sleep`, tickers, and deadlines advance instantly when all goroutines block. Use `synctest.Wait()` to flush pending goroutines instead of polling.
 - **Never `time.Sleep` to wait for state.** Use channels, `sync.Cond`, or `synctest.Wait`. Sleep-based sync is the single largest source of flakes.
 
@@ -152,7 +158,7 @@ Always `t.TempDir()` for paths and `t.Setenv("HOME", t.TempDir())` for code that
 
 ## SQLite
 
-`db.OpenInMemory(t)` already returns a fresh DB and registers cleanup. Each `:memory:` is a distinct database — for shared in-memory across connections in one test, use `file::memory:?cache=shared`.
+`db.OpenInMemory()` returns a fresh DB (caller closes it). It clones a once-per-process migrated template via SQLite's backup API (`internal/db/memtemplate.go`), so it costs ~ms even under `-race`; each clone is a private `:memory:` database, and a test needing a 2nd concurrent connection gets an explicit error rather than an empty DB. Seeding (reads `HOME`) still runs per open. `Open(path)` never uses the template, so migration/upgrade tests must use a real file path (see `TestOpen_PathStillMigrates`). A test that needs a custom pre-migration schema builds its own `sql.Open("sqlite", ...)` + `createTables()`.
 
 ## Process / PTY
 
@@ -165,7 +171,9 @@ The reference helpers live in `internal/tui/smoke_test.go`:
 - `simApp(t)` — `SimulationScreen` wrapped in `lazyScreen`, mouse + paste enabled in the correct order.
 - `wireApp(t, app)` — full `App` wired to a SimulationScreen.
 - `runApp(t, app)` — runs the event loop in a goroutine, returns a stop func.
-- `syncUI(t, app)` — flush pending events via an empty `QueueUpdateDraw`.
+- `syncUI(t, app)` — a real **barrier**, not a sleep: it sends a sentinel key (`F64`, swallowed by an input-capture wrapper before any handler, widget or PTY) down the same SimulationScreen FIFO as the injected events and waits for the capture to see it, then does a `QueueUpdate` round-trip. On return every earlier `sim.Inject*`/`QueueEvent` has been handled and its post-event draw is done. Bounded by `barrierTimeout` (10s, only ever spent on a failing test) and it fails with a message naming the likely causes. Tests may install their own `SetInputCapture`; the next `syncUI` re-wraps it (it must run on the UI goroutine, since tview's capture accessors are unlocked). An app built without `simApp` must call `registerBarrier`.
+
+**Barrier vs condition wait — never a sleep.** `syncUI` covers *synchronous* effects of injected events only. If the effect lands later (a goroutine that ends in `QueueUpdateDraw`, a refresher/poller, a timer, an off-thread DB write the UI then re-reads), assert it with `waitForCond(t, app.tapp, "what", fn)` on the observable result — or `waitFor` for state that is not UI-owned. Do not add or lengthen a `time.Sleep`: it is too slow when the host is idle and still flaky when loaded. `waitForCond` already runs `fn` on the UI goroutine, so calling `readUI` inside it deadlocks. A barrier makes a negative assertion ("X did not happen") *stronger* for synchronous effects (the handler is proven finished), but vacuous for async ones: if the thing you are asserting absent would be produced by a goroutine, first prove that goroutine ran (a signal channel, or `waitForCond` on a sibling positive effect), and keep any unavoidable timed wait deliberate, short and commented. A failing barrier must never fall back to a short timeout then proceed — the prototype did (50 ms) and under `-race` a slow 240x50 draw let a plain `QueueUpdate` overtake unprocessed keys (`TestSmoke_CoordinatorBoard` then indexed an empty `sess.writes`; a test-side race, not a production bug).
 
 **New page wrappers, layout containers, and any `SetScreen`/`EnableMouse`/`EnablePaste` change require a smoke test.** See CLAUDE.md "Testing Requirements".
 

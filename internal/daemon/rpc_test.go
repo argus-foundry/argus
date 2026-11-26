@@ -157,6 +157,40 @@ func TestRPC_Resize(t *testing.T) {
 	})
 }
 
+func TestRPC_ScopedPTY(t *testing.T) {
+	const taskID = "scoped-pty"
+	d, c := startTestSession(t, taskID, "sleep 60")
+	session := d.runner.Get(taskID)
+	pid := session.PID()
+	cols, rows := session.PTYSize()
+
+	var response StatusResp
+	testutil.NoError(t, c.Call("Daemon.ResizeForPID", &ResizeReq{
+		TaskID: taskID, Rows: 31, Cols: 99, ExpectedPID: pid + 1,
+	}, &response))
+	testutil.False(t, response.OK)
+	testutil.Equal(t, response.Error, agent.ErrSessionNotFound.Error())
+	gotCols, gotRows := session.PTYSize()
+	testutil.Equal(t, gotCols, cols)
+	testutil.Equal(t, gotRows, rows)
+
+	testutil.NoError(t, c.Call("Daemon.StopRerenderForPID", &StopReq{
+		TaskID: taskID, Scope: agent.StopRerender, ExpectedPID: pid + 1,
+	}, &response))
+	testutil.False(t, response.OK)
+	testutil.Equal(t, response.Error, agent.ErrSessionNotFound.Error())
+	testutil.True(t, session.Alive())
+
+	response = StatusResp{}
+	testutil.NoError(t, c.Call("Daemon.ResizeForPID", &ResizeReq{
+		TaskID: taskID, Rows: 31, Cols: 99, ExpectedPID: pid,
+	}, &response))
+	testutil.True(t, response.OK)
+	gotCols, gotRows = session.PTYSize()
+	testutil.Equal(t, gotCols, 99)
+	testutil.Equal(t, gotRows, 31)
+}
+
 func TestRPC_GetExitInfo(t *testing.T) {
 	d, sockPath := testDaemon(t)
 	serveTestServer(t, d, sockPath)
@@ -600,14 +634,14 @@ func TestDaemon_RegisterUnregisterStream(t *testing.T) {
 	a, b := net.Pipe()
 	t.Cleanup(func() { a.Close(); b.Close() })
 
-	d.registerStream("t1", a)
+	d.registerStream("t1", a, 1)
 	d.mu.Lock()
 	got := len(d.streams["t1"])
 	d.mu.Unlock()
 	testutil.Equal(t, got, 1)
 
 	// Register a second on the same task to exercise the slice path.
-	d.registerStream("t1", b)
+	d.registerStream("t1", b, 1)
 	d.mu.Lock()
 	got = len(d.streams["t1"])
 	d.mu.Unlock()

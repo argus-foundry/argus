@@ -1,0 +1,3 @@
+- [x] Persist and recheck nuke ownership, and propagate single and cascade failures.
+- [x] Invalidate all PWA detail exits and preserve its deadline through rendering and stream admission.
+- [x] Run regression coverage and archive the change.

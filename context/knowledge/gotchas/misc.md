@@ -5,6 +5,7 @@
 
 ## Database Patterns
 
+- **`OpenInMemory` clones a template; only `Open(path)` replays migrations.** The template (`memtemplate.go`) holds `createTables()` output only — exactly what `OpenInMemory` always ran — so `migrate()`/`fixupBackends()`/`seedDefaults()` stay per-open (seeding reads `HOME`; freezing it into the template would leak the first test's HOME). Use the driver backup API, not `Deserialize` (buffer ownership is unsafe). The template conn is intentionally never closed (one pure in-memory conn, no goroutine); a build failure is returned from `OpenInMemory` (eager `Ping`) and not cached. The connector is one-shot per `OpenInMemory`: a second pooled connection returns an explicit error (a blank or empty clone would silently lose reads/writes); do not use `SetMaxOpenConns(1)`, which turns that into a deadlock. A schema change needs no invalidation — the template is rebuilt per process.
 - **New columns use `ALTER TABLE ... ADD COLUMN ... DEFAULT ''` after `CREATE TABLE IF NOT EXISTS`.** Error for duplicate column silently ignored.
 - **`taskColumns` is the canonical column list.** Update `taskColumns`, `scanTask`, `Add`, and `Update` in lockstep.
 - **Backend default config must be self-healing.** `fixupBackends()` runs on every `Open()` to repair outdated configs. Any `DefaultConfig()` change must be mirrored there. All Claude fixup checks use `name == "claude"` (not `strings.Contains(command, "claude")`) to avoid matching user-created backends.
@@ -424,6 +425,12 @@
 ## Board decisions
 
 - **An omitted board-update `options` parameter preserves structured options and recommendation.** Only an explicit empty array clears the structure; structure changes mark unread and advance the revision so stale browser answers conflict.
+
+- **Rebuilding `hera_board_items` requires foreign keys OFF on the same pinned connection before BEGIN, then an integrity check and enforcement restored after commit/rollback.** Never rename the parent first (SQLite rewrites child targets), and preserve IDs, AUTOINCREMENT high-water mark, indexes/triggers and approval/receipt records; DROP with enforcement ON can silently cascade child deletion.
+
+- **Pending triggers and every board `todo` are quiet even when unread; triggering requires an explicit coordinator update, never parsing trigger prose.** Reuse the shared attention predicate in badge, landing, resident auto-show and jump paths; normal sub-coordinator archive must refuse open actions/todos in both its fast and transactional checks.
+
+- **Board `todo` is independent of Things 3 `internal/todo` and `todo_*` tools.** Do not introduce backend calls or infer completion from reads; action Done and board todo Done/Dropped use revision-checked durable receipts plus an atomic coordinator notice, and stored commands are copyable data only.
 
 ## Project rename
 

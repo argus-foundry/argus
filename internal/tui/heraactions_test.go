@@ -262,7 +262,7 @@ func TestHeraActions_BounceNoOpWhenSessionNotLive(t *testing.T) {
 
 // TestHeraActions_ForceRecycleCleansUpPendingFlagOnError pins the
 // recycle-pane-artifact-fix wiring in heraDoForceRecycle: it mirrors
-// maybeKickRerender by staging a.pendingRerenderRestart[taskID] before handing
+// maybeKickRerender by staging a.hasPendingRerenderRestart(taskID) before handing
 // off to recycle_coord, so handleSessionExitUI's immediate-resume branch can
 // treat a recycle-triggered exit the same way a rerender kick's exit is
 // treated. When recycle_coord fails before ever touching the session (no live
@@ -286,7 +286,7 @@ func TestHeraActions_ForceRecycleCleansUpPendingFlagOnError(t *testing.T) {
 	app.heraDoForceRecycle(rv)
 
 	testutil.Contains(t, app.statusbar.Error(), "Force recycle failed")
-	testutil.Equal(t, app.pendingRerenderRestart["tc"], false) // rolled back, not leaked
+	testutil.Equal(t, app.hasPendingRerenderRestart("tc"), false) // rolled back, not leaked
 }
 
 // TestHeraActions_ClearArchiveScopesToSubCoordinator pins BUG-003: pressing `C`
@@ -381,7 +381,8 @@ func TestHeraActions_NukeArchivedRoleSoleBound(t *testing.T) {
 	testutil.NoError(t, d.ArchiveHeraRole(role.ID)) // hidden first
 
 	rv := &hera.RoleView{RoleID: role.ID, OrchID: orch, Kind: db.HeraKindWorker, TaskID: "tw", BridgeTaskID: "tw", Archived: true}
-	app.heraNukeArchivedRole(rv)
+	_, err := app.heraNukeArchivedRole(rv)
+	testutil.NoError(t, err)
 
 	task, err := d.Get("tw")
 	testutil.NoError(t, err)
@@ -389,6 +390,28 @@ func TestHeraActions_NukeArchivedRoleSoleBound(t *testing.T) {
 	got, err := d.HeraRole(role.ID)        // row RETAINED (no hard delete)
 	testutil.NoError(t, err)
 	testutil.Equal(t, got.NukedAt != nil, true)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		err = d.SetArchived("tw", false)
+		if err == nil {
+			break
+		}
+		testutil.ErrorIs(t, err, db.ErrHeraReclaimInProgress)
+		if time.Now().After(deadline) {
+			t.Fatal("completed standalone reclaim still owns the archived task")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	app.heraReclaimAndArchiveTask("tw")
+	task, err = d.Get("tw")
+	testutil.NoError(t, err)
+	testutil.False(t, task.Archived)
+	testutil.NoError(t, d.SetArchived("tw", true))
+	candidates, err := d.HeraNukeReclaimCandidates()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(candidates), 0)
+	testutil.NoError(t, d.Delete("tw"))
 }
 
 // TestHeraActions_NukeArchivedRoleMultiBoundPreservesTask verifies a task bound
@@ -406,7 +429,8 @@ func TestHeraActions_NukeArchivedRoleMultiBoundPreservesTask(t *testing.T) {
 	testutil.NoError(t, err)
 
 	rv := &hera.RoleView{RoleID: roleA.ID, OrchID: a, Kind: db.HeraKindWorker, TaskID: "shared", BridgeTaskID: "shared", Live: true}
-	reclaimed := app.heraNukeArchivedRole(rv)
+	reclaimed, err := app.heraNukeArchivedRole(rv)
+	testutil.NoError(t, err)
 
 	testutil.Equal(t, reclaimed, false) // bound elsewhere → worktree not reclaimed
 	task, err := d.Get("shared")
@@ -418,6 +442,49 @@ func TestHeraActions_NukeArchivedRoleMultiBoundPreservesTask(t *testing.T) {
 	gotB, err := d.HeraRole(roleB.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, gotB.OrchestratorID, b) // other orchestrator's role intact
+}
+
+func TestHeraActions_ClearArchiveReportsReclaimConflict(t *testing.T) {
+	d := testDB(t)
+	app := New(d, agent.NewRunner(nil), false)
+	app.heraOps = hera.NewOps(d)
+	orch := seedHeraOrch(t, d, "o")
+	role := seedHeraBoundRole(t, d, orch, "w", db.HeraKindWorker, "tw")
+	testutil.NoError(t, d.ArchiveHeraRole(role.ID))
+	unblock, acquired, err := d.TryLockHeraReclaim("tw")
+	testutil.NoError(t, err)
+	testutil.True(t, acquired)
+	defer unblock()
+
+	app.heraDoClearArchive([]hera.RoleView{{
+		RoleID: role.ID, OrchID: orch, Kind: db.HeraKindWorker, TaskID: "tw", BridgeTaskID: "tw", Archived: true,
+	}})
+	testutil.Contains(t, app.statusbar.Error(), "Cleared 0 of 1 archived roles")
+	testutil.Contains(t, app.statusbar.Error(), db.ErrHeraReclaimInProgress.Error())
+	got, err := d.HeraRole(role.ID)
+	testutil.NoError(t, err)
+	testutil.Nil(t, got.NukedAt)
+}
+
+func TestHeraStackedDeletePreservesReclaimOwnedBranch(t *testing.T) {
+	app, d := heraRepoApp(t)
+	repo := d.Config().Projects["p"].Path
+	const branch = "argus/worker"
+	create := exec.Command("git", "branch", branch)
+	create.Dir = repo
+	testutil.NoError(t, create.Run())
+	task := &model.Task{ID: "task", Name: "Worker", Project: "p", Branch: branch}
+	testutil.NoError(t, d.Add(task))
+	orch := seedHeraOrch(t, d, "team")
+	role := seedHeraRoleOnTask(t, d, orch, "worker", db.HeraKindWorker, task.ID, "")
+	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(role.ID))
+
+	repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
+	testutil.NoError(t, err)
+	app.heraDeleteStackedBranches([]stackedBranchCandidate{{TaskID: task.ID, Branch: branch, Repository: repository, Tip: agent.TaskGitBranchTip(context.Background(), repo, branch)}})
+	verify := exec.Command("git", "show-ref", "--verify", "refs/heads/"+branch)
+	verify.Dir = repo
+	testutil.NoError(t, verify.Run())
 }
 
 // TestHeraActions_NukeRolePrunesSoleBoundTaskOnceSessionSettled pins
@@ -1523,7 +1590,7 @@ func TestHandleSessionExitUI_RerenderRestartsWhenViewedViaHeraPane(t *testing.T)
 	var boundToHera bool
 	readUI(t, app.tapp, func() {
 		boundToHera = app.heraPage.IsBoundToTask("tc")
-		app.pendingRerenderRestart["tc"] = true
+		app.pendingRerenderRestart["tc"] = 0
 		app.handleSessionExitUI("tc", false /* non-clean: kick-induced stop */, false)
 	})
 	if !boundToHera {
@@ -1601,7 +1668,7 @@ func TestHandleSessionExitUI_RerenderRefusesClosedOutWorker(t *testing.T) {
 			var boundToHera bool
 			readUI(t, app.tapp, func() {
 				boundToHera = app.heraPage.IsBoundToTask("tw")
-				app.pendingRerenderRestart["tw"] = true
+				app.pendingRerenderRestart["tw"] = 0
 				app.handleSessionExitUI("tw", false /* non-clean: kick-induced stop */, false)
 			})
 			if !boundToHera {
@@ -1645,7 +1712,7 @@ func TestHandleSessionExitUI_RerenderStillRestartsNonClosedOutWorker(t *testing.
 	var boundToHera bool
 	readUI(t, app.tapp, func() {
 		boundToHera = app.heraPage.IsBoundToTask("tw")
-		app.pendingRerenderRestart["tw"] = true
+		app.pendingRerenderRestart["tw"] = 0
 		app.handleSessionExitUI("tw", false /* non-clean: kick-induced stop */, false)
 	})
 	if !boundToHera {
@@ -1854,7 +1921,7 @@ func TestHeraActions_OrchHeaderDeleteCascadesNestedSubtree(t *testing.T) {
 // message reflects only what was kept).
 func TestHeraCascadeNukeFrom_StackedBranchSequentialReview(t *testing.T) {
 	d := testDB(t)
-	testutil.NoError(t, d.SetProject("p", config.Project{Path: t.TempDir(), Branch: "master"}))
+	testutil.NoError(t, d.SetProject("p", config.Project{Path: stackFixtureRepo(t), Branch: "master"}))
 	now := time.Now()
 	chainTasks := []*model.Task{
 		{ID: "midA", Name: "midA", Project: "p", Branch: "bA", BaseBranch: "b1", Status: model.StatusInProgress, CreatedAt: now},
@@ -1934,7 +2001,7 @@ func TestHeraCascadeNukeFrom_StackedBranchSequentialReview(t *testing.T) {
 	// Re-running discovery over the SAME candidate proves the exclusion
 	// persisted and is never re-offered, while the kept branch (midB, never
 	// excluded) still surfaces normally.
-	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"task1"}, map[string]bool{"task1": true}, make(map[string]mergesafety.Verdict))
+	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"task1"}, map[string]bool{"task1": true})
 	got := map[string]bool{}
 	for _, c := range extra {
 		got[c.TaskID] = true

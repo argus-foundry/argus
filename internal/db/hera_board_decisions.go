@@ -176,6 +176,9 @@ func (d *DB) answerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]He
 		case i.Resolved:
 			if !durable {
 				r.Outcome = "already_resolved"
+			} else {
+				r.Item = i
+				uxlog.Log("[board] answer closed feedback rejected role=%d item=%d", roleID, a.ItemID)
 			}
 		case a.ExpectedUpdatedAt.IsZero() || len(a.Note) > 4096 || !utf8.ValidString(a.Note):
 		case a.Action != "answer" && a.Action != "comment":
@@ -265,7 +268,7 @@ func (d *DB) answerHeraBoardItems(roleID int64, answers []HeraBoardAnswer) ([]He
 			}
 			if kind == "decision" {
 				open = append(open, fmt.Sprintf("#%d", id))
-			} else {
+			} else if kind == "fyi" {
 				openFYIs = append(openFYIs, fmt.Sprintf("#%d", id))
 			}
 		}

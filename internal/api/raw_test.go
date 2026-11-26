@@ -107,6 +107,37 @@ func TestHandleUpdateTaskRaw(t *testing.T) {
 	})
 }
 
+func TestTaskArchiveEndpointsRefuseCommittedHeraReclaim(t *testing.T) {
+	srv, d := testServer(t)
+	mux := srv.routes()
+	task := &model.Task{ID: "reclaim", Name: "Reclaim", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	orch, err := d.CreateHeraOrchestrator("reclaim", "")
+	testutil.NoError(t, err)
+	role, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
+		OrchestratorID: orch.ID, Name: "worker", Kind: db.HeraKindWorker,
+	}, task.ID, "")
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(role.ID))
+
+	for _, tc := range []struct{ name, method, path, body string }{
+		{"archive", "POST", "/api/tasks/reclaim/archive", ""},
+		{"raw", "PUT", "/api/tasks/reclaim/raw", `{"id":"reclaim","name":"Changed","status":"complete","archived":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, masterReq(tc.method, tc.path, tc.body))
+			testutil.Equal(t, w.Code, http.StatusConflict)
+			testutil.Contains(t, w.Body.String(), db.ErrHeraReclaimInProgress.Error())
+		})
+	}
+	got, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.False(t, got.Archived)
+	testutil.Equal(t, got.Name, task.Name)
+	testutil.Equal(t, got.Status, task.Status)
+}
+
 func TestHandleAddTaskRaw(t *testing.T) {
 	srv, d := testServer(t)
 	mux := srv.routes()

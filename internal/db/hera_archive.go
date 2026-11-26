@@ -334,13 +334,13 @@ func archiveUnitKidChecks(tx *sql.Tx, kids []int64, forced bool) error {
 		case !errors.Is(err, sql.ErrNoRows):
 			return archiveRefuse("child roles unreadable (%v)", err)
 		}
-		var subj string
-		err = tx.QueryRow(`SELECT i.subject FROM hera_board_items i JOIN hera_roles r ON r.id=i.role_id
+		var subj, kind string
+		err = tx.QueryRow(`SELECT i.subject,i.kind FROM hera_board_items i JOIN hera_roles r ON r.id=i.role_id
 			WHERE r.orchestrator_id=? AND r.kind='coordinator' AND r.archived_at IS NULL AND r.nuked_at IS NULL AND r.cancelled_at IS NULL
-			  AND i.kind='decision' AND i.resolved=0 LIMIT 1`, k).Scan(&subj)
+			  AND i.kind IN ('decision','action','todo') AND i.resolved=0 LIMIT 1`, k).Scan(&subj, &kind)
 		switch {
 		case err == nil:
-			return archiveRefuse("open decision board item %q", subj)
+			return archiveRefuse("open %s board item %q", kind, subj)
 		case !errors.Is(err, sql.ErrNoRows):
 			return archiveRefuse("board unreadable (%v)", err)
 		}

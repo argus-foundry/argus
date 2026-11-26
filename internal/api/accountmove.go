@@ -60,6 +60,11 @@ func (s *Server) handleMoveTaskAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "task operation canceled", err)
 		return
 	}
+	unlockSession, ok := s.lockSessionMutationHTTP(w, id)
+	if !ok {
+		return
+	}
+	defer unlockSession()
 
 	rollbackCloseout := func() {}
 	if task, err := s.db.Get(id); err == nil && task != nil && s.liveRuntimeSession(id) == nil {
@@ -94,12 +99,17 @@ func (s *Server) handleMoveTaskAccount(w http.ResponseWriter, r *http.Request) {
 // task_move_account tool. It takes the per-task lock itself.
 func (s *Server) MoveTaskAccount(in agent.AccountMoveInput) (agent.AccountMoveResult, error) {
 	defer s.taskLocks.Lock(in.TaskID)()
+	unlock, err := s.tryLockExistingSessionMutation(in.TaskID)
+	if err != nil {
+		return agent.AccountMoveResult{}, err
+	}
+	defer unlock()
 	res, _, _, err := s.moveTaskAccountLocked(in)
 	return res, err
 }
 
 // moveTaskAccountLocked runs the move plus the restart fallback and maps
-// failures to an HTTP status; the caller holds the task lock. It emits
+// failures to an HTTP status; the caller holds both task locks. It emits
 // task.account_changed once the account is persisted, whatever the restart did.
 func (s *Server) moveTaskAccountLocked(in agent.AccountMoveInput) (agent.AccountMoveResult, int, moveOutcome, error) {
 	task, res, err := agent.MoveTaskAccount(s.db, s.runner, in)

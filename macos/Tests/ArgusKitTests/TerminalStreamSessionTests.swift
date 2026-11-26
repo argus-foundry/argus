@@ -10,6 +10,21 @@ import Testing
 @Suite("Terminal stream session")
 struct TerminalStreamSessionTests {
 
+    @Test("ownerless recorded bytes are replaced before a successor can feed")
+    func ownerlessRecordedOutput() {
+        let recorded = Data("old".utf8)
+        let successor = Data("new".utf8)
+        for signal in [TerminalEvent.process(23), .output(successor)] {
+            var session = TerminalStreamSession()
+            #expect(session.start(tailTotal: 3, tailData: recorded, recorded: true) == [.feed(recorded), .openStream(since: 0)])
+            #expect(session.handle(.connected).isEmpty)
+            #expect(session.phase == .connecting)
+            #expect(session.handle(signal) == [.reloadSnapshot])
+            #expect(session.start(tailTotal: 3, tailData: successor, sessionPID: 23) == [.feed(successor), .openStream(since: 3)])
+            #expect(session.handle(.process(23)).isEmpty)
+        }
+    }
+
     private func bytes(_ s: String) -> Data { Data(s.utf8) }
 
     // MARK: - start() / offset seeding
@@ -449,5 +464,20 @@ struct TerminalStreamSessionTests {
         _ = session.handle(.clipboard(text: "hi", cleared: false))
         #expect(session.phase == phaseBefore)
         #expect(session.offset == offsetBefore)
+    }
+
+    @Test("a stale cursor reloads the snapshot before attaching to the replacement")
+    func reloadsStaleProcessSnapshot() {
+        var session = TerminalStreamSession()
+        _ = session.start(tailTotal: 80, sessionPID: 41)
+        _ = session.handle(.connected)
+        #expect(session.streamClosed(error: ArgusError.http(status: 409, body: #"{"code":"stale_session"}"#)) == .reloadSnapshot)
+        #expect(session.offset == 0)
+        #expect(session.sessionPID == nil)
+        #expect(session.phase == .connecting)
+        #expect(session.start(tailTotal: 4, sessionPID: 42) == [.openStream(since: 4)])
+        #expect(session.handle(.process(42)).isEmpty)
+        #expect(session.sessionPID == 42)
+        #expect(session.handle(.process(43)) == [.reloadSnapshot])
     }
 }

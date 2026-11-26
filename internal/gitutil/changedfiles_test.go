@@ -3,6 +3,7 @@ package gitutil
 import "testing"
 
 func TestParseGitStatus(t *testing.T) {
+	t.Parallel()
 	input := " M internal/ui/root.go\n?? newfile.go\nA  added.go\n"
 	files := ParseGitStatus(input)
 	if len(files) != 3 {
@@ -17,12 +18,14 @@ func TestParseGitStatus(t *testing.T) {
 }
 
 func TestParseGitStatus_Empty(t *testing.T) {
+	t.Parallel()
 	if ParseGitStatus("") != nil {
 		t.Error("expected nil for empty input")
 	}
 }
 
 func TestParseGitDiffNameStatus(t *testing.T) {
+	t.Parallel()
 	input := "M\tfile1.go\nA\tfile2.go\nD\tfile3.go\n"
 	files := ParseGitDiffNameStatus(input)
 	if len(files) != 3 {
@@ -37,12 +40,14 @@ func TestParseGitDiffNameStatus(t *testing.T) {
 }
 
 func TestParseGitDiffNameStatus_Empty(t *testing.T) {
+	t.Parallel()
 	if ParseGitDiffNameStatus("") != nil {
 		t.Error("expected nil for empty input")
 	}
 }
 
 func TestMergeChangedFiles(t *testing.T) {
+	t.Parallel()
 	base := []ChangedFile{
 		{Status: "M", Path: "a.go"},
 		{Status: "A", Path: "b.go"},
@@ -64,6 +69,7 @@ func TestMergeChangedFiles(t *testing.T) {
 }
 
 func TestMergeChangedFiles_BothEmpty(t *testing.T) {
+	t.Parallel()
 	if MergeChangedFiles(nil, nil) != nil {
 		t.Error("expected nil for both empty")
 	}

@@ -7,6 +7,7 @@ import (
 )
 
 func TestParseZ(t *testing.T) {
+	t.Parallel()
 	t.Run("numstat rename and binary", func(t *testing.T) {
 		m := parseNumstatZ("1\t2\ta b.txt\x00-\t-\tbin\x003\t0\t\x00old\x00new\x00")
 		testutil.Equal(t, m["a b.txt"].add, 1)

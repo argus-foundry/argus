@@ -1,0 +1,3 @@
+- [x] Return the existing missing-workflow result for stale task IDs.
+- [x] Reject suspend input before voice job creation.
+- [x] Verify both paths and archive the change.

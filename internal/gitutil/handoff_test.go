@@ -16,6 +16,7 @@ func handoffPRJSON(state, rollup string) string {
 }
 
 func TestParsePRHandoff(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, raw, want string // want = reason substring; "" means ok
 	}{
@@ -121,6 +122,7 @@ func TestCheckHandoff(t *testing.T) {
 }
 
 func TestShort(t *testing.T) {
+	t.Parallel()
 	testutil.Equal(t, short("abcdefghijkl"), "abcdefgh")
 	testutil.Equal(t, short("abc"), "abc")
 }

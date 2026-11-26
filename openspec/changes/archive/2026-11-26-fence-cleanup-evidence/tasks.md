@@ -1,0 +1,3 @@
+- [x] Fence stack and leased cleanup against repository redirection.
+- [x] Scope verdict caching and cover archived response omission.
+- [x] Verify and archive the changes.

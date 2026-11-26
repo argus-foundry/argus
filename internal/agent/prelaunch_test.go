@@ -190,6 +190,29 @@ func TestRunner_StopAll_CancelsPrelaunchCtx(t *testing.T) {
 	t.Fatalf("prelaunch ctx not cancelled after StopAll: err=%v", captured.Err())
 }
 
+func TestRunnerCancelPendingStartsClosesAdmission(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	runner := NewRunner(nil)
+	entered := make(chan struct{})
+	t.Cleanup(SetPrelaunchForTest(func(ctx context.Context, _ *model.Task, _ config.Config) error {
+		close(entered)
+		<-ctx.Done()
+		return nil
+	}))
+	task := &model.Task{ID: "pending", Worktree: t.TempDir()}
+	finished := make(chan error, 1)
+	go func() {
+		_, err := runner.Start(task, config.DefaultConfig(), 24, 80, false)
+		finished <- err
+	}()
+	<-entered
+	runner.CancelPendingStarts()
+	testutil.ErrorIs(t, <-finished, context.Canceled)
+	testutil.Nil(t, runner.Get(task.ID))
+	_, err := runner.Start(task, config.DefaultConfig(), 24, 80, false)
+	testutil.ErrorIs(t, err, context.Canceled)
+}
+
 // TestRunner_Start_PrelaunchFailureAborts asserts that a prelaunch error
 // short-circuits Start, frees the slot reservation, and surfaces the error.
 func TestRunner_Start_PrelaunchFailureAborts(t *testing.T) {

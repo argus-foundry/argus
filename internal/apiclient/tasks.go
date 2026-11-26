@@ -13,6 +13,7 @@ type TaskJSON struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Status       string `json:"status"`
+	Live         bool   `json:"live"`
 	Idle         bool   `json:"idle,omitempty"`
 	Project      string `json:"project"`
 	Branch       string `json:"branch,omitempty"`

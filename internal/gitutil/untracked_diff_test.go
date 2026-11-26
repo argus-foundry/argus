@@ -9,6 +9,7 @@ import (
 )
 
 func TestUntrackedDiffPatchParity(t *testing.T) {
+	t.Parallel()
 	for _, quotePath := range []string{"true", "false"} {
 		t.Run(quotePath, func(t *testing.T) {
 			dir := initRepo(t, t.TempDir())
@@ -56,6 +57,7 @@ func TestUntrackedDiffPatchParity(t *testing.T) {
 }
 
 func TestUntrackedDiffSnapshotLimit(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	file, err := os.Create(filepath.Join(dir, "oversize"))
 	testutil.NoError(t, err)
@@ -67,6 +69,7 @@ func TestUntrackedDiffSnapshotLimit(t *testing.T) {
 }
 
 func TestUntrackedDiffAttributes(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	testutil.NoError(t, os.Mkdir(filepath.Join(dir, "nested"), 0o700))
 	for name, content := range map[string]string{

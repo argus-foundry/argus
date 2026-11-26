@@ -64,7 +64,7 @@ jobs:
       - name: Test
         # Keep the per-package hang guard in sync with Makefile TEST_TIMEOUT.
         # api/tui exceeded 10m in CI; db passed at 571s (2026-11-19).
-        run: go test -race -count=1 -timeout 20m -coverprofile=coverage.out ./...
+        run: go test -race -gcflags=modernc.org/sqlite/lib=-race=false -gcflags=modernc.org/libc/...=-race=false -gcflags=modernc.org/memory=-race=false -count=1 -timeout 20m -coverprofile=coverage.out ./...
 
       - name: Filter Coverage
         # Strips entries listed in coverage-ignore.txt (CLI entry points,
@@ -125,8 +125,32 @@ jobs:
             coverage.filtered.out
           retention-days: 7
 
+      # fgrosse/go-coverage-report immediately runs `gh run download <this run>`
+      # for the artifact uploaded above; the artifact API is eventually
+      # consistent, so that can fail with "no valid artifacts found to
+      # download" seconds after a successful upload (two PRs, 2026-11-24).
+      # Poll until it is visible so the report normally works.
+      - name: Wait For Coverage Artifact
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for i in $(seq 1 12); do
+            if gh run download "$GITHUB_RUN_ID" --name coverage --dir "$RUNNER_TEMP/cov-probe" >/dev/null 2>&1; then
+              echo "coverage artifact visible after $i attempt(s)"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::coverage artifact still not downloadable after 2 minutes"
+
       - name: Coverage Report
         if: github.event_name == 'pull_request'
+        # The PR comment is advisory. The coverage floor is enforced by the
+        # Coverage Gate step above, which stays fatal.
+        continue-on-error: true
         uses: fgrosse/go-coverage-report@v1.3.0
         with:
           coverage-artifact-name: coverage

@@ -677,8 +677,95 @@ func (d *DB) NukeHeraRole(id int64) error {
 // worker's nuke by anyone but the resident (HeraActorResident, its own
 // hera_delete_worker) queues the resident a notice.
 func (d *DB) NukeHeraRoleAs(id int64, actor HeraActor) error {
+	return d.nukeHeraRole(id, actor, false, 0, nil, "")
+}
+
+// NukeHeraRoleAndEndBinding records a human nuke and ends the role's live
+// binding together, so a failed nuke cannot leave a sweep candidate.
+func (d *DB) NukeHeraRoleAndEndBinding(id int64) error {
+	return d.NukeHeraRoleAndEndBindingAs(id, HeraActorHuman)
+}
+
+// NukeHeraRoleAndEndBindingAs records the role transition and binding end
+// atomically and preserves the caller's actor for resident notifications.
+func (d *DB) NukeHeraRoleAndEndBindingAs(id int64, actor HeraActor) error {
+	d.mu.Lock()
+	binding, err := scanHeraBinding(d.conn.QueryRow(
+		`SELECT id, role_id, orchestrator_id, argus_task_id, worktree_path, started_at, ended_at, end_reason
+		FROM hera_bindings WHERE role_id=? ORDER BY ended_at IS NULL DESC, id DESC LIMIT 1`, id))
+	d.mu.Unlock()
+	if err != nil && !errors.Is(err, ErrHeraNotFound) {
+		return err
+	}
+	var bindingID int64
+	if binding != nil {
+		bindingID = binding.ID
+		unlock, acquired, err := d.TryLockHeraReclaim(binding.ArgusTaskID)
+		if err != nil {
+			return err
+		}
+		if !acquired {
+			return ErrHeraReclaimInProgress
+		}
+		defer unlock()
+	}
+	return d.nukeHeraRole(id, actor, true, bindingID, nil, "")
+}
+
+// NukeResidentWorkerBinding commits a resident nuke under the caller's task
+// locks, provided its live binding and shared ownership still match preflight.
+// A non-nil lease authorizes local reclaim and records its remote policy.
+func (d *DB) NukeResidentWorkerBinding(id, bindingID int64, lease *HeraReclaimLease) error {
+	reclaim := lease != nil
+	leaseJSON, err := encodeHeraReclaimLease(lease)
+	if err != nil {
+		return err
+	}
+	return d.nukeHeraRole(id, HeraActorResident, true, bindingID, &reclaim, leaseJSON)
+}
+
+func (d *DB) nukeHeraRole(id int64, actor HeraActor, endBinding bool, bindingID int64, expectedReclaim *bool, lease string) error {
 	return d.heraRoleMutation(id, actor, ResidentNoticeNuked, func(tx *sql.Tx, cur *HeraRole) (bool, string, error) {
 		now := formatTime(time.Now())
+		if endBinding {
+			var currentID int64
+			var taskID string
+			var live, shared bool
+			err := tx.QueryRow(`SELECT id,argus_task_id,ended_at IS NULL,
+				EXISTS(SELECT 1 FROM hera_bindings sibling
+					WHERE sibling.argus_task_id=target.argus_task_id AND sibling.id<>target.id AND sibling.ended_at IS NULL)
+				FROM hera_bindings target WHERE role_id=? ORDER BY ended_at IS NULL DESC, id DESC LIMIT 1`, id).
+				Scan(&currentID, &taskID, &live, &shared)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return false, "", err
+			}
+			if currentID != bindingID {
+				return false, "", fmt.Errorf("%w: role binding changed during nuke", ErrHeraReclaimInProgress)
+			}
+			reclaim := !shared
+			if expectedReclaim != nil && (!live || *expectedReclaim != reclaim) {
+				return false, "", fmt.Errorf("%w: worker binding ownership changed during nuke", ErrHeraReclaimInProgress)
+			}
+			if currentID != 0 && (live || (cur.ArchivedAt != nil && cur.NukedAt == nil)) {
+				if err := graduationPendingGuard(tx, taskID); err != nil {
+					return false, "", err
+				}
+				outcome := "claimed"
+				if shared {
+					outcome = "preserved"
+				}
+				_, err := tx.Exec(`UPDATE hera_bindings
+					SET end_reason=CASE WHEN ended_at IS NULL THEN ? ELSE end_reason END,
+						ended_at=COALESCE(ended_at,?), nuke_reclaim=?, resident_reclaim_lease=?
+					WHERE id=?`, HeraEndReasonUserDeleted, now, outcome, lease, currentID)
+				if err != nil {
+					return false, "", fmt.Errorf("end hera role binding: %w", err)
+				}
+				if live {
+					clearDeadRoleMailAfterEnd(tx, HeraEndReasonUserDeleted)
+				}
+			}
+		}
 		// The transition is nuked_at NULL -> set; the archive/pin side effects
 		// ride the same statement, and a repeat only re-asserts them.
 		res, err := tx.Exec(`UPDATE hera_roles SET nuked_at=?, archived_at=COALESCE(archived_at, ?), pinned_at=NULL WHERE id=? AND nuked_at IS NULL`, now, now, id)
@@ -807,6 +894,11 @@ func insertHeraRole(ex execer, in CreateHeraRoleInput, now string) (*HeraRole, e
 // orchestrator), (worktree, orchestrator), or role fails with a constraint
 // error — the deterministic backstop behind any app-level pre-check.
 func (d *DB) CreateHeraBinding(in CreateHeraBindingInput) (*HeraBinding, error) {
+	unlock, err := d.lockHeraTaskAdmission(in.ArgusTaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -828,9 +920,14 @@ func (d *DB) CreateHeraBinding(in CreateHeraBindingInput) (*HeraBinding, error) 
 // (e.g. born-bound spawn) supply a name made unique within the orchestrator,
 // and the partial unique index is the backstop.
 func (d *DB) CreateHeraRoleWithBinding(roleIn CreateHeraRoleInput, taskID, worktreePath string) (*HeraRole, *HeraBinding, error) {
+	unlock, err := d.lockHeraTaskAdmission(taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer unlock()
 	var role *HeraRole
 	var binding *HeraBinding
-	err := d.WithTx(func(tx *sql.Tx) error {
+	err = d.WithTx(func(tx *sql.Tx) error {
 		now := formatTime(time.Now())
 		r, err := insertHeraRole(tx, roleIn, now)
 		if err != nil {
@@ -887,8 +984,13 @@ type MoveHeraBindingResult struct {
 // failure, so a not-found or a doomed role/binding insert leaves the old
 // binding live and untouched.
 func (d *DB) MoveHeraBinding(oldBindingID int64, roleIn CreateHeraRoleInput, taskID, worktreePath string) (*MoveHeraBindingResult, error) {
+	unlock, err := d.lockHeraTaskAdmission(taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	var result MoveHeraBindingResult
-	err := d.WithTx(func(tx *sql.Tx) error {
+	err = d.WithTx(func(tx *sql.Tx) error {
 		if err := residentGuard(tx, taskID); err != nil {
 			return err
 		}
@@ -1126,6 +1228,11 @@ func (d *DB) EndHeraCoordinatorBindingsForTask(taskID, reason string) (int, erro
 // re-opened. Called wherever an accepted task's session is resumed so a
 // revived sub-coordinator gets its coordinator hat back.
 func (d *DB) RestoreAcceptedHeraCoordinatorBindings(taskID string) (int, error) {
+	unlock, err := d.lockHeraTaskAdmission(taskID)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	res, err := d.conn.Exec(
@@ -1665,9 +1772,8 @@ func (d *DB) ListHeraLiveBindings() ([]*HeraBinding, error) {
 		 FROM hera_bindings WHERE ended_at IS NULL ORDER BY started_at ASC, id ASC`)
 }
 
-// HeraNukeReclaimCandidates returns every task holding at least one
-// hera_bindings row ended for the cascade-nuke path's own reason
-// (HeraEndReasonUserDeleted) that currently holds NO live binding
+// HeraNukeReclaimCandidates returns every task holding an unsettled
+// nuke reclaim claim that currently holds NO live binding
 // (hera_bindings.ended_at IS NULL) — the candidate set for
 // hera.ReconcileHeraReclaims (fix-hera-nuke-cleanup Stage 3), a durable sweep
 // that finishes a nuke's worktree/branch reclaim and row prune when the
@@ -1683,13 +1789,12 @@ func (d *DB) HeraNukeReclaimCandidates() ([]*model.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	//nolint:gosec // G202: qualifyColumns(taskColumns) is a fixed compile-time column list; end_reason is a bound parameter.
-	rows, err := d.conn.Query(`SELECT DISTINCT `+qualifyColumns("t", taskColumns)+`
+	//nolint:gosec // G202: Both the column list and candidate predicate are fixed.
+	rows, err := d.conn.Query(`SELECT ` + qualifyColumns("t", taskColumns) + `
 		FROM tasks t
-		JOIN hera_bindings hb ON hb.argus_task_id = t.id
-		WHERE t.kind = '' AND hb.end_reason = ?
+		WHERE t.kind = '' AND t.id IN (` + heraNukeBindingSQL + `)
 		AND NOT EXISTS (SELECT 1 FROM hera_bindings hb2 WHERE hb2.argus_task_id = t.id AND hb2.ended_at IS NULL)
-		ORDER BY t.created_at ASC`, HeraEndReasonUserDeleted)
+		ORDER BY t.created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query hera nuke reclaim candidates: %w", err)
 	}

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"os"
 	"strings"
 	"sync"
@@ -42,6 +43,45 @@ func TestH_PidAlive(t *testing.T) {
 	testutil.True(t, rs.Alive())
 }
 
+func TestH_Ack(t *testing.T) {
+	c, active := startedClient(t, "ack", "cat")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	t.Cleanup(cancel)
+	n, err := active.WriteInputAcknowledged(ctx, []byte("test\r"), agentview.OriginUser)
+	testutil.NoError(t, err)
+	testutil.Equal(t, n, 5)
+	testutil.False(t, active.LastUserInput().IsZero())
+
+	missing := newRemoteSession("ack-missing", c)
+	t.Cleanup(missing.close)
+	n, err = missing.WriteInputAcknowledged(ctx, []byte("test\r"), agentview.OriginUser)
+	testutil.Error(t, err)
+	testutil.Equal(t, n, 0)
+	testutil.True(t, missing.LastUserInput().IsZero())
+}
+
+func TestAcknowledgedInputPreservesNewerDraft(t *testing.T) {
+	handle := &RemoteSession{inputCh: make(chan inputItem, 2), done: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	finished := make(chan error, 1)
+	go func() {
+		_, err := handle.WriteInputAcknowledged(ctx, []byte("go\r"), agentview.OriginUser)
+		finished <- err
+	}()
+	var voiceInput inputItem
+	select {
+	case voiceInput = <-handle.inputCh:
+	case <-ctx.Done():
+		t.Fatal("voice write was not queued")
+	}
+	_, err := handle.WriteInput([]byte("next"), agentview.OriginUser)
+	testutil.NoError(t, err)
+	voiceInput.ack <- nil
+	testutil.NoError(t, <-finished)
+	testutil.True(t, handle.ComposerDirty())
+}
+
 func TestH_Done(t *testing.T) {
 	_, rs := startedClient(t, "t-h-done", "sleep 60")
 	select {
@@ -78,10 +118,9 @@ func TestH_IsIdle(t *testing.T) {
 	_ = rs.IsIdle()
 }
 
-// TestH_IsIdleRefreshesPID pins that IsIdle re-queries the daemon: the
-// graduation stale-PID guard reads the live PID through it, so a handle
-// whose cached PID predates a respawn must pick up the new one.
-func TestH_IsIdleRefreshesPID(t *testing.T) {
+// A task-level metadata poll cannot assign a different process to an
+// existing stream and its history.
+func TestH_IsIdlePreservesStreamPID(t *testing.T) {
 	fd := newFakeDaemon(t)
 	fd.mu.Lock()
 	fd.statusPID = 22
@@ -91,7 +130,7 @@ func TestH_IsIdleRefreshesPID(t *testing.T) {
 	rs.updateInfo(daemon.SessionInfo{PID: 11})
 	testutil.Equal(t, rs.PID(), 11)
 	_ = rs.IsIdle()
-	testutil.Equal(t, rs.PID(), 22)
+	testutil.Equal(t, rs.PID(), 11)
 }
 
 func TestH_Resize(t *testing.T) {
@@ -151,6 +190,25 @@ func TestDrainInput(t *testing.T) {
 		testutil.Equal(t, string(batch.data), "abcd")
 		testutil.Nil(t, carry)
 		testutil.Equal(t, len(ch), 0)
+	})
+
+	t.Run("acknowledged input keeps its place in the queue", func(t *testing.T) {
+		ch := make(chan inputItem, 2)
+		acknowledged := userItem("voice")
+		acknowledged.ctx = context.Background()
+		acknowledged.ack = make(chan error, 1)
+		ch <- acknowledged
+		ch <- userItem("after")
+
+		before, carry := drainInput(userItem("before"), ch)
+		testutil.Equal(t, string(before.data), "before")
+		testutil.NotNil(t, carry)
+		batch, next := drainInput(*carry, ch)
+		testutil.Equal(t, string(batch.data), "voice")
+		testutil.Equal(t, batch.ack, acknowledged.ack)
+		testutil.Nil(t, next)
+		testutil.Equal(t, len(ch), 1)
+		testutil.Equal(t, string((<-ch).data), "after")
 	})
 
 	t.Run("initial ending in paste-end never reads channel", func(t *testing.T) {

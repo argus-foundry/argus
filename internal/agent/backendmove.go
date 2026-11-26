@@ -108,6 +108,9 @@ func MoveTaskBackend(database *db.DB, runner accountMoveRunner, in AccountMoveIn
 	}
 	var recycler backendMoveRunner
 	if sess != nil {
+		if err := CheckManagedRestartSupported(runner, task.ID); err != nil {
+			return nil, AccountMoveResult{}, err
+		}
 		r, ok := runner.(backendMoveRunner)
 		if !ok {
 			return nil, AccountMoveResult{}, fmt.Errorf("this runner cannot restart a live session with a handoff")

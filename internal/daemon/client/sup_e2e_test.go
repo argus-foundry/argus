@@ -3,9 +3,12 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -162,24 +165,41 @@ func TestSupInnerAmbiguous(t *testing.T) {
 	// mocked prelaunch — restoring while that goroutine is still running it
 	// would race the package-level var.
 	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && !sc.HasSession(task.ID) {
+	for {
+		info, probeErr := sc.ProbeSession(task.ID)
+		testutil.NoError(t, probeErr)
+		if info.Alive && info.PID > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the reserved launch did not publish a PID")
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	testutil.True(t, sc.HasSession(task.ID))
 	restore()
 	testutil.NoError(t, sc.Stop(task.ID))
 }
 
 func waitFile(t *testing.T, path string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
+	// Every caller supplies a test-owned Unix socket. Bind creates its file
+	// before listen completes, so Stat alone races a following Connect.
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+		if err == nil {
+			testutil.NoError(t, conn.Close())
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-deadline.C:
+			t.Fatalf("socket %s did not accept connections", path)
+		case <-tick.C:
+		}
 	}
-	t.Fatalf("file %s did not appear", path)
 }
 
 func waitStatus(t *testing.T, database *db.DB, taskID string, want model.Status) {
@@ -359,6 +379,499 @@ func TestSupStop(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	testutil.NoError(t, sc.Stop(task.ID))
 	waitStatus(t, database, task.ID, model.StatusInReview)
+}
+
+func TestSupLateExit(t *testing.T) {
+	d, sc, database := supE2E(t)
+	// Delay the real supervisor EOF relay at the scheduling boundary,
+	// after the client received the supervisor's actual GetExitInfo reply.
+	arrived, release, delivered := make(chan daemon.ExitInfo, 1), make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	sc.mu.Lock()
+	relay := sc.onSessionExitOwned
+	sc.mu.Unlock()
+	first := true
+	var relayMu sync.Mutex
+	sc.OnSessionExitOwned(func(id string, info daemon.ExitInfo, owner agent.SessionHandle) {
+		relayMu.Lock()
+		delay := first
+		first = false
+		relayMu.Unlock()
+		if delay {
+			arrived <- info
+			<-release
+		}
+		relay(id, info, owner)
+		if delay {
+			close(delivered)
+		}
+	})
+
+	task := startE2E(t, d, sc, database, "late-exit", "printf 'ready\\n'; exec sleep 30")
+	old := sc.Get(task.ID)
+	oldPID := old.PID()
+	testutil.NoError(t, database.RecordResumedSession(task.ID, oldPID, "", ""))
+	deadline := time.Now().Add(3 * time.Second)
+	for old.TotalWritten() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	testutil.Contains(t, string(old.RecentOutput()), "ready")
+	testutil.NoError(t, sc.StopSettled(task.ID))
+	testutil.NoError(t, database.RecordSessionStop(task.ID))
+	select {
+	case info := <-arrived:
+		testutil.True(t, info.Stopped)
+		testutil.False(t, info.StreamLost)
+		testutil.Equal(t, info.PID, oldPID)
+	case <-time.After(3 * time.Second):
+		t.Fatal("outgoing supervisor exit was not delivered")
+	}
+
+	unlock, err := database.LockSessionMutation(t.Context(), task.ID)
+	testutil.NoError(t, err)
+	next, attached, err := sc.StartOrReattach(task, database.Config(), 24, 80, false)
+	testutil.NoError(t, err)
+	testutil.False(t, attached)
+	testutil.True(t, next.PID() != oldPID)
+	testutil.NoError(t, database.RecordResumedSession(task.ID, next.PID(), "", ""))
+	unlock()
+	t.Cleanup(func() { _ = sc.Stop(task.ID) })
+	testutil.NoError(t, d.Clipboard().Set(task.ID, "replacement output"))
+
+	close(release)
+	select {
+	case <-delivered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("outgoing relay did not finish")
+	}
+	current, err := database.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, current.AgentPID, next.PID())
+	testutil.Equal(t, current.Status, model.StatusInProgress)
+	info, err := sc.ProbeSession(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, info.Alive)
+	testutil.Equal(t, info.PID, next.PID())
+	staged, ok := d.Clipboard().Get(task.ID)
+	testutil.True(t, ok)
+	testutil.Equal(t, staged, "replacement output")
+}
+
+func TestSupReclaim(t *testing.T) {
+	d, sc, database := supE2E(t)
+	for _, tc := range []struct {
+		id        string
+		pidOffset int
+		want      model.Status
+	}{
+		{id: "reclaim-matching", want: model.StatusComplete},
+		{id: "reclaim-stale", pidOffset: 1, want: model.StatusInReview},
+	} {
+		task := startE2E(t, d, sc, database, tc.id, "printf 'ready\\n'; exec sleep 30")
+		sess := sc.Get(task.ID)
+		testutil.NoError(t, database.RecordResumedSession(task.ID, sess.PID(), "", ""))
+		testutil.NoError(t, database.SetArchived(task.ID, true))
+		armed, err := database.ArmHeraReclaimStop(task.ID, sess.PID()+tc.pidOffset)
+		testutil.NoError(t, err)
+		testutil.True(t, armed)
+		deadline := time.Now().Add(3 * time.Second)
+		for sess.TotalWritten() == 0 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		testutil.Contains(t, string(sess.RecentOutput()), "ready")
+		testutil.NoError(t, sc.StopSettled(task.ID))
+		waitStatus(t, database, task.ID, tc.want)
+	}
+}
+
+func TestSupKickFail(t *testing.T) {
+	d, sc, database := supE2E(t)
+	task := startE2E(t, d, sc, database, "kick-fail", "printf 'ready\\n'; exec sleep 30")
+	sess := sc.Get(task.ID)
+	oldPID := sess.PID()
+	deadline := time.Now().Add(3 * time.Second)
+	for sess.TotalWritten() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	testutil.Contains(t, string(sess.RecentOutput()), "ready")
+	entered, finish := make(chan struct{}), make(chan struct{})
+	restore := agent.SetPrelaunchForTest(func(ctx context.Context, _ *model.Task, _ config.Config) error {
+		close(entered)
+		select {
+		case <-finish:
+			return errors.New("test restart failure")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	t.Cleanup(restore)
+
+	testutil.NoError(t, sc.KickWidthRerenderForPID(task, database.Config(), 30, 105, oldPID))
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("restart did not begin")
+	}
+	observed, err := sc.ProbeSession(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, observed.RestartFromPID, oldPID)
+	close(finish)
+	waitStatus(t, database, task.ID, model.StatusInReview)
+	ended := sc.sessionExitInfo(sess.(*RemoteSession))
+	testutil.Equal(t, ended.PID, oldPID)
+	testutil.False(t, ended.PendingRestart)
+	testutil.False(t, ended.StreamLost)
+	testutil.Contains(t, ended.Err, "test restart failure")
+
+	fresh, err := Connect(sc.sockPath)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = fresh.Close() })
+	relayed := make(chan daemon.ExitInfo, 1)
+	fresh.OnSessionExit(func(_ string, info daemon.ExitInfo) { relayed <- info })
+	fresh.AttachObservedSession(observed)
+	select {
+	case exit := <-relayed:
+		testutil.Equal(t, exit.PID, oldPID)
+		testutil.False(t, exit.StreamLost)
+		testutil.False(t, exit.PendingRestart)
+	case <-time.After(5 * time.Second):
+		t.Fatal("startup relay dropped a completed restart failure")
+	}
+}
+
+func TestSupKickFast(t *testing.T) {
+	d, sc, database := supE2E(t)
+	task := startE2E(t, d, sc, database, "fast", "printf 'ready\\n'; exec sleep 30")
+	sess := sc.Get(task.ID)
+	oldPID := sess.PID()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(string(sess.RecentOutput()), "ready") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	testutil.Contains(t, string(sess.RecentOutput()), "ready")
+
+	// Pause the existing reader at its outgoing exit callback until the
+	// supervisor has observed that the replacement really exited.
+	arrived, release := make(chan struct{}), make(chan struct{})
+	sc.mu.Lock()
+	relay := sc.onSessionExitOwned
+	sc.mu.Unlock()
+	var first sync.Once
+	sc.OnSessionExitOwned(func(id string, info daemon.ExitInfo, owner agent.SessionHandle) {
+		if info.PID == oldPID && info.PendingRestart {
+			first.Do(func() {
+				close(arrived)
+				<-release
+			})
+		}
+		relay(id, info, owner)
+	})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	testutil.NoError(t, database.SetBackend(task.Backend, config.Backend{Command: "printf 'replacement failed\\n'; exit 7"}))
+	testutil.NoError(t, sc.KickWidthRerenderForPID(task, database.Config(), 30, 105, oldPID))
+	select {
+	case <-arrived:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the outgoing exit was lost after the replacement launched")
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	var successorPID int
+	for time.Now().Before(deadline) {
+		info, err := sc.ProbeSession(task.ID)
+		testutil.NoError(t, err)
+		if !info.Alive && info.LastExitPID != 0 && info.LastExitPID != oldPID {
+			successorPID = info.LastExitPID
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if successorPID == 0 {
+		t.Fatal("replacement did not launch and exit")
+	}
+	close(release)
+	waitStatus(t, database, task.ID, model.StatusInReview)
+	exit := sc.sessionExitInfo(sess.(*RemoteSession))
+	testutil.Equal(t, exit.PID, successorPID)
+	testutil.False(t, exit.PendingRestart)
+	testutil.False(t, exit.StreamLost)
+	testutil.Contains(t, exit.Err, "exit status 7")
+	testutil.Contains(t, string(exit.LastOutput), "replacement failed")
+}
+
+func TestSupKicks(t *testing.T) {
+	d, sc, database := supE2E(t)
+	savedBackoff := streamBackoffPtr.Load()
+	backoff := []time.Duration{30 * time.Millisecond, 100 * time.Millisecond, 250 * time.Millisecond}
+	streamBackoffPtr.Store(&backoff)
+	t.Cleanup(func() { streamBackoffPtr.Store(savedBackoff) })
+
+	task := startE2E(t, d, sc, database, "kicks", "printf 'ready %s\\n' \"$$\"; exec sleep 30")
+	sock := filepath.Join(t.TempDir(), "d.sock")
+	serveTestServer(t, d, sock)
+	waitFile(t, sock)
+	c, err := Connect(sock)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	sess := c.Get(task.ID)
+	if sess == nil {
+		t.Fatal("initial session did not attach")
+	}
+	t.Cleanup(func() { _ = sc.Stop(task.ID) })
+	waitForProcess := func(previous int) int {
+		t.Helper()
+		deadline := time.Now().Add(4 * time.Second)
+		for time.Now().Before(deadline) && sess.Alive() {
+			pid := sess.PID()
+			if pid != previous && strings.Contains(string(sess.RecentOutput()), fmt.Sprintf("ready %d", pid)) {
+				return pid
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("existing terminal stopped following the session after PID %d", previous)
+		return 0
+	}
+	pid := waitForProcess(0)
+	for range len(backoff) + 2 {
+		testutil.NoError(t, c.KickWidthRerenderForPID(task, database.Config(), 30, 105, pid))
+		pid = waitForProcess(pid)
+		testutil.Equal(t, c.Get(task.ID), sess)
+	}
+}
+
+func TestSupKickSlow(t *testing.T) {
+	d, sc, database := supE2E(t)
+	savedBackoff := streamBackoffPtr.Load()
+	backoff := []time.Duration{15 * time.Millisecond, 30 * time.Millisecond}
+	streamBackoffPtr.Store(&backoff)
+	t.Cleanup(func() { streamBackoffPtr.Store(savedBackoff) })
+
+	task := startE2E(t, d, sc, database, "slow-kick", "printf 'ready\\n'; exec sleep 30")
+	sess := sc.Get(task.ID)
+	pid := sess.PID()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(string(sess.RecentOutput()), "ready") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	testutil.Contains(t, string(sess.RecentOutput()), "ready")
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	resume := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(resume)
+	restore := agent.SetPrelaunchForTest(func(ctx context.Context, _ *model.Task, _ config.Config) error {
+		close(entered)
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	t.Cleanup(restore)
+
+	testutil.NoError(t, database.SetBackend(task.Backend, config.Backend{Command: "printf 'successor\\n'; exit 7"}))
+	testutil.NoError(t, sc.KickWidthRerenderForPID(task, database.Config(), 30, 105, pid))
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement did not enter prelaunch")
+	}
+	fresh, err := Connect(sc.sockPath)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = fresh.Close() })
+	freshSession := fresh.Get(task.ID)
+	testutil.NotNil(t, freshSession)
+	testutil.Equal(t, freshSession.PID(), 0)
+	snapshots, err := fresh.ListSessionInfoChecked()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(snapshots), 1)
+	testutil.Equal(t, snapshots[0].RestartFromPID, pid)
+	freshExit := make(chan daemon.ExitInfo, 1)
+	fresh.OnSessionExit(func(_ string, info daemon.ExitInfo) {
+		if !info.PendingRestart {
+			freshExit <- info
+		}
+	})
+	// Keep the exact restart pending longer than the whole transport budget.
+	time.Sleep(200 * time.Millisecond)
+	testutil.True(t, sess.Alive())
+	testutil.True(t, freshSession.Alive())
+	testutil.DeepEqual(t, sc.Running(), []string{task.ID})
+	resume()
+
+	waitStatus(t, database, task.ID, model.StatusInReview)
+	exit := sc.sessionExitInfo(sess.(*RemoteSession))
+	testutil.True(t, exit.PID > 0 && exit.PID != pid)
+	testutil.False(t, exit.StreamLost)
+	testutil.Contains(t, exit.Err, "exit status 7")
+	select {
+	case relayed := <-freshExit:
+		testutil.Equal(t, relayed.PID, exit.PID)
+		testutil.False(t, relayed.StreamLost)
+	case <-time.After(5 * time.Second):
+		t.Fatal("fresh supervisor client did not relay the successor exit")
+	}
+	late, err := Connect(sc.sockPath)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = late.Close() })
+	lateExit := make(chan daemon.ExitInfo, 1)
+	late.OnSessionExit(func(_ string, info daemon.ExitInfo) {
+		if !info.PendingRestart {
+			lateExit <- info
+		}
+	})
+	late.AttachObservedSession(snapshots[0])
+	select {
+	case relayed := <-lateExit:
+		testutil.Equal(t, relayed.PID, exit.PID)
+		testutil.False(t, relayed.StreamLost)
+	case <-time.After(5 * time.Second):
+		t.Fatal("startup relay did not settle a successor retired since listing")
+	}
+}
+
+func TestSupOldKick(t *testing.T) {
+	d, sc, database := supE2E(t)
+	task := startE2E(t, d, sc, database, "old-kick", "printf 'ready\\n'; exec sleep 30")
+	pid := sc.Get(task.ID).PID()
+	t.Cleanup(func() { _ = sc.Stop(task.ID) })
+	cfg := database.Config()
+	sc.mu.Lock()
+	sc.peerProtocol = managedRestartProtocolVersion - 1
+	sc.mu.Unlock()
+
+	testutil.ErrorIs(t, sc.KickRerender(task, cfg, 30, 105), agent.ErrSessionCoordinationUnsupported)
+	testutil.ErrorIs(t, sc.KickWidthRerender(task, cfg, 30, 105), agent.ErrSessionCoordinationUnsupported)
+	testutil.ErrorIs(t, sc.KickWidthRerenderForPID(task, cfg, 30, 105, pid), agent.ErrSessionCoordinationUnsupported)
+	testutil.ErrorIs(t, sc.Revive(task, cfg, 30, 105), agent.ErrSessionCoordinationUnsupported)
+	testutil.ErrorIs(t, sc.Recycle(task, cfg, 30, 105), agent.ErrSessionCoordinationUnsupported)
+	info, err := sc.ProbeSession(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, info.Alive)
+	testutil.Equal(t, info.PID, pid)
+	testutil.False(t, sc.HasPendingRestart(task.ID))
+}
+
+func TestSupListExit(t *testing.T) {
+	d, sc, database := supE2E(t)
+	task := startE2E(t, d, sc, database, "list-exit", "printf 'ready\\n'; while [ ! -f finish ]; do sleep 0.02; done")
+	t.Cleanup(func() { _ = sc.Stop(task.ID) })
+	sess := sc.Get(task.ID)
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(string(sess.RecentOutput()), "ready") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	testutil.Contains(t, string(sess.RecentOutput()), "ready")
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	allowExit := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(allowExit)
+	sc.mu.Lock()
+	relay := sc.onSessionExitOwned
+	sc.mu.Unlock()
+	sc.OnSessionExitOwned(func(id string, info daemon.ExitInfo, owner agent.SessionHandle) {
+		close(entered)
+		<-release
+		relay(id, info, owner)
+	})
+
+	testutil.NoError(t, os.WriteFile(filepath.Join(task.Worktree, "finish"), nil, 0600))
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not receive the retiring process")
+	}
+	testutil.Equal(t, len(sc.Running()), 0)
+	var reply daemon.ListResp
+	testutil.NoError(t, d.ListSessions(&daemon.Empty{}, &reply))
+	testutil.DeepEqual(t, reply.Sessions, []daemon.SessionInfo{{TaskID: task.ID, Alive: true}})
+
+	allowExit()
+	waitStatus(t, database, task.ID, model.StatusComplete)
+	testutil.NoError(t, sc.Close())
+	if err := d.ListSessions(&daemon.Empty{}, &reply); err == nil {
+		t.Fatal("daemon reported an authoritative listing after losing the supervisor")
+	}
+}
+
+func TestSupDrain(t *testing.T) {
+	d, sc, database := supE2E(t)
+	// The trap has to run in the session leader. BuildCmd wraps the backend
+	// command in `sh -c`, and StopTree signals that process group: a trap
+	// inside a child script does not keep the leader alive, so the slot
+	// frees before the overlapping start is refused.
+	const hold = "trap '' TERM; printf 'ready\\n'; while [ ! -f finish ]; do sleep 0.02; done"
+	task := startE2E(t, d, sc, database, "drain", hold)
+	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(task.Worktree, "finish"), nil, 0600) })
+	sock := filepath.Join(t.TempDir(), "d.sock")
+	serveTestServer(t, d, sock)
+	waitFile(t, sock)
+	client, err := Connect(sock)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+
+	initial, reattached, err := client.StartOrReattach(task, database.Config(), 24, 80, false)
+	testutil.NoError(t, err)
+	testutil.True(t, reattached)
+	deadline := time.Now().Add(4 * time.Second)
+	for !strings.Contains(string(initial.RecentOutput()), "ready") && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	testutil.Contains(t, string(initial.RecentOutput()), "ready")
+	stream := initial.(*RemoteSession)
+	ownerPID := stream.PID()
+	stream.mu.Lock()
+	stream.pid = ownerPID + 1
+	stream.mu.Unlock()
+	session, err := client.AttachableSession(task.ID)
+	testutil.ErrorIs(t, err, agent.ErrSessionStarting)
+	testutil.True(t, session == nil)
+	testutil.Equal(t, stream.PID(), ownerPID+1)
+	stream.mu.Lock()
+	stream.pid = ownerPID
+	stream.mu.Unlock()
+
+	testutil.NoError(t, client.StopSettled(task.ID))
+	info, err := sc.ProbeSession(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, info.Alive)
+
+	session, reattached, err = client.StartOrReattach(task, database.Config(), 24, 80, false)
+	testutil.ErrorIs(t, err, agent.ErrSessionStarting)
+	testutil.False(t, reattached)
+	testutil.True(t, session == nil)
+	_, err = client.Start(task, database.Config(), 24, 80, false)
+	testutil.ErrorIs(t, err, agent.ErrSessionStarting)
+
+	testutil.NoError(t, os.WriteFile(filepath.Join(task.Worktree, "finish"), nil, 0600))
+	deadline = time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		session, err := client.AttachableSession(task.ID)
+		if err == nil && session == nil && !stream.Alive() {
+			testutil.NoError(t, database.SetBackend(task.Backend, config.Backend{Command: "sleep 30"}))
+			replacement, reattached, err := client.StartOrReattach(task, database.Config(), 24, 80, false)
+			testutil.NoError(t, err)
+			testutil.False(t, reattached)
+			testutil.True(t, replacement.PID() > 0 && replacement.PID() != ownerPID)
+			testutil.NoError(t, client.StopSettled(task.ID))
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("supervisor did not release the task slot after process retirement")
 }
 
 // TestSupTee proves the double-proxy: bytes flow supervisor → daemon-client ring

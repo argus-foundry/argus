@@ -294,13 +294,15 @@ const (
 	// recovery guidance in the Hera builtin skill (add-decide-fyi-and-phone).
 	// 57: coordinator spawn/reclaim and the materialized Hera skill require
 	// addressing typed annotations and recovering full decision/FYI receipts.
-	// 58: git.agent_commit_signing = "agent-key" exports commit.gpgsign=true,
+	// 58: new sessions receive action/todo board guidance, explicit trigger
+	// readiness and Done/Dropped semantics in the materialized Hera skills.
+	// 59: git.agent_commit_signing = "agent-key" exports commit.gpgsign=true,
 	// gpg.format=ssh, the agent key's public half and gpg.ssh.program=<argus>
 	// (add-agent-signing-key). A stale supervisor fails config validation on
 	// agent-key, so its FileLoader warns and drops the WHOLE config.toml
 	// overlay, launching with the inherit policy (personal-key prompts) and
 	// every other config.toml setting ignored until it is restarted.
-	SupervisorSpawnSurface = 58
+	SupervisorSpawnSurface = 59
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -371,7 +373,25 @@ const (
 	// v19: resident PTY startup output best-effort logs fallback notices once
 	// to the supervisor log within 64 KiB/60s, preserving ANSI/UTF-8 boundaries.
 	// v20: full session stops also snapshot and clean detached task browsers.
-	SupervisorStreamSurface = 20
+	// v21: StopSettledSession arbitrates a voice stop against starting and
+	// restarting the target session under the runner lock. Retirement clears
+	// stop bookkeeping before the next session can own that task ID.
+	// v22: AttachableSession checks owner-side retirement and replacement
+	// state before reuse. External starts cannot take a queued restart's slot.
+	// PID-scoped width repairs verify the process when claiming a restart.
+	// v23: exit records, stream attachment, resize, and width-repair stops
+	// carry the producing or targeted PID across each owner boundary.
+	// v24: scoped exit lookups retain managed restart chains, and full-tree
+	// Hera reclaim stops verify the retiring PID at the owner.
+	// v25: session listings preserve pending restarts during prelaunch, and
+	// PID-scoped tree stops avoid worktree-wide detached process cleanup.
+	// v26: session listings and status retain ordinary launch reservations.
+	// v27: owner snapshots identify managed predecessors and report failed
+	// launches as retired while admission stays closed through finalization.
+	// v28: a queued managed restart identifies its predecessor before the
+	// retiring session's exit callback publishes its receipt.
+	// v29: slot observations and exit baselines are captured together.
+	SupervisorStreamSurface = 29
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -601,6 +621,8 @@ var SupervisorStreamPaths = []string{
 	"internal/agent/ringbuffer.go",            // the ring the sole readLoop tees into
 	"internal/claudeagents/claudeagents.go",   // `claude agents`/`claude stop` under the session's config dir
 	"internal/agent/runner.go",                // live session map, pendingRestart, Stop/StopAll, KickRerender
+	"internal/agent/iface.go",                 // owner-side attachability dispatch
+	"internal/agent/errors.go",                // typed stop refusal sent across the R/S boundary
 	"internal/agent/session.go",               // the single readLoop: PTY read → ring + writers, session log
 	"internal/agent/resident_auto.go",         // resident native permission fallback diagnostics
 	"internal/agent/terminal_color.go",        // PTY startup OSC color-query replies and duplicate filtering
@@ -628,10 +650,8 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest = "efb4b7deeef7c3330faf6585457e617fc6c51a7bbab22e1590e28d157143c852"
-	// ResidentStateResp gained daemon-only timer summary fields and bounce.go
-	// changed daemon-side comments; neither changes supervisor stream behavior.
-	StreamSurfaceDigest = "6db616d49b2aae4049a1e16f5eeb7c4b16aa724b7451c2faab7c0302ef5fd83d"
+	SpawnSurfaceDigest  = "90c5b521f5b67e0e214266c2658cebd35337f7daebdf9a39240a9bbd77b8f986"
+	StreamSurfaceDigest = "7d6fe4e16399abae70093546fd8880ada92218d3fe4a97123ffe68c2679699db"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

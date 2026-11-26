@@ -1,0 +1,4 @@
+- [x] Record committed versus preserved nuke outcomes and verify delayed TUI ownership.
+- [x] Refuse conflicting generic mutations and report clear-archive refusals.
+- [x] Fence browser logout, resume completion and detail attachment.
+- [x] Verify and archive the changes.

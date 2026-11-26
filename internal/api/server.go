@@ -60,6 +60,7 @@ type Server struct {
 
 	deleteOps          deleteOps
 	deleteJobMu        sync.Mutex
+	voiceCreateMu      sync.Mutex
 	deleteJobsActive   map[string]bool
 	deleteJobWG        sync.WaitGroup
 	deleteJobCtx       context.Context
