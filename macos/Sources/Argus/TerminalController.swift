@@ -169,8 +169,7 @@ final class TerminalController {
                 if let oldPID = self.session.sessionPID, let newPID = tail.sessionPID, oldPID != newPID {
                     self.resetTerminal()
                 }
-                let total = tail.source == "log" && tail.sessionPID == nil ? 0 : tail.total
-                self.apply(self.session.start(tailTotal: total, tailData: tail.data, sessionPID: tail.sessionPID))
+                self.apply(self.session.start(tailTotal: tail.total, tailData: tail.data, sessionPID: tail.sessionPID, recorded: tail.source == "log"))
             } catch {
                 guard !_Concurrency.Task.isCancelled else { return }
                 Self.log.error("[terminal] tail failed task=\(self.taskID, privacy: .public) err=\(String(describing: error), privacy: .public)")

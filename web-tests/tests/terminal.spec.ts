@@ -166,6 +166,7 @@ test.describe('terminal', () => {
       await page.locator('#detail-view .detail-back').click();
       await page.locator('.task-item').first().click();
       await expect(page.locator('.term-status.live')).toBeVisible();
+      await expect(page.locator('#btn-overflow')).toBeEnabled();
       await page.evaluate(() => { (window as any).reopenedTerm = (window as any).term; });
       release!();
       const sameTerminal = await page.evaluate(async () => {
@@ -180,13 +181,22 @@ test.describe('terminal', () => {
 
   for (const action of ['fork', 'rename', 'archive', 'delete']) test(`late ${action} leaves the reopened terminal view alone`, async ({ page }) => {
     let requested = false;
+    let serverName: string | undefined;
     let release: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks(?:\?|$)/, async route => {
+      if (!serverName) return route.continue();
+      const response = await route.fetch();
+      const body = await response.json();
+      body.tasks[0].name = serverName;
+      await route.fulfill({ response, json: body });
+    });
     await page.route(/\/api\/tasks\/[^/?]+(?:\/(?:fork|rename|archive))?$/, async route => {
       const request = route.request();
       if (request.method() === 'GET' || !['POST', 'DELETE'].includes(request.method())) return route.continue();
       requested = true;
       await held;
+      if (action === 'rename') serverName = 'Renamed by server';
       await route.fulfill({ status: 200, json: { id: 'forked-task' } }).catch(() => {});
     });
     page.on('dialog', dialog => dialog.type() === 'prompt' ? dialog.accept('Action result') : dialog.accept());
@@ -194,6 +204,7 @@ test.describe('terminal', () => {
       await login(page);
       await page.locator('.task-item').first().click();
       await expect(page.locator('.term-status.live')).toBeVisible();
+      await expect(page.locator('#btn-overflow')).toBeEnabled();
       await page.evaluate(action => {
         const app = window as any;
         const mutate = { fork: app.forkTask, rename: app.renameTask, archive: () => app.setArchive(true), delete: app.deleteTask };
@@ -211,7 +222,7 @@ test.describe('terminal', () => {
         return (window as any).term === (window as any).reopenedTerm;
       });
       expect(sameTerminal).toBe(true);
-      await expect(page.locator('#detail-title')).toHaveText(title!);
+      await expect(page.locator('#detail-title')).toHaveText(serverName ?? title!);
     } finally {
       release!();
     }

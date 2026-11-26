@@ -374,3 +374,5 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **List refresh and online reconnect leave an active recovery in charge of attaching.** During a restart the list can briefly report a non-live task, then report it live before the recovery poll detects it. Keep the original recovery deadline through stream admission.
 
 - **Apply task action results only to the originating detail visit.** A request can still succeed after Back or a tab switch. A later view may even show the same task, so check the visit before changing its title, closing it, or opening a fork.
+
+- **Use fresh model fields to render a reopened task.** Each detail visit owns its action controls, and list refresh applies the current task's authoritative name independently of terminal reattachment.

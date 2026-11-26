@@ -11,6 +11,7 @@ package hera
 
 import (
 	"context"
+	"errors"
 	"slices"
 
 	"github.com/argus-foundry/argus/internal/agent"
@@ -156,20 +157,22 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 	}
 
 	repoDir := agent.ResolveDir(t, cfg)
-	if t.Worktree != "" && agent.DirExists(t.Worktree) {
-		if lease != nil {
-			if lease.RepoDir != "" {
-				repoDir = lease.RepoDir
-			}
-			agent.RemoveWorktreeAndLocalBranch(t.Worktree, t.Branch, repoDir)
-		} else {
-			agent.RemoveWorktreeAndBranch(t.Worktree, t.Branch, repoDir)
+	if lease != nil {
+		removed, err := settleResidentLocalReclaim(ctx, d, cfg, t, repoDir, lease)
+		if err != nil {
+			uxlog.Log("[resident] reclaim sweep: local ownership unavailable task=%s err=%v", id, err)
+			return
 		}
+		if removed {
+			sum.WorktreesRetried++
+		}
+	} else if t.Worktree != "" && agent.DirExists(t.Worktree) {
+		agent.RemoveWorktreeAndBranch(t.Worktree, t.Branch, repoDir)
 		sum.WorktreesRetried++
 		uxlog.Log("[hera] reclaim sweep: retried worktree+branch removal task=%s", id)
 	}
 
-	sum.StackedBranchesDeleted += reconcileStackedBranches(ctx, d, cfg, byBaseBranch, t, tipVerdicts)
+	sum.StackedBranchesDeleted += reconcileStackedBranches(ctx, d, cfg, byBaseBranch, t, tipVerdicts, lease != nil)
 	if lease != nil {
 		residentRemoteBranchDelete(ResidentDeleteOptions{}, id, lease.RepoDir, lease.Branch, lease.Tip)
 	} else if t.Archived && t.Worktree == "" && t.Branch != "" && repoDir != "" {
@@ -185,6 +188,66 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 		sum.Pruned++
 		uxlog.Log("[hera] reclaim sweep: pruned task row %s", id)
 	}
+}
+
+// settleResidentLocalReclaim fences worktree creation before checking for a
+// replacement. It records the completed local step before any Git network I/O.
+func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config, task *model.Task, repoDir string, lease *db.HeraReclaimLease) (bool, error) {
+	if lease.LocalDone {
+		return false, nil
+	}
+	if lease.RepoDir != "" {
+		repoDir = lease.RepoDir
+	}
+	unlock, acquired, err := agent.TryLockTaskGitOwnership(ctx, repoDir)
+	if err != nil {
+		return false, err
+	}
+	if !acquired {
+		return false, db.ErrHeraReclaimInProgress
+	}
+	defer unlock()
+	tasks, err := d.TasksChecked()
+	if err != nil {
+		return false, err
+	}
+	worktree, branch := task.Worktree, agent.TaskGitCleanupBranch(task.Worktree, task.Branch)
+	if worktree == "" {
+		branch = lease.Branch
+	}
+	for _, other := range tasks {
+		if other.ID == task.ID {
+			continue
+		}
+		if worktree != "" && agent.SamePath(other.Worktree, worktree) {
+			worktree, branch, lease.Tip = "", "", ""
+			break
+		}
+		if branch != "" && branch == other.Branch {
+			targetID, err := agent.TaskGitRepositoryID(ctx, repoDir)
+			if err != nil {
+				return false, err
+			}
+			otherID, err := agent.TaskGitRepositoryID(ctx, agent.ResolveDir(other, cfg))
+			if err != nil {
+				return false, err
+			}
+			if otherID == "" || agent.SamePath(targetID, otherID) {
+				branch, lease.Tip = "", ""
+			}
+		}
+	}
+	removed := worktree != "" && agent.DirExists(worktree)
+	if removed {
+		agent.RemoveWorktreeAndLocalBranch(worktree, branch, repoDir)
+		if agent.DirExists(worktree) {
+			return false, errors.New("resident worktree remains after cleanup")
+		}
+	} else if branch != "" && repoDir != "" {
+		agent.DeleteBranch(repoDir, branch)
+	}
+	lease.LocalDone = true
+	return removed, d.SetResidentReclaimLease(task.ID, lease)
 }
 
 // walkStackForward walks a base_branch stack forward from x exactly like
@@ -229,7 +292,7 @@ func walkStackForward(x *model.Task, byBaseBranch map[string]*model.Task) (chain
 // here is logged and skipped, never surfaced to the caller, and a resolution
 // failure (no project, no repo, tip not confirmed safe) simply results in
 // zero deletions for this candidate.
-func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, byBaseBranch map[string]*model.Task, x *model.Task, tipVerdicts map[string]mergesafety.Verdict) int {
+func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, byBaseBranch map[string]*model.Task, x *model.Task, tipVerdicts map[string]mergesafety.Verdict, leasedRoot bool) int {
 	chain, tip, ok := walkStackForward(x, byBaseBranch)
 	if !ok || len(chain) == 0 {
 		return 0
@@ -263,6 +326,9 @@ func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, 
 
 	deleted := 0
 	for _, y := range chain {
+		if y.ID == x.ID && leasedRoot {
+			continue
+		}
 		excluded, err := d.ExcludedCleanupBranches(y.ID)
 		if err != nil {
 			uxlog.Log("[hera] reclaim sweep: read excluded branches failed task=%s: %v", y.ID, err)
@@ -287,12 +353,22 @@ func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, 
 		if !v.Safe {
 			continue
 		}
+		unlock := func() {}
+		if y.ID != x.ID {
+			unlock, err = d.TryLockTaskOutsideReclaim(y.ID)
+			if err != nil {
+				uxlog.Log("[hera] reclaim sweep: stacked branch cleanup deferred task=%s err=%v", y.ID, err)
+				continue
+			}
+		}
 		if !branchExistsOnOrigin(repoDir, y.Branch) {
+			unlock()
 			continue
 		}
 
 		agent.DeleteBranch(repoDir, y.Branch)
 		agent.DeleteRemoteBranch(repoDir, y.Branch)
+		unlock()
 		deleted++
 		uxlog.Log("[hera] reclaim sweep: deleted stacked branch %q (task=%s) confirmed via %s", y.Branch, y.ID, v.Tier)
 	}

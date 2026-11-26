@@ -79,7 +79,7 @@ func RemoveWorktreeAndLocalBranchLocked(worktreePath, branch, repoDir string) (r
 // WorktreeRemoteBranchLease captures the remote-tracking or local tip before
 // resident deletion can defer worktree removal to a later owner.
 func WorktreeRemoteBranchLease(worktreePath, branch, repoDir string) (remoteRepoDir, remoteBranch, leaseTip string) {
-	if worktreePath == "" || branch == "" {
+	if branch == "" || (worktreePath == "" && repoDir == "") {
 		return "", "", ""
 	}
 	dir := repoDir
@@ -88,7 +88,7 @@ func WorktreeRemoteBranchLease(worktreePath, branch, repoDir string) (remoteRepo
 	}
 	// Same base-branch inference as RemoveWorktreeAndBranch.
 	actualBranch := branch
-	if !strings.HasPrefix(branch, "argus/") {
+	if worktreePath != "" && !strings.HasPrefix(branch, "argus/") {
 		actualBranch = "argus/" + filepath.Base(worktreePath)
 		uxlog.Log("[worktree] stored branch %q is not argus/*, trying inferred branch %q", branch, actualBranch)
 	}

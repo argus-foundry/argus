@@ -220,6 +220,34 @@ func TestDeferredResidentReclaimUsesOriginalRemoteTip(t *testing.T) {
 	testutil.False(t, pending)
 }
 
+func TestDeferredResidentReclaimPreservesReusedWorktree(t *testing.T) {
+	repo := initGitRepo(t, t.TempDir())
+	const branch = "argus/worker"
+	worktree := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+	gitRun(t, repo, "worktree", "add", "-b", branch, worktree)
+	task := &model.Task{ID: "original", Name: "Worker", Project: "p", Worktree: worktree, Branch: branch}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: repo}))
+	starting := true
+	owner := nukeReclaimOwner{Runner: agent.NewRunner(nil), pending: &starting}
+	_, err := NukeResidentWorker(d, owner, view)
+	testutil.NoError(t, err)
+	gitRun(t, repo, "worktree", "remove", worktree)
+	gitRun(t, repo, "worktree", "add", worktree, branch)
+	replacement := &model.Task{ID: "replacement", Name: "Replacement", Project: task.Project, Worktree: worktree, Branch: branch}
+	testutil.NoError(t, d.Add(replacement))
+	addGitCommit(t, worktree, "replacement.txt", "replacement content\n")
+
+	sum, err := ReconcileHeraReclaims(d, &fakeSessionChecker{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, sum.Pruned, 1)
+	_, err = os.Stat(filepath.Join(worktree, "replacement.txt"))
+	testutil.NoError(t, err)
+	testutil.True(t, gitBranchExists(repo, branch))
+	_, err = d.Get(replacement.ID)
+	testutil.NoError(t, err)
+}
+
 // A session that exits on Stop but has not settled by the end of the wait is
 // refused ("had not settled"), the recheck never runs, and the worker is left
 // resumable. Covers both the wait measured from the Stop call's START (not

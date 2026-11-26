@@ -309,6 +309,12 @@ func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView
 	} else if !stopResidentWorkerBeforeReclaim(runner, t.ID) {
 		return noop, nil
 	}
+	if t.Worktree == "" && lease.Branch != "" {
+		if _, err := settleResidentLocalReclaim(context.Background(), d, d.Config(), t, lease.RepoDir, lease); err != nil {
+			residentDeleteLog("[resident] delete role %d: branch cleanup deferred task=%s: %v", r.RoleID, t.ID, err)
+			return noop, nil
+		}
+	}
 	reclaimResidentWorkerTask(d, runner, t, repoLocked)
 	return func() {
 		residentRemoteBranchDelete(opts, t.ID, lease.RepoDir, lease.Branch, lease.Tip)
@@ -575,6 +581,6 @@ func residentWorkerStackFollowUp(d *db.DB, x *model.Task) {
 			byBase[t.BaseBranch] = t
 		}
 	}
-	n := reconcileStackedBranches(context.Background(), d, d.Config(), byBase, x, map[string]mergesafety.Verdict{})
+	n := reconcileStackedBranches(context.Background(), d, d.Config(), byBase, x, map[string]mergesafety.Verdict{}, true)
 	residentDeleteLog("[resident] delete: stacked-branch follow-up task=%s deleted=%d", x.ID, n)
 }

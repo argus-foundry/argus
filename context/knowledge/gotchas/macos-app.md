@@ -109,3 +109,5 @@ The `macos/` SwiftPM package (ArgusKit SDK + Argus SwiftUI app) is a thin REST/S
 **`ArgusClient.resize` reports `scrolledUp`/`composerDirty` and decodes `deferred`; the controller retries the SAME size while the daemon holds the kick.** The typed fold is the pure `KeepPlace.composerTyped`, fed from `enqueueInput` (post-Ctrl+Z-sanitize, user keyboard/paste only). The retry stops on no deferral, `terminalView.window == nil` (detached view) or `teardown()`; a new size cancels a pending retry of the old one. `ResizeResult.deferred` decodes as empty from an older daemon. Unverified without the GUI: SwiftTerm's real `canScroll`/scroll-position behavior on the alt screen and the timers end to end.
 
 - **Native terminal snapshots retry `409 stale_session` while their load is active.** The owner can still be in prelaunch when a scoped SSE attach first detects that the previous process has retired.
+
+- **A PID-less recorded snapshot cannot accept live bytes.** The first process or output frame triggers a fresh snapshot before the native terminal feeds that stream. Workspace also retries an interactive attach when its full snapshot reports recorded output.

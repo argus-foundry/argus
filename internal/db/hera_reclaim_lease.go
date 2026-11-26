@@ -9,9 +9,10 @@ import (
 // HeraReclaimLease records the origin ref that resident cleanup may delete.
 // An empty tip means only local resources may be reclaimed.
 type HeraReclaimLease struct {
-	RepoDir string `json:"repo_dir"`
-	Branch  string `json:"branch"`
-	Tip     string `json:"tip"`
+	RepoDir   string `json:"repo_dir"`
+	Branch    string `json:"branch"`
+	Tip       string `json:"tip"`
+	LocalDone bool   `json:"local_done,omitempty"`
 }
 
 func encodeHeraReclaimLease(lease *HeraReclaimLease) (string, error) {
@@ -43,6 +44,20 @@ func (d *DB) HeraResidentReclaimLease(taskID string) (*HeraReclaimLease, error) 
 		return nil, err
 	}
 	return &lease, nil
+}
+
+// SetResidentReclaimLease records local settlement while the caller holds
+// task reclaim and Git ownership. The branch lease remains available to retry.
+func (d *DB) SetResidentReclaimLease(taskID string, lease *HeraReclaimLease) error {
+	raw, err := encodeHeraReclaimLease(lease)
+	if err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err = d.conn.Exec(`UPDATE hera_bindings SET resident_reclaim_lease=?
+		WHERE argus_task_id=? AND nuke_reclaim='claimed' AND resident_reclaim_lease<>''`, raw, taskID)
+	return err
 }
 
 // HasPendingResidentReclaims reports whether the fast recovery tick should

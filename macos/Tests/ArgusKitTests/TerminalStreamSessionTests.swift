@@ -10,6 +10,21 @@ import Testing
 @Suite("Terminal stream session")
 struct TerminalStreamSessionTests {
 
+    @Test("ownerless recorded bytes are replaced before a successor can feed")
+    func ownerlessRecordedOutput() {
+        let recorded = Data("old".utf8)
+        let successor = Data("new".utf8)
+        for signal in [TerminalEvent.process(23), .output(successor)] {
+            var session = TerminalStreamSession()
+            #expect(session.start(tailTotal: 3, tailData: recorded, recorded: true) == [.feed(recorded), .openStream(since: 0)])
+            #expect(session.handle(.connected).isEmpty)
+            #expect(session.phase == .connecting)
+            #expect(session.handle(signal) == [.reloadSnapshot])
+            #expect(session.start(tailTotal: 3, tailData: successor, sessionPID: 23) == [.feed(successor), .openStream(since: 3)])
+            #expect(session.handle(.process(23)).isEmpty)
+        }
+    }
+
     private func bytes(_ s: String) -> Data { Data(s.utf8) }
 
     // MARK: - start() / offset seeding

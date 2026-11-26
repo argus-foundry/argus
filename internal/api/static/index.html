@@ -2308,6 +2308,8 @@ async function refresh() {
         // Mirror openDetail()'s window.currentTask write so Playwright specs
         // and any test hook reading `window.currentTask` see live state.
         window.currentTask = fresh;
+        const title = document.getElementById('detail-title');
+        if (title.textContent !== fresh.name) title.textContent = fresh.name;
         if (menuChanged) {
           document.getElementById('detail-subtitle').textContent =
             `${fresh.project} · ${statusLabel(effectiveStatus(fresh))}${fresh.elapsed ? ' · ' + fresh.elapsed : ''}`;
@@ -2679,6 +2681,7 @@ async function openDetail(id) {
   cancelTerminalRecovery();
   ++detailViewGen;
   currentTask = task;
+  setActionButtons(false);
   dropRestartQueue();
   // Test hook: top-level `let` doesn't auto-attach to window, but Playwright
   // specs need to read/mutate the active task to drive paths like the empty
@@ -3684,6 +3687,7 @@ function closeStream() {
 
 function detachTaskTerminal() {
   ++detailViewGen;
+  setActionButtons(false);
   ++attachGen;
   attachmentAbort?.abort();
   attachmentAbort = null;
@@ -4270,7 +4274,7 @@ async function resumeTask() {
   } catch(e) {
     if (view === detailViewGen) showToast('Resume failed: ' + e.message);
   } finally {
-    setActionButtons(false);
+    if (view === detailViewGen) setActionButtons(false);
   }
 }
 
@@ -4385,7 +4389,7 @@ async function deleteTask() {
   } catch(e) {
     if (view === detailViewGen) showToast('Delete failed: ' + e.message);
   } finally {
-    setActionButtons(false);
+    if (view === detailViewGen) setActionButtons(false);
   }
 }
 

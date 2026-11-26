@@ -466,6 +466,25 @@ func TestHeraActions_ClearArchiveReportsReclaimConflict(t *testing.T) {
 	testutil.Nil(t, got.NukedAt)
 }
 
+func TestHeraStackedDeletePreservesReclaimOwnedBranch(t *testing.T) {
+	app, d := heraRepoApp(t)
+	repo := d.Config().Projects["p"].Path
+	const branch = "argus/worker"
+	create := exec.Command("git", "branch", branch)
+	create.Dir = repo
+	testutil.NoError(t, create.Run())
+	task := &model.Task{ID: "task", Name: "Worker", Project: "p", Branch: branch}
+	testutil.NoError(t, d.Add(task))
+	orch := seedHeraOrch(t, d, "team")
+	role := seedHeraRoleOnTask(t, d, orch, "worker", db.HeraKindWorker, task.ID, "")
+	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(role.ID))
+
+	app.heraDeleteStackedBranches([]stackedBranchCandidate{{TaskID: task.ID, Branch: branch}})
+	verify := exec.Command("git", "show-ref", "--verify", "refs/heads/"+branch)
+	verify.Dir = repo
+	testutil.NoError(t, verify.Run())
+}
+
 // TestHeraActions_NukeRolePrunesSoleBoundTaskOnceSessionSettled pins
 // add-hera-nuke-cleanup Stage 2 (2.3): nuking a sole-bound, non-live role
 // hard-deletes the task row (via db.PruneTasks) once the backgrounded

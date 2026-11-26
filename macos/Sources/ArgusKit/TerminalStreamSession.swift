@@ -61,6 +61,7 @@ public struct TerminalStreamSession: Sendable, Equatable {
     public private(set) var offset: UInt64 = 0
     public private(set) var sessionPID: Int?
     public private(set) var phase: Phase = .idle
+    private var awaitingLiveSnapshot = false
 
     /// The delay the *next* reconnect will use; grows on each unhealthy
     /// reconnect, resets to ``baseDelay`` on healthy traffic.
@@ -98,14 +99,15 @@ public struct TerminalStreamSession: Sendable, Equatable {
     /// the cursor to `tailTotal`, resets the backoff, feeds any tail bytes, then
     /// opens the stream. Call this both for the initial attach and after a
     /// Restart (`POST /restart`) re-fetches the tail.
-    public mutating func start(tailTotal: UInt64, tailData: Data = Data(), sessionPID: Int? = nil) -> [Action] {
-        offset = tailTotal
+    public mutating func start(tailTotal: UInt64, tailData: Data = Data(), sessionPID: Int? = nil, recorded: Bool = false) -> [Action] {
+        awaitingLiveSnapshot = recorded && sessionPID == nil
+        offset = awaitingLiveSnapshot ? 0 : tailTotal
         self.sessionPID = sessionPID
         pendingDelay = baseDelay
         phase = .connecting
         var actions: [Action] = []
         if !tailData.isEmpty { actions.append(.feed(tailData)) }
-        actions.append(.openStream(since: tailTotal))
+        actions.append(.openStream(since: offset))
         return actions
     }
 
@@ -113,6 +115,7 @@ public struct TerminalStreamSession: Sendable, Equatable {
     public mutating func handle(_ event: TerminalEvent) -> [Action] {
         switch event {
         case .process(let pid):
+            if awaitingLiveSnapshot { return [reloadSnapshot()] }
             if let sessionPID, sessionPID != pid {
                 return [reloadSnapshot()]
             }
@@ -120,6 +123,7 @@ public struct TerminalStreamSession: Sendable, Equatable {
             return []
 
         case .connected:
+            if awaitingLiveSnapshot { return [] }
             // The SSE response validated: the stream is open and healthy even if
             // no bytes follow (an idle agent). Resolve the spinner to live and,
             // since an accepted connection is healthy, reset the backoff. A real
@@ -134,6 +138,7 @@ public struct TerminalStreamSession: Sendable, Equatable {
             return []
 
         case .output(let data):
+            if awaitingLiveSnapshot { return [reloadSnapshot()] }
             // Healthy traffic: advance the cursor and reset the backoff so a
             // later drop reconnects promptly.
             offset &+= UInt64(data.count)

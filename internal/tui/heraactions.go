@@ -1116,8 +1116,17 @@ func (a *App) heraDeleteStackedBranches(extra []stackedBranchCandidate) {
 		if repoDir == "" {
 			continue
 		}
+		unlock := func() {}
+		if database, ok := a.db.(*db.DB); ok {
+			unlock, err = database.TryLockTaskOutsideReclaim(c.TaskID)
+			if err != nil {
+				uxlog.Log("[hera-view] cascade: stacked branch delete deferred task=%s err=%v", c.TaskID, err)
+				continue
+			}
+		}
 		agent.DeleteBranch(repoDir, c.Branch)
 		agent.DeleteRemoteBranch(repoDir, c.Branch)
+		unlock()
 		uxlog.Log("[hera-view] cascade: deleted stacked branch %q (task=%s)", c.Branch, c.TaskID)
 	}
 }

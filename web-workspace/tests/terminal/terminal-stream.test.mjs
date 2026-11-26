@@ -180,3 +180,38 @@ test('cached recorded output refreshes before reuse without a process cursor', a
   assert.deepEqual(adjustments, [['write', 'old'], ['replace', 'finished output']]);
   assert.equal(stream.cursor, 0);
 });
+
+for (const cached of [false, true]) test(`live attachment retries ownerless recorded output (${cached ? 'cached' : 'initial'})`, async t => {
+  const original = globalThis.EventSource;
+  const opened = [], painted = [];
+  globalThis.EventSource = class {
+    constructor(url) { opened.push(url); }
+    addEventListener() {}
+    close() {}
+  };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const controller = new AbortController();
+  t.after(() => { controller.abort(); globalThis.EventSource = original; });
+  const task = { id: 'recover-recorded', status: 'in_progress', live: true };
+  let recorded = true;
+  const api = {
+    json: async path => path.endsWith('/size') ? { cols: 80, rows: 24 } : task,
+    request: async () => new Response(recorded ? 'old' : 'new', { headers: recorded
+      ? { 'X-Source': 'log', 'X-Output-Total': '3' }
+      : { 'X-Argus-Session-Pid': '44', 'X-Output-Total': '3' } }),
+    streamUrl: url => url,
+  };
+  const stream = new TerminalStream(api, task, controller.signal, {
+    state() {}, write: async bytes => painted.push(new TextDecoder().decode(bytes)),
+    replace: async bytes => painted.push(new TextDecoder().decode(bytes)),
+  });
+  if (cached) { stream.suspend(); await stream.resume(); }
+  else await stream.start();
+  assert.deepEqual(opened, []);
+  assert.deepEqual(painted, []);
+  recorded = false;
+  t.mock.timers.tick(500);
+  await new Promise(setImmediate);
+  assert.deepEqual(painted, ['new']);
+  assert.deepEqual(opened, ['/api/tasks/recover-recorded/stream?since=3&expected_pid=44']);
+});

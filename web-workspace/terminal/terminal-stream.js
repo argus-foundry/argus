@@ -9,6 +9,12 @@ function snapshotCursor(response) {
   return { pid, recorded, cursor: recorded && !pid ? 0 : outputCursor(response.headers.get('X-Output-Total')) };
 }
 
+function requireLiveSnapshot(task, recorded, pid) {
+  if (isInteractive(task) && recorded && !pid) {
+    throw Object.assign(new Error('Waiting for live terminal snapshot'), { status: 409 });
+  }
+}
+
 export class TerminalStream {
   constructor(api, task, signal, hooks) {
     Object.assign(this, { api, task, signal, hooks, cursor: 0, pid: 0, attempts: 0, version: 0 });
@@ -40,7 +46,9 @@ export class TerminalStream {
       const response = await this.api.request(this.path + '/output?bytes=1048576', { signal });
       bytes = new Uint8Array(await response.arrayBuffer());
       if (!this.active || version !== this.version) return;
-      ({ cursor, pid } = snapshotCursor(response));
+      const snapshot = snapshotCursor(response);
+      requireLiveSnapshot(task ?? this.task, snapshot.recorded, snapshot.pid);
+      ({ cursor, pid } = snapshot);
     } catch (error) {
       if (!this.active || version !== this.version) return;
       if (error.status !== 404) throw error;
@@ -244,6 +252,7 @@ export class TerminalStream {
       const {cursor,pid,recorded}=snapshotCursor(response);
       if(!this.active || version!==this.version)return;
       if(!terminalSize(size))throw new Error('Invalid terminal dimensions');
+      requireLiveSnapshot(task, recorded, pid);
       const current=this.hooks.currentSize?.();
       const remaining=this.needsReplacement || pid!==this.pid || (recorded && !pid)
         ? null : retainedOutput(this.cursor,cursor,bytes);

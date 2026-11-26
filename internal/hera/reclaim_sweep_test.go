@@ -1,6 +1,7 @@
 package hera
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/mergesafety"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -298,4 +300,34 @@ func TestReconcileHeraReclaims_ExcludedStackedBranchStays(t *testing.T) {
 
 	testutil.Equal(t, gitBranchExists(dir, "x-branch"), false)
 	testutil.Equal(t, gitBranchExists(dir, "m-branch"), true)
+}
+
+func TestStackedReclaimPreservesLeasedResidentBranchAfterPrune(t *testing.T) {
+	root := &model.Task{ID: "root", Name: "Root", Project: "p", Branch: "root-branch"}
+	worker := &model.Task{ID: "worker", Name: "Worker", Project: "p", Branch: "argus/worker", BaseBranch: root.Branch}
+	tip := &model.Task{ID: "tip", Name: "Tip", Project: "p", Branch: "tip-branch", BaseBranch: worker.Branch}
+	d, _, view := residentWorkerNukeFixture(t, worker)
+	repo := initGitRepo(t, t.TempDir())
+	gitRun(t, repo, "branch", root.Branch)
+	gitRun(t, repo, "branch", worker.Branch)
+	gitRun(t, repo, "branch", tip.Branch)
+	gitRun(t, repo, "update-ref", "refs/remotes/origin/"+worker.Branch, worker.Branch)
+	testutil.NoError(t, d.SetProject(worker.Project, config.Project{Path: repo}))
+	testutil.NoError(t, d.Add(root))
+	testutil.NoError(t, d.Add(tip))
+	binding, err := d.HeraLiveBindingByRole(view.RoleID)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.NukeResidentWorkerBinding(view.RoleID, binding.ID, &db.HeraReclaimLease{RepoDir: repo, Branch: worker.Branch, Tip: "old"}))
+	byBase := map[string]*model.Task{root.Branch: worker, worker.Branch: tip}
+	safeTips := map[string]mergesafety.Verdict{tip.Branch: {Safe: true}}
+	for _, prune := range []bool{false, true} {
+		if prune {
+			pruned, _, err := d.PruneHeraReclaimedTask(worker.ID)
+			testutil.NoError(t, err)
+			testutil.Equal(t, len(pruned), 1)
+		}
+		deleted := reconcileStackedBranches(context.Background(), d, d.Config(), byBase, root, safeTips, false)
+		testutil.Equal(t, deleted, 0)
+		testutil.True(t, gitBranchExists(repo, worker.Branch))
+	}
 }
