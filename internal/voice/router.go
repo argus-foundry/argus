@@ -385,6 +385,9 @@ func (r *Router) send(ctx context.Context, req Request) Result {
 	if len(req.Text) > MaxTextBytes {
 		return fail("That message is too long.", "text_too_long")
 	}
+	if strings.ContainsRune(req.Text, '\x1a') {
+		return fail("That message contains a disabled control key.", "unsupported_input")
+	}
 	ref, res, ok := r.lookup(ctx, req)
 	if !ok {
 		return res

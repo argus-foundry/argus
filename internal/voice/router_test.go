@@ -191,6 +191,21 @@ func TestRouterSendByTaskID(t *testing.T) {
 	testutil.Equal(t, done.Speech, "Sent that to Review.")
 }
 
+func TestRouterRejectsSuspendInputBeforeStartingJob(t *testing.T) {
+	op := &fakeOp{find: FindResult{Found: true, Ref: TaskRef{ID: "t1", Name: "Review", Live: true}}}
+	r := NewRouter(op)
+	got := r.Do(context.Background(), Request{Command: "send", TaskID: "t1", Text: "before\x1aafter"})
+	testutil.Equal(t, got.Detail, "unsupported_input")
+	testutil.Equal(t, got.JobID, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	testutil.NoError(t, r.Shutdown(ctx))
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	testutil.Equal(t, len(op.sends), 0)
+}
+
 func TestRouterReplaysSendAfterSessionExits(t *testing.T) {
 	op := &fakeOp{find: FindResult{Found: true, Ref: TaskRef{ID: "t1", Name: "Review", Live: true}}}
 	r := NewRouter(op)

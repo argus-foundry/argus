@@ -68,6 +68,18 @@ func TestVoiceSnapshotMatchesStatusCounts(t *testing.T) {
 	testutil.Contains(t, got, "finished recently")
 }
 
+func TestVoiceRouterReportsMissingTaskID(t *testing.T) {
+	srv, d := testServer(t)
+	task := &model.Task{Name: "old workflow"}
+	testutil.NoError(t, d.Add(task))
+	testutil.NoError(t, d.Delete(task.ID))
+
+	router := voice.NewRouter(srv.VoiceOperator())
+	got := router.Do(context.Background(), voice.Request{Command: "resume", TaskID: task.ID})
+	testutil.Equal(t, got.Detail, "not_found")
+	testutil.Equal(t, got.JobID, "")
+}
+
 func TestVoiceOperatorStartStopSendResume(t *testing.T) {
 	srv, d := testServer(t)
 	sess := &voiceSess{}

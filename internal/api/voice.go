@@ -55,11 +55,11 @@ func (a apiVoice) Find(ctx context.Context, taskID, name, project string) (voice
 	project = strings.TrimSpace(project)
 	if taskID != "" {
 		t, err := a.s.db.Get(taskID)
+		if errors.Is(err, db.ErrTaskNotFound) {
+			return voice.FindResult{}, nil
+		}
 		if err != nil {
 			return voice.FindResult{}, err
-		}
-		if t == nil {
-			return voice.FindResult{}, nil
 		}
 		return voice.FindResult{Found: true, Ref: a.ref(t)}, nil
 	}
