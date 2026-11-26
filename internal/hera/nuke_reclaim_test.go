@@ -72,13 +72,20 @@ func TestNukeRoleArmsScopedStopForReviewTask(t *testing.T) {
 		},
 	}
 
-	background := NukeSingleRole(d, owner, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})
-	background()
+	unlock, acquired, err := d.TryLockSessionMutation(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, acquired)
+	NukeSingleRole(d, owner, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true})
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.False(t, row.Archived)
+	unlock()
+	RetryNukeStop(d, owner, task.ID)
 	testutil.False(t, called)
 	pending = false
-	RetryArchivedNukeStop(d, owner, task.ID)
+	RetryNukeStop(d, owner, task.ID)
 	testutil.True(t, called)
-	row, err := d.Get(task.ID)
+	row, err = d.Get(task.ID)
 	testutil.NoError(t, err)
 	testutil.True(t, row.Archived)
 	testutil.Equal(t, row.Status, model.StatusComplete)

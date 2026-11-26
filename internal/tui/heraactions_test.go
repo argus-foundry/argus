@@ -389,6 +389,19 @@ func TestHeraActions_NukeArchivedRoleSoleBound(t *testing.T) {
 	got, err := d.HeraRole(role.ID)        // row RETAINED (no hard delete)
 	testutil.NoError(t, err)
 	testutil.Equal(t, got.NukedAt != nil, true)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		err = d.Delete("tw")
+		if err == nil {
+			break
+		}
+		testutil.ErrorIs(t, err, db.ErrHeraReclaimInProgress)
+		if time.Now().After(deadline) {
+			t.Fatal("completed standalone reclaim still owns the archived task")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // TestHeraActions_NukeArchivedRoleMultiBoundPreservesTask verifies a task bound

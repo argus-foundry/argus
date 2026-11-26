@@ -364,3 +364,5 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **Recorded output without a PID has no live cursor.** Refresh the cached display from the recorded snapshot. A stale-session conflict during replacement keeps the remote pane waiting even when the task’s workflow status is already in review.
 
 - **The PWA recovery loop awaits each terminal attach.** A stale snapshot stays within that loop and its delay and deadline.
+
+- **PWA recovery owns one attachment generation.** Superseding that attachment cancels its reads and discards late rendering. The deadline continues through the snapshot body and paint.

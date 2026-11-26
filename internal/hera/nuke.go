@@ -272,9 +272,9 @@ func stopNukedTask(d *db.DB, runner NukeRunner, taskID string) {
 	}
 }
 
-// RetryArchivedNukeStop replays a deferred nuke after owner prelaunch settles.
+// RetryNukeStop replays a deferred nuke after owner prelaunch settles.
 // The periodic daemon pass leaves contended operations to the next tick.
-func RetryArchivedNukeStop(d *db.DB, runner NukeRunner, taskID string) {
+func RetryNukeStop(d *db.DB, runner NukeRunner, taskID string) {
 	unlock, acquired, err := d.TryLockSessionMutation(taskID)
 	if err != nil || !acquired {
 		return
@@ -285,15 +285,9 @@ func RetryArchivedNukeStop(d *db.DB, runner NukeRunner, taskID string) {
 		return
 	}
 	defer release()
-	task, err := d.Get(taskID)
-	if err != nil || !task.Archived {
-		return
+	if archiveNukedTaskLocked(d, taskID) {
+		requestNukeStopLocked(d, runner, taskID)
 	}
-	bindings, err := d.ListHeraLiveBindingsByTask(taskID)
-	if err != nil || len(bindings) != 0 || CheckNukeTask(d, taskID) != nil {
-		return
-	}
-	requestNukeStopLocked(d, runner, taskID)
 }
 
 func requestNukeStopLocked(d *db.DB, runner NukeRunner, taskID string) {

@@ -261,6 +261,36 @@ func TestBulkDelete_SkipsProtectedTasks(t *testing.T) {
 	testutil.Equal(t, len(ops.cleanups), 1)
 }
 
+func TestBulkDelete_SkipsDeferredHeraReclaimBeforeSideEffects(t *testing.T) {
+	srv, d, ops, rec, _ := bulkSetup(t)
+	task := addTask(t, d, "reclaim")
+	orch, err := d.CreateHeraOrchestrator("reclaim", "")
+	testutil.NoError(t, err)
+	role, _, err := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
+		OrchestratorID: orch.ID, Name: "worker", Kind: db.HeraKindWorker,
+	}, task.ID, task.Worktree)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(role.ID))
+	testutil.NoError(t, d.SetArchived(task.ID, true))
+	logPath := agent.SessionLogPath(task.ID)
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o700))
+	testutil.NoError(t, os.WriteFile(logPath, []byte("keep"), 0o600))
+	artifactPath := filepath.Join(agent.ArtifactsDir(task.ID), "report.html")
+	testutil.NoError(t, os.MkdirAll(filepath.Dir(artifactPath), 0o700))
+	testutil.NoError(t, os.WriteFile(artifactPath, []byte("keep"), 0o600))
+
+	result := waitJob(t, srv, submit(t, srv, `{"task_ids":["`+task.ID+`"]}`)).Results[0]
+	testutil.Equal(t, result.State, "skipped")
+	testutil.Equal(t, *result.Error, "reclaim_pending")
+	testutil.False(t, result.RecordDeleted)
+	testutil.Equal(t, len(rec.stopped), 0)
+	testutil.Equal(t, len(ops.cleanups), 0)
+	_, err = os.Stat(logPath)
+	testutil.NoError(t, err)
+	_, err = os.Stat(artifactPath)
+	testutil.NoError(t, err)
+}
+
 func TestBulkDelete_AllowDirtyDeletesDirtyTask(t *testing.T) {
 	srv, d, ops, _, _ := bulkSetup(t)
 	tk := addTask(t, d, "dirty")

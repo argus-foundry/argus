@@ -4,13 +4,19 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/model"
 )
 
 var ErrHeraReclaimInProgress = errors.New("task reclaim is in progress")
 
-const heraNukeBindingSQL = `SELECT argus_task_id FROM hera_bindings WHERE end_reason='` + HeraEndReasonUserDeleted + `'`
+const heraReclaimSettledKey = "reclaim_settled_binding"
+
+const heraNukeBindingSQL = `SELECT argus_task_id FROM hera_bindings deleted
+	WHERE end_reason='` + HeraEndReasonUserDeleted + `' AND id > COALESCE((
+		SELECT CAST(value AS INTEGER) FROM task_meta
+		WHERE task_id=deleted.argus_task_id AND namespace='hera' AND key='` + heraReclaimSettledKey + `'),0)`
 
 const heraReclaimOwnsTaskSQL = `(hera_reclaim_pid<>0 OR (archived=1 AND id IN (` + heraNukeBindingSQL + `)
 	AND id NOT IN (SELECT argus_task_id FROM hera_bindings WHERE ended_at IS NULL)))`
@@ -49,6 +55,26 @@ func (d *DB) lockHeraTaskAdmission(taskID string) (func(), error) {
 		return nil, ErrHeraReclaimInProgress
 	}
 	return unlock, nil
+}
+
+// TryLockTaskOutsideReclaim protects a generic mutation's side effects from
+// taking place on a task that already belongs to Hera reclaim.
+func (d *DB) TryLockTaskOutsideReclaim(taskID string) (func(), error) {
+	return d.lockHeraTaskAdmission(taskID)
+}
+
+// MarkHeraReclaimCleaned releases ownership when cleanup deliberately keeps an
+// archived row. An ensuing nuke of a newer binding can reclaim it again.
+func (d *DB) MarkHeraReclaimCleaned(taskID string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.conn.Exec(`INSERT INTO task_meta (task_id,namespace,key,value,updated_at)
+		SELECT ?, 'hera', ?, CAST(MAX(id) AS TEXT), ? FROM hera_bindings
+		WHERE argus_task_id=? AND end_reason=?
+		HAVING COUNT(*) > 0
+		ON CONFLICT(task_id,namespace,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+		taskID, heraReclaimSettledKey, formatTime(time.Now()), taskID, HeraEndReasonUserDeleted)
+	return err
 }
 
 // ArmHeraReclaimStop records the outgoing PTY of an archived, active task.

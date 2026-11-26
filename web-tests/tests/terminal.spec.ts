@@ -47,6 +47,65 @@ test.describe('terminal', () => {
     expect(requestedAt[2] - requestedAt[1]).toBeGreaterThanOrEqual(200);
   });
 
+  test('a superseded terminal recovery leaves the reopened terminal attached', async ({ page }) => {
+    let requests = 0;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      switch (++requests) {
+      case 1:
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+        return;
+      case 2:
+        await held;
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } }).catch(() => {});
+        return;
+      default:
+        await route.continue();
+      }
+    });
+    try {
+      await login(page);
+      await page.locator('.task-item').first().click();
+      await expect.poll(() => requests).toBe(2);
+      await page.locator('#detail-view .detail-back').click();
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('.term-status.live')).toBeVisible({ timeout: 5000 });
+      release!();
+      await page.waitForTimeout(350);
+      expect(requests).toBe(3);
+      await expect(page.locator('.term-status.live')).toBeVisible();
+    } finally {
+      release!();
+    }
+  });
+
+  test('a stalled replacement snapshot reaches the terminal recovery deadline', async ({ page }) => {
+    await page.addInitScript(() => {
+      const original = window.fetch.bind(window);
+      let snapshots = 0;
+      window.fetch = async (...args) => {
+        const response = await original(...args);
+        if (/\/api\/tasks\/[^/]+\/output(?:\?|$)/.test(response.url) && ++snapshots === 2) {
+          response.arrayBuffer = () => new Promise(() => {});
+        }
+        return response;
+      };
+    });
+    let initial = true;
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      if (initial) {
+        initial = false;
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+      } else {
+        await route.continue();
+      }
+    });
+    await login(page);
+    await page.locator('.task-item').first().click();
+    await expect(page.locator('#term-status-text')).toHaveText('session ended', { timeout: 17_000 });
+  });
+
   test('typing forwards to PTY and echoes back', async ({ page }) => {
     await login(page);
     await page.locator('.task-item').first().click();

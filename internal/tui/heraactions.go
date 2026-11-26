@@ -659,9 +659,18 @@ func (a *App) removeHeraReclaimedWorktree(t *model.Task) {
 	if t.Worktree != "" {
 		agent.RemoveWorktreeAndBranch(t.Worktree, t.Branch, repoDir)
 		a.heraPruneReclaimedTask(t.ID)
-	} else if t.Branch != "" && repoDir != "" {
-		agent.DeleteBranch(repoDir, t.Branch)
-		agent.DeleteRemoteBranch(repoDir, t.Branch)
+		return
+	}
+	if t.Branch != "" && repoDir != "" {
+		if result := agent.CleanupTaskGit("", t.Branch, repoDir); result.Failed() {
+			uxlog.Log("[hera-view] nuke: branch cleanup failed task=%s: %s", t.ID, result.Err)
+			return
+		}
+	}
+	if database, ok := a.db.(*db.DB); !a.daemonConnected && ok {
+		if err := database.MarkHeraReclaimCleaned(t.ID); err != nil {
+			uxlog.Log("[hera-view] nuke: could not release archived task task=%s: %v", t.ID, err)
+		}
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 type reclaimExitOwner interface {
 	sessionProber
 	agent.HeraReclaimSessionOwner
-	ObservedSessionExit(taskID string, pid int) ExitInfo
+	ObservedSessionExit(taskID string, pid int) (ExitInfo, error)
 }
 
 type localReclaimOwner struct {
@@ -24,12 +24,10 @@ func (o localReclaimOwner) ProbeSession(taskID string) (SessionInfo, error) {
 	return info, err
 }
 
-func (o localReclaimOwner) ObservedSessionExit(taskID string, pid int) ExitInfo {
+func (o localReclaimOwner) ObservedSessionExit(taskID string, pid int) (ExitInfo, error) {
 	var exit ExitInfo
-	if err := o.core.GetExitInfo(&TaskIDReq{TaskID: taskID, ExpectedPID: pid}, &exit); err != nil {
-		return ExitInfo{StreamLost: true}
-	}
-	return exit
+	err := o.core.GetExitInfo(&TaskIDReq{TaskID: taskID, ExpectedPID: pid}, &exit)
+	return exit, err
 }
 
 // recoverHeraReclaimExits settles exact supervisor exits that the daemon's
@@ -66,9 +64,7 @@ func (d *Daemon) recoverHeraReclaimExits() int {
 		if d.exitCtx.Err() != nil {
 			break
 		}
-		if task.Archived {
-			hera.RetryArchivedNukeStop(d.db, d.runner, task.ID)
-		}
+		hera.RetryNukeStop(d.db, d.runner, task.ID)
 	}
 	return recovered
 }
@@ -95,7 +91,11 @@ func (d *Daemon) recoverHeraReclaimExit(owner reclaimExitOwner, taskID string) b
 		slog.Info("hera reclaim: owner did not confirm retired process", "task", taskID, "pid", pid, "owner_pid", info.PID, "last_exit_pid", info.LastExitPID, "err", err)
 		return false
 	}
-	exit := owner.ObservedSessionExit(taskID, pid)
+	exit, err := owner.ObservedSessionExit(taskID, pid)
+	if err != nil {
+		slog.Info("hera reclaim: exit receipt lookup failed", "task", taskID, "pid", pid, "err", err)
+		return false
+	}
 	if exit.StreamLost && info.LastExitPID == pid {
 		return d.settleExpiredReclaimExit(taskID, pid)
 	}

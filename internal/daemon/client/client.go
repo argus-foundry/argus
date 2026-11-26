@@ -1195,14 +1195,19 @@ func (c *Client) sessionExitInfo(rs *RemoteSession) daemon.ExitInfo {
 }
 
 // ObservedSessionExit returns the owner's retained exit record for pid.
-func (c *Client) ObservedSessionExit(taskID string, pid int) daemon.ExitInfo {
+func (c *Client) ObservedSessionExit(taskID string, pid int) (daemon.ExitInfo, error) {
 	if pid <= 0 {
-		return daemon.ExitInfo{StreamLost: true}
+		return daemon.ExitInfo{StreamLost: true}, nil
 	}
-	return c.exitInfoForPID(taskID, pid)
+	return c.exitInfoForPIDChecked(taskID, pid)
 }
 
 func (c *Client) exitInfoForPID(taskID string, pid int) daemon.ExitInfo {
+	info, _ := c.exitInfoForPIDChecked(taskID, pid)
+	return info
+}
+
+func (c *Client) exitInfoForPIDChecked(taskID string, pid int) (daemon.ExitInfo, error) {
 	var info daemon.ExitInfo
 	err := c.call("Daemon.GetExitInfo", &daemon.TaskIDReq{TaskID: taskID, ExpectedPID: pid}, &info)
 	if err != nil || info.NoEvidenceOfExit() || (pid > 0 && info.PID > 0 && info.PID != pid) {
@@ -1212,7 +1217,7 @@ func (c *Client) exitInfoForPID(taskID string, pid int) daemon.ExitInfo {
 	}
 	uxlog.Log("client.sessionExitInfo: task=%s pid=%d exitPID=%d err=%v rpcErr=%v stopped=%v streamLost=%v lastOutput=%d bytes",
 		taskID, pid, info.PID, info.Err, err, info.Stopped, info.StreamLost, len(info.LastOutput))
-	return info
+	return info, err
 }
 
 // SetFocused notifies the daemon that the TUI has entered or left agent view

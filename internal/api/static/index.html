@@ -2229,7 +2229,7 @@ async function api(path, opts = {}) {
     if (!isUpload) baseHeaders['Content-Type'] = 'application/json';
     const r = await fetch(API + path, {
       ...fetchOpts,
-      signal: controller.signal,
+      signal: fetchOpts.signal ? AbortSignal.any([controller.signal, fetchOpts.signal]) : controller.signal,
       headers: { ...baseHeaders, ...(fetchOpts.headers || {}) }
     });
     if (r.status === 401) { logout(); throw new Error('unauthorized'); }
@@ -2717,11 +2717,13 @@ async function openDetail(id) {
 // terminal.
 let attachGen = 0;
 
-async function attachTerminal(task, recovering = false) {
+async function attachTerminal(task, recovery = null) {
+  if (!recovery) cancelTerminalRecovery();
   closeStream();
   destroyTerm();
 
   const myGen = ++attachGen;
+  if (recovery) recovery.generation = myGen;
 
   // Always mount xterm. Non-running tasks (Done / Pending / In Review) replay
   // their scrollback through the same widget so escape sequences are executed
@@ -2745,10 +2747,10 @@ async function attachTerminal(task, recovering = false) {
     // then attaches live -- no gap, no duplicate. The previous path skipped
     // the disk replay and only got the 256KB ring buffer via SSE, silently
     // truncating history for any session that emitted more than that.
-    const result = await loadStaticOutput(task.id);
+    const result = await loadStaticOutput(task.id, recovery?.controller.signal);
     if (myGen !== attachGen) return false;
     if (result.stale || result.source === 'log') {
-      if (!recovering) pollAndRecoverFromRerenderExit(task.id);
+      if (!recovery) pollAndRecoverFromRerenderExit(task.id);
       return false;
     }
     // result.ok=false (404 / 5xx / network) is intentionally NOT a gate
@@ -2974,7 +2976,7 @@ const RESTART_FLUSH_SETTLE_MS = 500;       // let the resumed TUI enter raw mode
 let restartQueue = null; // { taskId, items: string[], bytes, recovering, flushing, timer }
 // Task whose recovery poll is running. Separate from the queue so a late exit
 // event / 404'd stream can't start a second loop after the queue was dropped.
-let recoveringTaskId = null;
+let terminalRecovery = null;
 
 function armRestartWatchdog() {
   const q = restartQueue;
@@ -3654,31 +3656,63 @@ function closeStream() {
 // (typical 1-3s, sometimes longer on cold sandbox) much better than a fixed
 // timeout. If the user navigated away in the meantime, no-op.
 async function pollAndRecoverFromRerenderExit(id) {
-  if (!currentTask || currentTask.id !== id) { dropRestartQueue(); return; }
-  // The exit event and a 404'd stream can both fire for one restart.
-  if (recoveringTaskId === id) return;
-  recoveringTaskId = id;
+  if (currentTask?.id !== id) return;
+  if (terminalRecovery?.id === id && terminalRecovery.generation === attachGen) return;
+  cancelTerminalRecovery();
+  const recovery = { id, generation: attachGen, controller: new AbortController() };
+  terminalRecovery = recovery;
+  const deadline = setTimeout(() => {
+    if (!ownsTerminalRecovery(recovery)) return;
+    ++attachGen;
+    endTerminalRecovery(recovery);
+    recovery.controller.abort();
+    terminalRecovery = null;
+  }, 15000);
   try {
-    await recoverFromRerenderExit(id);
+    await recoverFromRerenderExit(recovery);
   } finally {
-    if (recoveringTaskId === id) recoveringTaskId = null;
+    clearTimeout(deadline);
+    if (terminalRecovery === recovery) terminalRecovery = null;
   }
 }
 
-async function recoverFromRerenderExit(id) {
+function ownsTerminalRecovery(recovery) {
+  return terminalRecovery === recovery && currentTask?.id === recovery.id && attachGen === recovery.generation;
+}
+
+function cancelTerminalRecovery() {
+  if (!terminalRecovery) return;
+  const id = terminalRecovery.id;
+  terminalRecovery.controller.abort();
+  terminalRecovery = null;
+  if (restartQueue?.taskId === id) {
+    restartQueue.recovering = false;
+    armRestartWatchdog();
+  }
+}
+
+function endTerminalRecovery(recovery) {
+  if (restartQueue?.taskId === recovery.id) {
+    dropRestartQueue();
+    showToast('Agent did not restart — queued input discarded');
+  }
+  showTermStatus('session ended', 'error');
+}
+
+async function recoverFromRerenderExit(recovery) {
+  const { id, controller } = recovery;
   beginRestartQueue(id);
   restartQueue.recovering = true;
   showTermStatus('rerendering…', 'reconnecting');
-  const start = Date.now();
-  const deadline = start + 15000; // 15s upper bound — covers cold-start sandboxed Claude/Codex
-  while (Date.now() < deadline) {
-    if (!currentTask || currentTask.id !== id) { dropRestartQueue(); return; } // user moved on
+  while (ownsTerminalRecovery(recovery)) {
     try {
       const res = await fetch(API + `/api/tasks/${id}`, {
+        signal: controller.signal,
         headers: { 'Authorization': 'Bearer ' + TOKEN }
       });
       if (res.ok) {
         const t = await res.json();
+        if (!ownsTerminalRecovery(recovery)) return;
         // Wait for the restarted session to actually exist. Status stays
         // in_progress through the whole kill+resume gap, so a status-only
         // check attached immediately: the compose bar mounted over a stream
@@ -3690,30 +3724,23 @@ async function recoverFromRerenderExit(id) {
         if (isInteractive(t)) {
           currentTask = t;
           window.currentTask = t;
-          if (!await attachTerminal(t, true)) {
-            await new Promise(r => setTimeout(r, 250));
-            continue;
+          const attached = await attachTerminal(t, recovery);
+          if (!ownsTerminalRecovery(recovery)) return;
+          if (attached) {
+            if (restartQueue?.taskId === id) {
+              restartQueue.recovering = false;
+              armRestartWatchdog();
+            }
+            return;
           }
-          // Recovery is done; the new stream's onopen flushes (after a live
-          // check). Hand the deadline back to the watchdog so a stream that
-          // never opens can't strand the queue.
-          if (restartQueue && restartQueue.taskId === id) {
-            restartQueue.recovering = false;
-            armRestartWatchdog();
-          }
-          return;
         }
       }
     } catch (e) {
       // Transient network error — fall through to retry.
     }
-    await new Promise(r => setTimeout(r, 250));
+    if (ownsTerminalRecovery(recovery)) await new Promise(r => setTimeout(r, 250));
   }
-  if (restartQueue && restartQueue.taskId === id) {
-    dropRestartQueue();
-    showToast('Agent did not restart — queued input discarded');
-  }
-  showTermStatus('session ended', 'error');
+  if (ownsTerminalRecovery(recovery)) endTerminalRecovery(recovery);
 }
 
 // --- Agent-staged clipboard ---
@@ -3831,7 +3858,9 @@ function b64ToBytes(s) {
   return out;
 }
 
-async function loadStaticOutput(id) {
+async function loadStaticOutput(id, signal) {
+  const target = term;
+  const current = () => target && term === target && !signal?.aborted;
   // Replay raw PTY bytes into the xterm widget so the user sees the same final
   // screen the agent rendered. NO `clean=1` — xterm.js's parser executes the
   // ANSI sequences itself, and the server-side sanitizer's regex doesn't fully
@@ -3850,13 +3879,13 @@ async function loadStaticOutput(id) {
   // for active tasks then opens an SSE stream) still gets a live attach.
   let r;
   try {
-    r = await api(`/api/tasks/${id}/output?bytes=${STATIC_OUTPUT_MAX_BYTES}`);
+    r = await api(`/api/tasks/${id}/output?bytes=${STATIC_OUTPUT_MAX_BYTES}`, { signal });
   } catch(e) {
-    if (term) term.write('\x1b[31m(failed to load output)\x1b[0m\r\n');
+    if (current()) target.write('\x1b[31m(failed to load output)\x1b[0m\r\n');
     return { since: 0, ok: false };
   }
   // Race: user navigated away before the fetch resolved.
-  if (!term) return { since: 0, ok: false };
+  if (!current()) return { since: 0, ok: false };
   if (!r.ok) {
     if (r.status === 409) return { since: 0, ok: false, stale: true };
     // 404 = no log yet (Pending task that never started). "no output yet"
@@ -3864,10 +3893,10 @@ async function loadStaticOutput(id) {
     // since the user can still resume the task to populate it. Other errors
     // are flagged red as a real failure.
     if (r.status === 404) {
-      term.write('\x1b[2m(no output yet)\x1b[0m\r\n');
+      target.write('\x1b[2m(no output yet)\x1b[0m\r\n');
       return { since: 0, ok: true };
     }
-    term.write('\x1b[31m(failed to load output)\x1b[0m\r\n');
+    target.write('\x1b[31m(failed to load output)\x1b[0m\r\n');
     return { since: 0, ok: false };
   }
   // X-Output-Total is the disk-log byte size at read time. Pair it with
@@ -3886,9 +3915,9 @@ async function loadStaticOutput(id) {
   const pid = Number(r.headers.get('X-Argus-Session-Pid') || 0);
   const source = r.headers.get('X-Source') || '';
   const buf = await r.arrayBuffer();
-  if (!term) return { since, ok: false };
+  if (!current()) return { since, ok: false };
   if (buf.byteLength === 0) {
-    term.write('\x1b[2m(no output yet)\x1b[0m\r\n');
+    target.write('\x1b[2m(no output yet)\x1b[0m\r\n');
     return { since, pid, source, ok: true };
   }
   // Defer the write until after setupTerm()'s rAF fit() has set proper
@@ -3897,12 +3926,12 @@ async function loadStaticOutput(id) {
   // localhost which usually wins the race, but the explicit double-rAF makes
   // it deterministic.
   await new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
-  if (!term) return { since, ok: false };
+  if (!current()) return { since, ok: false };
   // Uint8Array (not string) preserves raw bytes — high-byte content in status
   // bars round-trips through JS's UTF-8 string path otherwise. Same pattern as
   // the SSE write path (see web-remote gotcha "base64 SSE chunks → Uint8Array").
-  term.write(new Uint8Array(buf), () => {
-    if (term) term.scrollToBottom();
+  target.write(new Uint8Array(buf), () => {
+    if (current()) target.scrollToBottom();
   });
   return { since, pid, source, ok: true };
 }
@@ -4283,6 +4312,8 @@ async function deleteTask() {
 }
 
 function closeDetail() {
+  ++attachGen;
+  cancelTerminalRecovery();
   closeStream();
   dropRestartQueue();
   destroyTerm();

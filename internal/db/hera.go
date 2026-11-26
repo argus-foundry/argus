@@ -677,7 +677,7 @@ func (d *DB) NukeHeraRole(id int64) error {
 // worker's nuke by anyone but the resident (HeraActorResident, its own
 // hera_delete_worker) queues the resident a notice.
 func (d *DB) NukeHeraRoleAs(id int64, actor HeraActor) error {
-	return d.nukeHeraRole(id, actor, false)
+	return d.nukeHeraRole(id, actor, false, 0)
 }
 
 // NukeHeraRoleAndEndBinding records a human nuke and ends the role's live
@@ -689,15 +689,38 @@ func (d *DB) NukeHeraRoleAndEndBinding(id int64) error {
 // NukeHeraRoleAndEndBindingAs records the role transition and binding end
 // atomically and preserves the caller's actor for resident notifications.
 func (d *DB) NukeHeraRoleAndEndBindingAs(id int64, actor HeraActor) error {
-	return d.nukeHeraRole(id, actor, true)
+	binding, err := d.HeraLiveBindingByRole(id)
+	if err != nil && !errors.Is(err, ErrHeraNotFound) {
+		return err
+	}
+	var bindingID int64
+	if binding != nil {
+		bindingID = binding.ID
+		unlock, acquired, err := d.TryLockHeraReclaim(binding.ArgusTaskID)
+		if err != nil {
+			return err
+		}
+		if !acquired {
+			return ErrHeraReclaimInProgress
+		}
+		defer unlock()
+	}
+	return d.nukeHeraRole(id, actor, true, bindingID)
 }
 
-func (d *DB) nukeHeraRole(id int64, actor HeraActor, endBinding bool) error {
+func (d *DB) nukeHeraRole(id int64, actor HeraActor, endBinding bool, bindingID int64) error {
 	return d.heraRoleMutation(id, actor, ResidentNoticeNuked, func(tx *sql.Tx, cur *HeraRole) (bool, string, error) {
 		now := formatTime(time.Now())
 		if endBinding {
-			result, err := tx.Exec(`UPDATE hera_bindings SET ended_at=?, end_reason=? WHERE role_id=? AND ended_at IS NULL`,
-				now, HeraEndReasonUserDeleted, id)
+			var liveID int64
+			if err := tx.QueryRow(`SELECT COALESCE(MAX(id),0) FROM hera_bindings WHERE role_id=? AND ended_at IS NULL`, id).Scan(&liveID); err != nil {
+				return false, "", err
+			}
+			if liveID != bindingID {
+				return false, "", fmt.Errorf("%w: role binding changed during nuke", ErrHeraReclaimInProgress)
+			}
+			result, err := tx.Exec(`UPDATE hera_bindings SET ended_at=?, end_reason=? WHERE id=? AND ended_at IS NULL`,
+				now, HeraEndReasonUserDeleted, liveID)
 			if err != nil {
 				return false, "", fmt.Errorf("end hera role binding: %w", err)
 			}
@@ -1729,13 +1752,12 @@ func (d *DB) HeraNukeReclaimCandidates() ([]*model.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	//nolint:gosec // G202: qualifyColumns(taskColumns) is a fixed compile-time column list; end_reason is a bound parameter.
-	rows, err := d.conn.Query(`SELECT DISTINCT `+qualifyColumns("t", taskColumns)+`
+	//nolint:gosec // G202: Both the column list and candidate predicate are fixed.
+	rows, err := d.conn.Query(`SELECT ` + qualifyColumns("t", taskColumns) + `
 		FROM tasks t
-		JOIN hera_bindings hb ON hb.argus_task_id = t.id
-		WHERE t.kind = '' AND hb.end_reason = ?
+		WHERE t.kind = '' AND t.id IN (` + heraNukeBindingSQL + `)
 		AND NOT EXISTS (SELECT 1 FROM hera_bindings hb2 WHERE hb2.argus_task_id = t.id AND hb2.ended_at IS NULL)
-		ORDER BY t.created_at ASC`, HeraEndReasonUserDeleted)
+		ORDER BY t.created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query hera nuke reclaim candidates: %w", err)
 	}

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/agent"
@@ -14,13 +15,16 @@ type reclaimProbe struct {
 	info       SessionInfo
 	retirement error
 	exit       ExitInfo
+	exitErr    error
 	stopPID    *int
 	onStop     func()
 }
 
 func (o reclaimProbe) ProbeSession(string) (SessionInfo, error) { return o.info, nil }
 func (o reclaimProbe) CheckReclaimSessionRetired(string) error  { return o.retirement }
-func (o reclaimProbe) ObservedSessionExit(string, int) ExitInfo { return o.exit }
+func (o reclaimProbe) ObservedSessionExit(string, int) (ExitInfo, error) {
+	return o.exit, o.exitErr
+}
 func (o reclaimProbe) StopTreeForPID(_ string, pid int) error {
 	*o.stopPID = pid
 	if o.onStop != nil {
@@ -36,6 +40,7 @@ func TestRecoverHeraReclaimExitValidatesOwner(t *testing.T) {
 		info       SessionInfo
 		retirement error
 		exit       ExitInfo
+		exitErr    error
 		committed  bool
 		recovered  bool
 		retried    bool
@@ -49,6 +54,7 @@ func TestRecoverHeraReclaimExitValidatesOwner(t *testing.T) {
 		{name: "replacement already retired", info: SessionInfo{LastExitPID: pid + 1}, exit: ExitInfo{PID: pid, Stopped: true}},
 		{name: "unconfirmed relay", exit: ExitInfo{PID: pid, StreamLost: true}},
 		{name: "expired payload with confirmed PID", info: SessionInfo{LastExitPID: pid}, exit: ExitInfo{StreamLost: true}, recovered: true},
+		{name: "receipt transport failed", info: SessionInfo{LastExitPID: pid}, exit: ExitInfo{StreamLost: true}, exitErr: errors.New("connection lost")},
 		{name: "different receipt", exit: ExitInfo{PID: pid + 1, Stopped: true}},
 		{name: "pending restart receipt", exit: ExitInfo{PID: pid, PendingRestart: true}},
 		{name: "matching receipt", exit: ExitInfo{PID: pid, Stopped: true}, recovered: true},
@@ -73,7 +79,7 @@ func TestRecoverHeraReclaimExitValidatesOwner(t *testing.T) {
 			}
 			var stopPID int
 			d.UseSupervisorRunner(reclaimProbe{
-				fakeSupClient: &fakeSupClient{}, info: tc.info, retirement: tc.retirement, exit: tc.exit, stopPID: &stopPID,
+				fakeSupClient: &fakeSupClient{}, info: tc.info, retirement: tc.retirement, exit: tc.exit, exitErr: tc.exitErr, stopPID: &stopPID,
 				onStop: func() {
 					testutil.ErrorIs(t, database.SetArchived(task.ID, false), db.ErrHeraReclaimInProgress)
 					testutil.ErrorIs(t, database.SetPinned(task.ID, true), db.ErrHeraReclaimInProgress)

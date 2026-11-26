@@ -496,3 +496,5 @@ M6a scaffolds the native Hera view: a `HeraPage` (rail | coordinator pane | agen
 - **A scoped stop is pending until the retiring owner confirms its exit.** The task’s workflow status can already be complete while its PTY is live. Resume and restart consult the durable marker under the session lock.
 
 - **An archived, unbound nuke candidate owns cleanup before arming and after receipt settlement.** Generic prune skips it. The reclaim path can prune after owner retirement and worktree removal.
+
+- **An ended nuke binding survives a contended archive.** Periodic recovery rechecks unarchived candidates under both task locks. A standalone cleanup that deliberately keeps an archived task records the last settled nuke binding so a future, newer nuke can still claim it.
