@@ -380,7 +380,7 @@ func TestStackedDeletePreservesSuccessorAfterOldTaskDisappears(t *testing.T) {
 }
 
 func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
-	for _, name := range []string{"original origin", "changed origin", "changed remote tip", "changed local tip", "linked successor", "checked-out local branch", "paused rebase", "tip moves during deletion", "origin moves during push"} {
+	for _, name := range []string{"original origin", "changed origin", "changed remote tip", "changed local tip", "linked successor", "checked-out local branch", "paused rebase", "tip moves during deletion", "origin moves during push", "rewritten origin with push hook"} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			repo := initGitRepo(t, t.TempDir())
@@ -405,6 +405,20 @@ func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
 			}
 			gitRun(t, repo, "push", "origin", branch)
 			gitRun(t, repo, "push", second, branch)
+			hookMark := filepath.Join(t.TempDir(), "hook-ran")
+			if name == "rewritten origin with push hook" {
+				gitRun(t, repo, "config", "--add", "url."+first+".insteadOf", "outbound-argus")
+				gitRun(t, repo, "config", "--add", "url."+second+".insteadOf", first)
+				gitRun(t, repo, "remote", "set-url", "--push", "origin", "outbound-argus")
+				hooks := t.TempDir()
+				gitRun(t, repo, "config", "core.hooksPath", hooks)
+				const hook = `#!/bin/sh
+[ "$1" = origin ] || exit 1
+: > "$ARGUS_TEST_STACK_HOOK_MARK"
+`
+				testutil.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-push"), []byte(hook), 0o700))
+				t.Setenv("ARGUS_TEST_STACK_HOOK_MARK", hookMark)
+			}
 			repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
 			testutil.NoError(t, err)
 			tip := agent.TaskGitBranchTip(context.Background(), repo, branch)
@@ -460,12 +474,16 @@ exec "$ARGUS_TEST_STACK_REAL_GIT" "$@"
 				testutil.NoError(t, d.SetProject("other", config.Project{Path: initGitRepo(t, t.TempDir())}))
 				testutil.NoError(t, d.Add(&model.Task{ID: "successor", Name: "Successor", Project: "other", Worktree: linked, Branch: branch}))
 			}
-			localDeleted := name == "original origin" || name == "changed remote tip" || name == "origin moves during push"
-			remoteDeleted := name == "original origin" || name == "checked-out local branch" || name == "paused rebase" || name == "origin moves during push"
+			localDeleted := name == "original origin" || name == "changed remote tip" || name == "origin moves during push" || name == "rewritten origin with push hook"
+			remoteDeleted := name == "original origin" || name == "checked-out local branch" || name == "paused rebase" || name == "origin moves during push" || name == "rewritten origin with push hook"
 			testutil.Equal(t, DeleteStackedTaskBranch(context.Background(), d, "child", repository, branch, tip), localDeleted || remoteDeleted)
 			testutil.Equal(t, gitBranchExists(repo, branch), !localDeleted)
 			testutil.Equal(t, gitBranchExists(first, branch), !remoteDeleted)
 			testutil.True(t, gitBranchExists(second, branch))
+			if name == "rewritten origin with push hook" {
+				_, err := os.Stat(hookMark)
+				testutil.NoError(t, err)
+			}
 			if remoteDeleted {
 				testutil.False(t, gitBranchExists(repo, "origin/"+branch))
 			}

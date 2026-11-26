@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -315,27 +316,36 @@ func DeleteRemoteBranchAtOrigin(ctx context.Context, repoDir, branch, expectTip,
 	if stamp == "" || stamp != expectedOrigin {
 		return errors.New("original origin changed or is unavailable")
 	}
-	const urlEnv = "ARGUS_RECLAIM_VERIFIED_PUSH_URL"
-	remote := "argus-reclaim-" + rand.Text()
-	configArgs := []string{
-		"--config-env=remote." + remote + ".url=" + urlEnv,
-		"--config-env=remote." + remote + ".pushurl=" + urlEnv,
-	}
-	refspecs, _, _ := RunTaskGit(ctx, repoDir, "config", "--null", "--get-all", "remote.origin.fetch")
-	for spec := range strings.SplitSeq(refspecs, "\x00") {
-		if spec != "" {
-			configArgs = append(configArgs, "-c", "remote."+remote+".fetch="+spec)
+	// Keep the remote name so Git invokes transport settings and hooks for
+	// origin. Replacing the pushurl list affects this invocation only.
+	configArgs := []string{"-c", "remote.origin.pushurl="}
+	configCount := 0
+	if raw := os.Getenv("GIT_CONFIG_COUNT"); raw != "" {
+		var err error
+		configCount, err = strconv.Atoi(raw)
+		if err != nil || configCount < 0 || configCount+len(targets) < configCount {
+			return errors.New("invalid Git configuration environment")
 		}
 	}
-	var result error
-	for _, url := range targets {
-		run := func(args ...string) (string, int, error) {
-			command := append(append([]string(nil), configArgs...), args...)
-			return runTaskGitWithEnv(ctx, repoDir, []string{urlEnv + "=" + url}, command...)
-		}
-		result = errors.Join(result, deleteLeasedRemoteBranch(ctx, run, remote, branch, expectTip, false))
+	env := []string{"GIT_CONFIG_COUNT=" + strconv.Itoa(configCount+len(targets))}
+	for i, target := range targets {
+		token := "argus-reclaim-" + rand.Text()
+		index := strconv.Itoa(configCount + i)
+		// get-url already applied Git's rewrite rules. Make the target the
+		// result of a new rewrite, so Git does not apply a second rule to it.
+		env = append(env, "GIT_CONFIG_KEY_"+index+"=url."+target+".insteadOf",
+			"GIT_CONFIG_VALUE_"+index+"="+token)
+		configArgs = append(configArgs, "-c", "remote.origin.pushurl="+token)
 	}
-	return result
+	run := func(args ...string) (string, int, error) {
+		command := append(append([]string(nil), configArgs...), args...)
+		return runTaskGitWithEnv(ctx, repoDir, env, command...)
+	}
+	resolved, _, err := run("remote", "get-url", "--push", "--all", "origin")
+	if err != nil || resolved != strings.Join(targets, "\n") {
+		return errors.New("unable to pin original Git push destinations")
+	}
+	return deleteLeasedRemoteBranch(ctx, run, "origin", branch, expectTip, false)
 }
 
 type taskGitCommand func(...string) (string, int, error)
