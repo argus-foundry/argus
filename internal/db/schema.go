@@ -129,6 +129,10 @@ func (d *DB) createTables() error {
 	// archive and unarchive, and out of full-row edits.
 	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN stop_generation INTEGER NOT NULL DEFAULT 0`) //nolint:errcheck
 
+	// The local TUI records which PTY a Hera reclaim stopped so the daemon
+	// can finish the task on that PTY's observed exit, even after a TUI restart.
+	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN hera_reclaim_pid INTEGER NOT NULL DEFAULT 0`) //nolint:errcheck
+
 	// archetype (add-diligence-profiles): the authoritative model-resolution key
 	// read by agent.ResolveModel. Idempotent ADD for databases predating it;
 	// existing rows read empty (no archetype → no profile consulted).

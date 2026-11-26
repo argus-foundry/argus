@@ -28,6 +28,7 @@ type HeraRecycleRunner struct {
 	idle             agent.ContentIdleTracker
 	now              func() time.Time
 	residentRecycler *taskRecycleRunner
+	daemonOwned      bool
 }
 
 // NewHeraRecycleRunner builds the production hera.RecycleRunner. Exported so
@@ -98,6 +99,22 @@ func (r *HeraRecycleRunner) Restart(taskID string, roleID int64) error {
 			}
 		}
 		return r.residentRecycler.restartResident(taskID, note)
+	}
+	if r.daemonOwned {
+		// The native TUI acquires this lock before it calls the adapter.
+		// The resident branch above delegates to its own locked runner.
+		unlock, acquired, err := r.database.TryLockSessionMutation(taskID)
+		if err != nil {
+			return err
+		}
+		if !acquired {
+			return agent.ErrSessionStarting
+		}
+		defer unlock()
+		task, err = r.database.Get(taskID)
+		if err != nil {
+			return err
+		}
 	}
 	meta, err := r.database.ListMeta(taskID, db.HeraMetaNamespace)
 	if err != nil {

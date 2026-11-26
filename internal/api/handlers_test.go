@@ -1867,6 +1867,52 @@ func TestHandleStreamOutput(t *testing.T) {
 	})
 }
 
+type managedSSEFixture struct {
+	transcriptKickSession
+	done         chan struct{}
+	attachedPID  int
+	attachedFrom uint64
+}
+
+func (s *managedSSEFixture) Done() <-chan struct{}  { return s.done }
+func (s *managedSSEFixture) RemoveWriter(io.Writer) {}
+func (s *managedSSEFixture) AddWriterFromPID(w io.Writer, offset uint64, pid int) bool {
+	s.attachedPID, s.attachedFrom = pid, offset
+	_, err := w.Write([]byte("last bytes"))
+	return err == nil
+}
+func (s *managedSSEFixture) ProcessDone(int) <-chan struct{} {
+	retired := make(chan struct{})
+	close(retired)
+	return retired
+}
+
+type managedSSERunner struct {
+	*agent.Runner
+	session *managedSSEFixture
+}
+
+func (r managedSSERunner) Get(string) agent.SessionHandle { return r.session }
+
+func TestHandleStreamOutputBindsRetiringProcess(t *testing.T) {
+	s, _ := testServer(t)
+	session := &managedSSEFixture{done: make(chan struct{})}
+	s.runner = managedSSERunner{Runner: agent.NewRunner(nil), session: session}
+	w := httptest.NewRecorder()
+	req := authedReq("GET", "/api/tasks/process/stream?since=4", "")
+	ctx, cancel := context.WithTimeout(req.Context(), time.Second)
+	defer cancel()
+
+	s.routes().ServeHTTP(w, req.WithContext(ctx))
+
+	testutil.Equal(t, w.Code, http.StatusOK)
+	testutil.Equal(t, w.Header().Get("X-Argus-Session-Pid"), "123")
+	testutil.Equal(t, session.attachedPID, 123)
+	testutil.Equal(t, session.attachedFrom, uint64(4))
+	testutil.Contains(t, w.Body.String(), "data: bGFzdCBieXRlcw==")
+	testutil.Contains(t, w.Body.String(), "event: exit")
+}
+
 // --- handleListBackends ---
 
 func TestHandleListBackends(t *testing.T) {

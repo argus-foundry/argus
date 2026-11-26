@@ -2,6 +2,8 @@
 
 - **Hold the task session lock through both the runner call and its database write.** The daemon and native TUI share this lock across processes so an old PTY's stop cannot overwrite a replacement's status. Keep the lock files in place to preserve inode identity, and capture the stop generation when queuing a deferred TUI restart so a confirmed stop can cancel it.
 
+- **Supervisor exit records, stream cursors, and scoped terminal changes follow the process PID.** The daemon checks the supervisor under the task session lock before persisting a relayed exit. A retiring stream removes only its own handle and writers, and a replacement starts with a fresh process cursor.
+
 - **MCP client deadlines must exceed the server's longest inbox wait.** Claude's HTTP/SSE per-request default and Codex's per-tool default are 60s, shorter than `hera_inbox`'s 120s cap; `internal/mcplimits` derives the managed 150s client timeout with margin (milliseconds for Claude/OpenCode, seconds for Codex). Progress notifications do not extend Claude's per-server deadline; changed spawn settings require a supervisor restart and a newly spawned session to verify a silent 90s inbox wait.
 
 - **Task→Complete requires an observed clean exit, and the owning process persists it.** The daemon and standalone TUI use `ExitInfo.CleanExit()` (`!Stopped && Err == "" && !StreamLost`). An attached TUI uses daemon exit notifications to update the matching pane. A queued notification may refer to an earlier PTY, so it cannot persist task status or transcript ID. A missing RPC result or an inferred exit can leave a task in InReview, but cannot establish completion.

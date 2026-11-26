@@ -400,10 +400,11 @@ func TestRmSessRPCFail(t *testing.T) {
 		}
 	})
 	c.mu.Lock()
-	c.sessions["t"] = newRemoteSession("t", c)
+	rs := newRemoteSession("t", c)
+	c.sessions["t"] = rs
 	c.mu.Unlock()
 
-	c.removeSession("t")
+	c.removeSession(rs)
 
 	select {
 	case info := <-exitCh:
@@ -628,10 +629,11 @@ func TestRmSessZeroExit(t *testing.T) {
 	exitCh := make(chan daemon.ExitInfo, 1)
 	c.OnSessionExit(func(_ string, info daemon.ExitInfo) { exitCh <- info })
 	c.mu.Lock()
-	c.sessions["t"] = newRemoteSession("t", c)
+	rs := newRemoteSession("t", c)
+	c.sessions["t"] = rs
 	c.mu.Unlock()
 
-	c.removeSession("t")
+	c.removeSession(rs)
 
 	select {
 	case info := <-exitCh:
@@ -649,10 +651,11 @@ func TestRmSessRealExit(t *testing.T) {
 	exitCh := make(chan daemon.ExitInfo, 1)
 	c.OnSessionExit(func(_ string, info daemon.ExitInfo) { exitCh <- info })
 	c.mu.Lock()
-	c.sessions["t"] = newRemoteSession("t", c)
+	rs := newRemoteSession("t", c)
+	c.sessions["t"] = rs
 	c.mu.Unlock()
 
-	c.removeSession("t")
+	c.removeSession(rs)
 
 	select {
 	case info := <-exitCh:
@@ -685,10 +688,11 @@ func TestDaemonOnlyBounce(t *testing.T) {
 	d := daemon.New(database)
 	d.UseSupervisorRunner(c) // wires c.OnSessionExit to the daemon's exit sink
 	c.mu.Lock()
-	c.sessions[task.ID] = newRemoteSession(task.ID, c)
+	rs := newRemoteSession(task.ID, c)
+	c.sessions[task.ID] = rs
 	c.mu.Unlock()
 
-	c.removeSession(task.ID) // the stream-retry "alive=false" path
+	c.removeSession(rs) // the stream-retry "alive=false" path
 
 	got, err := database.Get(task.ID)
 	testutil.NoError(t, err)

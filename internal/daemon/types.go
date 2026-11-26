@@ -153,7 +153,11 @@ type BootInfoResp struct {
 // identifies the launch recovery behavior that makes this field necessary.
 // v14 carries StartReq.ResumeOnly: automatic recovery must never launch fresh.
 // v15 adds AttachableSession, typed start conflicts, and PID-scoped width repair.
-const ProtocolVersion = 15
+// v16 carries the producing PID in exit records, identifies the last retired
+// process, and scopes stream attachment and exit lookups to the selected PID.
+// ResizeForPID and StopRerenderForPID use separate RPC methods so stale
+// supervisors cannot silently ignore the target of a width repair.
+const ProtocolVersion = 16
 
 // SupervisorProtocolMatch reports whether a supervisor's handshake version
 // equals the daemon's. A mismatch is NOT fatal and NEVER triggers an auto-
@@ -265,7 +269,8 @@ type StartResp struct {
 
 // TaskIDReq is an RPC request that identifies a single task.
 type TaskIDReq struct {
-	TaskID string
+	TaskID      string
+	ExpectedPID int
 }
 
 // AttachableSessionResp carries the session owner's resume admission decision.
@@ -279,8 +284,9 @@ type AttachableSessionResp struct {
 // agent.StopTree, so a pre-v9 peer's bare {TaskID} request keeps meaning a
 // full stop (stop-finished-task-sessions).
 type StopReq struct {
-	TaskID string
-	Scope  agent.StopScope
+	TaskID      string
+	Scope       agent.StopScope
+	ExpectedPID int
 }
 
 // StatusResp is a generic success/error RPC response.
@@ -297,6 +303,7 @@ type SessionInfo struct {
 	Alive            bool
 	Idle             bool
 	PID              int
+	LastExitPID      int
 	Cols             int
 	Rows             int
 	InitialCols      int // PTY width at session start; immutable
@@ -318,9 +325,10 @@ type WriteReq struct {
 
 // ResizeReq is the RPC request to resize a session's PTY.
 type ResizeReq struct {
-	TaskID string
-	Rows   uint16
-	Cols   uint16
+	TaskID      string
+	Rows        uint16
+	Cols        uint16
+	ExpectedPID int
 }
 
 // KickReq is the RPC request to kick-rerender a session (P2, protocol v2). It
@@ -390,8 +398,9 @@ type RecycleReq struct {
 // reconnect to TotalWritten() at attach time so retries don't duplicate
 // bytes already in the client's local ring.
 type StreamHeader struct {
-	TaskID string `json:"task_id"`
-	Since  uint64 `json:"since,omitempty"`
+	TaskID      string `json:"task_id"`
+	Since       uint64 `json:"since,omitempty"`
+	ExpectedPID int    `json:"expected_pid,omitempty"`
 }
 
 // ListResp is the RPC response for listing all sessions.

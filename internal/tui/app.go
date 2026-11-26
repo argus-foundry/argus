@@ -2419,13 +2419,20 @@ func (a *App) HandleSessionExitOwned(taskID string, info daemon.ExitInfo, owner 
 		uxlog.Log("[tui] stream lost: task=%s — status unchanged, process may still be alive", taskID)
 		return
 	}
+	if info.PendingRestart {
+		uxlog.Log("[tui] session view retained for owner-managed restart task=%s", taskID)
+		return
+	}
 	uxlog.Log("[tui] session exit (daemon): task=%s err=%s stopped=%v pending=%v lastOutput=%d bytes",
 		taskID, info.Err, info.Stopped, info.PendingRestart, len(info.LastOutput))
 	a.tapp.QueueUpdateDraw(func() {
 		if a.agentState.TaskID == taskID {
-			if bound := a.agentPane.Session(); bound != nil && bound != owner && bound.Alive() {
-				uxlog.Log("[tui] ignored retired session exit task=%s", taskID)
-				return
+			if bound := a.agentPane.Session(); bound != nil && bound.Alive() {
+				pidKnown, _ := bound.(interface{ PID() int })
+				if bound != owner || (info.PID > 0 && pidKnown != nil && pidKnown.PID() != info.PID) {
+					uxlog.Log("[tui] ignored retired session exit task=%s", taskID)
+					return
+				}
 			}
 		}
 		a.handleSessionExitUI(taskID, info.CleanExit(), info.PendingRestart)
@@ -6749,7 +6756,7 @@ func (a *App) kickRerenderCore(task *model.Task, sess agent.SessionHandle, panel
 					}()
 					return
 				}
-				generation, unlock, err := a.lockDeferredSessionRestart(taskID, true)
+				generation, unlock, err := a.lockDeferredSessionRestart(taskID, sess)
 				if err != nil {
 					a.setRerendering(taskID, false)
 					a.invalidateAttachCache(taskID)
@@ -6772,7 +6779,7 @@ func (a *App) kickRerenderCore(task *model.Task, sess agent.SessionHandle, panel
 				a.pendingRerenderRestart[taskID] = generation
 				// Cooperative repair preserves descendants; an unresponsive
 				// agent's escalation also reaps its process tree.
-				if err := sess.StopScoped(agent.StopRerender); err != nil {
+				if err := agent.StopRerenderForPID(a.runner, taskID, pid); err != nil {
 					a.setRerenderPending(taskID)
 					uxlog.Log("[tui] rerender: stop failed task=%s err=%v", taskID, err)
 					if forced {
@@ -6951,7 +6958,7 @@ func (a *App) hasPendingRerenderRestart(taskID string) bool {
 // lockDeferredSessionRestart captures the native task's stop generation before
 // signaling its PTY. Hold the lock until the restart intent and stop request
 // are both registered. A live PTY can still be draining after a confirmed stop.
-func (a *App) lockDeferredSessionRestart(taskID string, live bool) (int64, func(), error) {
+func (a *App) lockDeferredSessionRestart(taskID string, expected agent.SessionHandle) (int64, func(), error) {
 	d, ok := a.db.(*db.DB)
 	if !ok {
 		return 0, func() {}, nil
@@ -6968,13 +6975,13 @@ func (a *App) lockDeferredSessionRestart(taskID string, live bool) (int64, func(
 		unlock()
 		return 0, nil, err
 	}
-	if live && generation != 0 {
+	if expected != nil {
 		session, err := agent.AttachableSession(a.runner, taskID)
 		if err != nil {
 			unlock()
 			return 0, nil, err
 		}
-		if session == nil {
+		if session == nil || session.PID() != expected.PID() {
 			unlock()
 			return 0, nil, agent.ErrSessionNotFound
 		}
@@ -8355,9 +8362,12 @@ func (a *App) switchSession(newID, title string) {
 		}()
 		return
 	}
-	sess := a.agentPane.Session()
+	sess, _ := a.agentPane.Session().(agent.SessionHandle)
 	live := sess != nil && sess.Alive()
-	generation, release, err := a.lockDeferredSessionRestart(taskID, live)
+	if !live {
+		sess = nil
+	}
+	generation, release, err := a.lockDeferredSessionRestart(taskID, sess)
 	if err != nil {
 		a.statusbar.SetError("Session switch failed: " + err.Error())
 		uxlog.Log("[tui] session switch: restart unavailable task=%s err=%v", taskID, err)
@@ -8395,7 +8405,7 @@ func (a *App) switchSession(newID, title string) {
 	a.invalidateTasksChangeGate()
 	uxlog.Log("[tui] session switch: task %s → session %s (%q)", taskID, newID, title)
 
-	if sess != nil && sess.Alive() {
+	if live {
 		// Live session: queue the in-place restart, then stop. The exit
 		// handler reads the freshly persisted SessionID and resumes it.
 		a.pendingRerenderRestart[taskID] = generation

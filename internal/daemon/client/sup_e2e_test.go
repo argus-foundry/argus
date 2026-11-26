@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -372,6 +373,139 @@ func TestSupStop(t *testing.T) {
 	waitStatus(t, database, task.ID, model.StatusInReview)
 }
 
+func TestSupLateExit(t *testing.T) {
+	d, sc, database := supE2E(t)
+	// Delay the real supervisor EOF relay at the scheduling boundary,
+	// after the client received the supervisor's actual GetExitInfo reply.
+	arrived, release, delivered := make(chan daemon.ExitInfo, 1), make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	sc.mu.Lock()
+	relay := sc.onSessionExitOwned
+	sc.mu.Unlock()
+	first := true
+	var relayMu sync.Mutex
+	sc.OnSessionExitOwned(func(id string, info daemon.ExitInfo, owner agent.SessionHandle) {
+		relayMu.Lock()
+		delay := first
+		first = false
+		relayMu.Unlock()
+		if delay {
+			arrived <- info
+			<-release
+		}
+		relay(id, info, owner)
+		if delay {
+			close(delivered)
+		}
+	})
+
+	task := startE2E(t, d, sc, database, "late-exit", "printf 'ready\\n'; exec sleep 30")
+	old := sc.Get(task.ID)
+	oldPID := old.PID()
+	testutil.NoError(t, database.RecordResumedSession(task.ID, oldPID, "", ""))
+	deadline := time.Now().Add(3 * time.Second)
+	for old.TotalWritten() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	testutil.Contains(t, string(old.RecentOutput()), "ready")
+	testutil.NoError(t, sc.StopSettled(task.ID))
+	testutil.NoError(t, database.RecordSessionStop(task.ID))
+	select {
+	case info := <-arrived:
+		testutil.True(t, info.Stopped)
+		testutil.False(t, info.StreamLost)
+		testutil.Equal(t, info.PID, oldPID)
+	case <-time.After(3 * time.Second):
+		t.Fatal("outgoing supervisor exit was not delivered")
+	}
+
+	unlock, err := database.LockSessionMutation(t.Context(), task.ID)
+	testutil.NoError(t, err)
+	next, attached, err := sc.StartOrReattach(task, database.Config(), 24, 80, false)
+	testutil.NoError(t, err)
+	testutil.False(t, attached)
+	testutil.True(t, next.PID() != oldPID)
+	testutil.NoError(t, database.RecordResumedSession(task.ID, next.PID(), "", ""))
+	unlock()
+	t.Cleanup(func() { _ = sc.Stop(task.ID) })
+	testutil.NoError(t, d.Clipboard().Set(task.ID, "replacement output"))
+
+	close(release)
+	select {
+	case <-delivered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("outgoing relay did not finish")
+	}
+	current, err := database.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, current.AgentPID, next.PID())
+	testutil.Equal(t, current.Status, model.StatusInProgress)
+	info, err := sc.ProbeSession(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, info.Alive)
+	testutil.Equal(t, info.PID, next.PID())
+	staged, ok := d.Clipboard().Get(task.ID)
+	testutil.True(t, ok)
+	testutil.Equal(t, staged, "replacement output")
+}
+
+func TestSupReclaim(t *testing.T) {
+	d, sc, database := supE2E(t)
+	for _, tc := range []struct {
+		id        string
+		pidOffset int
+		want      model.Status
+	}{
+		{id: "reclaim-matching", want: model.StatusComplete},
+		{id: "reclaim-stale", pidOffset: 1, want: model.StatusInReview},
+	} {
+		task := startE2E(t, d, sc, database, tc.id, "printf 'ready\\n'; exec sleep 30")
+		sess := sc.Get(task.ID)
+		testutil.NoError(t, database.RecordResumedSession(task.ID, sess.PID(), "", ""))
+		testutil.NoError(t, database.SetArchived(task.ID, true))
+		armed, err := database.ArmHeraReclaimStop(task.ID, sess.PID()+tc.pidOffset)
+		testutil.NoError(t, err)
+		testutil.True(t, armed)
+		deadline := time.Now().Add(3 * time.Second)
+		for sess.TotalWritten() == 0 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		testutil.Contains(t, string(sess.RecentOutput()), "ready")
+		testutil.NoError(t, sc.StopSettled(task.ID))
+		waitStatus(t, database, task.ID, tc.want)
+	}
+}
+
+func TestSupKickFail(t *testing.T) {
+	d, sc, database := supE2E(t)
+	task := startE2E(t, d, sc, database, "kick-fail", "printf 'ready\\n'; exec sleep 30")
+	sess := sc.Get(task.ID)
+	oldPID := sess.PID()
+	deadline := time.Now().Add(3 * time.Second)
+	for sess.TotalWritten() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	testutil.Contains(t, string(sess.RecentOutput()), "ready")
+	restore := agent.SetPrelaunchForTest(func(context.Context, *model.Task, config.Config) error {
+		return errors.New("test restart failure")
+	})
+	t.Cleanup(restore)
+
+	testutil.NoError(t, sc.KickWidthRerenderForPID(task, database.Config(), 30, 105, oldPID))
+	waitStatus(t, database, task.ID, model.StatusInReview)
+	ended := sc.sessionExitInfo(sess.(*RemoteSession))
+	testutil.Equal(t, ended.PID, oldPID)
+	testutil.False(t, ended.PendingRestart)
+	testutil.False(t, ended.StreamLost)
+	testutil.Contains(t, ended.Err, "test restart failure")
+}
+
 func TestSupDrain(t *testing.T) {
 	d, sc, database := supE2E(t)
 	// The trap has to run in the session leader. BuildCmd wraps the backend
@@ -403,7 +537,7 @@ func TestSupDrain(t *testing.T) {
 	stream.mu.Unlock()
 	session, err := client.AttachableSession(task.ID)
 	testutil.ErrorIs(t, err, agent.ErrSessionStarting)
-	testutil.Nil(t, session)
+	testutil.True(t, session == nil)
 	testutil.Equal(t, stream.PID(), ownerPID+1)
 	stream.mu.Lock()
 	stream.pid = ownerPID
@@ -417,7 +551,7 @@ func TestSupDrain(t *testing.T) {
 	session, reattached, err = client.StartOrReattach(task, database.Config(), 24, 80, false)
 	testutil.ErrorIs(t, err, agent.ErrSessionStarting)
 	testutil.False(t, reattached)
-	testutil.Nil(t, session)
+	testutil.True(t, session == nil)
 	_, err = client.Start(task, database.Config(), 24, 80, false)
 	testutil.ErrorIs(t, err, agent.ErrSessionStarting)
 

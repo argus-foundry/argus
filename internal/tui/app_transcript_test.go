@@ -40,6 +40,7 @@ func TestMaybeKickRerenderAtWidth_TranscriptDeferredThenRetry(t *testing.T) {
 	})
 	seedTUITranscript(t, home, task.Worktree, task.SessionID, time.Time{})
 	readUI(t, app.tapp, func() {
+		app.runner = getRunner{Runner: agent.NewRunner(nil), sess: sess}
 		app.maybeKickRerenderAtWidth(task, sess, 98, nil)
 	})
 	deadline = time.Now().Add(uiTimeout)
@@ -51,9 +52,12 @@ func TestMaybeKickRerenderAtWidth_TranscriptDeferredThenRetry(t *testing.T) {
 
 type transcriptProbeRunner struct {
 	*agent.Runner
+	sess  agent.SessionHandle
 	err   error
 	calls atomic.Int32
 }
+
+func (r *transcriptProbeRunner) Get(string) agent.SessionHandle { return r.sess }
 
 func (r *transcriptProbeRunner) ResumableSessionAvailable(*model.Task, config.Config) (bool, error) {
 	r.calls.Add(1)
@@ -70,7 +74,8 @@ func TestKickUsesRemoteTranscriptProbe(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fails := tc.fails
 			t.Setenv("HOME", t.TempDir())
-			r := &transcriptProbeRunner{Runner: agent.NewRunner(nil)}
+			sess := &fakeKickSession{idle: !tc.busy, alive: true, initCols: 80}
+			r := &transcriptProbeRunner{Runner: agent.NewRunner(nil), sess: sess}
 			if fails {
 				r.err = os.ErrPermission
 			}
@@ -80,9 +85,10 @@ func TestKickUsesRemoteTranscriptProbe(t *testing.T) {
 			defer stop()
 			task := &model.Task{ID: "remote", Backend: "claude", Worktree: t.TempDir(), SessionID: "unseeded"}
 			testutil.NoError(t, d.Add(task))
-			sess := &fakeKickSession{idle: !tc.busy, alive: true, initCols: 80}
 			var deferred atomic.Bool
-			readUI(t, app.tapp, func() { app.maybeKickRerenderAtWidth(task, sess, 98, func() { deferred.Store(true) }) })
+			readUI(t, app.tapp, func() {
+				app.maybeKickRerenderAtWidth(task, sess, 98, func() { deferred.Store(true) })
+			})
 			deadline := time.Now().Add(uiTimeout)
 			for time.Now().Before(deadline) && !sess.stopCalled.Load() && !deferred.Load() {
 				time.Sleep(10 * time.Millisecond)

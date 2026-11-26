@@ -335,11 +335,12 @@ func TestStreamLost_RemoveSession(t *testing.T) {
 
 	// Manually add a session to the map.
 	c.mu.Lock()
-	c.sessions["t-stream-lost"] = newRemoteSession("t-stream-lost", c)
+	rs := newRemoteSession("t-stream-lost", c)
+	c.sessions["t-stream-lost"] = rs
 	c.mu.Unlock()
 
 	// Call removeSessionStreamLost — should fire StreamLost=true.
-	c.removeSessionStreamLost("t-stream-lost")
+	c.removeSessionStreamLost(rs)
 
 	select {
 	case info := <-exitCh:
@@ -391,7 +392,7 @@ func TestDoneClose_StreamLost(t *testing.T) {
 
 	// removeSessionStreamLost should fire with StreamLost=true.
 	// This is what connectStream's <-rs.done case now calls.
-	c.removeSessionStreamLost("t-done-close")
+	c.removeSessionStreamLost(rs)
 
 	select {
 	case info := <-exitCh:

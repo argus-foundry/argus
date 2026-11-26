@@ -917,7 +917,10 @@ func TestMaybeKickRerenderAtWidth_KicksOnGenuineDrift(t *testing.T) {
 	seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 	sess := &fakeKickSession{idle: true, alive: true, initCols: 20}
 
-	readUI(t, app.tapp, func() { app.maybeKickRerenderAtWidth(task, sess, 120, nil) })
+	readUI(t, app.tapp, func() {
+		app.runner = getRunner{Runner: runner, sess: sess}
+		app.maybeKickRerenderAtWidth(task, sess, 120, nil)
+	})
 
 	deadline := time.Now().Add(uiTimeout)
 	stopped := false
@@ -1034,7 +1037,10 @@ func TestMaybeKickRerenderAtWidth_LaterNarrowRebindStillKicksAfterDeferredWideBi
 	// initCols (80) but nowhere near the 142 the content actually committed
 	// to while busy.
 	sess.idle = true
-	readUI(t, app.tapp, func() { app.maybeKickRerenderAtWidth(task, sess, 90, nil) })
+	readUI(t, app.tapp, func() {
+		app.runner = getRunner{Runner: runner, sess: sess}
+		app.maybeKickRerenderAtWidth(task, sess, 90, nil)
+	})
 
 	deadline = time.Now().Add(uiTimeout)
 	stopped := false
@@ -4588,6 +4594,28 @@ func TestApp_HandleSessionExit_DispatchesToUI(t *testing.T) {
 	})
 }
 
+func TestApp_HandleSessionExit_KeepsManagedRestartBound(t *testing.T) {
+	d := testDB(t)
+	app := New(d, agent.NewRunner(nil), true)
+	task := &model.Task{ID: "restart-view", Name: "Restart view", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	_, stop := wireApp(t, app)
+	t.Cleanup(stop)
+	session := &fakeKickSession{pid: 32, alive: true}
+	readUI(t, app.tapp, func() {
+		app.mode = modeAgent
+		app.agentState.Reset(task.ID, task.Name)
+		app.agentPane.SetSession(session)
+	})
+
+	app.HandleSessionExitOwned(task.ID, daemon.ExitInfo{Stopped: true, PendingRestart: true, PID: 32}, session)
+	app.HandleSessionExitOwned(task.ID, daemon.ExitInfo{Stopped: true, PID: 31}, session)
+
+	readUI(t, app.tapp, func() {
+		testutil.True(t, app.agentPane.Session() == session)
+	})
+}
+
 func TestApp_HandleSessionExitUI_TaskNotFound(t *testing.T) {
 	d := testDB(t)
 	runner := agent.NewRunner(nil)
@@ -5938,7 +5966,10 @@ func TestMaybeKickRerenderAtWidth_DeferredNarrowBindKeepsTheWideAnchor(t *testin
 	// The agent finally goes idle and the pane rebinds at the SAME 90. Both
 	// gates must recognize the outstanding 142 drift and kick.
 	sess.idle = true
-	readUI(t, app.tapp, func() { app.maybeKickRerenderAtWidth(task, sess, 90, nil) })
+	readUI(t, app.tapp, func() {
+		app.runner = getRunner{Runner: runner, sess: sess}
+		app.maybeKickRerenderAtWidth(task, sess, 90, nil)
+	})
 
 	deadline := time.Now().Add(uiTimeout)
 	for time.Now().Before(deadline) && !sess.stopCalled.Load() {

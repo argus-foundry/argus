@@ -373,7 +373,9 @@ const (
 	// v22: AttachableSession checks owner-side retirement and replacement
 	// state before reuse. External starts cannot take a queued restart's slot.
 	// PID-scoped width repairs verify the process when claiming a restart.
-	SupervisorStreamSurface = 22
+	// v23: exit records, stream attachment, resize, and width-repair stops
+	// carry the producing or targeted PID across each owner boundary.
+	SupervisorStreamSurface = 23
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -632,7 +634,7 @@ var SupervisorStreamPaths = []string{
 // message prints the computed digest to paste back here.
 const (
 	SpawnSurfaceDigest  = "d5dc8e881ff9ce381a59e01eb592ab9b44cf02d1d1b44fe96001a8e2aed737e3"
-	StreamSurfaceDigest = "697baa6ba2270ec42fbe170659a88dbdd9eaa9702ffab7e68c880b8d7def1a31"
+	StreamSurfaceDigest = "4b855493f6504c8c1c555da600e75070e675e569fc81b11b308a418fbafec8c2"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

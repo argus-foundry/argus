@@ -92,17 +92,29 @@ func TestRerenderNow_ConfirmedStopFencesDeferredRestart(t *testing.T) {
 }
 
 func TestRerenderNow_ConfirmedStopPreventsKickOfDrainingSession(t *testing.T) {
-	r := newNowRig(t, "hk-stopping", 20)
-	d := r.app.db.(*db.DB)
-	testutil.NoError(t, d.RecordSessionStop(r.task.ID))
-	readUI(t, r.app.tapp, func() {
-		r.app.runner = stoppingRerenderRunner{getRunner{Runner: agent.NewRunner(nil), sess: r.sess}}
-	})
-	r.press(t, 100, nil, nil, "error")
-	testutil.False(t, r.sess.stopCalled.Load())
-	readUI(t, r.app.tapp, func() {
-		testutil.False(t, r.app.hasPendingRerenderRestart(r.task.ID))
-	})
+	for _, tc := range []struct {
+		name         string
+		recordedStop bool
+	}{
+		{name: "persisted stop", recordedStop: true},
+		{name: "owner-only stop"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newNowRig(t, "hk-stopping", 20)
+			if tc.recordedStop {
+				d := r.app.db.(*db.DB)
+				testutil.NoError(t, d.RecordSessionStop(r.task.ID))
+			}
+			readUI(t, r.app.tapp, func() {
+				r.app.runner = stoppingRerenderRunner{getRunner{Runner: agent.NewRunner(nil), sess: r.sess}}
+			})
+			r.press(t, 100, nil, nil, "error")
+			testutil.False(t, r.sess.stopCalled.Load())
+			readUI(t, r.app.tapp, func() {
+				testutil.False(t, r.app.hasPendingRerenderRestart(r.task.ID))
+			})
+		})
+	}
 }
 
 type stoppingRerenderRunner struct {

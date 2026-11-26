@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -101,15 +102,18 @@ func TestResumeRefusesDrainingStoppedSession(t *testing.T) {
 	testutil.NoError(t, err)
 	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(task.Worktree, "finish"), nil, 0600) })
 	deadline := time.Now().Add(6 * time.Second)
-	for !initial.IsIdle() && time.Now().Before(deadline) {
+	for (!initial.IsIdle() || !strings.Contains(string(initial.RecentOutput()), "ready")) && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	testutil.True(t, initial.IsIdle())
+	testutil.Contains(t, string(initial.RecentOutput()), "ready")
 
 	stop := httptest.NewRecorder()
 	s.routes().ServeHTTP(stop, authedReq(http.MethodPost, "/api/tasks/"+task.ID+"/stop", ""))
 	testutil.Equal(t, stop.Code, http.StatusOK)
-	testutil.True(t, initial.Alive())
+	if !initial.Alive() {
+		t.Fatal("the TERM-resistant PTY retired before the resume checks")
+	}
 	resume := httptest.NewRecorder()
 	s.routes().ServeHTTP(resume, authedReq(http.MethodPost, "/api/tasks/"+task.ID+"/resume", ""))
 	testutil.Equal(t, resume.Code, http.StatusConflict)

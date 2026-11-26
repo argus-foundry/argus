@@ -1,13 +1,45 @@
 package db
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/testutil"
 )
+
+func TestLockSessionMutationWaitsForReleaseOrCancellation(t *testing.T) {
+	d := testDB(t)
+	synctest.Test(t, func(t *testing.T) {
+		unlock, acquired, err := d.TryLockSessionMutation("task")
+		testutil.NoError(t, err)
+		testutil.True(t, acquired)
+		defer unlock()
+
+		ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
+		defer cancel()
+		release, err := d.LockSessionMutation(ctx, "task")
+		testutil.Nil(t, release)
+		testutil.ErrorIs(t, err, context.DeadlineExceeded)
+
+		results := make(chan error, 1)
+		go func() {
+			release, err := d.LockSessionMutation(t.Context(), "task")
+			if release != nil {
+				release()
+			}
+			results <- err
+		}()
+		synctest.Wait()
+		testutil.Equal(t, len(results), 0)
+		unlock()
+		testutil.NoError(t, <-results)
+	})
+}
 
 func TestTryLockSessionMutationDisk(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.sql")

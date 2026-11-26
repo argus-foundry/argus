@@ -267,6 +267,11 @@ func (r *Runner) start(task *model.Task, cfg config.Config, rows, cols uint16, r
 			// over and consumers should fall back to direct session lookup.
 			r.mu.Lock()
 			delete(r.pendingRestart, task.ID)
+			if rerr != nil {
+				// The failed restart still owes its outgoing owner's exit
+				// notification. Keep the slot reserved through that callback.
+				r.sessions[task.ID] = nil
+			}
 			r.mu.Unlock()
 			if rerr != nil {
 				// Restart failed. The daemon's onFinish skipped the DB
@@ -278,6 +283,9 @@ func (r *Runner) start(task *model.Task, cfg config.Config, rows, cols uint16, r
 				if r.onFinish != nil {
 					r.onFinish(task.ID, rerr, true, lastOutput)
 				}
+				r.mu.Lock()
+				delete(r.sessions, task.ID)
+				r.mu.Unlock()
 			}
 		}
 	}()
@@ -619,14 +627,14 @@ func (r *Runner) Stop(taskID string) error { return r.StopScoped(taskID, StopTre
 
 // StopScoped stops a running session with the given scope (see StopScope).
 func (r *Runner) StopScoped(taskID string, scope StopScope) error {
-	return r.stopScoped(taskID, scope, false)
+	return r.stopScoped(taskID, scope, false, 0)
 }
 
 func (r *Runner) StopSettled(taskID string) error {
-	return r.stopScoped(taskID, StopTree, true)
+	return r.stopScoped(taskID, StopTree, true, 0)
 }
 
-func (r *Runner) stopScoped(taskID string, scope StopScope, settled bool) error {
+func (r *Runner) stopScoped(taskID string, scope StopScope, settled bool, expectedPID int) error {
 	r.mu.Lock()
 	sess, reserved := r.sessions[taskID]
 	if settled && (r.pendingRestart[taskID] != nil || (reserved && sess == nil)) {
@@ -636,6 +644,16 @@ func (r *Runner) stopScoped(taskID string, scope StopScope, settled bool) error 
 	if sess == nil || (settled && !sess.Alive()) {
 		r.mu.Unlock()
 		return ErrSessionNotFound
+	}
+	if expectedPID > 0 {
+		if sess.PID() != expectedPID {
+			r.mu.Unlock()
+			return ErrSessionNotFound
+		}
+		if r.stopped[taskID] {
+			r.mu.Unlock()
+			return ErrSessionStarting
+		}
 	}
 	r.stopped[taskID] = true
 	r.mu.Unlock()

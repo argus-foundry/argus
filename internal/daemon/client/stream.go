@@ -35,6 +35,7 @@ func streamBackoff() []time.Duration { return *streamBackoffPtr.Load() }
 func (rs *RemoteSession) connectStream(sockPath string) {
 	backoff := streamBackoff()
 	maxStreamRetries := len(backoff)
+	waitingRestart := false
 	for attempt := 0; attempt <= maxStreamRetries; attempt++ {
 		// Check if the client was closed (e.g., daemon restart replaced it).
 		// This stops stale goroutines from flooding the new daemon with
@@ -62,6 +63,34 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 		}
 
 		rs.streamAttempt = attempt
+		if waitingRestart {
+			if !rs.client.ownsSession(rs) {
+				rs.close()
+				return
+			}
+			info, err := rs.client.ProbeSession(rs.taskID)
+			if err != nil {
+				continue
+			}
+			if !info.Alive {
+				// A failed kick replaces the outgoing PID's pending record
+				// with a confirmed terminal exit.
+				exit := rs.client.sessionExitInfo(rs)
+				if !exit.StreamLost && !exit.PendingRestart {
+					rs.client.finishSession(rs, exit)
+					return
+				}
+				continue
+			}
+			if info.PID == 0 || info.PID == rs.PID() {
+				continue
+			}
+			if !rs.client.adoptRestart(rs, info) {
+				rs.close()
+				return
+			}
+			waitingRestart = false
+		}
 		exited, daemonDown := rs.streamOnce(sockPath)
 		if daemonDown {
 			// Can't reach daemon — not a confirmed process exit. A restarting
@@ -74,14 +103,16 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 			}
 			uxlog.Log("stream: gave up, daemon unreachable after %d retries task=%s, treating as stream lost", maxStreamRetries, rs.taskID)
 			rs.close()
-			rs.client.removeSessionStreamLost(rs.taskID)
+			rs.client.removeSessionStreamLost(rs)
 			return
 		}
 		if exited {
 			// Process actually exited — fire the exit callback.
-			rs.close()
-			rs.client.removeSession(rs.taskID)
-			return
+			if !rs.client.removeSession(rs) {
+				return
+			}
+			waitingRestart = true
+			continue
 		}
 
 		// Stream dropped but process is still alive — check if we
@@ -94,7 +125,7 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 			// marking the task Complete.
 			uxlog.Log("stream: session closed externally task=%s, treating as stream lost", rs.taskID)
 			rs.close() // no-op (done already closed), but consistent with other exit paths
-			rs.client.removeSessionStreamLost(rs.taskID)
+			rs.client.removeSessionStreamLost(rs)
 			return
 		default:
 		}
@@ -103,7 +134,42 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 	// Exhausted retries — stream lost, not a confirmed process exit.
 	uxlog.Log("stream: gave up after %d retries task=%s, treating as stream lost", maxStreamRetries, rs.taskID)
 	rs.close()
-	rs.client.removeSessionStreamLost(rs.taskID)
+	rs.client.removeSessionStreamLost(rs)
+}
+
+func (c *Client) ownsSession(rs *RemoteSession) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sessions[rs.taskID] == rs
+}
+
+// adoptRestart changes the process behind a handle only after the outgoing
+// owner confirmed an in-place restart. Explicit starts install their own handle.
+func (c *Client) adoptRestart(rs *RemoteSession, info daemon.SessionInfo) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessions[rs.taskID] != rs {
+		return false
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if !rs.Alive() {
+		return false
+	}
+	uxlog.Log("stream: following managed restart task=%s old_pid=%d pid=%d", rs.taskID, rs.pid, info.PID)
+	for w := range rs.pidBoundWriters {
+		rs.removeWriterLocked(w)
+	}
+	if rs.processDone != nil {
+		close(rs.processDone)
+		rs.processDone = nil
+	}
+	rs.pid, rs.info = info.PID, info
+	rs.streamBase = rs.buf.TotalWritten()
+	rs.buf.Reset()
+	rs.composerTyped = false
+	rs.composerGeneration++
+	return true
 }
 
 // streamOnce opens a single stream connection and reads until EOF or error.
@@ -148,9 +214,14 @@ func (rs *RemoteSession) streamOnce(sockPath string) (processExited, daemonDown 
 	// already written to rs.buf, preventing duplicate content from being
 	// re-emulated by x/vt (e.g., a stale status bar bake-in).
 	enc := json.NewEncoder(conn)
+	rs.mu.Lock()
+	pid := rs.pid
+	since := rs.buf.TotalWritten() - rs.streamBase
+	rs.mu.Unlock()
 	if err := enc.Encode(daemon.StreamHeader{
-		TaskID: rs.taskID,
-		Since:  rs.buf.TotalWritten(),
+		TaskID:      rs.taskID,
+		Since:       since,
+		ExpectedPID: pid,
 	}); err != nil {
 		uxlog.Log("stream: ENCODE HEADER FAILED task=%s err=%v", rs.taskID, err)
 		alive, reachable := rs.isSessionAlive()
@@ -225,5 +296,8 @@ func (rs *RemoteSession) isSessionAlive() (alive bool, daemonReachable bool) {
 		return false, false
 	}
 	uxlog.Log("stream: SessionStatus task=%s alive=%v pid=%d", rs.taskID, info.Alive, info.PID)
+	if pid := rs.PID(); pid > 0 && info.PID > 0 && info.PID != pid {
+		return false, true
+	}
 	return info.Alive, true
 }

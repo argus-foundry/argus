@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,7 +40,10 @@ type RemoteSession struct {
 	mu                 sync.Mutex
 	buf                *agent.RingBuffer // local ring buffer, populated by stream reader
 	writers            []io.Writer       // stream reader tees output to all attached writers (see fan-out note below)
+	pidBoundWriters    map[io.Writer]struct{}
 	pid                int
+	streamBase         uint64
+	processDone        chan struct{}
 	info               daemon.SessionInfo // cached session info
 	done               chan struct{}      // closed when stream EOF
 	closeOnce          sync.Once          // guards close(done) — see close()
@@ -261,14 +265,40 @@ func (rs *RemoteSession) LastUserInput() time.Time {
 }
 
 func (rs *RemoteSession) Resize(rows, cols uint16) error {
+	return rs.resize("Daemon.Resize", rows, cols, 0)
+}
+
+// ResizeForPID asks the owner to resize only the identified process.
+func (rs *RemoteSession) ResizeForPID(rows, cols uint16, expectedPID int) error {
+	if expectedPID <= 0 {
+		return agent.ErrSessionNotFound
+	}
+	return rs.resize("Daemon.ResizeForPID", rows, cols, expectedPID)
+}
+
+func (rs *RemoteSession) resize(method string, rows, cols uint16, expectedPID int) error {
 	var resp daemon.StatusResp
-	err := rs.client.call("Daemon.Resize", &daemon.ResizeReq{
-		TaskID: rs.taskID,
-		Rows:   rows,
-		Cols:   cols,
+	err := rs.client.call(method, &daemon.ResizeReq{
+		TaskID:      rs.taskID,
+		Rows:        rows,
+		Cols:        cols,
+		ExpectedPID: expectedPID,
 	}, &resp)
 	if err != nil {
+		if expectedPID > 0 && strings.Contains(err.Error(), "can't find method Daemon.ResizeForPID") {
+			return agent.ErrSessionCoordinationUnsupported
+		}
 		return err
+	}
+	if expectedPID > 0 {
+		switch resp.Error {
+		case agent.ErrSessionNotFound.Error():
+			return agent.ErrSessionNotFound
+		case agent.ErrSessionStarting.Error():
+			return agent.ErrSessionStarting
+		case agent.ErrSessionCoordinationUnsupported.Error():
+			return agent.ErrSessionCoordinationUnsupported
+		}
 	}
 	if resp.Error != "" {
 		return fmt.Errorf("%s", resp.Error)
@@ -297,6 +327,14 @@ func (rs *RemoteSession) RecentOutputTailWithTotal(n int) (tail []byte, total ui
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	return rs.buf.Tail(n), rs.buf.TotalWritten()
+}
+
+// ProcessOutputTailWithTotal returns a cursor relative to the current PTY.
+// This matches the log, which starts over when the owner launches a process.
+func (rs *RemoteSession) ProcessOutputTailWithTotal(n int) ([]byte, uint64) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.buf.Tail(n), rs.buf.TotalWritten() - rs.streamBase
 }
 
 func (rs *RemoteSession) TotalWritten() uint64 {
@@ -340,6 +378,26 @@ func (rs *RemoteSession) Done() <-chan struct{} {
 	return rs.done
 }
 
+var retiredProcess = func() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}()
+
+// ProcessDone also closes when a managed restart switches the active process
+// behind this handle, while Done remains open for the attached pane.
+func (rs *RemoteSession) ProcessDone(expectedPID int) <-chan struct{} {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if !rs.Alive() || rs.pid != expectedPID {
+		return retiredProcess
+	}
+	if rs.processDone == nil {
+		rs.processDone = make(chan struct{})
+	}
+	return rs.processDone
+}
+
 func (rs *RemoteSession) Err() error {
 	return nil // errors are communicated via DB, not the handle
 }
@@ -360,14 +418,18 @@ func (rs *RemoteSession) StopScoped(scope agent.StopScope) error {
 	return rs.client.StopScoped(rs.taskID, scope)
 }
 
-// updateInfo stores cached session info.
-func (rs *RemoteSession) updateInfo(info daemon.SessionInfo) {
+// updateInfo refreshes metadata for the handle's process only.
+func (rs *RemoteSession) updateInfo(info daemon.SessionInfo) bool {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+	if rs.pid != 0 && info.PID != rs.pid {
+		return false
+	}
 	rs.info = info
 	if info.PID != 0 {
 		rs.pid = info.PID
 	}
+	return true
 }
 
 // refreshInfo fetches session info from the daemon.
@@ -385,8 +447,10 @@ func (rs *RemoteSession) BridgeGeneration() string {
 	if err := rs.client.call("Daemon.SessionStatus", &daemon.TaskIDReq{TaskID: rs.taskID}, &info); err != nil {
 		return ""
 	}
-	rs.updateInfo(info)
-	return info.BridgeGeneration
+	if rs.updateInfo(info) {
+		return info.BridgeGeneration
+	}
+	return ""
 }
 
 // Writer fan-out — the supervisor-client double-proxy (session-supervisor P2).
@@ -443,8 +507,26 @@ func (rs *RemoteSession) AddWriterFrom(w io.Writer, offset uint64) {
 // stream reader. Accepts a small gap rather than a duplicate. `offset` of 0
 // replays the full ring. Mirrors Session.AddWriterFromTolerant.
 func (rs *RemoteSession) AddWriterFromTolerant(w io.Writer, offset uint64) {
+	rs.addWriterFromTolerant(w, offset, 0)
+}
+
+// AddWriterFromPID registers a stream writer with an offset relative to the
+// given process. A replay may block, so verify the identity again before
+// registering it to receive live output.
+func (rs *RemoteSession) AddWriterFromPID(w io.Writer, offset uint64, expectedPID int) bool {
+	return rs.addWriterFromTolerant(w, offset, expectedPID)
+}
+
+func (rs *RemoteSession) addWriterFromTolerant(w io.Writer, offset uint64, expectedPID int) bool {
 	rs.mu.Lock()
 	currentTotal := rs.buf.TotalWritten()
+	if expectedPID > 0 {
+		if rs.pid != expectedPID || !rs.Alive() {
+			rs.mu.Unlock()
+			return false
+		}
+		currentTotal -= rs.streamBase
+	}
 	var replay []byte
 	if offset < currentTotal {
 		gap := currentTotal - offset
@@ -458,13 +540,23 @@ func (rs *RemoteSession) AddWriterFromTolerant(w io.Writer, offset uint64) {
 
 	if len(replay) > 0 {
 		if _, err := w.Write(replay); err != nil {
-			return
+			return false
 		}
 	}
 
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if expectedPID > 0 && (rs.pid != expectedPID || !rs.Alive()) {
+		return false
+	}
 	rs.writers = append(rs.writers, w)
-	rs.mu.Unlock()
+	if expectedPID > 0 {
+		if rs.pidBoundWriters == nil {
+			rs.pidBoundWriters = make(map[io.Writer]struct{})
+		}
+		rs.pidBoundWriters[w] = struct{}{}
+	}
+	return true
 }
 
 // RemoveWriter unregisters a writer. Safe to call concurrently.
@@ -476,6 +568,7 @@ func (rs *RemoteSession) RemoveWriter(w io.Writer) {
 
 // removeWriterLocked removes a writer from the slice. Caller must hold rs.mu.
 func (rs *RemoteSession) removeWriterLocked(w io.Writer) {
+	delete(rs.pidBoundWriters, w)
 	for i, existing := range rs.writers {
 		if existing == w {
 			rs.writers = append(rs.writers[:i], rs.writers[i+1:]...)
@@ -494,5 +587,13 @@ func (rs *RemoteSession) removeWriterLocked(w io.Writer) {
 // of closed channel" panic (surfaced under parallel -race load). Mirrors the
 // Client.closeOnce fix one level down.
 func (rs *RemoteSession) close() {
-	rs.closeOnce.Do(func() { close(rs.done) })
+	rs.closeOnce.Do(func() {
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
+		close(rs.done)
+		if rs.processDone != nil {
+			close(rs.processDone)
+			rs.processDone = nil
+		}
+	})
 }

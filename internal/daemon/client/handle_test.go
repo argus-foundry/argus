@@ -118,10 +118,9 @@ func TestH_IsIdle(t *testing.T) {
 	_ = rs.IsIdle()
 }
 
-// TestH_IsIdleRefreshesPID pins that IsIdle re-queries the daemon: the
-// graduation stale-PID guard reads the live PID through it, so a handle
-// whose cached PID predates a respawn must pick up the new one.
-func TestH_IsIdleRefreshesPID(t *testing.T) {
+// A task-level metadata poll cannot assign a different process to an
+// existing stream and its history.
+func TestH_IsIdlePreservesStreamPID(t *testing.T) {
 	fd := newFakeDaemon(t)
 	fd.mu.Lock()
 	fd.statusPID = 22
@@ -131,7 +130,7 @@ func TestH_IsIdleRefreshesPID(t *testing.T) {
 	rs.updateInfo(daemon.SessionInfo{PID: 11})
 	testutil.Equal(t, rs.PID(), 11)
 	_ = rs.IsIdle()
-	testutil.Equal(t, rs.PID(), 22)
+	testutil.Equal(t, rs.PID(), 11)
 }
 
 func TestH_Resize(t *testing.T) {

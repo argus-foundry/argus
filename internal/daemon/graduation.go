@@ -180,6 +180,15 @@ func (g *graduationWatcher) resolveGraduate(taskID string) (b *db.HeraBinding, a
 }
 
 func (g *graduationWatcher) advance(taskID, phase string) error {
+	unlock, acquired, err := g.db.TryLockSessionMutation(taskID)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return agent.ErrSessionStarting
+	}
+	defer unlock()
+
 	t, err := g.db.Get(taskID)
 	if err != nil {
 		return err

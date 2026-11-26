@@ -93,6 +93,7 @@ func TestRerender_ExternalRestartDropsPreviousPIDAnchor(t *testing.T) {
 			waitRerender(t, func() bool { return deferred.Load() })
 			next := &fakeKickSession{pid: 202, idle: true, alive: true, initCols: tc.init}
 			readUI(t, app.tapp, func() {
+				app.runner = getRunner{Runner: agent.NewRunner(nil), sess: next}
 				testutil.Equal(t, app.committedCols[task.ID], uint16(100))
 				app.lastAttachCols[task.ID] = 80        // another viewer cached the old process
 				app.pendingRerenderRestart[task.ID] = 0 // lost old-process exit notification
@@ -156,6 +157,7 @@ func TestRerender_PendingReasons(t *testing.T) {
 			}
 			var deferred atomic.Bool
 			readUI(t, app.tapp, func() {
+				app.runner = getRunner{Runner: agent.NewRunner(nil), sess: sess}
 				app.agentPane.SetTaskID(task.ID)
 				app.maybeKickRerenderAtWidth(task, sess, 100, func() { deferred.Store(true) })
 			})
@@ -175,7 +177,11 @@ func TestRerender_ActiveAndStaleClear(t *testing.T) {
 	testutil.NoError(t, d.Add(task))
 	seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 	sess := &fakeKickSession{idle: true, alive: true, initCols: 80}
-	readUI(t, app.tapp, func() { app.agentPane.SetTaskID(task.ID); app.maybeKickRerenderAtWidth(task, sess, 100, nil) })
+	readUI(t, app.tapp, func() {
+		app.runner = getRunner{Runner: agent.NewRunner(nil), sess: sess}
+		app.agentPane.SetTaskID(task.ID)
+		app.maybeKickRerenderAtWidth(task, sess, 100, nil)
+	})
 	waitRerender(t, func() bool { return sess.stopCalled.Load() })
 	readUI(t, app.tapp, func() {
 		testutil.Equal(t, app.agentPane.RerenderStatus(), "Re-rendering…")
@@ -242,6 +248,7 @@ func TestRerender_IntermediateSkipPreservesAnchor(t *testing.T) {
 		testutil.Equal(t, app.committedCols[task.ID], uint16(100))
 		testutil.False(t, app.heraPage.CoordPane().Rerendering())
 		sess.idle = true
+		app.runner = getRunner{Runner: agent.NewRunner(nil), sess: sess}
 		app.maybeKickRerenderAtWidth(task, sess, 80, nil)
 	})
 	waitRerender(t, func() bool { return sess.stopCalled.Load() })

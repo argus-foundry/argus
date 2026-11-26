@@ -60,6 +60,7 @@ func (r *keepPlaceRig) logged() string {
 func (r *keepPlaceRig) kick(t *testing.T, sess agent.SessionHandle, stopped func() bool, scrolled func() bool, deferred func()) {
 	t.Helper()
 	readUI(t, r.app.tapp, func() {
+		r.app.runner = getRunner{Runner: agent.NewRunner(nil), sess: sess}
 		r.app.agentPane.SetTaskID(r.task.ID)
 		r.app.maybeKickRerenderGated(r.task, sess, 100, deferred, scrolled)
 	})

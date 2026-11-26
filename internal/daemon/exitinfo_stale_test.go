@@ -28,6 +28,29 @@ func newDoneSession(closed bool) *doneSession {
 }
 
 func (s *doneSession) Done() <-chan struct{} { return s.done }
+func (s *doneSession) PID() int              { return 0 }
+
+func TestSessionCore_StreamRetirementUsesPID(t *testing.T) {
+	core := staleTestCore()
+	old, oldPeer := net.Pipe()
+	defer old.Close()
+	defer oldPeer.Close()
+	next, nextPeer := net.Pipe()
+	defer next.Close()
+	defer nextPeer.Close()
+
+	core.registerStream("t", old, 10)
+	core.registerStream("t", next, 20)
+	core.mu.Lock()
+	retired := core.takeExitedStreamsLocked("t", 10)
+	remaining := core.streams["t"]
+	core.mu.Unlock()
+	testutil.Equal(t, len(retired), 1)
+	testutil.Equal(t, retired[0], old)
+	testutil.Equal(t, len(remaining), 1)
+	testutil.Equal(t, remaining[0].conn, next)
+	testutil.Equal(t, remaining[0].pid, 20)
+}
 
 func staleTestCore() *sessionCore {
 	return newSessionCore(&fakeSupClient{}, config.DefaultConfig, make(chan struct{}))
@@ -71,7 +94,7 @@ func TestSessionCore_ExitInfoOwnership(t *testing.T) {
 		testutil.False(t, c.hasExit("t"))
 		// ...and nothing is left for await to mistake for B's own.
 		start := time.Now()
-		c.awaitExitInfoCached("t", b, gen, 60*time.Millisecond)
+		c.awaitExitInfoCached("t", b, 0, gen, 60*time.Millisecond)
 		testutil.True(t, time.Since(start) >= 50*time.Millisecond)
 	})
 	t.Run("unowned entry falls back to Done timing", func(t *testing.T) {
@@ -103,7 +126,7 @@ func TestSessionCore_ExitInfoOwnership(t *testing.T) {
 		c, sess := staleTestCore(), newDoneSession(true)
 		c.record("t", nil)
 		start := time.Now()
-		c.awaitExitInfoCached("t", sess, c.exitGen, 5*time.Second)
+		c.awaitExitInfoCached("t", sess, 0, c.exitGen, 5*time.Second)
 		testutil.True(t, time.Since(start) < time.Second)
 	})
 	t.Run("await: own entry already consumed does not wait out the bound", func(t *testing.T) {
@@ -114,7 +137,7 @@ func TestSessionCore_ExitInfoOwnership(t *testing.T) {
 		testutil.True(t, info.Stopped)
 		testutil.NoError(t, c.GetExitInfo(&TaskIDReq{TaskID: "t"}, &info)) // second read is empty
 		start := time.Now()
-		c.awaitExitInfoCached("t", sess, c.exitGen, 5*time.Second)
+		c.awaitExitInfoCached("t", sess, 0, c.exitGen, 5*time.Second)
 		testutil.True(t, time.Since(start) < time.Second)
 	})
 	t.Run("await: entry overwritten by a later incarnation does not wait out the bound", func(t *testing.T) {
@@ -122,14 +145,14 @@ func TestSessionCore_ExitInfoOwnership(t *testing.T) {
 		gen := c.dropStaleExitInfo("t", mine) // attach: nothing cached yet
 		c.record("t", later)                  // a later incarnation's exit lands first
 		start := time.Now()
-		c.awaitExitInfoCached("t", mine, gen, 5*time.Second)
+		c.awaitExitInfoCached("t", mine, 0, gen, 5*time.Second)
 		testutil.True(t, time.Since(start) < time.Second)
 	})
 	t.Run("await: an older incarnation's leftover keeps waiting", func(t *testing.T) {
 		c, old, cur := staleTestCore(), newDoneSession(true), newDoneSession(true)
 		c.record("t", old)
 		start := time.Now()
-		c.awaitExitInfoCached("t", cur, c.exitGen, 60*time.Millisecond) // attached after the write, never dropped
+		c.awaitExitInfoCached("t", cur, 0, c.exitGen, 60*time.Millisecond) // attached after the write, never dropped
 		testutil.True(t, time.Since(start) >= 50*time.Millisecond)
 	})
 	// An unowned entry that was consumed leaves a tombstone. If the next
@@ -151,7 +174,7 @@ func TestSessionCore_ExitInfoOwnership(t *testing.T) {
 		var info ExitInfo
 		testutil.NoError(t, c.GetExitInfo(&TaskIDReq{TaskID: "t"}, &info))
 		start := time.Now() // tombstone left in place: no dropStale
-		c.awaitExitInfoCached("t", b, c.exitGen, 60*time.Millisecond)
+		c.awaitExitInfoCached("t", b, 0, c.exitGen, 60*time.Millisecond)
 		testutil.True(t, time.Since(start) >= 50*time.Millisecond)
 	})
 	t.Run("unowned tombstone then done attach: await waits, never serves a zero ExitInfo", func(t *testing.T) {
@@ -161,7 +184,7 @@ func TestSessionCore_ExitInfoOwnership(t *testing.T) {
 		testutil.NoError(t, c.GetExitInfo(&TaskIDReq{TaskID: "t"}, &info))
 		gen := c.dropStaleExitInfo("t", b)
 		start := time.Now()
-		c.awaitExitInfoCached("t", b, gen, 60*time.Millisecond)
+		c.awaitExitInfoCached("t", b, 0, gen, 60*time.Millisecond)
 		testutil.True(t, time.Since(start) >= 50*time.Millisecond)
 		// The real exit lands afterwards and is what the relay reads.
 		c.mu.Lock()
@@ -191,8 +214,9 @@ func TestSessionCore_ExitInfoOwnership(t *testing.T) {
 // beat the fresh ExitInfo to the cache and the relay's GetExitInfo consumes the
 // stale PendingRestart=true entry: the daemon then skips the status flip and
 // the task stays in_progress after its agent is gone. Attaching to a live
-// session must therefore drop whatever exit info predates it.
-func TestSup_StaleExitInfoDroppedOnAttach(t *testing.T) {
+// session must therefore hide any earlier exit from unscoped readers. An old
+// reader that identifies its PID can still fetch its own exit after the attach.
+func TestSup_ExitInfoScopedAfterAttach(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	s, _ := testSupervisor(t, supCfg("sleep 60"))
 	core := s.sessionCore
@@ -242,10 +266,12 @@ func TestSup_StaleExitInfoDroppedOnAttach(t *testing.T) {
 		return len(core.streams[id]) == 1
 	})
 
-	core.mu.Lock()
-	_, stillStale := core.exitInfos[id]
-	core.mu.Unlock()
-	testutil.False(t, stillStale)
+	var info ExitInfo
+	testutil.NoError(t, core.GetExitInfo(&TaskIDReq{TaskID: id}, &info))
+	testutil.True(t, info.StreamLost)
+	testutil.NoError(t, core.GetExitInfo(&TaskIDReq{TaskID: id, ExpectedPID: first.PID()}, &info))
+	testutil.Equal(t, info.PID, first.PID())
+	testutil.True(t, info.PendingRestart)
 
 	// The replacement's real exit now yields its own ExitInfo, never the stale one.
 	var stop StatusResp
@@ -255,7 +281,6 @@ func TestSup_StaleExitInfoDroppedOnAttach(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("stream never ended after the session was stopped")
 	}
-	var info ExitInfo
 	waitFor(t, "fresh exit info", func() bool {
 		testutil.NoError(t, core.GetExitInfo(&TaskIDReq{TaskID: id}, &info))
 		return info.Stopped

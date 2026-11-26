@@ -110,6 +110,15 @@ func (r *HeraReviveRunner) RestartDead(taskID string) error {
 }
 
 func (r *HeraReviveRunner) restartDead(taskID string, resumeOnly bool, started func(uint64)) error {
+	unlock, acquired, err := r.database.TryLockSessionMutation(taskID)
+	if err != nil {
+		return fmt.Errorf("revive restart: lock task %s: %w", taskID, err)
+	}
+	if !acquired {
+		slog.Info("revive restart: task lifecycle busy", "task", taskID)
+		return agent.ErrSessionStarting
+	}
+	defer unlock()
 	task, err := r.database.Get(taskID)
 	if err != nil {
 		return fmt.Errorf("revive restart: load task %s: %w", taskID, err)
@@ -119,6 +128,7 @@ func (r *HeraReviveRunner) restartDead(taskID string, resumeOnly bool, started f
 	}
 	cfg := r.cfgFn()
 	agent.RefreshResumeSessionID(r.database, task)
+	priorSessionID := task.SessionID
 	task.ResumeOnly = resumeOnly
 	if resumeOnly {
 		available, err := agent.ResumableSessionAvailable(task, cfg)
@@ -148,9 +158,7 @@ func (r *HeraReviveRunner) restartDead(taskID string, resumeOnly bool, started f
 	if err != nil {
 		return fmt.Errorf("revive restart: start task %s: %w", taskID, err)
 	}
-	task.SetStatus(model.StatusInProgress)
-	task.AgentPID = sess.PID()
-	return r.database.Update(task)
+	return r.database.RecordResumedSession(taskID, sess.PID(), priorSessionID, task.SessionID)
 }
 
 // reviveForInput dispatches a resolved revive request to the right shared

@@ -1357,7 +1357,13 @@ func (s *Server) handleGetOutput(w http.ResponseWriter, r *http.Request) {
 			// lock acquisition. Reading them in two calls lets readLoop
 			// advance ringTotal past the bytes in data, leaving the client
 			// with a since-cursor that skips bytes never delivered.
-			data, ringTotal := sess.RecentOutputTailWithTotal(tailSize)
+			readOutput := sess.RecentOutputTailWithTotal
+			if scoped, ok := sess.(interface {
+				ProcessOutputTailWithTotal(int) ([]byte, uint64)
+			}); ok {
+				readOutput = scoped.ProcessOutputTailWithTotal
+			}
+			data, ringTotal := readOutput(tailSize)
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.Header().Set("X-Source", "ring")
 			// data is the ring tail and ringTotal is the high-water mark; the
@@ -1629,11 +1635,15 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "rerender requires a positive expected_pid and committed_cols in range", nil)
 		return
 	}
-	if req.ExpectedPID != 0 && sess.PID() != req.ExpectedPID {
-		writeJSON(w, http.StatusOK, resizeResponse{Deferred: "stale_session"})
-		return
-	}
-	if err := sess.Resize(req.Rows, req.Cols); err != nil {
+	if err := agent.ResizeSessionForPID(sess, req.Rows, req.Cols, req.ExpectedPID); err != nil {
+		if req.ExpectedPID != 0 && errors.Is(err, agent.ErrSessionNotFound) {
+			writeJSON(w, http.StatusOK, resizeResponse{Deferred: "stale_session"})
+			return
+		}
+		if req.ExpectedPID != 0 && errors.Is(err, agent.ErrSessionCoordinationUnsupported) {
+			writeJSON(w, http.StatusOK, resizeResponse{Deferred: "owner_unsupported"})
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
@@ -1889,23 +1899,33 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	pid := sess.PID()
+	cols, rows := sess.InitialPTYSize()
+	sessDone := sess.Done()
+	// Buffer the ring replay and bind the writer to the same process as the
+	// headers, including across a managed supervisor restart.
+	cw := &channelWriter{ch: make(chan []byte, 128)}
+	if scoped, ok := sess.(interface {
+		AddWriterFromPID(io.Writer, uint64, int) bool
+		ProcessDone(int) <-chan struct{}
+	}); ok && pid > 0 {
+		if !scoped.AddWriterFromPID(cw, since, pid) {
+			writeErr(w, http.StatusConflict, "session changed while attaching", nil)
+			return
+		}
+		sessDone = scoped.ProcessDone(pid)
+	} else {
+		sess.AddWriterFrom(cw, since)
+	}
+	defer sess.RemoveWriter(cw)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	// The remote TUI associates its history width with this exact PTY.
-	cols, rows := sess.InitialPTYSize()
-	w.Header().Set("X-Argus-Session-Pid", strconv.Itoa(sess.PID()))
+	w.Header().Set("X-Argus-Session-Pid", strconv.Itoa(pid))
 	w.Header().Set("X-Argus-Session-Initial-Cols", strconv.Itoa(cols))
 	w.Header().Set("X-Argus-Session-Initial-Rows", strconv.Itoa(rows))
 	flusher.Flush()
-
-	// Use a channelWriter so AddWriterFrom's synchronous ring buffer replay
-	// doesn't block readLoop. The channel is large enough to hold the full
-	// 256KB ring buffer replay (256KB / 4KB chunks = 64 items), and Write
-	// drops on full to keep the lock-held replay non-blocking.
-	cw := &channelWriter{ch: make(chan []byte, 128)}
-	sess.AddWriterFrom(cw, since)
-	defer sess.RemoveWriter(cw)
 
 	// Subscribe to agent-staged clipboard updates for this task. Any change
 	// (set or clear) queues a `clipboard` SSE event. The subscriber callback
@@ -1934,13 +1954,6 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 
 	keepalive := time.NewTicker(30 * time.Second)
 	defer keepalive.Stop()
-
-	// sess.Done() closes when the session's process exits. Without observing
-	// it explicitly, `event: exit` would never fire for the SPA — cw.ch is
-	// fed only by readLoop's Write calls, and is never closed when the session
-	// dies. The SPA's reconnect-on-rerender path keys off `event: exit`, so
-	// missing this signal makes the rerender recovery unobservable.
-	sessDone := sess.Done()
 
 	for {
 		select {
@@ -1980,7 +1993,7 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 			// SSE delivery. Daemon already evaluated HasPendingRestart
 			// for its own skip-transition decision; surface it here too.
 			exitPayload := `{"rerendering":false}`
-			if s.runner.HasPendingRestart(id) {
+			if s.runner.HasPendingRestart(id) || (sess.Alive() && sess.PID() != pid) {
 				exitPayload = `{"rerendering":true}`
 			}
 			fmt.Fprintf(w, "event: exit\ndata: %s\n\n", exitPayload) //nolint:errcheck

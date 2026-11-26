@@ -125,6 +125,7 @@ func DefaultPIDPath() string {
 // ExitInfo holds the exit state of a finished session, cached briefly
 // so clients can query it after the stream closes.
 type ExitInfo struct {
+	PID            int
 	Err            string
 	Stopped        bool
 	LastOutput     []byte
@@ -132,11 +133,9 @@ type ExitInfo struct {
 	PendingRestart bool // true when a kick-restart is queued (TUI must skip status flip)
 }
 
-// CleanExit is the single, authoritative predicate for "the agent process
-// exited on its own, normally" — the ONLY condition under which a task may be
-// marked Complete. Everything else (explicit stop, non-zero exit / crash,
-// fast-fail launch surfaced as an error, or an unconfirmed stream loss) is a
-// recoverable exit and lands the task in InReview so the user can resume.
+// CleanExit is the authoritative predicate for a normal process exit.
+// Ordinary confirmed exits are recoverable unless they are clean. A deliberate
+// Hera reclaim records its separate terminal intent before stopping.
 //
 // The daemon and standalone TUI use this predicate for the sessions they own.
 // The rule is timing-independent: a missing
@@ -146,7 +145,7 @@ func (e ExitInfo) CleanExit() bool {
 	return !e.Stopped && e.Err == "" && !e.StreamLost
 }
 
-// NoEvidenceOfExit reports whether e is the all-zero value: no error, not
+// NoEvidenceOfExit reports whether e is the all-zero value: no PID, no error, not
 // stopped, not stream-lost, no pending restart and no captured output. A real
 // exit carries at least the PTY's final ring tail (every agent TUI emits
 // bytes), so this shape is what an OLD server answers for "nothing recorded"
@@ -155,7 +154,7 @@ func (e ExitInfo) CleanExit() bool {
 // exits 0 having printed nothing at all lands in_review via the tick
 // reconciler instead of complete — recoverable, and the safe direction.
 func (e ExitInfo) NoEvidenceOfExit() bool {
-	return e.Err == "" && !e.Stopped && !e.StreamLost && !e.PendingRestart && len(e.LastOutput) == 0
+	return e.PID == 0 && e.Err == "" && !e.Stopped && !e.StreamLost && !e.PendingRestart && len(e.LastOutput) == 0
 }
 
 // Daemon manages agent sessions and exposes them over a Unix socket.
@@ -173,6 +172,8 @@ type Daemon struct {
 	db       *db.DB
 	listener net.Listener
 	done     chan struct{}
+	exitCtx  context.Context
+	endExits context.CancelFunc
 
 	// devStackScan / devStackStop override the dev-stack sweeper's process scan
 	// and stop (nil = the real agent functions). Test seams, set before Serve.
@@ -361,9 +362,12 @@ func (d *Daemon) BootInfo() (BootInfoResp, error) {
 
 // New creates a new Daemon.
 func New(database *db.DB) *Daemon {
+	exitCtx, endExits := context.WithCancel(context.Background())
 	d := &Daemon{
 		db:        database,
 		done:      make(chan struct{}),
+		exitCtx:   exitCtx,
+		endExits:  endExits,
 		ready:     make(chan struct{}),
 		bootedAt:  time.Now(),
 		clipboard: clipboard.New(),
@@ -416,12 +420,14 @@ func New(database *db.DB) *Daemon {
 		// from the tview main goroutine (the gotcha at daemon-rpc.md:9).
 		// The exiting session is still in the runner's map here; stamp it as the
 		// ExitInfo's owner so stream attaches can tell a stale entry by identity.
+		owner := d.runner.Get(taskID)
 		d.handleSessionExitOwned(taskID, ExitInfo{
+			PID:            d.finishedPID(taskID, owner),
 			Err:            errStr,
 			Stopped:        stopped,
 			LastOutput:     lastOutput,
 			PendingRestart: d.runner.HasPendingRestart(taskID),
-		}, d.runner.Get(taskID))
+		}, owner)
 	}, database.IsResidentWorker)
 
 	// Mount the session-serving substrate. The daemon owns the runner (and thus
@@ -454,16 +460,38 @@ func (d *Daemon) handleSessionExit(taskID string, ei ExitInfo) {
 	d.handleSessionExitOwned(taskID, ei, nil)
 }
 
-// handleSessionExitOwned is handleSessionExit with the exiting session known
-// (in-process runner path); owner stamps the cached ExitInfo for identity-based
-// staleness checks. nil = unknown (relay-sourced).
+// handleSessionExitOwned applies effects only to the process that exited.
 func (d *Daemon) handleSessionExitOwned(taskID string, ei ExitInfo, owner agent.SessionHandle) {
-	slog.Info("session exited", "task", taskID, "stopped", ei.Stopped, "err", ei.Err, "streamLost", ei.StreamLost, "pending", ei.PendingRestart, "lastOutputBytes", len(ei.LastOutput))
+	slog.Info("session exited", "task", taskID, "pid", ei.PID, "stopped", ei.Stopped, "err", ei.Err, "streamLost", ei.StreamLost, "pending", ei.PendingRestart, "lastOutputBytes", len(ei.LastOutput))
 
+	if !ei.StreamLost && !ei.PendingRestart {
+		// Coordinated resume can run as soon as the supervisor retires the
+		// old PTY. Its task lock covers start through the persisted launch.
+		unlock, err := d.db.LockSessionMutation(d.exitCtx, taskID)
+		if err != nil {
+			slog.Warn("session exit: could not lock task", "task", taskID, "err", err)
+			ei.StreamLost = true
+		} else {
+			defer unlock()
+			ei.StreamLost = !d.finalizeSessionExit(taskID, ei)
+		}
+	}
+
+	pid := ei.PID
+	if pid == 0 && owner != nil {
+		pid = owner.PID()
+		if ei.StreamLost {
+			ei.PID = pid
+		}
+	}
 	d.mu.Lock()
-	d.recordExitLocked(taskID, ei, owner)
-	conns := d.streams[taskID]
-	delete(d.streams, taskID)
+	latest := d.exitInfos[taskID]
+	// An unconfirmed relay cannot replace a confirmed exit record for
+	// another process, or be reported as that process's observed exit.
+	if !ei.StreamLost || latest.info.PID == 0 || (latest.info.PID == pid && latest.info.StreamLost) {
+		d.recordExitLocked(taskID, ei, owner)
+	}
+	conns := d.takeExitedStreamsLocked(taskID, pid)
 	d.mu.Unlock()
 
 	if ei.StreamLost {
@@ -474,44 +502,49 @@ func (d *Daemon) handleSessionExitOwned(taskID string, ei ExitInfo, owner agent.
 		return
 	}
 
-	// Flip the DB row out of InProgress. Without this, a daemon-only setup
-	// (web-app users with no TUI attached) leaves the row stuck in_progress
-	// forever — the API then reports idle:true and the PWA pops a Resume modal
-	// for a task whose agent has already exited. Connected clients use the
-	// notification to update their view after this transition.
-	//
-	// SKIP when a kick-restart is in flight (KickRerender stopped the session and
-	// queued a same-task Start). Transitioning here would race the restart and
-	// leave the row in the wrong state mid-flip.
-	if !ei.PendingRestart {
-		d.transitionTaskOnExit(taskID, ei.CleanExit())
-	}
-
-	// Capture session ID for backends that mint it themselves post-exit (codex
-	// via state_5.sqlite, pi via session-file scan; Claude refreshes on /clear).
-	// In supervisor mode the daemon still owns this — it reads the worktree-scoped
-	// backend state, which lives on the shared filesystem both processes see, and
-	// the relay only fires after the supervisor observed Cmd.Wait, so the state
-	// file is already written (design §5: recapture daemon-side on the exit relay).
-	go d.captureSessionIDPostExit(taskID)
-
 	// Signal stream EOF to all connected clients by closing their connections.
 	slog.Info("session exited, closing stream clients", "task", taskID, "clients", len(conns))
 	for _, conn := range conns {
 		conn.Close() //nolint:errcheck // best-effort EOF signal; conn is being discarded
 	}
 
-	// Clear any agent-staged clipboard for the finished task — the agent that
-	// staged it is gone; the user shouldn't see a stale copy button.
-	d.clipboard.Clear(taskID)
-
 	// Surface session lifecycle to plugins. Fired AFTER the DB transition so an
 	// SSE subscriber waking on this event sees a coherent snapshot.
 	events.Emit(model.EventTypeSessionExited, taskID, map[string]any{
+		"pid":             ei.PID,
 		"stopped":         ei.Stopped,
 		"err":             ei.Err,
 		"pending_restart": ei.PendingRestart,
 	})
+}
+
+// finalizeSessionExit is called with exclusive ownership of the task's
+// lifecycle. Probe the supervisor directly: runner.Get may be a cached
+// stream, while the supervisor already has (or retired) a replacement.
+func (d *Daemon) finalizeSessionExit(taskID string, ei ExitInfo) bool {
+	if owner, ok := d.supClient.(sessionProber); ok {
+		if ei.PID == 0 {
+			slog.Warn("session exit: supervisor did not identify the retiring process; restart Session Supervisor from System in Settings", "task", taskID)
+			return false
+		}
+		info, err := owner.ProbeSession(taskID)
+		if err != nil || info.Alive ||
+			(info.PID != 0 && info.PID != ei.PID) ||
+			(info.LastExitPID != 0 && info.LastExitPID != ei.PID) {
+			slog.Info("session exit: current owner did not confirm retired process", "task", taskID, "pid", ei.PID,
+				"owner_pid", info.PID, "last_exit_pid", info.LastExitPID, "err", err)
+			return false
+		}
+	}
+
+	reclaim, err := d.db.ConsumeHeraReclaimStop(taskID, ei.PID)
+	if err != nil {
+		slog.Warn("session exit: could not read reclaim intent", "task", taskID, "pid", ei.PID, "err", err)
+	}
+	d.transitionTaskOnExit(taskID, ei.CleanExit() || reclaim)
+	d.captureSessionIDPostExit(taskID)
+	d.clipboard.Clear(taskID)
+	return true
 }
 
 // Runner returns the underlying session runner. Typed as agent.SessionRunner
@@ -522,8 +555,7 @@ func (d *Daemon) Runner() agent.SessionRunner {
 }
 
 // captureSessionIDPostExit refreshes a task's session UUID from backend state.
-// Runs in its own goroutine from onFinish so it never blocks the runner exit
-// path. The recapture decision is delegated to agent.NeedsSessionRecapture:
+// The recapture decision is delegated to agent.NeedsSessionRecapture:
 // codex/pi capture once (while SessionID is empty), Claude refreshes on every
 // exit (a /clear mints a new UUID under ~/.claude/projects), unknown backends
 // never recapture. Connected clients leave this write to the daemon.
@@ -559,16 +591,14 @@ func (d *Daemon) captureSessionIDPostExit(taskID string) {
 	if sid == "" || sid == t.SessionID {
 		return // Unrecognized backend, or no change (common no-/clear exit).
 	}
-	t2, err := d.db.Get(taskID)
-	if err != nil || t2 == nil {
-		return
-	}
-	t2.SessionID = sid
-	if uerr := d.db.Update(t2); uerr != nil {
+	written, uerr := d.db.RefreshSessionID(taskID, t.SessionID, sid)
+	if uerr != nil {
 		slog.Warn("daemon: session ID persist failed", "task", taskID, "err", uerr)
 		return
 	}
-	slog.Info("daemon: session ID captured", "task", taskID, "sid", sid)
+	if written {
+		slog.Info("daemon: session ID captured", "task", taskID, "sid", sid)
+	}
 }
 
 // transitionTaskOnExit flips an InProgress task to its terminal status when
@@ -612,7 +642,7 @@ func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
 	} else {
 		t.SetStatus(model.StatusInReview)
 	}
-	if uerr := d.db.Update(t); uerr != nil {
+	if uerr := d.db.SetStatus(taskID, t.Status); uerr != nil {
 		slog.Warn("session exit: status update failed", "task", taskID, "err", uerr)
 		return
 	}
@@ -1982,6 +2012,7 @@ func (d *Daemon) Shutdown() {
 	// with "close of closed channel".
 	first := false
 	d.shutdownOnce.Do(func() {
+		d.endExits()
 		close(d.done)
 		first = true
 	})

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -9,7 +10,29 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 )
+
+// LockSessionMutation waits for the task's current lifecycle operation to
+// finish. Use it from background work that can be canceled.
+func (d *DB) LockSessionMutation(ctx context.Context, taskID string) (func(), error) {
+	retry := time.NewTicker(10 * time.Millisecond)
+	defer retry.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		unlock, acquired, err := d.TryLockSessionMutation(taskID)
+		if err != nil || acquired {
+			return unlock, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-retry.C:
+		}
+	}
+}
 
 // TryLockSessionMutation acquires exclusive ownership of a task's session
 // lifecycle across handles and processes that open this database. A competing

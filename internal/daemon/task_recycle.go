@@ -111,6 +111,7 @@ func (d *Daemon) taskRecycleRunner() *taskRecycleRunner {
 func (d *Daemon) heraRecycleRunner() *HeraRecycleRunner {
 	r := NewHeraRecycleRunner(d.db, d.runner, d.cfgFn)
 	r.residentRecycler = d.taskRecycleRunner()
+	r.daemonOwned = true
 	return r
 }
 
@@ -221,6 +222,14 @@ func (r *taskRecycleRunner) awaitIdleAndRestart(taskID string, buildSeed func(*m
 // recycle_coord guards against) then hands off to the shared
 // restartSessionWithSeedPrompt kill/restart primitive.
 func (r *taskRecycleRunner) restart(taskID string, buildSeed func(*model.Task) string) error {
+	unlock, acquired, err := r.database.TryLockSessionMutation(taskID)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return agent.ErrSessionStarting
+	}
+	defer unlock()
 	task, err := r.database.Get(taskID)
 	if err != nil {
 		return fmt.Errorf("task_recycle restart: load task %s: %w", taskID, err)

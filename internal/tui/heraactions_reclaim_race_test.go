@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -19,6 +20,110 @@ type fakeReclaimRunner struct {
 	liveTaskID string
 	stopErr    error
 	stopped    chan struct{}
+}
+
+type connectedReclaimRunner struct {
+	*agent.Runner
+	session   agent.SessionHandle
+	attachErr error
+	stop      func() error
+}
+
+func (r connectedReclaimRunner) AttachableSession(string) (agent.SessionHandle, error) {
+	return r.session, r.attachErr
+}
+
+func (r connectedReclaimRunner) HasSession(string) bool { return r.session != nil }
+
+func (r connectedReclaimRunner) Stop(string) error { return r.stop() }
+
+func TestHeraReclaimConnectedArmsSessionBeforeStop(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress}
+	const pid = 42
+	type observation struct {
+		armed, locked bool
+		err           error
+	}
+	observed := make(chan observation, 1)
+	runner := connectedReclaimRunner{
+		Runner:  agent.NewRunner(nil),
+		session: &fakeKickSession{pid: pid, alive: true},
+		stop: func() error {
+			armed, err := d.ConsumeHeraReclaimStop(task.ID, pid)
+			unlock, acquired, lockErr := d.TryLockSessionMutation(task.ID)
+			if acquired {
+				unlock()
+			}
+			observed <- observation{armed: armed, locked: !acquired, err: errors.Join(err, lockErr)}
+			return nil
+		},
+	}
+	app := New(d, runner, true)
+	testutil.NoError(t, d.Add(task))
+	app.heraReclaimAndArchiveTask(task.ID)
+	select {
+	case got := <-observed:
+		testutil.NoError(t, got.err)
+		testutil.True(t, got.armed)
+		testutil.True(t, got.locked)
+	case <-time.After(2 * time.Second):
+		t.Fatal("reclaim did not stop the active session")
+	}
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, row.Archived)
+	testutil.Equal(t, row.Status, model.StatusInProgress)
+	testutil.False(t, app.consumeHeraReclaimPending(task.ID))
+}
+
+func TestHeraReclaimConnectedStopFailureClearsIntent(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Archived: true}
+	testutil.NoError(t, d.Add(task))
+	const pid = 42
+	runner := connectedReclaimRunner{
+		Runner:  agent.NewRunner(nil),
+		session: &fakeKickSession{pid: pid, alive: true},
+		stop:    func() error { return errors.New("session could not be stopped") },
+	}
+	stopConnectedHeraReclaim(runner, d, task.ID, true)
+	armed, err := d.ConsumeHeraReclaimStop(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.False(t, armed)
+}
+
+func TestHeraReclaimConnectedUncertifiedSession(t *testing.T) {
+	const pid = 42
+	for _, tc := range []struct {
+		name      string
+		attachErr error
+		wantStop  bool
+	}{
+		{name: "unsettled", attachErr: agent.ErrSessionStarting},
+		{name: "legacy stop", attachErr: agent.ErrSessionCoordinationUnsupported, wantStop: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Archived: true}
+			testutil.NoError(t, d.Add(task))
+			var stopped bool
+			runner := connectedReclaimRunner{
+				Runner:    agent.NewRunner(nil),
+				session:   &fakeKickSession{pid: pid, alive: true},
+				attachErr: tc.attachErr,
+				stop: func() error {
+					stopped = true
+					return nil
+				},
+			}
+			stopConnectedHeraReclaim(runner, d, task.ID, true)
+			testutil.Equal(t, stopped, tc.wantStop)
+			armed, err := d.ConsumeHeraReclaimStop(task.ID, pid)
+			testutil.NoError(t, err)
+			testutil.False(t, armed)
+		})
+	}
 }
 
 func newFakeReclaimRunner(liveTaskID string) *fakeReclaimRunner {
