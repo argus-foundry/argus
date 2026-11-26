@@ -49,7 +49,8 @@ func NewWebhook(urlOf func() string, nameOf func(string) string) *Webhook {
 	if nameOf == nil {
 		nameOf = func(string) string { return "" }
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	// Stop owns cancel. G118 only sees calls in this function.
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: Stop calls cancel
 	return &Webhook{
 		urlOf: urlOf, nameOf: nameOf, client: newWebhookClient(),
 		ch: make(chan model.Event, 32), ctx: ctx, cancel: cancel, done: make(chan struct{}),
