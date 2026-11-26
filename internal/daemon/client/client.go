@@ -459,9 +459,7 @@ func (c *Client) Get(taskID string) agent.SessionHandle {
 	if rs = c.sessions[taskID]; rs != nil {
 		return rs
 	}
-	rs = c.newSessionLocked(taskID, info.PID)
-	rs.updateInfo(info)
-	return rs
+	return c.newSessionLocked(taskID, info)
 }
 
 // ProbeSession asks the server about one session and surfaces an RPC failure
@@ -1057,12 +1055,12 @@ func (c *Client) sessionForStart(taskID string, pid int) *RemoteSession {
 	if rs := c.sessions[taskID]; rs != nil && rs.Alive() && rs.PID() == pid {
 		return rs
 	}
-	return c.newSessionLocked(taskID, pid)
+	return c.newSessionLocked(taskID, daemon.SessionInfo{PID: pid})
 }
 
-func (c *Client) newSessionLocked(taskID string, pid int) *RemoteSession {
+func (c *Client) newSessionLocked(taskID string, info daemon.SessionInfo) *RemoteSession {
 	rs := newRemoteSession(taskID, c)
-	rs.pid = pid
+	rs.pid, rs.info = info.PID, info
 	c.sessions[taskID] = rs
 
 	// Open a stream connection in the background.

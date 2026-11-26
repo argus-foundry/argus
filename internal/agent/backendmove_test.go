@@ -20,7 +20,10 @@ type bmRunner struct {
 	moveRunner
 	recycled   *model.Task
 	recycleErr error
+	supportErr error
 }
+
+func (r *bmRunner) CheckManagedRestartSupported(string) error { return r.supportErr }
 
 func (r *bmRunner) Recycle(task *model.Task, _ config.Config, rows, cols uint16) error {
 	r.rows, r.cols = rows, cols
@@ -91,6 +94,25 @@ func TestMoveTaskBackend_UnreadableTranscriptFailsOpen(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.True(t, res.Started)
 	testutil.Contains(t, r.recycled.Prompt, "No excerpt of the last exchange")
+}
+
+func TestMoveTaskBackend_RefusesUnsupportedOwnerBeforeHandoff(t *testing.T) {
+	f := bmFixture(t)
+	r := &bmRunner{
+		moveRunner: moveRunner{sess: &moveSession{idle: true, alive: true}},
+		supportErr: ErrSessionCoordinationUnsupported,
+	}
+
+	_, _, err := MoveTaskAccount(f.d, r, AccountMoveInput{TaskID: "mv", Backend: "codex"})
+	testutil.ErrorIs(t, err, ErrSessionCoordinationUnsupported)
+	saved, err := f.d.Get("mv")
+	testutil.NoError(t, err)
+	testutil.Equal(t, saved.Backend, f.task.Backend)
+	testutil.Equal(t, saved.Prompt, f.task.Prompt)
+	meta, err := f.d.ListMeta("mv", backendMoveMetaNS)
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(meta), 0)
+	testutil.Nil(t, r.recycled)
 }
 
 func TestMoveTaskBackend_NoLiveSessionPersistsOnly(t *testing.T) {

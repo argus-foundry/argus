@@ -165,10 +165,17 @@ func TestSupInnerAmbiguous(t *testing.T) {
 	// mocked prelaunch — restoring while that goroutine is still running it
 	// would race the package-level var.
 	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && !sc.HasSession(task.ID) {
+	for {
+		info, probeErr := sc.ProbeSession(task.ID)
+		testutil.NoError(t, probeErr)
+		if info.Alive && info.PID > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the reserved launch did not publish a PID")
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	testutil.True(t, sc.HasSession(task.ID))
 	restore()
 	testutil.NoError(t, sc.Stop(task.ID))
 }
@@ -650,9 +657,22 @@ func TestSupKickSlow(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("replacement did not enter prelaunch")
 	}
+	fresh, err := Connect(sc.sockPath)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = fresh.Close() })
+	freshSession := fresh.Get(task.ID)
+	testutil.NotNil(t, freshSession)
+	testutil.Equal(t, freshSession.PID(), 0)
+	freshExit := make(chan daemon.ExitInfo, 1)
+	fresh.OnSessionExit(func(_ string, info daemon.ExitInfo) {
+		if !info.PendingRestart {
+			freshExit <- info
+		}
+	})
 	// Keep the exact restart pending longer than the whole transport budget.
 	time.Sleep(200 * time.Millisecond)
 	testutil.True(t, sess.Alive())
+	testutil.True(t, freshSession.Alive())
 	testutil.DeepEqual(t, sc.Running(), []string{task.ID})
 	resume()
 
@@ -661,6 +681,13 @@ func TestSupKickSlow(t *testing.T) {
 	testutil.True(t, exit.PID > 0 && exit.PID != pid)
 	testutil.False(t, exit.StreamLost)
 	testutil.Contains(t, exit.Err, "exit status 7")
+	select {
+	case relayed := <-freshExit:
+		testutil.Equal(t, relayed.PID, exit.PID)
+		testutil.False(t, relayed.StreamLost)
+	case <-time.After(5 * time.Second):
+		t.Fatal("fresh supervisor client did not relay the successor exit")
+	}
 }
 
 func TestSupOldKick(t *testing.T) {

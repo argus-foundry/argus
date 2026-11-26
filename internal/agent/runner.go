@@ -586,6 +586,15 @@ func (r *Runner) HasPendingRestart(taskID string) bool {
 	return ok
 }
 
+// HasPendingSessionLaunch includes ordinary start reservations and managed
+// restart gaps. An unavailable launch is distinct from a retired process.
+func (r *Runner) HasPendingSessionLaunch(taskID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sess, reserved := r.sessions[taskID]
+	return (reserved && sess == nil) || r.pendingRestart[taskID] != nil
+}
+
 // SetSessionForTest injects a live *Session into the runner's map without
 // going through Start (which needs a backend command + worktree). Tests use it
 // to drive watcher / notify paths against a real PTY session (e.g. exec sleep)
@@ -781,14 +790,19 @@ func (r *Runner) Sessions() map[string]*Session {
 	return r.sessionsLocked()
 }
 
-// SessionsAndPendingRestarts snapshots handles and restart reservations at
+// SessionsAndPendingLaunches snapshots handles and launch reservations at
 // once so a successor publishing mid-listing cannot disappear from both.
-func (r *Runner) SessionsAndPendingRestarts() (map[string]*Session, []string) {
+func (r *Runner) SessionsAndPendingLaunches() (map[string]*Session, []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	sessions, pending := r.sessionsLocked(), r.pendingRestartIDsLocked()
 	for _, id := range pending {
 		delete(sessions, id)
+	}
+	for id, sess := range r.sessions {
+		if sess == nil && r.pendingRestart[id] == nil {
+			pending = append(pending, id)
+		}
 	}
 	return sessions, pending
 }

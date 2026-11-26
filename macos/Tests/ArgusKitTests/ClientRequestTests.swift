@@ -212,6 +212,26 @@ struct ClientRequestTests {
         #expect(items["clean"] == "1")
     }
 
+    @Test("output retries a stale snapshot until the replacement is ready")
+    func outputRetriesStaleSession() async throws {
+        MockURLProtocol.handler = { req in
+            let attempt = MockURLProtocol.lock.withLock { MockURLProtocol.requestLog.count }
+            if attempt <= 2 {
+                let response = HTTPURLResponse(url: req.url!, statusCode: 409, httpVersion: "HTTP/1.1",
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, Data(#"{"error":"session changed while reading output","code":"stale_session"}"#.utf8))
+            }
+            let response = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                                           headerFields: ["X-Argus-Session-Pid": "456", "X-Output-Total": "11"])!
+            return (response, Data("replacement".utf8))
+        }
+        let snapshot = try await makeClient().output(taskID: "t1")
+        #expect(snapshot.sessionPID == 456)
+        #expect(snapshot.total == 11)
+        #expect(String(decoding: snapshot.data, as: UTF8.self) == "replacement")
+        #expect(MockURLProtocol.lock.withLock { MockURLProtocol.requestLog.count } == 3)
+    }
+
     // MARK: - Raw task pin round-trip (add-mac-keybinding-parity Stage 1 red:
     // `ArgusClient.setPinned` does not exist yet)
     //

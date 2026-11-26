@@ -3,9 +3,7 @@
 ## Purpose
 
 Voice control lets a speakable MCP client drive Argus without a worktree directory. Short named commands reuse the existing task, session, and status paths. Answers meant to be read aloud are plain sentences. An optional loopback webhook reports when a session needs input or a task completes.
-
 ## Requirements
-
 ### Requirement: Voice commands are an allowlist without a working directory
 
 The system SHALL expose a named-command registry through the MCP server. Each command SHALL declare the arguments it reads. A call SHALL NOT require a working directory. The registry SHALL NOT include `kb_ingest` or `kb_delete`, and a request for either name SHALL be refused without changing the knowledge base. Unknown command names SHALL be refused.
@@ -272,3 +270,27 @@ A live terminal snapshot SHALL identify its process alongside the cursor. Client
 
 - **WHEN** the current process differs from the one associated with the requested output cursor
 - **THEN** the client opens a fresh snapshot without reusing the outgoing cursor
+
+### Requirement: Scoped lifecycle recovery
+
+Terminal reconnects SHALL retain the requested process identity through stream attachment. Native clients SHALL retry temporary snapshot conflicts during replacement.
+
+#### Scenario: Process changes during attachment
+- **WHEN** a terminal reconnect requests an offset for the old process and a replacement is installed before attachment
+- **THEN** the request receives a stale-session conflict and cannot apply the old offset to the replacement.
+
+#### Scenario: Previous supervisor cannot manage a live backend move
+- **WHEN** a live Claude or Codex task is moved between backends and the session owner cannot manage its restart
+- **THEN** the move fails before persisting its new backend or handoff.
+
+#### Scenario: Hera stop delivery is interrupted
+- **WHEN** the daemon finds a durable reclaim intent for an archived, unbound task whose exact process is still live
+- **THEN** it retries the PID-scoped stop and waits for a matching exit before reclaiming.
+
+#### Scenario: Hera role admission overlaps reclaim
+- **WHEN** a task is being stopped or its worktree is being removed by Hera reclaim
+- **THEN** a new live binding for that task cannot commit during reclaim.
+
+#### Scenario: Daemon reattaches while a launch is reserved
+- **WHEN** the owner has reserved a launch or a managed successor is still starting
+- **THEN** owner listings retain the reservation and the new daemon keeps tracking the launch until the owner settles it.

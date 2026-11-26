@@ -1869,11 +1869,12 @@ func TestHandleStreamOutput(t *testing.T) {
 
 type managedSSEFixture struct {
 	transcriptKickSession
-	done         chan struct{}
-	pid          int
-	output       string
-	attachedPID  int
-	attachedFrom uint64
+	done                chan struct{}
+	pid                 int
+	output              string
+	attachedPID         int
+	attachedFrom        uint64
+	replaceAfterPIDRead int
 }
 
 func (s *managedSSEFixture) Done() <-chan struct{}  { return s.done }
@@ -1882,12 +1883,20 @@ func (s *managedSSEFixture) PID() int {
 	if s.pid == 0 {
 		return 123
 	}
-	return s.pid
+	pid := s.pid
+	if s.replaceAfterPIDRead != 0 {
+		s.pid = s.replaceAfterPIDRead
+		s.replaceAfterPIDRead = 0
+	}
+	return pid
 }
 func (s *managedSSEFixture) RecentOutputTailWithTotal(int) ([]byte, uint64) {
 	return []byte(s.output), uint64(len(s.output))
 }
 func (s *managedSSEFixture) AddWriterFromPID(w io.Writer, offset uint64, pid int) bool {
+	if pid != s.PID() {
+		return false
+	}
 	s.attachedPID, s.attachedFrom = pid, offset
 	_, err := w.Write([]byte("last bytes"))
 	return err == nil
@@ -1953,6 +1962,18 @@ func TestTerminalOutputCursorRejectsReplacement(t *testing.T) {
 	testutil.Equal(t, fresh.Code, http.StatusOK)
 	testutil.Equal(t, fresh.Header().Get("X-Argus-Session-Pid"), "32")
 	testutil.Equal(t, fresh.Body.String(), "new process")
+}
+
+func TestTerminalStreamCursorRejectsReplacementDuringAttach(t *testing.T) {
+	s, _ := testServer(t)
+	session := &managedSSEFixture{pid: 31, replaceAfterPIDRead: 32}
+	s.runner = managedSSERunner{Runner: agent.NewRunner(nil), session: session}
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, authedReq("GET", "/api/tasks/process/stream?expected_pid=31&since=40", ""))
+	testutil.Equal(t, session.PID(), 32)
+	testutil.Equal(t, w.Code, http.StatusConflict)
+	testutil.Contains(t, w.Body.String(), "stale_session")
+	testutil.Equal(t, session.attachedPID, 0)
 }
 
 // --- handleListBackends ---

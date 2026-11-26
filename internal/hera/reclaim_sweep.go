@@ -107,6 +107,12 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 		return
 	}
 	defer unlock()
+	releaseReclaim, acquired, err := d.TryLockHeraReclaim(id)
+	if err != nil || !acquired {
+		uxlog.Log("[hera] reclaim sweep: binding admission busy task=%s err=%v", id, err)
+		return
+	}
+	defer releaseReclaim()
 
 	t, err := d.Get(id)
 	if err != nil {

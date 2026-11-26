@@ -8,6 +8,35 @@ import (
 	"github.com/argus-foundry/argus/internal/model"
 )
 
+var ErrHeraReclaimInProgress = errors.New("task reclaim is in progress")
+
+// lockHeraBindingAdmission keeps live bindings from being installed while
+// reclaim is stopping the prior owner or removing the task's worktree.
+func (d *DB) lockHeraBindingAdmission(taskID string) (func(), error) {
+	unlock, acquired, err := d.TryLockHeraReclaim(taskID)
+	if err != nil {
+		return nil, err
+	}
+	if !acquired {
+		return nil, ErrHeraReclaimInProgress
+	}
+	d.mu.Lock()
+	var blocked bool
+	err = d.conn.QueryRow(`SELECT EXISTS (SELECT 1 FROM tasks WHERE id=? AND hera_reclaim_pid<>0)
+		OR (NOT EXISTS (SELECT 1 FROM tasks WHERE id=?) AND EXISTS (
+		    SELECT 1 FROM hera_bindings WHERE argus_task_id=? AND end_reason=?))`,
+		taskID, taskID, taskID, HeraEndReasonUserDeleted).Scan(&blocked)
+	d.mu.Unlock()
+	if err != nil || blocked {
+		unlock()
+		if err != nil {
+			return nil, err
+		}
+		return nil, ErrHeraReclaimInProgress
+	}
+	return unlock, nil
+}
+
 // ArmHeraReclaimStop records the outgoing PTY of an archived, active task.
 // The caller holds the task's session mutation lock through the stop request.
 func (d *DB) ArmHeraReclaimStop(taskID string, pid int) (bool, error) {

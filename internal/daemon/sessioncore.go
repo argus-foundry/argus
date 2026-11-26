@@ -91,7 +91,14 @@ type boundStream struct {
 // *agent.Session handles. *agent.Runner satisfies it; a supervisor-client does
 // not (it has no local sessions to iterate).
 type rawSessionLister interface {
-	SessionsAndPendingRestarts() (map[string]*agent.Session, []string)
+	SessionsAndPendingLaunches() (map[string]*agent.Session, []string)
+}
+
+func (c *sessionCore) sessionLaunchPending(taskID string) bool {
+	if r, ok := c.runner.(*agent.Runner); ok {
+		return r.HasPendingSessionLaunch(taskID)
+	}
+	return c.runner.HasPendingRestart(taskID)
 }
 
 // sessionInfoLister is the supervisor-client's listing surface: it relays the
@@ -403,7 +410,7 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 		// clients retry the connection instead of giving up and tearing down
 		// their local UI state. The actual liveness will be reported once
 		// the new session is in place.
-		if c.runner.HasPendingRestart(req.TaskID) {
+		if c.sessionLaunchPending(req.TaskID) {
 			resp.Alive = true
 		}
 		return nil
@@ -464,7 +471,7 @@ func (c *sessionCore) ListSessions(_ *Empty, resp *ListResp) error {
 	if !ok {
 		return nil
 	}
-	sessions, pending := rl.SessionsAndPendingRestarts()
+	sessions, pending := rl.SessionsAndPendingLaunches()
 	resp.Sessions = make([]SessionInfo, 0, len(sessions)+len(pending))
 	for id, sess := range sessions {
 		cols, rows := sess.PTYSize()

@@ -47,12 +47,15 @@ func (r connectedReclaimRunner) CheckReclaimSessionRetired(string) error { retur
 func TestHeraReclaimConnectedArmsSessionBeforeStop(t *testing.T) {
 	d := testDB(t)
 	task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress}
+	orch, err := d.CreateHeraOrchestrator("new-team", "")
+	testutil.NoError(t, err)
 	const pid = 42
 	type observation struct {
 		armed, locked bool
 		taskID        string
 		pid           int
 		err           error
+		bindErr       error
 	}
 	observed := make(chan observation, 1)
 	runner := connectedReclaimRunner{
@@ -64,7 +67,10 @@ func TestHeraReclaimConnectedArmsSessionBeforeStop(t *testing.T) {
 			if acquired {
 				unlock()
 			}
-			observed <- observation{armed: armed, locked: !acquired, taskID: id, pid: expectedPID, err: errors.Join(err, lockErr)}
+			_, _, bindErr := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
+				OrchestratorID: orch.ID, Name: "joining", Kind: db.HeraKindCoordinator,
+			}, task.ID, task.Worktree)
+			observed <- observation{armed: armed, locked: !acquired, taskID: id, pid: expectedPID, err: errors.Join(err, lockErr), bindErr: bindErr}
 			return nil
 		},
 	}
@@ -78,6 +84,7 @@ func TestHeraReclaimConnectedArmsSessionBeforeStop(t *testing.T) {
 		testutil.True(t, got.locked)
 		testutil.Equal(t, got.taskID, task.ID)
 		testutil.Equal(t, got.pid, pid)
+		testutil.ErrorIs(t, got.bindErr, db.ErrHeraReclaimInProgress)
 	case <-time.After(2 * time.Second):
 		t.Fatal("reclaim did not stop the active session")
 	}

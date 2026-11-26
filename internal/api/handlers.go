@@ -1861,8 +1861,10 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	var sess agent.SessionHandle
+	var pid int
 	if expected := r.URL.Query().Get("expected_pid"); expected != "" {
-		pid, err := strconv.Atoi(expected)
+		var err error
+		pid, err = strconv.Atoi(expected)
 		if err != nil || pid <= 0 || pid > 1<<31-1 {
 			writeErr(w, http.StatusBadRequest, "expected_pid must be a positive process ID", nil)
 			return
@@ -1903,7 +1905,9 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	pid := sess.PID()
+	if pid == 0 {
+		pid = sess.PID()
+	}
 	cols, rows := sess.InitialPTYSize()
 	sessDone := sess.Done()
 	// Buffer the ring replay and bind the writer to the same process as the

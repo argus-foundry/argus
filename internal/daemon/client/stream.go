@@ -36,6 +36,10 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 	backoff := streamBackoff()
 	maxStreamRetries := len(backoff)
 	var restart daemon.ExitInfo
+	rs.mu.Lock()
+	launch := rs.info
+	rs.mu.Unlock()
+	waitingForLaunch := launch.Alive && launch.PID == 0
 	for attempt := 0; attempt <= maxStreamRetries; attempt++ {
 		// Check if the client was closed (e.g., daemon restart replaced it).
 		// This stops stale goroutines from flooding the new daemon with
@@ -66,6 +70,33 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 		}
 
 		rs.streamAttempt = attempt
+		if waitingForLaunch {
+			info, err := rs.client.ProbeSession(rs.taskID)
+			if err != nil {
+				continue
+			}
+			if launch.LastExitPID > 0 {
+				exit := rs.client.exitInfoForPID(rs.taskID, launch.LastExitPID)
+				if exit.PendingRestart && !exit.StreamLost {
+					restart = exit
+					waitingForLaunch = false
+				}
+			}
+			if waitingForLaunch {
+				if info.Alive && info.PID == 0 {
+					// The owner still has a reservation. Startup reattach
+					// has no predecessor handle and must retain its relay.
+					attempt = 0
+					continue
+				}
+				if !info.Alive {
+					rs.finishUnattachedLaunch(launch, info)
+					return
+				}
+				rs.updateInfo(info)
+				waitingForLaunch = false
+			}
+		}
 		if restart.PendingRestart {
 			if !rs.client.ownsSession(rs) {
 				rs.close()
@@ -174,6 +205,19 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 
 	// Exhausted retries — stream lost, not a confirmed process exit.
 	uxlog.Log("stream: gave up after %d retries task=%s, treating as stream lost", maxStreamRetries, rs.taskID)
+	rs.close()
+	rs.client.removeSessionStreamLost(rs)
+}
+
+func (rs *RemoteSession) finishUnattachedLaunch(initial, current daemon.SessionInfo) {
+	pid := current.LastExitPID
+	if pid > 0 && pid != initial.LastExitPID {
+		exit := rs.client.exitInfoForPID(rs.taskID, pid)
+		if !exit.StreamLost && !exit.PendingRestart {
+			rs.client.finishSession(rs, exit)
+			return
+		}
+	}
 	rs.close()
 	rs.client.removeSessionStreamLost(rs)
 }

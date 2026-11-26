@@ -67,6 +67,23 @@ func TestHeraReclaimStopRespectsCurrentTaskState(t *testing.T) {
 	testutil.False(t, matched)
 }
 
+func TestHeraBindingAdmissionWaitsForReclaimExit(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{ID: "reclaim", Name: "Reclaim", Status: model.StatusInProgress, Archived: true}
+	testutil.NoError(t, d.Add(task))
+	orch, err := d.CreateHeraOrchestrator("new-team", "")
+	testutil.NoError(t, err)
+	role := CreateHeraRoleInput{OrchestratorID: orch.ID, Name: "joining", Kind: HeraKindCoordinator}
+	armed, err := d.ArmHeraReclaimStop(task.ID, 41)
+	testutil.NoError(t, err)
+	testutil.True(t, armed)
+	_, _, err = d.CreateHeraRoleWithBinding(role, task.ID, "")
+	testutil.ErrorIs(t, err, ErrHeraReclaimInProgress)
+	testutil.NoError(t, d.ClearHeraReclaimStop(task.ID, 41))
+	_, _, err = d.CreateHeraRoleWithBinding(role, task.ID, "")
+	testutil.NoError(t, err)
+}
+
 func TestReconcileMissingSessionPreservesArmedReclaim(t *testing.T) {
 	d := testDB(t)
 	const pid = 41

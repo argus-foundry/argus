@@ -93,6 +93,10 @@ public struct ArgusClient: Sendable {
             throw ArgusError.invalidResponse("non-HTTP response")
         }
         guard (200..<300).contains(http.statusCode) else {
+            if http.statusCode == 409 {
+                let conflict = ArgusError.http(status: http.statusCode, body: String(decoding: data, as: UTF8.self))
+                if conflict.isStaleSession { throw conflict }
+            }
             throw ArgusError.http(status: http.statusCode, body: Self.errorMessage(from: data))
         }
         return (data, http)

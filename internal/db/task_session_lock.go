@@ -39,22 +39,33 @@ func (d *DB) LockSessionMutation(ctx context.Context, taskID string) (func(), er
 // owner returns (nil, false, nil) without waiting. Call unlock after all
 // session and database changes for the operation have finished.
 func (d *DB) TryLockSessionMutation(taskID string) (unlock func(), acquired bool, err error) {
+	return d.tryLockTaskOperation(taskID, "")
+}
+
+// TryLockHeraReclaim coordinates worktree reclaim and binding admission across
+// processes. When a caller also needs the session lock, it takes that lock first.
+func (d *DB) TryLockHeraReclaim(taskID string) (unlock func(), acquired bool, err error) {
+	return d.tryLockTaskOperation(taskID, "hera-reclaim-")
+}
+
+func (d *DB) tryLockTaskOperation(taskID, filePrefix string) (unlock func(), acquired bool, err error) {
 	if taskID == "" {
 		return nil, false, errors.New("session mutation requires a task ID")
 	}
 	if d.sessionLockDir == "" {
-		if _, held := d.sessionLocks.LoadOrStore(taskID, struct{}{}); held {
+		key := filePrefix + ":" + taskID
+		if _, held := d.sessionLocks.LoadOrStore(key, struct{}{}); held {
 			return nil, false, nil
 		}
 		var release sync.Once
-		return func() { release.Do(func() { d.sessionLocks.Delete(taskID) }) }, true, nil
+		return func() { release.Do(func() { d.sessionLocks.Delete(key) }) }, true, nil
 	}
 
 	if err := os.MkdirAll(d.sessionLockDir, 0700); err != nil {
 		return nil, false, fmt.Errorf("create session lock directory: %w", err)
 	}
 	hash := sha256.Sum256([]byte(taskID))
-	path := filepath.Join(d.sessionLockDir, hex.EncodeToString(hash[:])+".lock")
+	path := filepath.Join(d.sessionLockDir, filePrefix+hex.EncodeToString(hash[:])+".lock")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
 		return nil, false, fmt.Errorf("open session lock file: %w", err)

@@ -13,11 +13,16 @@ type reclaimProbe struct {
 	info       SessionInfo
 	retirement error
 	exit       ExitInfo
+	stopPID    *int
 }
 
 func (o reclaimProbe) ProbeSession(string) (SessionInfo, error) { return o.info, nil }
 func (o reclaimProbe) CheckReclaimSessionRetired(string) error  { return o.retirement }
 func (o reclaimProbe) ObservedSessionExit(string, int) ExitInfo { return o.exit }
+func (o reclaimProbe) StopTreeForPID(_ string, pid int) error {
+	*o.stopPID = pid
+	return nil
+}
 
 func TestRecoverHeraReclaimExitValidatesOwner(t *testing.T) {
 	const pid = 41
@@ -28,8 +33,15 @@ func TestRecoverHeraReclaimExitValidatesOwner(t *testing.T) {
 		exit       ExitInfo
 		committed  bool
 		recovered  bool
+		retried    bool
+		unarchived bool
+		fenced     bool
 	}{
 		{name: "owner unsettled", retirement: agent.ErrSessionStarting, exit: ExitInfo{PID: pid, Stopped: true}},
+		{name: "interrupted stop", info: SessionInfo{Alive: true, PID: pid}, retirement: agent.ErrSessionStarting, retried: true},
+		{name: "different live owner", info: SessionInfo{Alive: true, PID: pid + 1}, retirement: agent.ErrSessionStarting},
+		{name: "task restored while stopped intent pending", info: SessionInfo{Alive: true, PID: pid}, retirement: agent.ErrSessionStarting, unarchived: true},
+		{name: "binding operation in progress", info: SessionInfo{Alive: true, PID: pid}, retirement: agent.ErrSessionStarting, fenced: true},
 		{name: "replacement became live", info: SessionInfo{Alive: true, PID: pid + 1}, exit: ExitInfo{PID: pid, Stopped: true}},
 		{name: "replacement already retired", info: SessionInfo{LastExitPID: pid + 1}, exit: ExitInfo{PID: pid, Stopped: true}},
 		{name: "unconfirmed relay", exit: ExitInfo{PID: pid, StreamLost: true}},
@@ -49,9 +61,24 @@ func TestRecoverHeraReclaimExitValidatesOwner(t *testing.T) {
 			if tc.committed {
 				testutil.NoError(t, database.SetStatus(task.ID, model.StatusComplete))
 			}
-			d.UseSupervisorRunner(reclaimProbe{fakeSupClient: &fakeSupClient{}, info: tc.info, retirement: tc.retirement, exit: tc.exit})
+			if tc.unarchived {
+				testutil.NoError(t, database.SetArchived(task.ID, false))
+			}
+			if tc.fenced {
+				unlock, acquired, err := database.TryLockHeraReclaim(task.ID)
+				testutil.NoError(t, err)
+				testutil.True(t, acquired)
+				defer unlock()
+			}
+			var stopPID int
+			d.UseSupervisorRunner(reclaimProbe{fakeSupClient: &fakeSupClient{}, info: tc.info, retirement: tc.retirement, exit: tc.exit, stopPID: &stopPID})
 
 			recovered := d.recoverHeraReclaimExits()
+			if tc.retried {
+				testutil.Equal(t, stopPID, pid)
+			} else {
+				testutil.Equal(t, stopPID, 0)
+			}
 			pending, err := database.HeraReclaimStopPID(task.ID)
 			testutil.NoError(t, err)
 			row, err := database.Get(task.ID)

@@ -575,6 +575,12 @@ func (a *App) reclaimConnectedHeraTask(runner agent.SessionProvider, database *d
 		return
 	}
 	defer unlock()
+	releaseReclaim, acquired, err := database.TryLockHeraReclaim(taskID)
+	if err != nil || !acquired {
+		uxlog.Log("[hera-view] nuke: reclaim lock unavailable task=%s: %v", taskID, err)
+		return
+	}
+	defer releaseReclaim()
 
 	task, err := database.Get(taskID)
 	if err != nil {

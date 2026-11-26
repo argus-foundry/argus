@@ -379,7 +379,8 @@ const (
 	// Hera reclaim stops verify the retiring PID at the owner.
 	// v25: session listings preserve pending restarts during prelaunch, and
 	// PID-scoped tree stops avoid worktree-wide detached process cleanup.
-	SupervisorStreamSurface = 25
+	// v26: session listings and status retain ordinary launch reservations.
+	SupervisorStreamSurface = 26
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -638,7 +639,7 @@ var SupervisorStreamPaths = []string{
 // message prints the computed digest to paste back here.
 const (
 	SpawnSurfaceDigest  = "d5dc8e881ff9ce381a59e01eb592ab9b44cf02d1d1b44fe96001a8e2aed737e3"
-	StreamSurfaceDigest = "4529e3f1f1e8221ab4c9a225359d82ab32640327da47be9acac6ee1d6ed75b87"
+	StreamSurfaceDigest = "18c89a44c06e3298e0729b9ec80d30b37d0196bda5e21791fd09e569f09599a8"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

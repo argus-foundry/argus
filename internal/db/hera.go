@@ -827,6 +827,11 @@ func insertHeraRole(ex execer, in CreateHeraRoleInput, now string) (*HeraRole, e
 // orchestrator), (worktree, orchestrator), or role fails with a constraint
 // error — the deterministic backstop behind any app-level pre-check.
 func (d *DB) CreateHeraBinding(in CreateHeraBindingInput) (*HeraBinding, error) {
+	unlock, err := d.lockHeraBindingAdmission(in.ArgusTaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -848,9 +853,14 @@ func (d *DB) CreateHeraBinding(in CreateHeraBindingInput) (*HeraBinding, error) 
 // (e.g. born-bound spawn) supply a name made unique within the orchestrator,
 // and the partial unique index is the backstop.
 func (d *DB) CreateHeraRoleWithBinding(roleIn CreateHeraRoleInput, taskID, worktreePath string) (*HeraRole, *HeraBinding, error) {
+	unlock, err := d.lockHeraBindingAdmission(taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer unlock()
 	var role *HeraRole
 	var binding *HeraBinding
-	err := d.WithTx(func(tx *sql.Tx) error {
+	err = d.WithTx(func(tx *sql.Tx) error {
 		now := formatTime(time.Now())
 		r, err := insertHeraRole(tx, roleIn, now)
 		if err != nil {
@@ -907,8 +917,13 @@ type MoveHeraBindingResult struct {
 // failure, so a not-found or a doomed role/binding insert leaves the old
 // binding live and untouched.
 func (d *DB) MoveHeraBinding(oldBindingID int64, roleIn CreateHeraRoleInput, taskID, worktreePath string) (*MoveHeraBindingResult, error) {
+	unlock, err := d.lockHeraBindingAdmission(taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	var result MoveHeraBindingResult
-	err := d.WithTx(func(tx *sql.Tx) error {
+	err = d.WithTx(func(tx *sql.Tx) error {
 		if err := residentGuard(tx, taskID); err != nil {
 			return err
 		}
@@ -1146,6 +1161,11 @@ func (d *DB) EndHeraCoordinatorBindingsForTask(taskID, reason string) (int, erro
 // re-opened. Called wherever an accepted task's session is resumed so a
 // revived sub-coordinator gets its coordinator hat back.
 func (d *DB) RestoreAcceptedHeraCoordinatorBindings(taskID string) (int, error) {
+	unlock, err := d.lockHeraBindingAdmission(taskID)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	res, err := d.conn.Exec(

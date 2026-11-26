@@ -172,6 +172,7 @@ final class TerminalController {
                 let total = tail.source == "log" && tail.sessionPID == nil ? 0 : tail.total
                 self.apply(self.session.start(tailTotal: total, tailData: tail.data, sessionPID: tail.sessionPID))
             } catch {
+                guard !_Concurrency.Task.isCancelled else { return }
                 Self.log.error("[terminal] tail failed task=\(self.taskID, privacy: .public) err=\(String(describing: error), privacy: .public)")
                 self.viewState = .error(AppState.describe(error))
             }

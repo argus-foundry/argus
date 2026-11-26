@@ -579,10 +579,18 @@ func TestRunner_PendingRestartIDs(t *testing.T) {
 	running, idle := r.RunningAndIdle()
 	testutil.DeepEqual(t, running, []string{"b"})
 	testutil.Equal(t, len(idle), 0)
-	sessions, restarts := r.SessionsAndPendingRestarts()
+	sessions, restarts := r.SessionsAndPendingLaunches()
 	testutil.Equal(t, len(sessions), 0)
 	testutil.DeepEqual(t, restarts, []string{"b"})
 	delete(r.sessions, "b")
+
+	r.SetSessionForTest("c", nil)
+	testutil.True(t, r.HasPendingSessionLaunch("c"))
+	testutil.False(t, r.HasPendingRestart("c"))
+	sessions, launches := r.SessionsAndPendingLaunches()
+	testutil.Equal(t, len(sessions), 0)
+	testutil.Equal(t, len(launches), 2)
+	delete(r.sessions, "c")
 
 	// A pending entry whose task also has a live session is filtered out —
 	// PendingRestartIDs only surfaces the kick gap (pending but no session).
