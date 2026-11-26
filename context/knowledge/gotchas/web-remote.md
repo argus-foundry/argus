@@ -368,3 +368,5 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **PWA recovery owns one attachment generation.** Superseding that attachment cancels its reads and discards late rendering. The deadline continues through the snapshot body and paint.
 
 - **All exits from detail cancel the terminal attachment.** The PWA keeps recovery pending through xterm’s write callback and EventSource acceptance. HTTP rejection retries within the original deadline.
+
+- **Resume belongs to the detail view that initiated it.** Back, a tab switch, or logout ends that view, even when the user immediately reopens the same task. A late resume result cannot replace the reopened terminal.

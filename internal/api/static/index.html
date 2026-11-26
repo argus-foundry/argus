@@ -2242,6 +2242,7 @@ async function api(path, opts = {}) {
 function logout() {
   localStorage.removeItem('argus-token');
   TOKEN = '';
+  closeDetail();
   stopProviderUsage();
   // Stop the poll loop. Without this, setInterval keeps calling refresh(),
   // which 401s with the empty token and would trip the offline screen
@@ -2670,9 +2671,13 @@ function effectiveStatus(t) {
 }
 
 // --- Task Detail ---
+let detailViewGen = 0;
+
 async function openDetail(id) {
-  currentTask = tasks.find(t => t.id === id);
-  if (!currentTask) return;
+  const task = tasks.find(t => t.id === id);
+  if (!task) return;
+  ++detailViewGen;
+  currentTask = task;
   dropRestartQueue();
   // Test hook: top-level `let` doesn't auto-attach to window, but Playwright
   // specs need to read/mutate the active task to drive paths like the empty
@@ -2717,6 +2722,7 @@ let attachGen = 0;
 let attachmentAbort = null;
 
 async function attachTerminal(task, recovery = null) {
+  if (!task || currentTask?.id !== task.id) return false;
   if (!recovery) cancelTerminalRecovery();
   attachmentAbort?.abort();
   attachmentAbort = new AbortController();
@@ -3677,6 +3683,7 @@ function closeStream() {
 }
 
 function detachTaskTerminal() {
+  ++detailViewGen;
   ++attachGen;
   attachmentAbort?.abort();
   attachmentAbort = null;
@@ -4244,11 +4251,13 @@ function setActionButtons(disabled) {
 let resumeReattachHandled = false;
 
 async function resumeTask() {
-  if (actionBusy) return;
+  if (actionBusy || !currentTask) return;
+  const id = currentTask.id;
+  const view = detailViewGen;
   setActionButtons(true);
   resumeReattachHandled = false;
   try {
-    const r = await api(`/api/tasks/${currentTask.id}/resume`, { method: 'POST' });
+    const r = await api(`/api/tasks/${id}/resume`, { method: 'POST' });
     if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'resume failed'); }
     // refresh() syncs currentTask + subtitle + overflow menu inline when a
     // watched field flips. For a non-interactive \u2192 interactive flip the
@@ -4257,9 +4266,9 @@ async function resumeTask() {
     // complete \u2192 in_progress) don't hit that branch, so we fall
     // through to attach here.
     await refresh();
-    if (!resumeReattachHandled) attachTerminal(currentTask);
+    if (view === detailViewGen && !resumeReattachHandled) attachTerminal(currentTask);
   } catch(e) {
-    showToast('Resume failed: ' + e.message);
+    if (view === detailViewGen) showToast('Resume failed: ' + e.message);
   } finally {
     setActionButtons(false);
   }

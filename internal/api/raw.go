@@ -99,7 +99,7 @@ func (s *Server) handleUpdateTaskRaw(w http.ResponseWriter, r *http.Request) {
 	task.Branch = existing.Branch
 	task.BaseBranch = existing.BaseBranch
 	if err := s.db.Update(&task); err != nil {
-		if errors.Is(err, db.ErrResidentProtected) || errors.Is(err, db.ErrGraduationPending) {
+		if errors.Is(err, db.ErrResidentProtected) || errors.Is(err, db.ErrGraduationPending) || errors.Is(err, db.ErrHeraReclaimInProgress) {
 			writeErr(w, http.StatusConflict, "", err)
 			return
 		}

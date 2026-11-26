@@ -119,7 +119,7 @@ func archiveNukedTaskLocked(d *db.DB, taskID string) bool {
 		uxlog.Log("[hera] nuke: task %s not found, skip archive: %v", taskID, err)
 		return false
 	}
-	if err := d.SetArchived(t.ID, true); err != nil {
+	if err := d.ArchiveHeraReclaim(t.ID); err != nil {
 		uxlog.Log("[hera] nuke: archive task failed task=%s: %v", t.ID, err)
 		return false
 	}

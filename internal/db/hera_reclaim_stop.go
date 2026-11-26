@@ -11,11 +11,11 @@ import (
 var ErrHeraReclaimInProgress = errors.New("task reclaim is in progress")
 
 const heraNukeBindingSQL = `SELECT argus_task_id FROM hera_bindings deleted
-	WHERE end_reason='` + HeraEndReasonUserDeleted + `' AND id > COALESCE((
-		SELECT hera_reclaim_settled_binding FROM tasks WHERE id=deleted.argus_task_id),0)`
+	WHERE (nuke_reclaim='claimed' OR (nuke_reclaim='' AND end_reason='` + HeraEndReasonUserDeleted + `'
+	AND id > COALESCE((SELECT hera_reclaim_settled_binding FROM tasks WHERE id=deleted.argus_task_id),0)))`
 
 const heraReclaimOwnsTaskSQL = `(hera_reclaim_pid<>0 OR (id IN (` + heraNukeBindingSQL + `
-	AND (tasks.archived=1 OR EXISTS (SELECT 1 FROM hera_roles WHERE id=deleted.role_id AND nuked_at IS NOT NULL)))
+	AND (tasks.archived=1 OR deleted.nuke_reclaim='claimed'))
 	AND id NOT IN (SELECT argus_task_id FROM hera_bindings WHERE ended_at IS NULL)))`
 
 func heraReclaimAdmissionGuard(q rowQuerier, taskID string) error {
@@ -60,20 +60,29 @@ func (d *DB) TryLockTaskOutsideReclaim(taskID string) (func(), error) {
 	return d.lockHeraTaskAdmission(taskID)
 }
 
-// MarkHeraReclaimCleaned releases ownership when cleanup deliberately keeps an
-// archived row. An ensuing nuke of a newer binding can reclaim it again.
+// MarkHeraReclaimCleaned releases ownership when cleanup keeps an archived
+// task. Each explicit claim settles on its binding, so clearing an older
+// hidden role can still issue a fresh claim later.
 func (d *DB) MarkHeraReclaimCleaned(taskID string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	_, err := d.conn.Exec(`UPDATE tasks SET hera_reclaim_settled_binding=MAX(hera_reclaim_settled_binding, COALESCE((
-		SELECT MAX(id) FROM hera_bindings WHERE argus_task_id=tasks.id AND end_reason=?),0))
-		WHERE id=? AND archived=1 AND hera_reclaim_pid=0
-		AND NOT EXISTS (SELECT 1 FROM hera_bindings WHERE argus_task_id=tasks.id AND ended_at IS NULL)`,
-		HeraEndReasonUserDeleted, taskID)
-	return err
+	return d.WithTx(func(tx *sql.Tx) error {
+		result, err := tx.Exec(`UPDATE tasks SET hera_reclaim_settled_binding=MAX(hera_reclaim_settled_binding, COALESCE((
+			SELECT MAX(id) FROM hera_bindings WHERE argus_task_id=tasks.id AND nuke_reclaim='' AND end_reason=?),0))
+			WHERE id=? AND archived=1 AND hera_reclaim_pid=0
+			AND NOT EXISTS (SELECT 1 FROM hera_bindings WHERE argus_task_id=tasks.id AND ended_at IS NULL)`,
+			HeraEndReasonUserDeleted, taskID)
+		if err != nil {
+			return err
+		}
+		matched, err := result.RowsAffected()
+		if err != nil || matched == 0 {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE hera_bindings SET nuke_reclaim='settled' WHERE argus_task_id=? AND nuke_reclaim='claimed'`, taskID)
+		return err
+	})
 }
 
-// HasUnsettledHeraNuke revalidates a sweep candidate after acquiring task locks.
+// HasUnsettledHeraNuke revalidates queued reclaim after acquiring task locks.
 func (d *DB) HasUnsettledHeraNuke(taskID string) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

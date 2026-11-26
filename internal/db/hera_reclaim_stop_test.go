@@ -1,12 +1,22 @@
 package db
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
+
+func TestPinMissingTaskDoesNotCreateReclaimLock(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "tasks.db"))
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	testutil.ErrorIs(t, d.SetPinned("missing", true), ErrTaskNotFound)
+	_, err = os.Stat(d.sessionLockDir)
+	testutil.ErrorIs(t, err, os.ErrNotExist)
+}
 
 func TestHeraReclaimStopPersistsForExactSession(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tasks.db")
@@ -64,7 +74,7 @@ func TestHeraReclaimStopRespectsCurrentTaskState(t *testing.T) {
 	matched, err = d.ConsumeHeraReclaimStop(task.ID, 41)
 	testutil.NoError(t, err)
 	testutil.False(t, matched)
-	testutil.NoError(t, d.SetArchived(task.ID, true))
+	testutil.NoError(t, d.ArchiveHeraReclaim(task.ID))
 	matched, err = d.ConsumeHeraReclaimStop(task.ID, 41)
 	testutil.NoError(t, err)
 	testutil.False(t, matched)
@@ -98,7 +108,11 @@ func TestNukedTaskReclaimOwnsLaunchAndPrune(t *testing.T) {
 	}, task.ID, "")
 	testutil.NoError(t, err)
 	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(role.ID))
-	testutil.NoError(t, d.SetArchived(task.ID, true))
+	testutil.ErrorIs(t, d.SetArchived(task.ID, true), ErrHeraReclaimInProgress)
+	archived := *task
+	archived.SetArchived(true)
+	testutil.ErrorIs(t, d.Update(&archived), ErrHeraReclaimInProgress)
+	testutil.NoError(t, d.ArchiveHeraReclaim(task.ID))
 
 	checkGenericOperations := func() {
 		t.Helper()
@@ -126,6 +140,69 @@ func TestNukedTaskReclaimOwnsLaunchAndPrune(t *testing.T) {
 	pruned, _, err = d.PruneHeraReclaimedTask(task.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(pruned), 1)
+}
+
+func TestPreservedHeraNukeAllowsRemainingRoleRebind(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{ID: "shared", Name: "Shared", Status: model.StatusComplete}
+	testutil.NoError(t, d.Add(task))
+	first, err := d.CreateHeraOrchestrator("first", "")
+	testutil.NoError(t, err)
+	second, err := d.CreateHeraOrchestrator("second", "")
+	testutil.NoError(t, err)
+	role, _, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{
+		OrchestratorID: first.ID, Name: "first-worker", Kind: HeraKindWorker,
+	}, task.ID, "")
+	testutil.NoError(t, err)
+	remaining, binding, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{
+		OrchestratorID: second.ID, Name: "second-worker", Kind: HeraKindWorker,
+	}, task.ID, "")
+	testutil.NoError(t, err)
+
+	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(role.ID))
+	testutil.NoError(t, d.EndHeraBinding(binding.ID, "hera_rebind"))
+	candidates, err := d.HeraNukeReclaimCandidates()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(candidates), 0)
+	allowed, err := d.HasUnsettledHeraNuke(task.ID)
+	testutil.NoError(t, err)
+	testutil.False(t, allowed)
+	unlock, acquired, err := d.TryLockSessionLaunch(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, acquired)
+	unlock()
+	_, err = d.CreateHeraBinding(CreateHeraBindingInput{RoleID: remaining.ID, ArgusTaskID: task.ID})
+	testutil.NoError(t, err)
+}
+
+func TestClearOlderHiddenHeraRoleAfterReclaimSettled(t *testing.T) {
+	d := testDB(t)
+	const id = "shared"
+	testutil.NoError(t, d.Add(&model.Task{ID: id, Name: "Shared"}))
+	first, err := d.CreateHeraOrchestrator("first", "")
+	testutil.NoError(t, err)
+	second, err := d.CreateHeraOrchestrator("second", "")
+	testutil.NoError(t, err)
+	older, binding, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{
+		OrchestratorID: first.ID, Name: "older", Kind: HeraKindWorker,
+	}, id, "")
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.EndHeraBinding(binding.ID, "archived"))
+	testutil.NoError(t, d.ArchiveHeraRole(older.ID))
+	newer, _, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{
+		OrchestratorID: second.ID, Name: "newer", Kind: HeraKindWorker,
+	}, id, "")
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(newer.ID))
+	testutil.NoError(t, d.ArchiveHeraReclaim(id))
+	testutil.NoError(t, d.MarkHeraReclaimCleaned(id))
+	testutil.NoError(t, d.SetArchived(id, false))
+
+	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(older.ID))
+	testutil.ErrorIs(t, d.SetArchived(id, true), ErrHeraReclaimInProgress)
+	candidates, err := d.HeraNukeReclaimCandidates()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(candidates), 1)
 }
 
 func TestReconcileMissingSessionPreservesArmedReclaim(t *testing.T) {

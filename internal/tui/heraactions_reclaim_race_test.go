@@ -76,6 +76,7 @@ func TestHeraReclaimConnectedArmsSessionBeforeStop(t *testing.T) {
 	}
 	app := New(d, runner, true)
 	testutil.NoError(t, d.Add(task))
+	seedHeraReclaim(t, d, task)
 	app.heraReclaimAndArchiveTask(task.ID)
 	select {
 	case got := <-observed:
@@ -134,6 +135,7 @@ func TestHeraReclaimConnectedUnconfirmedPreservesWorktree(t *testing.T) {
 			}
 			app := New(d, runner, true)
 			testutil.NoError(t, d.Add(task))
+			seedHeraReclaim(t, d, task)
 			app.reclaimConnectedHeraTask(runner, d, task.ID)
 			testutil.Equal(t, stopCalls, wantCalls)
 			pending, err := d.HeraReclaimStopPending(task.ID)
@@ -153,6 +155,7 @@ func TestHeraReclaimConnectedRetiredRemovesWorktree(t *testing.T) {
 	runner := connectedReclaimRunner{Runner: agent.NewRunner(nil)}
 	app := New(d, runner, true)
 
+	seedHeraReclaim(t, d, task)
 	app.reclaimConnectedHeraTask(runner, d, task.ID)
 
 	testutil.False(t, agent.DirExists(worktree))
@@ -260,6 +263,7 @@ func TestHeraReclaimAndArchiveTask_LiveTaskCompletesAfterAsyncExit(t *testing.T)
 
 	testutil.NoError(t, d.Add(&model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Project: "p", CreatedAt: time.Now()}))
 
+	seedHeraReclaim(t, d, &model.Task{ID: "tw"})
 	reclaimed := app.heraReclaimAndArchiveTask("tw")
 	testutil.Equal(t, reclaimed, false) // no worktree/branch on this task, nothing to reclaim
 
@@ -305,6 +309,7 @@ func TestHeraReclaimAndArchiveTask_NoLiveSessionMarkerDoesNotLeak(t *testing.T) 
 
 	testutil.NoError(t, d.Add(&model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Project: "p", CreatedAt: time.Now()}))
 
+	seedHeraReclaim(t, d, &model.Task{ID: "tw"})
 	app.heraReclaimAndArchiveTask("tw")
 
 	task, err := d.Get("tw")

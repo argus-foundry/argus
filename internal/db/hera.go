@@ -689,7 +689,11 @@ func (d *DB) NukeHeraRoleAndEndBinding(id int64) error {
 // NukeHeraRoleAndEndBindingAs records the role transition and binding end
 // atomically and preserves the caller's actor for resident notifications.
 func (d *DB) NukeHeraRoleAndEndBindingAs(id int64, actor HeraActor) error {
-	binding, err := d.HeraLiveBindingByRole(id)
+	d.mu.Lock()
+	binding, err := scanHeraBinding(d.conn.QueryRow(
+		`SELECT id, role_id, orchestrator_id, argus_task_id, worktree_path, started_at, ended_at, end_reason
+		FROM hera_bindings WHERE role_id=? ORDER BY ended_at IS NULL DESC, id DESC LIMIT 1`, id))
+	d.mu.Unlock()
 	if err != nil && !errors.Is(err, ErrHeraNotFound) {
 		return err
 	}
@@ -712,20 +716,30 @@ func (d *DB) nukeHeraRole(id int64, actor HeraActor, endBinding bool, bindingID 
 	return d.heraRoleMutation(id, actor, ResidentNoticeNuked, func(tx *sql.Tx, cur *HeraRole) (bool, string, error) {
 		now := formatTime(time.Now())
 		if endBinding {
-			var liveID int64
-			if err := tx.QueryRow(`SELECT COALESCE(MAX(id),0) FROM hera_bindings WHERE role_id=? AND ended_at IS NULL`, id).Scan(&liveID); err != nil {
+			var currentID int64
+			var live bool
+			if err := tx.QueryRow(`SELECT COALESCE((SELECT id FROM hera_bindings
+				WHERE role_id=? ORDER BY ended_at IS NULL DESC, id DESC LIMIT 1),0),
+				EXISTS(SELECT 1 FROM hera_bindings WHERE role_id=? AND ended_at IS NULL)`, id, id).Scan(&currentID, &live); err != nil {
 				return false, "", err
 			}
-			if liveID != bindingID {
+			if currentID != bindingID {
 				return false, "", fmt.Errorf("%w: role binding changed during nuke", ErrHeraReclaimInProgress)
 			}
-			result, err := tx.Exec(`UPDATE hera_bindings SET ended_at=?, end_reason=? WHERE id=? AND ended_at IS NULL`,
-				now, HeraEndReasonUserDeleted, liveID)
-			if err != nil {
-				return false, "", fmt.Errorf("end hera role binding: %w", err)
-			}
-			if count, _ := result.RowsAffected(); count != 0 {
-				clearDeadRoleMailAfterEnd(tx, HeraEndReasonUserDeleted)
+			if currentID != 0 && (live || (cur.ArchivedAt != nil && cur.NukedAt == nil)) {
+				_, err := tx.Exec(`UPDATE hera_bindings AS target
+					SET end_reason=CASE WHEN ended_at IS NULL THEN ? ELSE end_reason END,
+						ended_at=COALESCE(ended_at,?),
+						nuke_reclaim=CASE WHEN EXISTS (SELECT 1 FROM hera_bindings sibling
+							WHERE sibling.argus_task_id=target.argus_task_id AND sibling.id<>target.id AND sibling.ended_at IS NULL)
+							THEN 'preserved' ELSE 'claimed' END
+					WHERE id=?`, HeraEndReasonUserDeleted, now, currentID)
+				if err != nil {
+					return false, "", fmt.Errorf("end hera role binding: %w", err)
+				}
+				if live {
+					clearDeadRoleMailAfterEnd(tx, HeraEndReasonUserDeleted)
+				}
 			}
 		}
 		// The transition is nuked_at NULL -> set; the archive/pin side effects
@@ -1734,9 +1748,8 @@ func (d *DB) ListHeraLiveBindings() ([]*HeraBinding, error) {
 		 FROM hera_bindings WHERE ended_at IS NULL ORDER BY started_at ASC, id ASC`)
 }
 
-// HeraNukeReclaimCandidates returns every task holding at least one
-// hera_bindings row ended for the cascade-nuke path's own reason
-// (HeraEndReasonUserDeleted) that currently holds NO live binding
+// HeraNukeReclaimCandidates returns every task holding an unsettled
+// nuke reclaim claim that currently holds NO live binding
 // (hera_bindings.ended_at IS NULL) — the candidate set for
 // hera.ReconcileHeraReclaims (fix-hera-nuke-cleanup Stage 3), a durable sweep
 // that finishes a nuke's worktree/branch reclaim and row prune when the

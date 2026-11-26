@@ -182,13 +182,11 @@ func (d *DB) insertTaskLocked(t *model.Task) error {
 }
 
 func (d *DB) Update(t *model.Task) error {
-	if !t.Archived {
-		unlock, err := d.lockHeraTaskAdmission(t.ID)
-		if err != nil {
-			return err
-		}
-		defer unlock()
+	unlock, err := d.lockHeraTaskAdmission(t.ID)
+	if err != nil {
+		return err
 	}
+	defer unlock()
 	d.resultMu.Lock()
 	defer d.resultMu.Unlock()
 	old, err := d.updateLocked(t)
@@ -462,17 +460,20 @@ func (d *DB) ResultTimes() (map[string]time.Time, error) {
 // Unarchiving (archived=false) leaves pinned alone — pinning state survives
 // a round trip through the archive section.
 func (d *DB) SetArchived(id string, archived bool) error {
+	unlock, err := d.lockHeraTaskAdmission(id)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return d.setArchived(id, archived)
 }
 
+// ArchiveHeraReclaim archives a task whose caller holds the reclaim lock.
+func (d *DB) ArchiveHeraReclaim(id string) error {
+	return d.setArchived(id, true)
+}
+
 func (d *DB) setArchived(id string, archived bool) error {
-	if !archived {
-		unlock, err := d.lockHeraTaskAdmission(id)
-		if err != nil {
-			return err
-		}
-		defer unlock()
-	}
 	// Both statements (tasks UPDATE + on-archive task_messages DELETE) run in
 	// one SQLite transaction so a crash between them can't leave an archived
 	// row with a queued inbox forever counting against the unread cap.
@@ -570,6 +571,9 @@ func emitSectionChange(id string, oldArchived, oldPinned, newArchived, newPinned
 // and/or archived), and only when a flag actually moved.
 func (d *DB) SetPinned(id string, pinned bool) error {
 	if pinned {
+		if _, err := d.Get(id); err != nil {
+			return err
+		}
 		unlock, err := d.lockHeraTaskAdmission(id)
 		if err != nil {
 			return err

@@ -577,16 +577,26 @@ func (a *App) reclaimStandaloneHeraTask(runner agent.SessionProvider, taskID str
 		release()
 		return false
 	}
+	var archiveErr error
 	if database, ok := a.db.(*db.DB); ok {
+		allowed, err := database.HasUnsettledHeraNuke(taskID)
+		if err != nil || !allowed {
+			uxlog.Log("[hera-view] nuke: standalone reclaim guard task=%s allowed=%t err=%v", taskID, allowed, err)
+			release()
+			return false
+		}
 		bindings, err := database.ListHeraLiveBindingsByTask(taskID)
 		if err != nil || len(bindings) != 0 {
 			uxlog.Log("[hera-view] nuke: standalone binding guard task=%s live=%d err=%v", taskID, len(bindings), err)
 			release()
 			return false
 		}
+		archiveErr = database.ArchiveHeraReclaim(t.ID)
+	} else {
+		archiveErr = a.db.SetArchived(t.ID, true)
 	}
-	if err := a.db.SetArchived(t.ID, true); err != nil {
-		uxlog.Log("[hera-view] nuke: archive task failed task=%s: %v", t.ID, err)
+	if archiveErr != nil {
+		uxlog.Log("[hera-view] nuke: archive task failed task=%s: %v", t.ID, archiveErr)
 		release()
 		return false
 	}
@@ -690,6 +700,11 @@ func (a *App) reclaimConnectedHeraTask(runner agent.SessionProvider, database *d
 	}
 	defer releaseReclaim()
 
+	allowed, err := database.HasUnsettledHeraNuke(taskID)
+	if err != nil || !allowed {
+		uxlog.Log("[hera-view] nuke: reclaim guard task=%s allowed=%t err=%v", taskID, allowed, err)
+		return
+	}
 	task, err := database.Get(taskID)
 	if err != nil {
 		uxlog.Log("[hera-view] nuke: reload task failed task=%s: %v", taskID, err)
@@ -710,7 +725,7 @@ func (a *App) reclaimConnectedHeraTask(runner agent.SessionProvider, database *d
 		uxlog.Log("[hera-view] nuke: reclaim binding guard task=%s live=%d err=%v", taskID, len(bindings), err)
 		return
 	}
-	if err := database.SetArchived(taskID, true); err != nil {
+	if err := database.ArchiveHeraReclaim(taskID); err != nil {
 		uxlog.Log("[hera-view] nuke: archive task failed task=%s: %v", taskID, err)
 		return
 	}
@@ -1159,20 +1174,20 @@ func (a *App) heraCountReclaimable(roles []hera.RoleView) (reclaim, preserved in
 // heraReclaimAndArchiveTask is invoked, same reasoning as heraNukeRole: starting
 // the reclaim's async prune step while the binding is still live races its own
 // no-live-hera-binding re-check at delete time.
-func (a *App) heraNukeArchivedRole(r *hera.RoleView) (reclaimed bool) {
+func (a *App) heraNukeArchivedRole(r *hera.RoleView) (reclaimed bool, err error) {
 	if r.TaskID != "" && a.graduationPendingBlocked(r.TaskID, "clear archive") {
-		return false
+		return false, db.ErrGraduationPending
 	}
 	taskID := roleReclaimTask(r)
 	doReclaim := taskID != "" && a.heraTaskReclaimable(taskID, r.RoleID)
 	if err := a.heraOps.NukeRole(r); err != nil {
 		uxlog.Log("[hera-view] clear archive: nuke role %d failed: %v", r.RoleID, err)
-		return false
+		return false, err
 	}
 	if doReclaim {
 		reclaimed = a.heraReclaimAndArchiveTask(taskID)
 	}
-	return reclaimed
+	return reclaimed, nil
 }
 
 // heraClearArchive (`C`) confirms then NUKES every Tier-1 hidden (archived)
@@ -1262,13 +1277,24 @@ func (a *App) heraDoClearArchive(roles []hera.RoleView) {
 		return
 	}
 	n, wt := 0, 0
+	var firstErr error
 	for i := range roles {
-		if a.heraNukeArchivedRole(&roles[i]) {
+		reclaimed, err := a.heraNukeArchivedRole(&roles[i])
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if reclaimed {
 			wt++
 		}
 		n++
 	}
 	uxlog.Log("[hera-view] clear archive: %d hidden role(s) nuked, %d worktree(s) reclaimed", n, wt)
+	if firstErr != nil {
+		a.statusbar.SetError(fmt.Sprintf("Cleared %d of %d archived roles (%v)", n, len(roles), firstErr))
+	}
 	a.heraRefresh()
 }
 

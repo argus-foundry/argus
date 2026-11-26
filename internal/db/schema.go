@@ -603,6 +603,8 @@ func (d *DB) createHeraTables() error {
 	d.conn.Exec(`ALTER TABLE hera_bindings ADD COLUMN tokens_cache_read INTEGER NOT NULL DEFAULT 0`)     //nolint:errcheck
 	d.conn.Exec(`ALTER TABLE hera_bindings ADD COLUMN tokens_output INTEGER NOT NULL DEFAULT 0`)         //nolint:errcheck
 	d.conn.Exec(`ALTER TABLE hera_bindings ADD COLUMN cost_usd_accrued REAL NOT NULL DEFAULT 0`)         //nolint:errcheck
+	// Empty records use the legacy binding-end reason until they are settled.
+	d.conn.Exec(`ALTER TABLE hera_bindings ADD COLUMN nuke_reclaim TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
 
 	ddl := `
 		CREATE TABLE IF NOT EXISTS hera_orchestrators (
@@ -692,6 +694,7 @@ func (d *DB) createHeraTables() error {
 			started_at      TEXT NOT NULL,
 			ended_at        TEXT,
 			end_reason      TEXT,
+			nuke_reclaim    TEXT NOT NULL DEFAULT '',
 			-- Token/cost accrual columns (add-coordinator-cost-estimate). Raw
 			-- per-rate-class totals are a full-resum overwrite on every Stop-hook
 			-- invocation (monotonic, idempotent — see design.md Decision 1).

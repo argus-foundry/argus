@@ -82,6 +82,10 @@ test.describe('terminal', () => {
 
   test('leaving the terminal tab cancels a pending recovery snapshot', async ({ page }) => {
     let requests = 0;
+    let streams = 0;
+    page.on('request', request => {
+      if (/\/api\/tasks\/[^/]+\/stream(?:\?|$)/.test(request.url())) streams++;
+    });
     let release: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
     await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
@@ -102,6 +106,60 @@ test.describe('terminal', () => {
       await expect(page.locator('#settings-view')).toBeVisible();
       expect(await page.evaluate(() => (window as any).term == null)).toBe(true);
       expect(requests).toBe(2);
+      expect(streams).toBe(0);
+    } finally {
+      release!();
+    }
+  });
+
+  test('an unauthorized recovery snapshot logs out and detaches the terminal', async ({ page }) => {
+    let snapshots = 0;
+    let streams = 0;
+    page.on('request', request => {
+      if (/\/api\/tasks\/[^/]+\/stream(?:\?|$)/.test(request.url())) streams++;
+    });
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      if (++snapshots === 1) {
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+      } else {
+        await route.fulfill({ status: 401, json: { error: 'unauthorized' } });
+      }
+    });
+
+    await login(page);
+    await page.locator('.task-item').first().click();
+    await expect(page.locator('#auth-screen')).toBeVisible();
+    await expect(page.locator('#detail-view')).not.toHaveClass(/\bopen\b/);
+    expect(await page.evaluate(() => [(window as any).term, (window as any).currentTask])).toEqual([null, null]);
+    expect(snapshots).toBe(2);
+    expect(streams).toBe(0);
+  });
+
+  test('resume completion cannot replace a reopened terminal view', async ({ page }) => {
+    let requested = false;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks\/[^/]+\/resume$/, async route => {
+      requested = true;
+      await held;
+      await route.fulfill({ status: 200, json: {} }).catch(() => {});
+    });
+    try {
+      await login(page);
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('.term-status.live')).toBeVisible();
+      await page.evaluate(() => { (window as any).pendingResume = (window as any).resumeTask(); });
+      await expect.poll(() => requested).toBe(true);
+      await page.locator('#detail-view .detail-back').click();
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('.term-status.live')).toBeVisible();
+      await page.evaluate(() => { (window as any).reopenedTerm = (window as any).term; });
+      release!();
+      const sameTerminal = await page.evaluate(async () => {
+        await (window as any).pendingResume;
+        return (window as any).term === (window as any).reopenedTerm;
+      });
+      expect(sameTerminal).toBe(true);
     } finally {
       release!();
     }

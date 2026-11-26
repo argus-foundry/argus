@@ -11,6 +11,13 @@ import (
 	"github.com/argus-foundry/argus/internal/tui/hera"
 )
 
+func seedHeraReclaim(t *testing.T, d *db.DB, task *model.Task) {
+	t.Helper()
+	orch := seedHeraOrch(t, d, "reclaim")
+	role := seedHeraRoleOnTask(t, d, orch, "worker", db.HeraKindWorker, task.ID, task.Worktree)
+	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(role.ID))
+}
+
 // TestHeraReclaimAndArchiveTask_InReviewAdvancesToComplete pins the
 // fix-hera-archive-status behavior: a task already resting at in_review when
 // it's reclaimed+archived is also advanced to complete, mirroring
@@ -23,6 +30,7 @@ func TestHeraReclaimAndArchiveTask_InReviewAdvancesToComplete(t *testing.T) {
 
 	testutil.NoError(t, d.Add(&model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Project: "p", CreatedAt: time.Now()}))
 	testutil.NoError(t, d.SetStatus("tw", model.StatusInReview))
+	seedHeraReclaim(t, d, &model.Task{ID: "tw"})
 
 	reclaimed := app.heraReclaimAndArchiveTask("tw")
 
@@ -43,6 +51,7 @@ func TestHeraReclaimAndArchiveTask_InProgressStatusUntouched(t *testing.T) {
 
 	testutil.NoError(t, d.Add(&model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Project: "p", CreatedAt: time.Now()}))
 
+	seedHeraReclaim(t, d, &model.Task{ID: "tw"})
 	app.heraReclaimAndArchiveTask("tw")
 
 	task, err := d.Get("tw")
@@ -60,6 +69,7 @@ func TestHeraReclaimAndArchiveTask_PendingStatusUntouched(t *testing.T) {
 
 	testutil.NoError(t, d.Add(&model.Task{ID: "tw", Name: "tw", Status: model.StatusPending, Project: "p", CreatedAt: time.Now()}))
 
+	seedHeraReclaim(t, d, &model.Task{ID: "tw"})
 	app.heraReclaimAndArchiveTask("tw")
 
 	task, err := d.Get("tw")
@@ -79,6 +89,7 @@ func TestHeraReclaimAndArchiveTask_AlreadyCompleteIdempotent(t *testing.T) {
 	testutil.NoError(t, d.SetStatus("tw", model.StatusInReview))
 	testutil.NoError(t, d.SetStatus("tw", model.StatusComplete))
 
+	seedHeraReclaim(t, d, &model.Task{ID: "tw"})
 	app.heraReclaimAndArchiveTask("tw")
 
 	task, err := d.Get("tw")

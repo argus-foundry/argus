@@ -381,7 +381,8 @@ func TestHeraActions_NukeArchivedRoleSoleBound(t *testing.T) {
 	testutil.NoError(t, d.ArchiveHeraRole(role.ID)) // hidden first
 
 	rv := &hera.RoleView{RoleID: role.ID, OrchID: orch, Kind: db.HeraKindWorker, TaskID: "tw", BridgeTaskID: "tw", Archived: true}
-	app.heraNukeArchivedRole(rv)
+	_, err := app.heraNukeArchivedRole(rv)
+	testutil.NoError(t, err)
 
 	task, err := d.Get("tw")
 	testutil.NoError(t, err)
@@ -402,6 +403,10 @@ func TestHeraActions_NukeArchivedRoleSoleBound(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	app.heraReclaimAndArchiveTask("tw")
+	task, err = d.Get("tw")
+	testutil.NoError(t, err)
+	testutil.False(t, task.Archived)
 	testutil.NoError(t, d.SetArchived("tw", true))
 	candidates, err := d.HeraNukeReclaimCandidates()
 	testutil.NoError(t, err)
@@ -424,7 +429,8 @@ func TestHeraActions_NukeArchivedRoleMultiBoundPreservesTask(t *testing.T) {
 	testutil.NoError(t, err)
 
 	rv := &hera.RoleView{RoleID: roleA.ID, OrchID: a, Kind: db.HeraKindWorker, TaskID: "shared", BridgeTaskID: "shared", Live: true}
-	reclaimed := app.heraNukeArchivedRole(rv)
+	reclaimed, err := app.heraNukeArchivedRole(rv)
+	testutil.NoError(t, err)
 
 	testutil.Equal(t, reclaimed, false) // bound elsewhere → worktree not reclaimed
 	task, err := d.Get("shared")
@@ -436,6 +442,28 @@ func TestHeraActions_NukeArchivedRoleMultiBoundPreservesTask(t *testing.T) {
 	gotB, err := d.HeraRole(roleB.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, gotB.OrchestratorID, b) // other orchestrator's role intact
+}
+
+func TestHeraActions_ClearArchiveReportsReclaimConflict(t *testing.T) {
+	d := testDB(t)
+	app := New(d, agent.NewRunner(nil), false)
+	app.heraOps = hera.NewOps(d)
+	orch := seedHeraOrch(t, d, "o")
+	role := seedHeraBoundRole(t, d, orch, "w", db.HeraKindWorker, "tw")
+	testutil.NoError(t, d.ArchiveHeraRole(role.ID))
+	unblock, acquired, err := d.TryLockHeraReclaim("tw")
+	testutil.NoError(t, err)
+	testutil.True(t, acquired)
+	defer unblock()
+
+	app.heraDoClearArchive([]hera.RoleView{{
+		RoleID: role.ID, OrchID: orch, Kind: db.HeraKindWorker, TaskID: "tw", BridgeTaskID: "tw", Archived: true,
+	}})
+	testutil.Contains(t, app.statusbar.Error(), "Cleared 0 of 1 archived roles")
+	testutil.Contains(t, app.statusbar.Error(), db.ErrHeraReclaimInProgress.Error())
+	got, err := d.HeraRole(role.ID)
+	testutil.NoError(t, err)
+	testutil.Nil(t, got.NukedAt)
 }
 
 // TestHeraActions_NukeRolePrunesSoleBoundTaskOnceSessionSettled pins
