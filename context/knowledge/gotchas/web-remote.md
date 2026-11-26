@@ -370,3 +370,5 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **All exits from detail cancel the terminal attachment.** The PWA keeps recovery pending through xterm’s write callback and EventSource acceptance. HTTP rejection retries within the original deadline.
 
 - **Resume belongs to the detail view that initiated it.** Back, a tab switch, or logout ends that view, even when the user immediately reopens the same task. A late resume result cannot replace the reopened terminal.
+
+- **List refresh and online reconnect leave an active recovery in charge of attaching.** During a restart the list can briefly report a non-live task, then report it live before the recovery poll detects it. Keep the original recovery deadline through stream admission.

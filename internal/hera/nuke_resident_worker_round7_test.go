@@ -84,6 +84,64 @@ func TestNukeResidentWorkerChecked_ForcePresenceUnreadableDefersPrune(t *testing
 	testutil.Contains(t, logs.String(), "session presence unreadable task=w")
 }
 
+func TestNukeResidentWorkerDefersWorktreeUntilScopedStopSettles(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		prelaunch bool
+		stopErr   error
+	}{
+		{"prelaunch owns the slot", true, nil},
+		{"stop failed", false, agent.ErrSessionStarting},
+		{"stop accepted but owner is still retiring", false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			worktree := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+			testutil.NoError(t, os.MkdirAll(worktree, 0o700))
+			task := &model.Task{ID: "w", Name: "Worker", Status: model.StatusInProgress, Worktree: worktree}
+			d, _, view := residentWorkerNukeFixture(t, task)
+			called := false
+			owner := nukeReclaimOwner{
+				Runner: agent.NewRunner(nil), pending: &tc.prelaunch,
+				stop: func(id string, pid int) error {
+					called = true
+					testutil.Equal(t, id, task.ID)
+					testutil.Equal(t, pid, 42)
+					armed, err := d.HeraReclaimStopPID(id)
+					testutil.NoError(t, err)
+					testutil.Equal(t, armed, pid)
+					return tc.stopErr
+				},
+			}
+
+			followUp, err := NukeResidentWorker(d, owner, view)
+			testutil.NoError(t, err)
+			followUp()
+			testutil.Equal(t, called, !tc.prelaunch)
+			got, err := d.Get(task.ID)
+			testutil.NoError(t, err)
+			testutil.True(t, got.Archived)
+			testutil.True(t, agent.DirExists(worktree))
+		})
+	}
+}
+
+func TestNukeResidentWorkerRefusesWhileTaskSessionIsChanging(t *testing.T) {
+	task := &model.Task{ID: "w", Name: "Worker", Status: model.StatusInProgress}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	release, acquired, err := d.TryLockSessionMutation(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, acquired)
+	defer release()
+
+	_, err = NukeResidentWorker(d, nil, view)
+	testutil.ErrorIs(t, err, ErrHostBusy)
+	role, err := d.HeraRole(view.RoleID)
+	testutil.NoError(t, err)
+	testutil.Nil(t, role.NukedAt)
+	_, err = d.HeraLiveBindingByRole(view.RoleID)
+	testutil.NoError(t, err)
+}
+
 // A session that exits on Stop but has not settled by the end of the wait is
 // refused ("had not settled"), the recheck never runs, and the worker is left
 // resumable. Covers both the wait measured from the Stop call's START (not

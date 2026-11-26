@@ -205,6 +205,81 @@ func TestClearOlderHiddenHeraRoleAfterReclaimSettled(t *testing.T) {
 	testutil.Equal(t, len(candidates), 1)
 }
 
+func TestLegacyHeraNukeUsesBindingHistory(t *testing.T) {
+	for _, tc := range []struct {
+		name, siblingEnd string
+		reclaim          bool
+	}{
+		{"sibling outlived nuke", "2026-01-01T00:00:00.000100002Z", false},
+		{"sibling ended later on UTC clock", "2026-01-01T02:00:00.000100Z", false},
+		{"nuke followed prior detachment", "2026-01-01T02:00:00.000100+02:00", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			const id = "legacy"
+			testutil.NoError(t, d.Add(&model.Task{ID: id, Name: "Legacy"}))
+			first, err := d.CreateHeraOrchestrator("first", "")
+			testutil.NoError(t, err)
+			second, err := d.CreateHeraOrchestrator("second", "")
+			testutil.NoError(t, err)
+			role, nuke, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{
+				OrchestratorID: first.ID, Name: "first-worker", Kind: HeraKindWorker,
+			}, id, "")
+			testutil.NoError(t, err)
+			remaining, sibling, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{
+				OrchestratorID: second.ID, Name: "second-worker", Kind: HeraKindWorker,
+			}, id, "")
+			testutil.NoError(t, err)
+			// Old clients marked the role and ended its binding without recording reclaim ownership.
+			testutil.NoError(t, d.NukeHeraRole(role.ID))
+			testutil.NoError(t, d.EndHeraBinding(nuke.ID, HeraEndReasonUserDeleted))
+			testutil.NoError(t, d.EndHeraBinding(sibling.ID, "hera_rebind"))
+			_, err = d.conn.Exec(`UPDATE hera_bindings SET ended_at=CASE WHEN id=? THEN ? ELSE ? END WHERE id IN (?,?)`,
+				nuke.ID, "2026-01-01T00:00:00.000100001Z", tc.siblingEnd, nuke.ID, sibling.ID)
+			testutil.NoError(t, err)
+
+			claimed, err := d.HasUnsettledHeraNuke(id)
+			testutil.NoError(t, err)
+			testutil.Equal(t, claimed, tc.reclaim)
+			candidates, err := d.HeraNukeReclaimCandidates()
+			testutil.NoError(t, err)
+			testutil.Equal(t, len(candidates) == 1, tc.reclaim)
+			if tc.reclaim {
+				testutil.NoError(t, d.SetArchived(id, true))
+			}
+			_, err = d.CreateHeraBinding(CreateHeraBindingInput{RoleID: remaining.ID, ArgusTaskID: id})
+			if tc.reclaim {
+				testutil.ErrorIs(t, err, ErrHeraReclaimInProgress)
+			} else {
+				testutil.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestHiddenHeraNukeRefusesPendingGraduation(t *testing.T) {
+	d := testDB(t)
+	const id = "graduate"
+	testutil.NoError(t, d.Add(&model.Task{ID: id, Name: "Graduate"}))
+	orch, err := d.CreateHeraOrchestrator("team", "")
+	testutil.NoError(t, err)
+	role, binding, err := d.CreateHeraRoleWithBinding(CreateHeraRoleInput{
+		OrchestratorID: orch.ID, Name: "worker", Kind: HeraKindWorker,
+	}, id, "")
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.EndHeraBinding(binding.ID, "archived"))
+	testutil.NoError(t, d.ArchiveHeraRole(role.ID))
+	testutil.NoError(t, d.SetMeta(id, HeraMetaNamespace, HeraMetaKeyGraduationPendingRestart, "true"))
+
+	testutil.ErrorIs(t, d.NukeHeraRoleAndEndBinding(role.ID), ErrGraduationPending)
+	got, err := d.HeraRole(role.ID)
+	testutil.NoError(t, err)
+	testutil.Nil(t, got.NukedAt)
+	claimed, err := d.HasUnsettledHeraNuke(id)
+	testutil.NoError(t, err)
+	testutil.False(t, claimed)
+}
+
 func TestReconcileMissingSessionPreservesArmedReclaim(t *testing.T) {
 	d := testDB(t)
 	const pid = 41

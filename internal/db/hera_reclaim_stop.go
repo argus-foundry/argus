@@ -10,9 +10,24 @@ import (
 
 var ErrHeraReclaimInProgress = errors.New("task reclaim is in progress")
 
+// Older bindings lack an explicit outcome. A sibling that outlived the nuke
+// or took over the task later supersedes that record. Compare whole seconds
+// in UTC and the fractional part separately to preserve RFC3339Nano precision.
+const legacyHeraNukeHasSuccessorSQL = `EXISTS (
+	SELECT 1 FROM hera_bindings sibling
+	WHERE sibling.argus_task_id=deleted.argus_task_id AND sibling.id<>deleted.id
+	AND (sibling.ended_at IS NULL OR (
+		unixepoch(substr(sibling.ended_at,1,19) || iif(substr(sibling.ended_at,-1)='Z','Z',substr(sibling.ended_at,-6))),
+		iif(substr(sibling.ended_at,20,1)='.',CAST(substr(sibling.ended_at,20) AS REAL),0)
+	) > (
+		unixepoch(substr(deleted.ended_at,1,19) || iif(substr(deleted.ended_at,-1)='Z','Z',substr(deleted.ended_at,-6))),
+		iif(substr(deleted.ended_at,20,1)='.',CAST(substr(deleted.ended_at,20) AS REAL),0)
+	)))`
+
 const heraNukeBindingSQL = `SELECT argus_task_id FROM hera_bindings deleted
 	WHERE (nuke_reclaim='claimed' OR (nuke_reclaim='' AND end_reason='` + HeraEndReasonUserDeleted + `'
-	AND id > COALESCE((SELECT hera_reclaim_settled_binding FROM tasks WHERE id=deleted.argus_task_id),0)))`
+	AND id > COALESCE((SELECT hera_reclaim_settled_binding FROM tasks WHERE id=deleted.argus_task_id),0)
+	AND NOT ` + legacyHeraNukeHasSuccessorSQL + `))`
 
 const heraReclaimOwnsTaskSQL = `(hera_reclaim_pid<>0 OR (id IN (` + heraNukeBindingSQL + `
 	AND (tasks.archived=1 OR deleted.nuke_reclaim='claimed'))

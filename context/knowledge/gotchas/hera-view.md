@@ -500,3 +500,7 @@ M6a scaffolds the native Hera view: a `HeraPage` (rail | coordinator pane | agen
 - **A nuke claims reclaim in the transaction that ends the final live binding.** A nuke that preserves a shared task cannot claim it later when the other role rebinds. Clear Archive can claim through a hidden role's already-ended binding.
 
 - **Recheck reclaim ownership after taking both locks.** Another cleanup can settle it while a callback is queued. Standalone cleanup records settlement on the claimed binding so an ordinary archive leaves the claim settled and a later nuke can make a fresh claim.
+
+- **A later sibling end supersedes a legacy nuke marker.** Older clients wrote the same end reason for preserved and reclaimable bindings. Same-task binding history distinguishes those cases even after the sibling goes offline.
+
+- **Resident worker deletion holds the task's session and reclaim locks through preflight and teardown.** Its local cleanup requires a committed claim and confirmed retirement. An unsettled process leaves the worktree for the periodic sweep.

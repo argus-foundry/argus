@@ -1175,10 +1175,10 @@ func (a *App) heraCountReclaimable(roles []hera.RoleView) (reclaim, preserved in
 // the reclaim's async prune step while the binding is still live races its own
 // no-live-hera-binding re-check at delete time.
 func (a *App) heraNukeArchivedRole(r *hera.RoleView) (reclaimed bool, err error) {
-	if r.TaskID != "" && a.graduationPendingBlocked(r.TaskID, "clear archive") {
+	taskID := roleReclaimTask(r)
+	if taskID != "" && a.graduationPendingBlocked(taskID, "clear archive") {
 		return false, db.ErrGraduationPending
 	}
-	taskID := roleReclaimTask(r)
 	doReclaim := taskID != "" && a.heraTaskReclaimable(taskID, r.RoleID)
 	if err := a.heraOps.NukeRole(r); err != nil {
 		uxlog.Log("[hera-view] clear archive: nuke role %d failed: %v", r.RoleID, err)
@@ -1225,7 +1225,7 @@ func (a *App) heraClearArchive(sel hera.Selection) {
 	}
 	var pendingIDs []string
 	for i := range workers {
-		pendingIDs = append(pendingIDs, workers[i].TaskID)
+		pendingIDs = append(pendingIDs, roleReclaimTask(&workers[i]))
 	}
 	if a.graduationPendingAny(pendingIDs, "clear archive") {
 		return
@@ -1271,7 +1271,7 @@ func (a *App) heraClearArchive(sel hera.Selection) {
 func (a *App) heraDoClearArchive(roles []hera.RoleView) {
 	var ids []string
 	for i := range roles {
-		ids = append(ids, roles[i].TaskID)
+		ids = append(ids, roleReclaimTask(&roles[i]))
 	}
 	if a.graduationPendingAny(ids, "clear archive") {
 		return

@@ -179,19 +179,38 @@ func NukeResidentWorkerChecked(d *db.DB, runner NukeRunner, r *heramodel.RoleVie
 		residentDeleteLog("[resident] delete role %d skipped task=%s: %v", r.RoleID, t.ID, err)
 		return noop, err
 	}
+	releaseSession, acquired, err := d.TryLockSessionMutation(t.ID)
+	if err != nil || !acquired {
+		residentDeleteLog("[resident] delete role %d refused task=%s: session lock unavailable: %v", r.RoleID, t.ID, err)
+		return noop, fmt.Errorf("%w: worker session is changing; nothing changed", ErrHostBusy)
+	}
+	defer releaseSession()
+	releaseReclaim, acquired, err := d.TryLockHeraReclaim(t.ID)
+	if err != nil || !acquired {
+		residentDeleteLog("[resident] delete role %d refused task=%s: reclaim lock unavailable: %v", r.RoleID, t.ID, err)
+		return noop, fmt.Errorf("%w: worker binding or reclaim is changing; nothing changed", ErrHostBusy)
+	}
+	defer releaseReclaim()
 	// Fail closed: an unreadable binding list must not read as "bound
 	// elsewhere", which would skip the stop and the recheck while the nuke
 	// still ends the only binding user_deleted, handing a possibly live
 	// worktree to the async reclaim sweep.
-	reclaim := false
-	if r.Live {
-		live, lErr := d.ListHeraLiveBindingsByTask(t.ID)
-		if lErr != nil {
-			residentDeleteLog("[resident] delete role %d refused task=%s: live bindings unreadable: %v; nothing changed", r.RoleID, t.ID, lErr)
-			return noop, fmt.Errorf("read live bindings of task %s: %w; nothing changed", t.ID, lErr)
-		}
-		reclaim = len(live) == 1 && live[0].RoleID == r.RoleID
+	live, err := d.ListHeraLiveBindingsByTask(t.ID)
+	if err != nil {
+		residentDeleteLog("[resident] delete role %d refused task=%s: live bindings unreadable: %v; nothing changed", r.RoleID, t.ID, err)
+		return noop, fmt.Errorf("read live bindings of task %s: %w; nothing changed", t.ID, err)
 	}
+	var bindingID int64
+	for _, binding := range live {
+		if binding.RoleID == r.RoleID {
+			bindingID = binding.ID
+			break
+		}
+	}
+	if bindingID == 0 {
+		return noop, fmt.Errorf("%w: worker role is no longer bound to the task; nothing changed", ErrHostBusy)
+	}
+	reclaim := len(live) == 1
 	if !opts.MutateBy.IsZero() {
 		if now := opts.Clock.Now(); now.After(opts.MutateBy) {
 			residentDeleteLog("[resident] delete role %d refused task=%s: host busy (first change due by %s, now %s late); nothing changed", r.RoleID, t.ID, opts.MutateBy.Format(time.RFC3339Nano), now.Sub(opts.MutateBy).Round(time.Millisecond))
@@ -211,9 +230,9 @@ func NukeResidentWorkerChecked(d *db.DB, runner NukeRunner, r *heramodel.RoleVie
 		}
 		// Released when this returns, before the caller runs followUp.
 		defer unlock()
-		return nukeResidentWorkerLocked(d, runner, r, t, reclaim, opts, true)
+		return nukeResidentWorkerLocked(d, runner, r, t, bindingID, reclaim, opts, true)
 	}
-	return nukeResidentWorkerLocked(d, runner, r, t, reclaim, opts, false)
+	return nukeResidentWorkerLocked(d, runner, r, t, bindingID, reclaim, opts, false)
 }
 
 // residentRepoLockPoll is how often the bounded repo-lock wait retries.
@@ -243,7 +262,7 @@ func lockResidentRepo(repoDir string, opts ResidentDeleteOptions, roleID int64, 
 // nukeResidentWorkerLocked is NukeResidentWorkerChecked after its pre-change
 // checks; repoLocked reports whether the caller holds the task repo's cleanup
 // lock (always so when a worktree is reclaimed).
-func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView, t *model.Task, reclaim bool, opts ResidentDeleteOptions, repoLocked bool) (followUp func(), err error) {
+func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView, t *model.Task, bindingID int64, reclaim bool, opts ResidentDeleteOptions, repoLocked bool) (followUp func(), err error) {
 	noop := func() {}
 	if reclaim && opts.Recheck != nil {
 		guard := armStopCloseoutGuard(d, t.ID)
@@ -259,7 +278,7 @@ func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView
 			return noop, err
 		}
 	}
-	if err := d.NukeHeraRoleAndEndBindingAs(r.RoleID, db.HeraActorResident); err != nil {
+	if err := d.NukeResidentWorkerBinding(r.RoleID, bindingID, reclaim); err != nil {
 		residentDeleteLog("[resident] delete role %d: nuke failed task=%s: %v", r.RoleID, t.ID, err)
 		return noop, fmt.Errorf("nuke role %d: %w", r.RoleID, err)
 	}
@@ -267,12 +286,52 @@ func nukeResidentWorkerLocked(d *db.DB, runner NukeRunner, r *heramodel.RoleView
 		residentDeleteLog("[resident] delete role %d: task=%s preserved (bound elsewhere)", r.RoleID, t.ID)
 		return noop, nil
 	}
-	archiveNukedTask(d, t.ID)
+	if !archiveNukedTaskLocked(d, t.ID) {
+		residentDeleteLog("[resident] delete role %d: reclaim deferred task=%s", r.RoleID, t.ID)
+		return noop, nil
+	}
+	pending, err := d.HeraReclaimStopPending(t.ID)
+	if err != nil || pending {
+		residentDeleteLog("[resident] delete role %d: reclaim stop unsettled task=%s pending=%t err=%v", r.RoleID, t.ID, pending, err)
+		return noop, nil
+	}
+	if owner, ok := runner.(agent.HeraReclaimSessionOwner); ok {
+		if err := owner.CheckReclaimSessionRetired(t.ID); err != nil {
+			requestNukeStopLocked(d, runner, t.ID)
+			residentDeleteLog("[resident] delete role %d: reclaim awaits session retirement task=%s: %v", r.RoleID, t.ID, err)
+			return noop, nil
+		}
+	} else if !stopResidentWorkerBeforeReclaim(runner, t.ID) {
+		return noop, nil
+	}
 	remoteDir, remoteBranch, leaseTip := reclaimResidentWorkerTask(d, runner, t, repoLocked)
 	return func() {
 		residentRemoteBranchDelete(opts, t.ID, remoteDir, remoteBranch, leaseTip)
 		residentWorkerStackFollowUp(d, t)
 	}, nil
+}
+
+func stopResidentWorkerBeforeReclaim(runner NukeRunner, taskID string) bool {
+	if runner == nil {
+		return true
+	}
+	present, err := SessionPresent(runner, taskID)
+	if err == nil && !present {
+		return true
+	}
+	if err != nil {
+		residentDeleteLog("[resident] delete: session presence unreadable task=%s: %v (stopping anyway)", taskID, err)
+	}
+	if stopErr := runner.Stop(taskID); stopErr != nil && !errors.Is(stopErr, agent.ErrSessionNotFound) {
+		residentDeleteLog("[resident] delete: stop session failed task=%s: %v", taskID, stopErr)
+		return false
+	}
+	present, err = SessionPresent(runner, taskID)
+	if present || err != nil {
+		residentDeleteLog("[resident] delete: prune deferred to reclaim sweep task=%s (session live or unreadable: %v)", taskID, err)
+		return false
+	}
+	return true
 }
 
 // residentRemoteBranchDelete is followUp's origin branch delete: its own
@@ -460,21 +519,9 @@ func stopResidentWorkerSession(runner NukeRunner, t *model.Task, wait StopWait, 
 // reclaimResidentWorkerTask is ReconcileHeraReclaims' per-candidate body for
 // exactly one task, minus the stacked-branch re-discovery and the origin
 // branch delete (both in followUp), so it is local and bounded. It returns
-// the repo dir and branch to delete on origin. An unreadable session presence
-// counts as present: the session is stopped anyway and the prune is left to
-// the reclaim sweep.
+// the repo dir and branch to delete on origin. The caller confirms session
+// retirement before invoking it and keeps both task locks held.
 func reclaimResidentWorkerTask(d *db.DB, runner NukeRunner, t *model.Task, repoLocked bool) (remoteDir, remoteBranch, leaseTip string) {
-	if runner != nil {
-		present, perr := SessionPresent(runner, t.ID)
-		if perr != nil {
-			residentDeleteLog("[resident] delete: session presence unreadable task=%s: %v (stopping anyway)", t.ID, perr)
-		}
-		if perr != nil || present {
-			if err := runner.Stop(t.ID); err != nil && !errors.Is(err, agent.ErrSessionNotFound) {
-				residentDeleteLog("[resident] delete: stop session failed task=%s: %v", t.ID, err)
-			}
-		}
-	}
 	if t.Worktree != "" && agent.DirExists(t.Worktree) {
 		remove := agent.RemoveWorktreeAndLocalBranch
 		if repoLocked {

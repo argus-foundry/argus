@@ -135,6 +135,19 @@ test.describe('terminal', () => {
     expect(streams).toBe(0);
   });
 
+  test('signing in again keeps Settings as the only visible tab', async ({ page }) => {
+    await login(page);
+    await page.locator('.tab[data-tab="settings"]').click();
+    await expect(page.locator('#settings-view')).toBeVisible();
+    await page.getByRole('button', { name: 'Forget token' }).click();
+    await expect(page.locator('#auth-screen')).toBeVisible();
+    await page.locator('#token-input').fill('test-token');
+    await page.locator('#auth-screen button').click();
+    await expect(page.locator('#main-app')).toBeVisible();
+    await expect(page.locator('#settings-view')).toBeVisible();
+    await expect(page.locator('#tasks-view')).toBeHidden();
+  });
+
   test('resume completion cannot replace a reopened terminal view', async ({ page }) => {
     let requested = false;
     let release: () => void;
@@ -173,18 +186,29 @@ test.describe('terminal', () => {
         const response = await original(...args);
         if (/\/api\/tasks\/[^/]+\/output(?:\?|$)/.test(response.url) && ++snapshots === 2) {
           if (stage === 'body') {
-            response.arrayBuffer = () => new Promise(() => {});
+            const read = response.arrayBuffer.bind(response);
+            response.arrayBuffer = () => new Promise((resolve, reject) => {
+              (window as any).releaseSnapshot = () => read().then(resolve, reject).catch(() => {});
+            });
           } else {
             const terminal = (window as any).term;
             const write = terminal.write.bind(terminal);
             terminal.write = (data: unknown, callback?: () => void) => {
-              if (!(data instanceof Uint8Array) || !callback) write(data, callback);
+              if (data instanceof Uint8Array && callback) {
+                (window as any).releaseSnapshot = callback;
+              } else {
+                write(data, callback);
+              }
             };
           }
         }
         return response;
       };
     }, stage);
+    let streams = 0;
+    page.on('request', request => {
+      if (/\/api\/tasks\/[^/]+\/stream(?:\?|$)/.test(request.url())) streams++;
+    });
     let initial = true;
     await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
       if (initial) {
@@ -196,7 +220,65 @@ test.describe('terminal', () => {
     });
     await login(page);
     await page.locator('.task-item').first().click();
+    await expect.poll(() => page.evaluate(() => typeof (window as any).releaseSnapshot)).toBe('function');
     await expect(page.locator('#term-status-text')).toHaveText('session ended', { timeout: 17_000 });
+    await page.evaluate(() => (window as any).releaseSnapshot());
+    await expect(page.locator('#term-status-text')).toHaveText('session ended');
+    expect(streams).toBe(0);
+  });
+
+  test('list refresh keeps an active recovery deadline through stream admission', async ({ page }) => {
+    let detailPolled = false;
+    let refreshLive = true;
+    let snapshots = 0;
+    let streamRequests = 0;
+    let detailReleased: () => void;
+    let streamReleased: () => void;
+    const detailHeld = new Promise<void>(resolve => { detailReleased = resolve; });
+    const streamHeld = new Promise<void>(resolve => { streamReleased = resolve; });
+    await page.route(/\/api\/tasks(?:\?|$)/, async route => {
+      const response = await route.fetch();
+      const body = await response.json();
+      for (const task of body.tasks) task.live = refreshLive;
+      await route.fulfill({ response, json: body });
+    });
+    await page.route(/\/api\/tasks\/[^/?]+$/, async route => {
+      detailPolled = true;
+      await detailHeld;
+      await route.continue().catch(() => {});
+    });
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      if (++snapshots === 1) {
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+      } else {
+        await route.continue();
+      }
+    });
+    await page.route(/\/api\/tasks\/[^/]+\/stream(?:\?|$)/, async route => {
+      streamRequests++;
+      await streamHeld;
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'data: late\n\n' }).catch(() => {});
+    });
+
+    try {
+      await login(page);
+      await page.locator('.task-item').first().click();
+      await expect.poll(() => detailPolled).toBe(true);
+      for (const live of [false, true]) {
+        refreshLive = live;
+        await page.evaluate(() => (window as any).refresh());
+        expect(await page.evaluate(() => (window as any).currentTask.live)).toBe(live);
+      }
+      expect(snapshots).toBe(1);
+      detailReleased!();
+      await expect.poll(() => streamRequests).toBe(1);
+      await expect(page.locator('#term-status-text')).toHaveText('session ended', { timeout: 17_000 });
+      streamReleased!();
+      await expect(page.locator('#term-status-text')).toHaveText('session ended');
+    } finally {
+      detailReleased!();
+      streamReleased!();
+    }
   });
 
   test('terminal waits between refused replacement streams', async ({ page }) => {

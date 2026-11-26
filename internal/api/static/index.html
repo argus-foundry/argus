@@ -2319,7 +2319,7 @@ async function refresh() {
           // the user may still be reading agent output and the keyboard
           // suddenly disappearing mid-conversation would be jarring. A live
           // session going active↔idle is NOT a flip: it stays interactive.
-          if (!wasInteractive && isInteractive(fresh)) {
+          if (!terminalRecovery && !wasInteractive && isInteractive(fresh)) {
             attachTerminal(fresh);
             // resumeTask() awaits refresh() and would call attachTerminal a
             // second time; signal that this branch already handled it so it
@@ -2676,6 +2676,7 @@ let detailViewGen = 0;
 async function openDetail(id) {
   const task = tasks.find(t => t.id === id);
   if (!task) return;
+  cancelTerminalRecovery();
   ++detailViewGen;
   currentTask = task;
   dropRestartQueue();
@@ -2722,8 +2723,7 @@ let attachGen = 0;
 let attachmentAbort = null;
 
 async function attachTerminal(task, recovery = null) {
-  if (!task || currentTask?.id !== task.id) return false;
-  if (!recovery) cancelTerminalRecovery();
+  if (!task || currentTask?.id !== task.id || (!recovery && terminalRecovery)) return false;
   attachmentAbort?.abort();
   attachmentAbort = new AbortController();
   const signal = recovery
@@ -4397,7 +4397,8 @@ function closeDetail() {
   dv.style.transform = '';
   const header = dv.querySelector('.detail-header');
   if (header) header.classList.remove('compact');
-  document.getElementById('tasks-view').style.display = 'block';
+  const selectedTab = document.querySelector('.tab.active')?.dataset.tab;
+  document.getElementById('tasks-view').style.display = selectedTab === 'tasks' ? 'block' : 'none';
 }
 
 // --- Original Prompt Modal ---

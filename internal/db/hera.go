@@ -677,7 +677,7 @@ func (d *DB) NukeHeraRole(id int64) error {
 // worker's nuke by anyone but the resident (HeraActorResident, its own
 // hera_delete_worker) queues the resident a notice.
 func (d *DB) NukeHeraRoleAs(id int64, actor HeraActor) error {
-	return d.nukeHeraRole(id, actor, false, 0)
+	return d.nukeHeraRole(id, actor, false, 0, nil)
 }
 
 // NukeHeraRoleAndEndBinding records a human nuke and ends the role's live
@@ -709,31 +709,49 @@ func (d *DB) NukeHeraRoleAndEndBindingAs(id int64, actor HeraActor) error {
 		}
 		defer unlock()
 	}
-	return d.nukeHeraRole(id, actor, true, bindingID)
+	return d.nukeHeraRole(id, actor, true, bindingID, nil)
 }
 
-func (d *DB) nukeHeraRole(id int64, actor HeraActor, endBinding bool, bindingID int64) error {
+// NukeResidentWorkerBinding commits a resident nuke under the caller's task
+// locks, provided its live binding and shared ownership still match preflight.
+func (d *DB) NukeResidentWorkerBinding(id, bindingID int64, reclaim bool) error {
+	return d.nukeHeraRole(id, HeraActorResident, true, bindingID, &reclaim)
+}
+
+func (d *DB) nukeHeraRole(id int64, actor HeraActor, endBinding bool, bindingID int64, expectedReclaim *bool) error {
 	return d.heraRoleMutation(id, actor, ResidentNoticeNuked, func(tx *sql.Tx, cur *HeraRole) (bool, string, error) {
 		now := formatTime(time.Now())
 		if endBinding {
 			var currentID int64
-			var live bool
-			if err := tx.QueryRow(`SELECT COALESCE((SELECT id FROM hera_bindings
-				WHERE role_id=? ORDER BY ended_at IS NULL DESC, id DESC LIMIT 1),0),
-				EXISTS(SELECT 1 FROM hera_bindings WHERE role_id=? AND ended_at IS NULL)`, id, id).Scan(&currentID, &live); err != nil {
+			var taskID string
+			var live, shared bool
+			err := tx.QueryRow(`SELECT id,argus_task_id,ended_at IS NULL,
+				EXISTS(SELECT 1 FROM hera_bindings sibling
+					WHERE sibling.argus_task_id=target.argus_task_id AND sibling.id<>target.id AND sibling.ended_at IS NULL)
+				FROM hera_bindings target WHERE role_id=? ORDER BY ended_at IS NULL DESC, id DESC LIMIT 1`, id).
+				Scan(&currentID, &taskID, &live, &shared)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return false, "", err
 			}
 			if currentID != bindingID {
 				return false, "", fmt.Errorf("%w: role binding changed during nuke", ErrHeraReclaimInProgress)
 			}
+			reclaim := !shared
+			if expectedReclaim != nil && (!live || *expectedReclaim != reclaim) {
+				return false, "", fmt.Errorf("%w: worker binding ownership changed during nuke", ErrHeraReclaimInProgress)
+			}
 			if currentID != 0 && (live || (cur.ArchivedAt != nil && cur.NukedAt == nil)) {
-				_, err := tx.Exec(`UPDATE hera_bindings AS target
+				if err := graduationPendingGuard(tx, taskID); err != nil {
+					return false, "", err
+				}
+				outcome := "claimed"
+				if shared {
+					outcome = "preserved"
+				}
+				_, err := tx.Exec(`UPDATE hera_bindings
 					SET end_reason=CASE WHEN ended_at IS NULL THEN ? ELSE end_reason END,
-						ended_at=COALESCE(ended_at,?),
-						nuke_reclaim=CASE WHEN EXISTS (SELECT 1 FROM hera_bindings sibling
-							WHERE sibling.argus_task_id=target.argus_task_id AND sibling.id<>target.id AND sibling.ended_at IS NULL)
-							THEN 'preserved' ELSE 'claimed' END
-					WHERE id=?`, HeraEndReasonUserDeleted, now, currentID)
+						ended_at=COALESCE(ended_at,?), nuke_reclaim=?
+					WHERE id=?`, HeraEndReasonUserDeleted, now, outcome, currentID)
 				if err != nil {
 					return false, "", fmt.Errorf("end hera role binding: %w", err)
 				}
