@@ -4331,7 +4331,8 @@ async function setArchive(archived) {
       try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (_) {}
       throw new Error(msg);
     }
-    if (view === detailViewGen) closeDetail();
+    const shownInSelectedList = archived === (listFilter === FILTER_ARCHIVED);
+    if (currentTask?.id === id && (view === detailViewGen || !shownInSelectedList)) closeDetail();
     refresh();
   } catch(e) { if (view === detailViewGen) showToast(e.message); }
 }

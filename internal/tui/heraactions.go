@@ -1105,6 +1105,10 @@ func (a *App) heraDoCascadeNuke(subtree []*hera.OrchView, subtreeIDs map[int64]b
 // shellouts) — callers background it via heraGoSafe, mirroring every other
 // git op in this file.
 func (a *App) heraDeleteStackedBranches(extra []stackedBranchCandidate) {
+	database, ok := a.db.(*db.DB)
+	if !ok {
+		return
+	}
 	cfg := a.db.Config()
 	for _, c := range extra {
 		t, err := a.db.Get(c.TaskID)
@@ -1116,17 +1120,9 @@ func (a *App) heraDeleteStackedBranches(extra []stackedBranchCandidate) {
 		if repoDir == "" {
 			continue
 		}
-		unlock := func() {}
-		if database, ok := a.db.(*db.DB); ok {
-			unlock, err = database.TryLockTaskOutsideReclaim(c.TaskID)
-			if err != nil {
-				uxlog.Log("[hera-view] cascade: stacked branch delete deferred task=%s err=%v", c.TaskID, err)
-				continue
-			}
+		if herasvc.DeleteStackedTaskBranch(context.Background(), database, c.TaskID, repoDir, c.Branch) {
+			uxlog.Log("[hera-view] cascade: stacked branch cleanup ran branch=%q task=%s", c.Branch, c.TaskID)
 		}
-		agent.DeleteStackedBranchContext(context.Background(), repoDir, c.Branch)
-		unlock()
-		uxlog.Log("[hera-view] cascade: deleted stacked branch %q (task=%s)", c.Branch, c.TaskID)
 	}
 }
 

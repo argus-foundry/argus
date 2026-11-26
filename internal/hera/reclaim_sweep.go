@@ -251,22 +251,8 @@ func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config
 	if branch == "" {
 		lease.Tip = ""
 	}
-	removed := worktree != "" && agent.DirExists(worktree)
-	if removed {
-		if repoLocked {
-			agent.RemoveWorktreeAndLocalBranchLocked(worktree, branch, repoDir)
-		} else {
-			agent.RemoveWorktreeAndLocalBranch(worktree, branch, repoDir)
-		}
-	} else if branch != "" && repoDir != "" {
-		if worktree != "" {
-			if _, _, err := agent.RunTaskGit(ctx, repoDir, "worktree", "prune"); err != nil {
-				return false, err
-			}
-		}
-		agent.DeleteBranch(repoDir, branch)
-	}
-	if err := agent.VerifyResidentLocalRemoval(ctx, worktree, branch, repoDir); err != nil {
+	removed, err := agent.CleanupResidentLocalGit(ctx, worktree, branch, repoDir, repoLocked)
+	if err != nil {
 		return false, err
 	}
 	lease.LocalDone = true
@@ -406,25 +392,67 @@ func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, 
 		if !v.Safe {
 			continue
 		}
-		unlock := func() {}
-		if y.ID != x.ID {
-			unlock, err = d.TryLockTaskOutsideReclaim(y.ID)
-			if err != nil {
-				uxlog.Log("[hera] reclaim sweep: stacked branch cleanup deferred task=%s err=%v", y.ID, err)
-				continue
-			}
-		}
-		if !branchExistsOnOrigin(repoDir, y.Branch) {
-			unlock()
+		if !branchExistsOnOrigin(ctx, repoDir, y.Branch) || !deleteStackedTaskBranch(ctx, d, y.ID, repoDir, y.Branch, y.ID == x.ID) {
 			continue
 		}
 
-		agent.DeleteStackedBranchContext(ctx, repoDir, y.Branch)
-		unlock()
 		deleted++
 		uxlog.Log("[hera] reclaim sweep: deleted stacked branch %q (task=%s) confirmed via %s", y.Branch, y.ID, v.Tier)
 	}
 	return deleted
+}
+
+// DeleteStackedTaskBranch revalidates a confirmed stack entry against task
+// creation and reclaim before deleting its branch.
+func DeleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, branch string) bool {
+	return deleteStackedTaskBranch(ctx, d, taskID, repoDir, branch, false)
+}
+
+func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, branch string, admissionHeld bool) bool {
+	if !admissionHeld {
+		unlock, err := d.TryLockTaskOutsideReclaim(taskID)
+		if err != nil {
+			uxlog.Log("[hera] stacked branch cleanup deferred task=%s err=%v", taskID, err)
+			return false
+		}
+		defer unlock()
+	}
+	unlock, acquired, err := agent.TryLockTaskGitOwnership(ctx, repoDir)
+	if err != nil || !acquired {
+		uxlog.Log("[hera] stacked branch ownership unavailable task=%s err=%v", taskID, err)
+		return false
+	}
+	defer unlock()
+	current, err := d.Get(taskID)
+	if err != nil || current.Branch != branch {
+		uxlog.Log("[hera] stacked branch assignment changed task=%s err=%v", taskID, err)
+		return false
+	}
+	root, err := agent.TaskGitRepositoryID(ctx, repoDir)
+	if err != nil || root == "" {
+		return false
+	}
+	cfg := d.Config()
+	currentRepo, err := agent.TaskGitRepositoryID(ctx, agent.ResolveDir(current, cfg))
+	if err != nil || !agent.SamePath(root, currentRepo) {
+		return false
+	}
+	tasks, err := d.TasksChecked()
+	if err != nil {
+		return false
+	}
+	for _, other := range tasks {
+		if other.ID == taskID || other.Branch != branch {
+			continue
+		}
+		otherRepo, err := agent.TaskGitRepositoryID(ctx, agent.ResolveDir(other, cfg))
+		if err != nil || otherRepo == "" || agent.SamePath(root, otherRepo) {
+			uxlog.Log("[hera] stacked branch belongs to another task task=%s other=%s", taskID, other.ID)
+			return false
+		}
+	}
+	agent.DeleteStackedBranchContext(ctx, repoDir, branch)
+	return true
 }
 
 // projectMergeSafetyContext resolves the shared, project-level
@@ -450,10 +478,8 @@ func projectMergeSafetyContext(ctx context.Context, cfg config.Config, t *model.
 }
 
 // branchExistsOnOrigin reports whether branch still has a remote-tracking
-// ref under origin — a purely local check (git for-each-ref against the
-// repo's own refs/remotes/, no fetch), mirroring Tier A's own no-fetch
-// staleness tradeoff rather than a live network round trip.
-func branchExistsOnOrigin(repoDir, branch string) bool {
-	target := "origin/" + branch
-	return slices.Contains(gitutil.ListRemoteBranches(repoDir), target)
+// ref under origin. This is a local check with no network fetch.
+func branchExistsOnOrigin(ctx context.Context, repoDir, branch string) bool {
+	_, _, err := agent.RunTaskGit(ctx, repoDir, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+branch)
+	return err == nil
 }

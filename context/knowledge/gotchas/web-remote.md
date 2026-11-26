@@ -378,3 +378,5 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 - **Use fresh model fields to render a reopened task.** Each detail visit owns its action controls, and list refresh applies the current task's authoritative name independently of terminal reattachment.
 
 - **A successful delete applies to the task ID across visits.** If the current detail still shows that ID, close it. Leave another task's view open.
+
+- **Archive and Unarchive can remove the current task from its list.** After success, close a reopened view of that same task if it moved to the other filter.

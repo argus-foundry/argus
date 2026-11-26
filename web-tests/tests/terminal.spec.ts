@@ -183,15 +183,16 @@ test.describe('terminal', () => {
     let requested = false;
     let serverName: string | undefined;
     let deletedID: string | undefined;
+    const movesOutOfList = action === 'delete' || action === 'archive';
     let release: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
     await page.route(/\/api\/tasks(?:\?|$)/, async route => {
-      if (action !== 'delete' && !serverName) return route.continue();
+      if (!movesOutOfList && !serverName) return route.continue();
       const response = await route.fetch();
       const body = await response.json();
       if (serverName) body.tasks[0].name = serverName;
       if (deletedID) body.tasks = body.tasks.filter(task => task.id !== deletedID);
-      if (action === 'delete') {
+      if (movesOutOfList) {
         body.tasks.push({ id: 'unrelated-task', name: 'Other task', project: 'test-proj', status: 'pending', live: false });
       }
       await route.fulfill({ response, json: body });
@@ -203,6 +204,7 @@ test.describe('terminal', () => {
       await held;
       if (action === 'rename') serverName = 'Renamed by server';
       if (action === 'delete') deletedID = new URL(request.url()).pathname.split('/').at(-1);
+      if (action === 'archive') deletedID = new URL(request.url()).pathname.split('/').at(-2);
       await route.fulfill({ status: 200, json: { id: 'forked-task' } }).catch(() => {});
     });
     page.on('dialog', dialog => dialog.type() === 'prompt' ? dialog.accept('Action result') : dialog.accept());
@@ -218,7 +220,7 @@ test.describe('terminal', () => {
       }, action);
       await expect.poll(() => requested).toBe(true);
       await page.locator('#detail-view .detail-back').click();
-      if (action === 'delete') await page.locator('.task-item').filter({ hasText: 'Other task' }).click();
+      if (movesOutOfList) await page.locator('.task-item').filter({ hasText: 'Other task' }).click();
       else await page.locator('.task-item').first().click();
       await expect(page.locator('#term .xterm')).toBeVisible();
       await expect(page.locator('#btn-overflow')).toBeEnabled();
@@ -231,6 +233,43 @@ test.describe('terminal', () => {
       });
       expect(sameTerminal).toBe(true);
       await expect(page.locator('#detail-title')).toHaveText(serverName ?? title!);
+    } finally {
+      release!();
+    }
+  });
+
+  for (const archive of [true, false]) test(`successful ${archive ? 'Archive' : 'Unarchive'} closes a reopened task outside the selected list`, async ({ page }) => {
+    let archived = !archive;
+    let requested = false;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks(?:\?|$)/, async route => {
+      const url = new URL(route.request().url());
+      const selectedArchive = url.searchParams.get('archived') === '1';
+      url.search = '';
+      const response = await route.fetch({ url: String(url) });
+      const body = await response.json();
+      body.tasks = selectedArchive === archived ? body.tasks.map(task => ({ ...task, archived })) : [];
+      await route.fulfill({ response, json: body });
+    });
+    await page.route(/\/api\/tasks\/[^/]+\/(?:archive|unarchive)$/, async route => {
+      requested = true;
+      await held;
+      archived = archive;
+      await route.fulfill({ status: 200, json: { archived } }).catch(() => {});
+    });
+    try {
+      await login(page);
+      if (!archive) await page.evaluate(() => (window as any).setListFilter('archived'));
+      await page.locator('.task-item').filter({ hasText: 'echo-bash' }).click();
+      await page.evaluate(archive => { (window as any).pendingArchive = (window as any).setArchive(archive); }, archive);
+      await expect.poll(() => requested).toBe(true);
+      await page.locator('#detail-view .detail-back').click();
+      await page.locator('.task-item').filter({ hasText: 'echo-bash' }).click();
+      release!();
+      await page.evaluate(() => (window as any).pendingArchive);
+      await expect(page.locator('#detail-view')).not.toHaveClass(/\bopen\b/);
+      await expect(page.locator('.task-item')).toHaveCount(0);
     } finally {
       release!();
     }

@@ -263,6 +263,7 @@ func TestReconcileHeraReclaimsWaitsForExitAndOwner(t *testing.T) {
 // safe — but M's branch was recorded operator-excluded, so it must survive
 // untouched while X's is deleted.
 func TestReconcileHeraReclaims_ExcludedStackedBranchStays(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	d, err := db.OpenInMemory()
 	testutil.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
@@ -345,4 +346,27 @@ func TestStackTasksUseSharedGitRepositoryIdentity(t *testing.T) {
 	got := stackTasksInRepository(context.Background(), cfg, repo, []*model.Task{same, other})
 	testutil.Equal(t, len(got), 1)
 	testutil.Equal(t, got["base"], same)
+}
+
+func TestStackedDeletePreservesSuccessorAfterOldTaskDisappears(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initGitRepo(t, t.TempDir())
+	remote := t.TempDir()
+	gitRun(t, remote, "init", "--bare")
+	gitRun(t, repo, "remote", "add", "origin", remote)
+	const branch = "argus/worker"
+	gitRun(t, repo, "branch", branch)
+	gitRun(t, repo, "push", "origin", branch)
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	testutil.NoError(t, d.SetProject("p", config.Project{Path: repo}))
+	old := &model.Task{ID: "old", Name: "Old worker", Project: "p", Branch: branch}
+	testutil.NoError(t, d.Add(old))
+	testutil.NoError(t, d.Delete(old.ID))
+	testutil.NoError(t, d.Add(&model.Task{ID: "new", Name: "New worker", Project: "p", Branch: branch}))
+
+	testutil.False(t, DeleteStackedTaskBranch(context.Background(), d, old.ID, repo, branch))
+	gitRun(t, repo, "show-ref", "--verify", "refs/heads/"+branch)
+	gitRun(t, remote, "show-ref", "--verify", "refs/heads/"+branch)
 }

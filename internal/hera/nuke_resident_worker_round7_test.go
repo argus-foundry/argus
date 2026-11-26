@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -183,17 +184,19 @@ func TestCheckedResidentNukeObservesExitBeforeLocalCallbackFinishes(t *testing.T
 }
 
 func TestDeferredResidentReclaimUsesOriginalRemoteTip(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	repo := initGitRepo(t, t.TempDir())
 	remote := t.TempDir()
 	gitRun(t, remote, "init", "--bare")
 	gitRun(t, repo, "remote", "add", "origin", remote)
 	const branch = "argus/worker"
-	worktree := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+	worktree := filepath.Join(home, ".argus", "worktrees", "worker")
 	gitRun(t, repo, "worktree", "add", "-b", branch, worktree)
 	gitRun(t, worktree, "push", "origin", branch)
 	task := &model.Task{ID: "w", Name: "Worker", Status: model.StatusInProgress, Project: "p", Worktree: worktree, Branch: branch}
 	d, _, view := residentWorkerNukeFixture(t, task)
+	t.Setenv("HOME", home)
 	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: repo}))
 	starting := true
 	owner := nukeReclaimOwner{Runner: agent.NewRunner(nil), pending: &starting}
@@ -221,12 +224,14 @@ func TestDeferredResidentReclaimUsesOriginalRemoteTip(t *testing.T) {
 }
 
 func TestDeferredResidentReclaimPreservesReusedWorktree(t *testing.T) {
+	home := t.TempDir()
 	repo := initGitRepo(t, t.TempDir())
 	const branch = "argus/worker"
-	worktree := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+	worktree := filepath.Join(home, ".argus", "worktrees", "worker")
 	gitRun(t, repo, "worktree", "add", "-b", branch, worktree)
 	task := &model.Task{ID: "original", Name: "Worker", Project: "p", Worktree: worktree, Branch: branch}
 	d, _, view := residentWorkerNukeFixture(t, task)
+	t.Setenv("HOME", home)
 	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: repo}))
 	starting := true
 	owner := nukeReclaimOwner{Runner: agent.NewRunner(nil), pending: &starting}
@@ -311,12 +316,14 @@ func TestSettledResidentReclaimPreservesSameTipOwnedOriginRef(t *testing.T) {
 }
 
 func TestDeferredResidentReclaimFindsUnconfiguredRepositoryFromWorktree(t *testing.T) {
+	home := t.TempDir()
 	const branch = "argus/worker"
 	repo := initGitRepo(t, t.TempDir())
-	checkout := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+	checkout := filepath.Join(home, ".argus", "worktrees", "worker")
 	gitRun(t, repo, "worktree", "add", "-b", branch, checkout)
 	task := &model.Task{ID: "worker", Name: "Worker", Worktree: checkout, Branch: branch}
 	d, _, view := residentWorkerNukeFixture(t, task)
+	t.Setenv("HOME", home)
 	starting := true
 	owner := nukeReclaimOwner{Runner: agent.NewRunner(nil), pending: &starting}
 	_, err := NukeResidentWorker(d, owner, view)
@@ -325,6 +332,80 @@ func TestDeferredResidentReclaimFindsUnconfiguredRepositoryFromWorktree(t *testi
 	testutil.NoError(t, err)
 	testutil.Equal(t, sum.Pruned, 1)
 	testutil.False(t, agent.DirExists(checkout))
+}
+
+func TestLeasedGitTransportCancellationReleasesRepositoryOwnership(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initGitRepo(t, t.TempDir())
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	git, err := exec.LookPath("git")
+	testutil.NoError(t, err)
+	bin := t.TempDir()
+	marker := filepath.Join(bin, "transport-started")
+	script := `#!/bin/sh
+if [ "$1" = push ]; then
+  printf started > "$ARGUS_TEST_LEASE_MARKER"
+  sleep 5 &
+  wait
+fi
+exec "$ARGUS_TEST_REAL_GIT" "$@"
+`
+	testutil.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700))
+	t.Setenv("ARGUS_TEST_REAL_GIT", git)
+	t.Setenv("ARGUS_TEST_LEASE_MARKER", marker)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	result := make(chan error, 1)
+	go func() {
+		result <- residentRemoteBranchDeleteOwned(context.Background(), d, ResidentDeleteOptions{RemoteBranchTimeout: 750 * time.Millisecond}, "worker",
+			&db.HeraReclaimLease{RepoDir: repo, Branch: "argus/worker", Tip: "1234567"})
+	}()
+	select {
+	case err := <-result:
+		testutil.NoError(t, err)
+	case <-time.After(4 * time.Second):
+		t.Fatal("Git child kept the repository lock past cancellation")
+	}
+	_, err = os.Stat(marker)
+	testutil.NoError(t, err)
+	unlock, acquired, err := agent.TryLockTaskGitOwnership(context.Background(), repo)
+	testutil.NoError(t, err)
+	testutil.True(t, acquired)
+	if acquired {
+		unlock()
+	}
+}
+
+func TestDeferredLocalReclaimPreservesLockedWorktreeInOriginalRepository(t *testing.T) {
+	home := t.TempDir()
+	repo, other := initGitRepo(t, t.TempDir()), initGitRepo(t, t.TempDir())
+	const branch = "argus/worker"
+	checkout := filepath.Join(home, ".argus", "worktrees", "worker")
+	gitRun(t, repo, "worktree", "add", "-b", branch, checkout)
+	gitRun(t, repo, "worktree", "lock", checkout)
+	gitRun(t, other, "branch", branch)
+	task := &model.Task{ID: "worker", Name: "Worker", Project: "p", Worktree: checkout, Branch: branch}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	t.Setenv("HOME", home)
+	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: other}))
+	_, err := NukeResidentWorker(d, nil, view)
+	testutil.NoError(t, err)
+	testutil.True(t, agent.DirExists(checkout))
+	lease, err := d.HeraResidentReclaimLease(task.ID)
+	testutil.NoError(t, err)
+	if lease == nil {
+		t.Fatal("locked worktree lost its pending cleanup record")
+	}
+	testutil.False(t, lease.LocalDone)
+	testutil.True(t, agent.SamePath(repo, lease.RepoDir))
+
+	gitRun(t, repo, "worktree", "unlock", checkout)
+	sum, err := ReconcileHeraReclaims(d, &fakeSessionChecker{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, sum.Pruned, 1)
+	testutil.False(t, agent.DirExists(checkout))
+	testutil.True(t, gitBranchExists(other, branch))
 }
 
 // A session that exits on Stop but has not settled by the end of the wait is

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -106,19 +105,67 @@ func WorktreeRemoteBranchLease(worktreePath, branch, repoDir string) (remoteRepo
 // configured repository is unavailable. The common Git directory survives
 // removal of the linked checkout.
 func ResidentCleanupRepository(ctx context.Context, worktree, repoDir string) string {
+	var linkedRepo string
+	if worktree != "" {
+		if _, err := os.Lstat(filepath.Join(worktree, ".git")); err == nil {
+			linkedRepo, _ = TaskGitRepositoryID(ctx, worktree)
+		}
+	}
 	if repoDir != "" {
-		if _, err := TaskGitRepositoryID(ctx, repoDir); err == nil {
+		if configured, err := TaskGitRepositoryID(ctx, repoDir); err == nil && (linkedRepo == "" || SamePath(linkedRepo, configured)) {
 			return repoDir
 		}
 	}
-	common, err := TaskGitRepositoryID(ctx, worktree)
-	if err != nil || common == "" {
+	if linkedRepo == "" {
 		return ""
 	}
-	if filepath.Base(common) == ".git" {
-		return filepath.Dir(common)
+	if filepath.Base(linkedRepo) == ".git" {
+		return filepath.Dir(linkedRepo)
 	}
-	return common
+	return linkedRepo
+}
+
+// CleanupResidentLocalGit checks registration before deleting, and never
+// substitutes recursive filesystem deletion for a refusal from Git.
+func CleanupResidentLocalGit(ctx context.Context, worktree, branch, repoDir string, repoLocked bool) (bool, error) {
+	if worktree == "" && branch == "" {
+		return false, nil
+	}
+	if !repoLocked {
+		unlock, err := lockRepoContext(ctx, repoDir)
+		if err != nil {
+			return false, err
+		}
+		defer unlock()
+	}
+	removed := false
+	if worktree != "" {
+		if testGuard(worktree) {
+			return false, errors.New("worktree path blocked during test")
+		}
+		path, err := checkedTaskWorktree(ctx, worktree, repoDir)
+		if err == nil {
+			stopDevStackFor(path)
+			stopBrowsersFor(path)
+			if _, _, err := RunTaskGit(ctx, repoDir, "worktree", "remove", "--force", path); err != nil {
+				return false, fmt.Errorf("remove resident worktree: %w", err)
+			}
+			removed = true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	if branch != "" && repoDir != "" {
+		if worktree != "" {
+			if _, _, err := RunTaskGit(ctx, repoDir, "worktree", "prune"); err != nil {
+				return false, err
+			}
+		}
+		if out, _, err := RunTaskGit(ctx, repoDir, "branch", "-D", "--", branch); err != nil {
+			uxlog.Log("[worktree] resident local delete failed repo=%q branch=%q err=%v output=%q", repoDir, branch, err, out)
+		}
+	}
+	return removed, VerifyResidentLocalRemoval(ctx, worktree, branch, repoDir)
 }
 
 // VerifyResidentLocalRemoval checks the actual filesystem and ref state. The
@@ -160,13 +207,11 @@ func DeleteStackedBranchContext(ctx context.Context, repoDir, branch string) {
 
 // revParseCommit resolves ref to a commit id in dir, "" when it does not.
 func revParseCommit(dir, ref string) string {
-	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
-	cmd.Dir = dir
-	out, err := cmd.Output()
+	out, _, err := RunTaskGit(context.Background(), dir, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return out
 }
 
 // ErrRemoteBranchChanged reports that DeleteRemoteBranchContext's lease
@@ -195,15 +240,11 @@ func DeleteRemoteBranchContext(ctx context.Context, repoDir, branch, expectTip s
 		return fmt.Errorf("delete origin branch %s: no expected tip to lease on; left in place", branch)
 	}
 	ref := "refs/heads/" + branch
-	cmd := exec.CommandContext(ctx, "git", "push", "--force-with-lease="+ref+":"+expectTip, "origin", ":"+ref)
-	cmd.Dir = repoDir
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	out, err := cmd.CombinedOutput()
+	msg, _, err := RunTaskGit(ctx, repoDir, "push", "--force-with-lease="+ref+":"+expectTip, "origin", ":"+ref)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("git push origin --delete %s: %w", branch, ctxErr)
 		}
-		msg := strings.TrimSpace(string(out))
 		// Current git reports a lease mismatch, including a branch already gone
 		// from origin, as "stale info"; some versions report the gone case as
 		// "remote ref does not exist". Either way ls-remote classifies it.
@@ -226,15 +267,11 @@ func DeleteRemoteBranchContext(ctx context.Context, repoDir, branch, expectTip s
 // by ctx. It only classifies a failed lease for logging; it never decides a
 // delete.
 func remoteBranchExists(ctx context.Context, repoDir, ref string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--exit-code", "origin", ref)
-	cmd.Dir = repoDir
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	err := cmd.Run()
-	var exitErr *exec.ExitError
+	_, code, err := RunTaskGit(ctx, repoDir, "ls-remote", "--exit-code", "origin", ref)
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.As(err, &exitErr) && exitErr.ExitCode() == 2:
+	case code == 2:
 		return false, nil // --exit-code: no matching ref
 	default:
 		return false, err

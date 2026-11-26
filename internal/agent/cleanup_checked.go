@@ -58,6 +58,7 @@ func RunTaskGit(ctx context.Context, dir string, args ...string) (string, int, e
 		}
 	}()
 	cmd.Dir = dir
+	cmd.Env = append(cmd.Environ(), "LC_ALL=C")
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		uxlog.Log("[worktree] git interrupted dir=%q err=%v", dir, ctx.Err())
