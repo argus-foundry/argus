@@ -22,6 +22,10 @@ type DB struct {
 	mu   sync.Mutex
 	// resultMu orders result commits through publication without holding mu in the sink.
 	resultMu sync.Mutex
+	// Disk-backed handles share this directory with other processes. Memory
+	// databases use their own map since they have no on-disk identity.
+	sessionLockDir string
+	sessionLocks   sync.Map
 	// Timer DDL is deferred so ordinary task/test DBs pay no setup cost.
 	// Guarded by mu; only successful initialization is cached.
 	residentTimersReady bool
@@ -67,6 +71,15 @@ func Open(path string) (*DB, error) {
 		conn.Close()
 		return nil, err
 	}
+	canonicalPath, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		canonicalPath, err = filepath.Abs(canonicalPath)
+	}
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("resolving database path: %w", err)
+	}
+	d.sessionLockDir = canonicalPath + ".session-locks"
 	if err := d.migrate(); err != nil {
 		conn.Close()
 		return nil, err

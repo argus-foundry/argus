@@ -1032,6 +1032,31 @@ func TestNukeHeraRole(t *testing.T) {
 	})
 }
 
+func TestNukeHeraRoleAndEndBindingRollsBackOnFailure(t *testing.T) {
+	d := heraTestDB(t)
+	orch := mkOrch(t, d, "alpha")
+	role := mkRole(t, d, orch.ID, "worker", HeraKindWorker)
+	task := &model.Task{ID: "worker-task", Name: "worker"}
+	testutil.NoError(t, d.Add(task))
+	binding, err := d.CreateHeraBinding(CreateHeraBindingInput{RoleID: role.ID, ArgusTaskID: task.ID})
+	testutil.NoError(t, err)
+	_, err = d.conn.Exec(`CREATE TRIGGER reject_nuke BEFORE UPDATE OF nuked_at ON hera_roles
+		BEGIN SELECT RAISE(ABORT, 'rejected nuke'); END`)
+	testutil.NoError(t, err)
+
+	testutil.Error(t, d.NukeHeraRoleAndEndBinding(role.ID))
+
+	got, err := d.HeraLiveBindingByRole(role.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.ID, binding.ID)
+	gotRole, err := d.HeraRole(role.ID)
+	testutil.NoError(t, err)
+	testutil.Nil(t, gotRole.NukedAt)
+	candidates, err := d.HeraNukeReclaimCandidates()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(candidates), 0)
+}
+
 // TestNukeHeraOrchestrator pins the orchestrator-level nuke.
 func TestNukeHeraOrchestrator(t *testing.T) {
 	t.Run("stamps markers, hides from list, keeps id lookup, frees name", func(t *testing.T) {

@@ -116,8 +116,10 @@ public struct SSEParser: Sendable {
     }
 }
 
-/// A decoded terminal-stream event from ``ArgusClient/terminalStream(taskID:since:)``.
+/// A decoded terminal-stream event from ``ArgusClient/terminalStream(taskID:since:expectedPID:)``.
 public enum TerminalEvent: Sendable, Equatable {
+    /// Identity of the process opened by the stream response.
+    case process(Int)
     /// The SSE response validated (2xx) and the channel is open — emitted ONCE,
     /// synthetically, before any frames. It is NOT decoded from an SSEvent; the
     /// stream wrapper injects it so a healthy-but-silent stream (an idle agent
@@ -173,6 +175,11 @@ extension ArgusClient {
     /// treat "onOpen fired" as an accepted, healthy connection.
     public func stream(path: String, query: [URLQueryItem] = [],
                        onOpen: (@Sendable () -> Void)? = nil) -> AsyncThrowingStream<SSEvent, Error> {
+        streamResponse(path: path, query: query, onOpen: { _ in onOpen?() })
+    }
+
+    private func streamResponse(path: String, query: [URLQueryItem],
+                                onOpen: @escaping @Sendable (HTTPURLResponse) -> Void) -> AsyncThrowingStream<SSEvent, Error> {
         AsyncThrowingStream { continuation in
             let work = _Concurrency.Task {
                 do {
@@ -186,12 +193,20 @@ extension ArgusClient {
                         throw ArgusError.invalidResponse("non-HTTP SSE response")
                     }
                     guard (200..<300).contains(http.statusCode) else {
+                        if http.statusCode == 409 {
+                            var body = Data()
+                            for try await byte in bytes {
+                                body.append(byte)
+                                if body.count == 4096 { break }
+                            }
+                            throw ArgusError.http(status: http.statusCode, body: String(decoding: body, as: UTF8.self))
+                        }
                         throw ArgusError.http(status: http.statusCode, body: "SSE \(path)")
                     }
                     // Response validated — the channel is open. Announce it before
                     // parsing so a stream that never emits a frame still resolves
                     // as connected rather than perpetually connecting.
-                    onOpen?()
+                    onOpen(http)
                     // Raw byte iteration, NOT `bytes.lines`: AsyncLineSequence
                     // swallows empty lines, and SSE dispatches on blank lines —
                     // see ByteLineSplitter.
@@ -224,15 +239,23 @@ extension ArgusClient {
     /// as `since` for a gapless resume. Unnamed events carry base64 PTY bytes;
     /// the `exit` event carries `{"rerendering":Bool}` and `clipboard` carries
     /// `{"text":…}` or `{"cleared":true}`.
-    public func terminalStream(taskID: String, since: UInt64 = 0) -> AsyncThrowingStream<TerminalEvent, Error> {
+    public func terminalStream(taskID: String, since: UInt64 = 0,
+                               expectedPID: Int? = nil) -> AsyncThrowingStream<TerminalEvent, Error> {
         var q: [URLQueryItem] = []
         if since > 0 { q.append(.init(name: "since", value: String(since))) }
+        if let expectedPID, expectedPID > 0 {
+            q.append(.init(name: "expected_pid", value: String(expectedPID)))
+        }
         return AsyncThrowingStream { continuation in
             // `onOpen` yields `.connected` the instant the response validates,
             // so it lands in the outer stream before any mapped frame (the base
             // stream reads no line until after onOpen fires).
-            let base = stream(path: "/api/tasks/\(pc(taskID))/stream", query: q,
-                              onOpen: { continuation.yield(.connected) })
+            let base = streamResponse(path: "/api/tasks/\(pc(taskID))/stream", query: q, onOpen: { response in
+                if let pid = Int(response.value(forHTTPHeaderField: "X-Argus-Session-Pid") ?? ""), pid > 0 {
+                    continuation.yield(.process(pid))
+                }
+                continuation.yield(.connected)
+            })
             let work = _Concurrency.Task {
                 do {
                     for try await ev in base {

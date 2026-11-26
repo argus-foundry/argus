@@ -129,7 +129,7 @@ func TestSmoke_ResizeDoesNotRestart(t *testing.T) {
 	time.Sleep(200 * time.Millisecond) // let any (wrongly) spawned decision goroutine act
 	testutil.False(t, sess.stopCalled.Load())
 	readUI(t, app.tapp, func() {
-		testutil.False(t, app.pendingRerenderRestart[task.ID])
+		testutil.False(t, app.hasPendingRerenderRestart(task.ID))
 		testutil.Equal(t, sess.PID(), 55)
 	})
 }

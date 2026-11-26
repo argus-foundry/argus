@@ -30,6 +30,10 @@ import (
 // case, wrap this same sentinel rather than inventing a parallel one.
 var ErrStartAmbiguous = errors.New("session start RPC did not confirm daemon-side outcome")
 
+// ErrSessionStopUnconfirmed means the owner may have accepted a stop before
+// its RPC response was lost. Keep the exact process intent until exit.
+var ErrSessionStopUnconfirmed = errors.New("session stop RPC did not confirm owner-side outcome")
+
 // SessionProvider abstracts the management of agent sessions.
 // Implemented by Runner (in-process) and daemon client (remote).
 type SessionProvider interface {
@@ -53,6 +57,47 @@ type SessionProvider interface {
 	HasPendingRestart(taskID string) bool
 }
 
+// SettledSessionStopper atomically refuses stops while a launch or replacement
+// owns the session slot. Implemented by the runner and the supervisor client.
+type SettledSessionStopper interface {
+	StopSettled(taskID string) error
+}
+
+// HeraReclaimSessionOwner certifies the process affected by a reclaim and
+// distinguishes an empty task slot from one that can still produce a process.
+type HeraReclaimSessionOwner interface {
+	StopTreeForPID(taskID string, expectedPID int) error
+	CheckReclaimSessionRetired(taskID string) error
+}
+
+// CheckManagedRestartSupported verifies that a remote owner can identify the
+// successor before callers prepare or persist changes for a managed restart.
+// An in-process owner tracks its own replacements.
+func CheckManagedRestartSupported(runner any, taskID string) error {
+	if owner, ok := runner.(interface{ CheckManagedRestartSupported(string) error }); ok {
+		return owner.CheckManagedRestartSupported(taskID)
+	}
+	return nil
+}
+
+// AttachableSession checks whether an existing PTY is safe to reuse. A pending
+// launch, stop, or replacement returns ErrSessionStarting. View-only lookups
+// continue using Get so a draining session's output remains available.
+func AttachableSession(provider SessionProvider, taskID string) (SessionHandle, error) {
+	switch owner := provider.(type) {
+	case *Runner:
+		return owner.attachableSession(taskID)
+	case interface {
+		AttachableSession(string) (SessionHandle, error)
+	}:
+		return owner.AttachableSession(taskID)
+	}
+	if provider.HasPendingRestart(taskID) {
+		return nil, ErrSessionStarting
+	}
+	return provider.Get(taskID), nil
+}
+
 // SessionRunner is the full in-daemon session-management surface: SessionProvider
 // plus the kick-rerender / reattach / needs-input extras that the daemon's API
 // server and resize/resume paths drive. Both *Runner (in-process) and the
@@ -67,8 +112,8 @@ type SessionProvider interface {
 type SessionRunner interface {
 	SessionProvider
 
-	// StartOrReattach returns the live session for task.ID if one already
-	// exists (reattached=true), otherwise starts a new one (reattached=false).
+	// StartOrReattach returns an attachable session for task.ID if one exists
+	// (reattached=true), otherwise starts a new one (reattached=false).
 	StartOrReattach(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (SessionHandle, bool, error)
 
 	// KickRerender stops a live session and queues a same-task restart at the

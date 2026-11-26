@@ -43,6 +43,8 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 
 ## xterm.js / SSE
 
+- **Pair a live output cursor with the PID from its snapshot.** Pass `X-Argus-Session-Pid` as `expected_pid` on the stream request and refresh the snapshot on `stale_session`. A replacement PTY starts a new log and cursor.
+
 - **base64 SSE chunks → `Uint8Array`, not string** — `term.write` accepts both, but using a string forces UTF-8 round-tripping that mangles raw bytes from agent output (status bars, ANSI sequences with high-byte content). Always decode base64 → byte array via `b64ToBytes`.
 - **SSE writes must go through `bufferOrWrite`, not `term.write` directly** — iOS Safari kills momentum-scroll the moment JS mutates the xterm viewport, so any `term.write` while the user is scrolled into history (`!termIsAtBottom()`) cancels the active fling and the scroll dies after one line. `bufferOrWrite` queues bytes in `pendingChunks` (capped at 256KB FIFO) and `flushPending` drains them once `term.onScroll` reports we're back at the bottom or the jump-bottom button is tapped. Don't add a second SSE write path that skips this gate.
 - **`termIsAtBottom()` alone is NOT enough — also gate on `termTouching` and `isTermScrolling` (scrollend-driven).** Two race windows kill iOS momentum even when the at-bottom check is in place: (1) between `touchstart` and the first scroll event, viewportY hasn't moved yet so JS still sees at-bottom, and a write that lands here cancels the fling; (2) during momentum after `touchend`, the moment `viewportY` snaps back to `baseY` a write races the still-active fling. The earlier 200ms-since-last-scroll heuristic was unreliable because iOS throttles scroll events during native momentum (long gaps with no scroll dispatched), so the gate opened mid-fling. The current implementation uses the **standard `scrollend` pattern** (matches React PR #32427 and argyleink/scrollyfills): native `scrollend` on `.xterm-viewport` when available (Safari 26.2+, Chrome, Firefox), polyfill via debounced scroll (100ms) + active-pointer tracking otherwise. `bufferOrWrite` checks `termIsAtBottom() && !termTouching && !isTermScrolling`. `isTermScrolling` flips true on the first `scroll` event and back to false on `scrollend` (or polyfilled equivalent — debounce only fires when no finger is down). Touch + viewport listeners are attached in `setupTerm()` and MUST be removed in `destroyTerm()` (named function refs in `termTouchEl` / `termViewportEl`) or they accumulate across open/close cycles.
@@ -356,3 +358,29 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 
 - **Decide closed-draft recovery must exclude only definitive closed/unavailable drafts from the queue; frozen uncertain payloads remain immutable and retryable.** Keep written notes and annotation quotes in collapsed recovery even when a bare already_resolved choice/Done can be treated as accepted; that outcome does not prove new written feedback was saved.
 - **Board trigger_pending alone changes attention/order, not authored response revision.** Emit the update and mark unread, but keep updated_at stable so queued Done receipts remain valid; body/command/trigger text/blocking edits still advance it.
+
+- **Theia must compare the snapshot PID before appending cached scrollback.** The remote TUI retains a retired pane handle during replacement and swaps it to a fresh ring after verifying the new PID.
+
+- **Recorded output without a PID has no live cursor.** Refresh the cached display from the recorded snapshot. A stale-session conflict during replacement keeps the remote pane waiting even when the task’s workflow status is already in review.
+
+- **The PWA recovery loop awaits each terminal attach.** A stale snapshot stays within that loop and its delay and deadline.
+
+- **PWA recovery owns one attachment generation.** Superseding that attachment cancels its reads and discards late rendering. The deadline continues through the snapshot body and paint.
+
+- **All exits from detail cancel the terminal attachment.** The PWA keeps recovery pending through xterm’s write callback and EventSource acceptance. HTTP rejection retries within the original deadline.
+
+- **Resume belongs to the detail view that initiated it.** Back, a tab switch, or logout ends that view, even when the user immediately reopens the same task. A late resume result cannot replace the reopened terminal.
+
+- **List refresh and online reconnect leave an active recovery in charge of attaching.** During a restart the list can briefly report a non-live task, then report it live before the recovery poll detects it. Keep the original recovery deadline through stream admission.
+
+- **Apply task action results only to the originating detail visit.** A request can still succeed after Back or a tab switch. A later view may even show the same task, so check the visit before changing its title, closing it, or opening a fork.
+
+- **Use fresh model fields to render a reopened task.** Each detail visit owns its action controls, and list refresh applies the current task's authoritative name independently of terminal reattachment.
+
+- **A successful delete applies to the task ID across visits.** If the current detail still shows that ID, close it. Leave another task's view open.
+
+- **Archive and Unarchive can remove the current task from its list.** After success, close a reopened view of that same task if it moved to the other filter.
+
+- **Re-read archival state before applying a response to a newer detail visit.** The server can commit a later Unarchive before the earlier Archive response arrives in the browser.
+
+- **The task API omits `archived` for active tasks.** Treat an omitted field as false when deciding whether a reopened terminal still belongs in its list.

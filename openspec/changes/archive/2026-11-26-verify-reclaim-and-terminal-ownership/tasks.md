@@ -1,0 +1,4 @@
+- [x] Revalidate local worktree and stacked branch ownership.
+- [x] Scope browser action controls by detail visit.
+- [x] Separate recorded history from workspace and macOS live output.
+- [x] Verify and archive the changes.

@@ -1,0 +1,5 @@
+- [x] Report launch state and observed process under one owner snapshot.
+- [x] Finalize retained receipts at startup and before a fresh relay attaches.
+- [x] Coordinate restore and standalone binding admission with Hera reclaim.
+- [x] Scope Theia reconnect and cached output to the producing process.
+- [x] Run regression tests and archive these requirements.

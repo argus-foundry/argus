@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/apiclient"
@@ -14,7 +15,6 @@ import (
 	"github.com/argus-foundry/argus/internal/daemon"
 	"github.com/argus-foundry/argus/internal/db"
 	herasvc "github.com/argus-foundry/argus/internal/hera"
-	"github.com/argus-foundry/argus/internal/mergesafety"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/tui/hera"
 	"github.com/argus-foundry/argus/internal/tui/modal"
@@ -461,8 +461,7 @@ func (a *App) heraNukeRole(r *hera.RoleView) {
 	reclaim := r.Live && r.TaskID != "" && a.heraTaskSolelyBoundTo(r)
 	if err := a.heraOps.NukeRole(r); err != nil {
 		a.statusbar.SetError("Nuke role failed: " + err.Error())
-	}
-	if reclaim {
+	} else if reclaim {
 		a.heraReclaimAndArchiveTask(r.TaskID)
 	}
 	a.heraRefresh()
@@ -497,12 +496,9 @@ func (a *App) heraNukeRole(r *hera.RoleView) {
 // permanently stranded at in_review by handleSessionExitUI's ordinary
 // crash/stop/fast-fail rule, which has no way to tell a deliberate, terminal
 // reclaim stop apart from a recoverable one (fix-nuke-completion-race). We
-// arm markHeraReclaimPending BEFORE backgrounding the stop, on this (the
-// tview main) goroutine, so handleSessionExitUI is guaranteed to see it set
-// by the time its own, later QueueUpdateDraw dispatch runs. The two "no exit
-// notification is ever coming" branches below (no live session; Stop errors)
-// clear it immediately instead, so it can never leak into a later, unrelated
-// exit of the same task ID.
+// arm the standalone TUI's marker before backgrounding the stop. A connected
+// TUI records the outgoing process in the shared database before it signals
+// the session so the daemon can finalize that process's exit.
 //
 // The session stop is backgrounded (heraGoSafe), not run inline: in a
 // daemon-connected TUI, HasSession/Stop are blocking RPC round-trips
@@ -522,50 +518,253 @@ func (a *App) heraReclaimAndArchiveTask(taskID string) (reclaimed bool) {
 		uxlog.Log("[hera-view] nuke: task %s not found, skip reclaim: %v", taskID, err)
 		return false
 	}
-	wasLive := t.Status == model.StatusInProgress
-	if wasLive {
-		a.markHeraReclaimPending(taskID)
+	runner := a.runner
+	if localDB, ok := a.db.(*db.DB); a.daemonConnected && ok {
+		heraGoSafe("nuke: reclaim task "+taskID, func() {
+			a.reclaimConnectedHeraTask(runner, localDB, taskID)
+		})
+		return t.Worktree != ""
 	}
-	heraGoSafe("nuke: stop session "+taskID, func() {
-		if a.runner.HasSession(taskID) {
-			if sErr := a.runner.Stop(taskID); sErr != nil {
-				uxlog.Log("[hera-view] nuke: stop session failed task=%s: %v", taskID, sErr)
-				if wasLive {
-					a.clearHeraReclaimPending(taskID)
-				}
-			}
-		} else if wasLive {
-			// No live session to stop — no exit notification is ever coming
-			// to consume the marker.
-			a.clearHeraReclaimPending(taskID)
+
+	release := func() {}
+	if database, ok := a.db.(*db.DB); ok {
+		var acquired bool
+		release, acquired, err = tryLockStandaloneReclaim(database, taskID)
+		if err != nil {
+			uxlog.Log("[hera-view] nuke: standalone reclaim lock failed task=%s: %v", taskID, err)
+			return false
 		}
-	})
-	cfg := a.db.Config()
-	repoDir := agent.ResolveDir(t, cfg)
-	wt, br := t.Worktree, t.Branch
-	if wt != "" {
-		reclaimed = true
-		heraGoSafe("nuke: remove worktree "+taskID, func() {
-			agent.RemoveWorktreeAndBranch(wt, br, repoDir)
-			a.heraPruneReclaimedTask(taskID)
-		})
-	} else if br != "" && repoDir != "" {
-		heraGoSafe("nuke: delete branch "+taskID, func() {
-			agent.DeleteBranch(repoDir, br)
-			agent.DeleteRemoteBranch(repoDir, br)
-		})
+		if !acquired {
+			heraGoSafe("nuke: wait for standalone reclaim "+taskID, func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				releaseSession, err := database.LockSessionMutation(ctx, taskID)
+				if err != nil {
+					uxlog.Log("[hera-view] nuke: standalone session wait failed task=%s: %v", taskID, err)
+					return
+				}
+				unlock, err := database.LockHeraReclaim(ctx, taskID)
+				if err != nil {
+					releaseSession()
+					uxlog.Log("[hera-view] nuke: standalone reclaim wait failed task=%s: %v", taskID, err)
+					return
+				}
+				a.reclaimStandaloneHeraTask(runner, taskID, func() { unlock(); releaseSession() })
+			})
+			return t.Worktree != ""
+		}
+	}
+	return a.reclaimStandaloneHeraTask(runner, taskID, release)
+}
+
+func tryLockStandaloneReclaim(database *db.DB, taskID string) (func(), bool, error) {
+	releaseSession, acquired, err := database.TryLockSessionMutation(taskID)
+	if err != nil || !acquired {
+		return nil, false, err
+	}
+	releaseBinding, acquired, err := database.TryLockHeraReclaim(taskID)
+	if err != nil || !acquired {
+		releaseSession()
+		return nil, false, err
+	}
+	return func() { releaseBinding(); releaseSession() }, true, nil
+}
+
+func (a *App) reclaimStandaloneHeraTask(runner agent.SessionProvider, taskID string, release func()) bool {
+	t, err := a.db.Get(taskID)
+	if err != nil {
+		release()
+		return false
+	}
+	var archiveErr error
+	if database, ok := a.db.(*db.DB); ok {
+		allowed, err := database.HasUnsettledHeraNuke(taskID)
+		if err != nil || !allowed {
+			uxlog.Log("[hera-view] nuke: standalone reclaim guard task=%s allowed=%t err=%v", taskID, allowed, err)
+			release()
+			return false
+		}
+		lease, err := database.HeraResidentReclaimLease(taskID)
+		if err != nil || lease != nil {
+			uxlog.Log("[hera-view] nuke: standalone deferred resident cleanup task=%s err=%v", taskID, err)
+			release()
+			return false
+		}
+		bindings, err := database.ListHeraLiveBindingsByTask(taskID)
+		if err != nil || len(bindings) != 0 {
+			uxlog.Log("[hera-view] nuke: standalone binding guard task=%s live=%d err=%v", taskID, len(bindings), err)
+			release()
+			return false
+		}
+		archiveErr = database.ArchiveHeraReclaim(t.ID)
+	} else {
+		archiveErr = a.db.SetArchived(t.ID, true)
+	}
+	if archiveErr != nil {
+		uxlog.Log("[hera-view] nuke: archive task failed task=%s: %v", t.ID, archiveErr)
+		release()
+		return false
+	}
+	wasLive := t.Status == model.StatusInProgress
+	if wasLive && !a.daemonConnected {
+		a.markHeraReclaimPending(taskID)
 	}
 	if t.Status == model.StatusInReview {
 		if sErr := a.db.SetStatus(t.ID, model.StatusComplete); sErr != nil {
 			uxlog.Log("[hera-view] nuke: complete task failed task=%s: %v", t.ID, sErr)
 		}
 	}
-	if aErr := a.db.SetArchived(t.ID, true); aErr != nil {
-		uxlog.Log("[hera-view] nuke: archive task failed task=%s: %v", t.ID, aErr)
-	} else {
-		uxlog.Log("[hera-view] nuke: reclaimed worktree + archived task %s", t.ID)
+	heraGoSafe("nuke: stop session and reclaim "+taskID, func() {
+		defer release()
+		if local, ok := runner.(*agent.Runner); ok {
+			stopped, err := stopStandaloneReclaim(local, taskID)
+			if !stopped {
+				a.clearHeraReclaimPending(taskID)
+			}
+			if err != nil {
+				uxlog.Log("[hera-view] nuke: standalone owner not retired task=%s: %v", taskID, err)
+				return
+			}
+		} else if runner.HasSession(taskID) {
+			if err := runner.Stop(taskID); err != nil {
+				uxlog.Log("[hera-view] nuke: stop session failed task=%s: %v", taskID, err)
+				a.clearHeraReclaimPending(taskID)
+				return
+			}
+		} else {
+			a.clearHeraReclaimPending(taskID)
+		}
+		a.removeHeraReclaimedWorktree(t)
+	})
+	return t.Worktree != ""
+}
+
+func stopStandaloneReclaim(runner *agent.Runner, taskID string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	stopped := false
+	for {
+		if err := runner.CheckReclaimSessionRetired(taskID); err == nil {
+			return stopped, nil
+		} else if !errors.Is(err, agent.ErrSessionStarting) {
+			return stopped, err
+		}
+		if !stopped {
+			sess, err := agent.AttachableSession(runner, taskID)
+			if err == nil && sess != nil {
+				if err := runner.StopTreeForPID(taskID, sess.PID()); err == nil {
+					stopped = true
+				} else if !errors.Is(err, agent.ErrSessionStarting) && !errors.Is(err, agent.ErrSessionNotFound) {
+					return stopped, err
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return stopped, ctx.Err()
+		case <-ticker.C:
+		}
 	}
-	return reclaimed
+}
+
+func (a *App) removeHeraReclaimedWorktree(t *model.Task) {
+	repoDir := agent.ResolveDir(t, a.db.Config())
+	if t.Worktree != "" {
+		agent.RemoveWorktreeAndBranch(t.Worktree, t.Branch, repoDir)
+		a.heraPruneReclaimedTask(t.ID)
+		return
+	}
+	if t.Branch != "" && repoDir != "" {
+		if result := agent.CleanupTaskGit("", t.Branch, repoDir); result.Failed() {
+			uxlog.Log("[hera-view] nuke: branch cleanup failed task=%s: %s", t.ID, result.Err)
+			return
+		}
+	}
+	if database, ok := a.db.(*db.DB); !a.daemonConnected && ok {
+		if err := database.MarkHeraReclaimCleaned(t.ID); err != nil {
+			uxlog.Log("[hera-view] nuke: could not release archived task task=%s: %v", t.ID, err)
+		}
+	}
+}
+
+func (a *App) reclaimConnectedHeraTask(runner agent.SessionProvider, database *db.DB, taskID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	unlock, err := database.LockSessionMutation(ctx, taskID)
+	if err != nil {
+		uxlog.Log("[hera-view] nuke: session lock failed task=%s: %v", taskID, err)
+		return
+	}
+	defer unlock()
+	releaseReclaim, err := database.LockHeraReclaim(ctx, taskID)
+	if err != nil {
+		uxlog.Log("[hera-view] nuke: reclaim lock unavailable task=%s: %v", taskID, err)
+		return
+	}
+	defer releaseReclaim()
+
+	allowed, err := database.HasUnsettledHeraNuke(taskID)
+	if err != nil || !allowed {
+		uxlog.Log("[hera-view] nuke: reclaim guard task=%s allowed=%t err=%v", taskID, allowed, err)
+		return
+	}
+	lease, err := database.HeraResidentReclaimLease(taskID)
+	if err != nil || lease != nil {
+		uxlog.Log("[hera-view] nuke: deferred resident cleanup task=%s err=%v", taskID, err)
+		return
+	}
+	task, err := database.Get(taskID)
+	if err != nil {
+		uxlog.Log("[hera-view] nuke: reload task failed task=%s: %v", taskID, err)
+		return
+	}
+	owner, ok := runner.(agent.HeraReclaimSessionOwner)
+	if !ok {
+		uxlog.Log("[hera-view] nuke: owner cannot certify reclaim task=%s", taskID)
+		return
+	}
+	pending, err := database.HeraReclaimStopPending(taskID)
+	if err != nil || pending {
+		uxlog.Log("[hera-view] nuke: reclaim already pending task=%s pending=%t err=%v", taskID, pending, err)
+		return
+	}
+	bindings, err := database.ListHeraLiveBindingsByTask(taskID)
+	if err != nil || len(bindings) != 0 {
+		uxlog.Log("[hera-view] nuke: reclaim binding guard task=%s live=%d err=%v", taskID, len(bindings), err)
+		return
+	}
+	if err := database.ArchiveHeraReclaim(taskID); err != nil {
+		uxlog.Log("[hera-view] nuke: archive task failed task=%s: %v", taskID, err)
+		return
+	}
+	if task.Status == model.StatusInReview {
+		if err := database.SetStatus(taskID, model.StatusComplete); err != nil {
+			uxlog.Log("[hera-view] nuke: complete task failed task=%s: %v", taskID, err)
+		}
+	}
+	sess, err := agent.AttachableSession(runner, taskID)
+	if err != nil {
+		uxlog.Log("[hera-view] nuke: scoped stop deferred task=%s: %v", taskID, err)
+		return
+	}
+	if sess == nil {
+		if err := owner.CheckReclaimSessionRetired(taskID); err != nil {
+			uxlog.Log("[hera-view] nuke: retirement not confirmed task=%s: %v", taskID, err)
+			return
+		}
+		a.removeHeraReclaimedWorktree(task)
+		return
+	}
+
+	pid := sess.PID()
+	if err := herasvc.RequestScopedReclaimStop(database, owner, taskID, pid); err != nil {
+		uxlog.Log("[hera-view] nuke: scoped stop failed task=%s pid=%d: %v", taskID, pid, err)
+		return
+	}
+	// The sweep waits for both retirement and the daemon's exit finalization.
+	uxlog.Log("[hera-view] nuke: scoped stop accepted task=%s pid=%d", taskID, pid)
 }
 
 // heraPruneReclaimedTask hard-deletes taskID's row once its worktree+branch
@@ -598,7 +797,7 @@ func (a *App) heraPruneReclaimedTask(taskID string) {
 	if !ok {
 		return
 	}
-	pruned, skipped, err := d.PruneTasks([]string{taskID})
+	pruned, skipped, err := d.PruneHeraReclaimedTask(taskID)
 	if err != nil {
 		uxlog.Log("[hera-view] nuke: prune task failed task=%s: %v", taskID, err)
 		return
@@ -734,7 +933,7 @@ func (a *App) heraCascadeNukeFrom(rootID int64) {
 			for _, id := range reclaimIDs {
 				inCascade[id] = true
 			}
-			extra = a.classifyStackedBranchesForCascade(context.Background(), notSafeIDs, inCascade, make(map[string]mergesafety.Verdict))
+			extra = a.classifyStackedBranchesForCascade(context.Background(), notSafeIDs, inCascade)
 		}
 		a.tapp.QueueUpdateDraw(func() { reviewThenConfirm(confirmed, extra) })
 	}()
@@ -833,18 +1032,9 @@ func (a *App) heraTaskBoundOutside(taskID string, subtreeIDs map[int64]bool) boo
 //     removes the row from the rail; never DeleteHeraRole);
 //   - NUKES the orchestrator row (Ops.NukeOrchestrator — NOT DeleteHeraOrchestrator).
 //
-// The task reclaim decision is made BEFORE ending that role's binding so the
-// multi-binding check sees full binding state. The reclaimed set guards against
-// double-archiving a task reached via two roles. Net: zero hard deletes — every
-// role/orchestrator/inbox/task row is retained (recoverable via the DB), only the
-// worktree dir + git branch are reclaimed.
-//
-// heraReclaimAndArchiveTask itself is invoked AFTER Ops.NukeRole ends this role's
-// binding, not before — its async prune step (heraPruneReclaimedTask) re-verifies
-// no-live-hera-binding at delete time, and starting that goroutine while the
-// binding is still live races the (synchronous, main-goroutine) end-binding call:
-// on a loaded scheduler the prune read can win and skip the delete for good, with
-// nothing in-process to retry it.
+// Decide task eligibility before ending its first binding. Dispatch reclaim
+// after every subtree binding mutation, so shared tasks have no remaining
+// subtree bindings and a failed mutation can still disqualify the task.
 //
 // extra is Stage 5's Tier D-discovered, operator-reviewed set of additional
 // origin branches (fix-hera-nuke-cleanup, classifyStackedBranchesForCascade +
@@ -858,29 +1048,47 @@ func (a *App) heraDoCascadeNuke(subtree []*hera.OrchView, subtreeIDs map[int64]b
 	if a.graduationPendingAny(subtreeTaskIDs(subtree), "cascade nuke") {
 		return
 	}
-	reclaimed := make(map[string]bool)
+	reclaimable := make(map[string]bool)
+	var candidates []string
+	var operationErr error
 	for _, o := range subtree {
 		for i := range o.Roles {
 			r := &o.Roles[i]
-			reclaimTask := ""
-			if r.Live && r.TaskID != "" && !reclaimed[r.TaskID] && !a.heraTaskBoundOutside(r.TaskID, subtreeIDs) {
-				reclaimed[r.TaskID] = true
-				reclaimTask = r.TaskID
+			if !r.Live {
+				continue
 			}
-			if r.Live {
-				if err := a.heraOps.NukeRole(r); err != nil {
-					uxlog.Log("[hera-view] cascade: nuke role %d failed: %v", r.RoleID, err)
-				}
+			if _, seen := reclaimable[r.TaskID]; !seen && r.TaskID != "" {
+				reclaimable[r.TaskID] = !a.heraTaskBoundOutside(r.TaskID, subtreeIDs)
+				candidates = append(candidates, r.TaskID)
 			}
-			if reclaimTask != "" {
-				a.heraReclaimAndArchiveTask(reclaimTask)
+			if err := a.heraOps.NukeRole(r); err != nil {
+				uxlog.Log("[hera-view] cascade: nuke role %d failed: %v", r.RoleID, err)
+				reclaimable[r.TaskID] = false
+				operationErr = err
 			}
-		}
-		if err := a.heraOps.NukeOrchestrator(o.ID); err != nil {
-			a.statusbar.SetError("Nuke sub-team failed: " + err.Error())
 		}
 	}
-	if len(extra) > 0 {
+	if operationErr == nil {
+		for _, o := range subtree {
+			if err := a.heraOps.NukeOrchestrator(o.ID); err != nil {
+				operationErr = err
+				for _, role := range o.Roles {
+					if role.Live {
+						reclaimable[role.TaskID] = false
+					}
+				}
+			}
+		}
+	}
+	if operationErr != nil {
+		a.statusbar.SetError("Nuke sub-team failed: " + operationErr.Error())
+	}
+	for _, taskID := range candidates {
+		if reclaimable[taskID] {
+			a.heraReclaimAndArchiveTask(taskID)
+		}
+	}
+	if operationErr == nil && len(extra) > 0 {
 		heraGoSafe("cascade: delete stacked branches", func() {
 			a.heraDeleteStackedBranches(extra)
 		})
@@ -896,20 +1104,14 @@ func (a *App) heraDoCascadeNuke(subtree []*hera.OrchView, subtreeIDs map[int64]b
 // shellouts) — callers background it via heraGoSafe, mirroring every other
 // git op in this file.
 func (a *App) heraDeleteStackedBranches(extra []stackedBranchCandidate) {
-	cfg := a.db.Config()
+	database, ok := a.db.(*db.DB)
+	if !ok {
+		return
+	}
 	for _, c := range extra {
-		t, err := a.db.Get(c.TaskID)
-		if err != nil || t == nil {
-			uxlog.Log("[hera-view] cascade: stacked branch delete skipped, task %s not found: %v", c.TaskID, err)
-			continue
+		if herasvc.DeleteStackedTaskBranch(context.Background(), database, c.TaskID, c.Repository, c.Branch, c.Tip) {
+			uxlog.Log("[hera-view] cascade: stacked branch cleanup ran branch=%q task=%s", c.Branch, c.TaskID)
 		}
-		repoDir := agent.ResolveDir(t, cfg)
-		if repoDir == "" {
-			continue
-		}
-		agent.DeleteBranch(repoDir, c.Branch)
-		agent.DeleteRemoteBranch(repoDir, c.Branch)
-		uxlog.Log("[hera-view] cascade: deleted stacked branch %q (task=%s)", c.Branch, c.TaskID)
 	}
 }
 
@@ -976,19 +1178,20 @@ func (a *App) heraCountReclaimable(roles []hera.RoleView) (reclaim, preserved in
 // heraReclaimAndArchiveTask is invoked, same reasoning as heraNukeRole: starting
 // the reclaim's async prune step while the binding is still live races its own
 // no-live-hera-binding re-check at delete time.
-func (a *App) heraNukeArchivedRole(r *hera.RoleView) (reclaimed bool) {
-	if r.TaskID != "" && a.graduationPendingBlocked(r.TaskID, "clear archive") {
-		return false
-	}
+func (a *App) heraNukeArchivedRole(r *hera.RoleView) (reclaimed bool, err error) {
 	taskID := roleReclaimTask(r)
+	if taskID != "" && a.graduationPendingBlocked(taskID, "clear archive") {
+		return false, db.ErrGraduationPending
+	}
 	doReclaim := taskID != "" && a.heraTaskReclaimable(taskID, r.RoleID)
 	if err := a.heraOps.NukeRole(r); err != nil {
 		uxlog.Log("[hera-view] clear archive: nuke role %d failed: %v", r.RoleID, err)
+		return false, err
 	}
 	if doReclaim {
 		reclaimed = a.heraReclaimAndArchiveTask(taskID)
 	}
-	return reclaimed
+	return reclaimed, nil
 }
 
 // heraClearArchive (`C`) confirms then NUKES every Tier-1 hidden (archived)
@@ -1026,7 +1229,7 @@ func (a *App) heraClearArchive(sel hera.Selection) {
 	}
 	var pendingIDs []string
 	for i := range workers {
-		pendingIDs = append(pendingIDs, workers[i].TaskID)
+		pendingIDs = append(pendingIDs, roleReclaimTask(&workers[i]))
 	}
 	if a.graduationPendingAny(pendingIDs, "clear archive") {
 		return
@@ -1072,19 +1275,30 @@ func (a *App) heraClearArchive(sel hera.Selection) {
 func (a *App) heraDoClearArchive(roles []hera.RoleView) {
 	var ids []string
 	for i := range roles {
-		ids = append(ids, roles[i].TaskID)
+		ids = append(ids, roleReclaimTask(&roles[i]))
 	}
 	if a.graduationPendingAny(ids, "clear archive") {
 		return
 	}
 	n, wt := 0, 0
+	var firstErr error
 	for i := range roles {
-		if a.heraNukeArchivedRole(&roles[i]) {
+		reclaimed, err := a.heraNukeArchivedRole(&roles[i])
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if reclaimed {
 			wt++
 		}
 		n++
 	}
 	uxlog.Log("[hera-view] clear archive: %d hidden role(s) nuked, %d worktree(s) reclaimed", n, wt)
+	if firstErr != nil {
+		a.statusbar.SetError(fmt.Sprintf("Cleared %d of %d archived roles (%v)", n, len(roles), firstErr))
+	}
 	a.heraRefresh()
 }
 
@@ -1129,7 +1343,13 @@ func (a *App) heraDoForceRecycle(role *hera.RoleView) {
 		a.statusbar.SetError("Force recycle: unavailable in this mode")
 		return
 	}
-	taskID := roleReclaimTask(role)
+	binding, err := d.HeraLiveBindingByRole(role.RoleID)
+	if err != nil {
+		a.statusbar.SetError("Force recycle failed: " + err.Error())
+		uxlog.Log("[hera-view] force recycle failed: role=%d: %v", role.RoleID, err)
+		return
+	}
+	taskID := binding.ArgusTaskID
 	if task, err := d.Get(taskID); err == nil && task.IsResident() {
 		if a.daemonClient == nil {
 			a.statusbar.SetError("Resident recycle requires the daemon")
@@ -1147,11 +1367,22 @@ func (a *App) heraDoForceRecycle(role *hera.RoleView) {
 		}()
 		return
 	}
+	sess := a.runner.Get(taskID)
+	live := sess != nil && sess.Alive()
+	if !live {
+		sess = nil
+	}
+	generation, unlock, err := a.lockDeferredSessionRestart(taskID, sess)
+	if err != nil {
+		a.statusbar.SetError("Force recycle failed: " + err.Error())
+		uxlog.Log("[hera-view] force recycle failed: role=%d: %v", role.RoleID, err)
+		return
+	}
+	defer unlock()
+
 	sessionID := ""
-	if taskID != "" {
-		if t, err := d.Get(taskID); err == nil && t != nil {
-			sessionID = t.SessionID
-		}
+	if t, err := d.Get(taskID); err == nil {
+		sessionID = t.SessionID
 	}
 	// Mirror maybeKickRerender's pendingRerenderRestart bookkeeping (app.go):
 	// RecycleCoord's kill+respawn is the same "session dies non-cleanly, a
@@ -1160,14 +1391,12 @@ func (a *App) heraDoForceRecycle(role *hera.RoleView) {
 	// it too rather than falling through to the generic crash/stop path —
 	// otherwise a coordinator open in the plain (non-hera) agent view flashes
 	// an "exited" state instead of resuming gaplessly in place.
-	if taskID != "" {
-		a.pendingRerenderRestart[taskID] = true
+	if live {
+		a.pendingRerenderRestart[taskID] = generation
 	}
 	rr := daemon.NewHeraRecycleRunner(d, runner, d.Config)
 	if err := herasvc.RecycleCoord(d, rr, role.RoleID, sessionID, herasvc.RecycleHumanForced); err != nil {
-		if taskID != "" {
-			delete(a.pendingRerenderRestart, taskID)
-		}
+		delete(a.pendingRerenderRestart, taskID)
 		a.statusbar.SetError("Force recycle failed: " + err.Error())
 		uxlog.Log("[hera-view] force recycle failed: role=%d: %v", role.RoleID, err)
 		return

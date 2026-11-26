@@ -313,9 +313,9 @@ func runTUI() {
 	// so no exit events can be missed during initialization.
 	var appRef2 *tui.App
 	if client != nil {
-		client.OnSessionExit(func(taskID string, info daemon.ExitInfo) {
+		client.OnSessionExitOwned(func(taskID string, info daemon.ExitInfo, owner agent.SessionHandle) {
 			if a := appRef2; a != nil {
-				a.HandleSessionExit(taskID, info)
+				a.HandleSessionExitOwned(taskID, info, owner)
 			}
 		})
 	}

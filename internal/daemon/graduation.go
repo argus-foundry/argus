@@ -180,6 +180,15 @@ func (g *graduationWatcher) resolveGraduate(taskID string) (b *db.HeraBinding, a
 }
 
 func (g *graduationWatcher) advance(taskID, phase string) error {
+	unlock, acquired, err := g.db.TryLockSessionLaunch(taskID)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return agent.ErrSessionStarting
+	}
+	defer unlock()
+
 	t, err := g.db.Get(taskID)
 	if err != nil {
 		return err
@@ -241,6 +250,11 @@ func (g *graduationWatcher) advance(taskID, phase string) error {
 			g.deferred[taskID] = "busy"
 		}
 		return nil
+	}
+	if alive {
+		if err := agent.CheckManagedRestartSupported(g.runner, taskID); err != nil {
+			return err
+		}
 	}
 	delete(g.deferred, taskID)
 	if !alive {

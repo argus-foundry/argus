@@ -205,6 +205,7 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 	}
 	summary := residentSummarize(ctx, cfg, task, pr)
 	var recheck func(*model.Task) error
+	var classifiedRepository agent.TaskGitRepository
 	if !p.Force {
 		// An expired budget makes the summary's fields unknown; that is not
 		// dirt, and saying so would mislead.
@@ -223,6 +224,15 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 				return residentHostBusy(id, role.Name, task.ID, "the worktree state check ran out of the call's time budget")
 			}
 			return residentToolError(id, fmt.Sprintf("not safe: %v; finish it on the worker's branch, or pass force=true", err))
+		}
+		configured := agent.ResolveDir(task, cfg)
+		if actual := agent.ResidentCleanupRepository(ctx, task.Worktree, ""); actual != "" && configured != "" {
+			expected, err := agent.CaptureTaskGitRepository(ctx, configured)
+			identity, identityErr := agent.TaskGitRepositoryID(ctx, actual)
+			if err != nil || identityErr != nil || !agent.SamePath(identity, expected.CommonDir) {
+				return residentToolError(id, "not safe: the worker checkout and configured project resolve to different repositories")
+			}
+			classifiedRepository = expected
 		}
 		classify := s.residentClassify
 		if classify == nil {
@@ -267,9 +277,11 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 		}
 	}
 	followUp, err := hera.NukeResidentWorkerChecked(d, runner, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true}, hera.ResidentDeleteOptions{
-		Recheck:  recheck,
-		Wait:     residentStopWait,
-		MutateBy: mutateBy,
+		Recheck:              recheck,
+		Wait:                 residentStopWait,
+		MutateBy:             mutateBy,
+		Deadline:             deadline,
+		ClassifiedRepository: classifiedRepository,
 		// The exit wait must leave the re-check and the local nuke their time.
 		GiveUpBy:           deadline.Add(-(residentRecheckBudget + residentLocalNukeReserve)),
 		Clock:              residentClock,
@@ -290,15 +302,21 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 	if err != nil {
 		return residentToolError(id, fmt.Sprintf("worker nuke did not complete: %v", err))
 	}
-	s.runResidentFleetReconcile(d, runner, role.Name, followUp)
 	updated, err := d.HeraRole(role.ID)
 	if err != nil || updated.NukedAt == nil {
 		return residentToolError(id, "worker nuke did not complete")
 	}
-	uxlog.Log("[resident] deleted worker=%s task=%s force=%t", role.Name, task.ID, p.Force)
-	slog.Info("[resident] deleted worker", "worker", role.Name, "task", task.ID, "force", p.Force)
+	lease, leaseErr := d.HeraResidentReclaimLease(task.ID)
+	cleanupPending := lease != nil || leaseErr != nil
+	s.runResidentFleetReconcile(d, runner, role.Name, followUp)
+	uxlog.Log("[resident] nuked worker=%s task=%s force=%t cleanup_pending=%t err=%v", role.Name, task.ID, p.Force, cleanupPending, leaseErr)
+	slog.Info("[resident] nuked worker", "worker", role.Name, "task", task.ID, "force", p.Force, "cleanup_pending", cleanupPending, "err", leaseErr)
 	var out strings.Builder
-	fmt.Fprintf(&out, "Deleted worker %s.\n", role.Name)
+	if cleanupPending {
+		fmt.Fprintf(&out, "Nuked worker %s. Session and worktree cleanup is pending.\n", role.Name)
+	} else {
+		fmt.Fprintf(&out, "Deleted worker %s.\n", role.Name)
+	}
 	if p.Force {
 		raw, _ := json.MarshalIndent(summary, "", "  ")
 		fmt.Fprintf(&out, "\nUnmerged summary (REPORT to Aaron now):\n%s\n", raw)

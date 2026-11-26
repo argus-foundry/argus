@@ -16,10 +16,8 @@ import (
 
 // pendingRestart holds the state needed to restart a session after
 // KickRerender or Recycle stops it. Stored under Runner.mu. The entry stays
-// in the map throughout the restart (so HasPendingRestart / Running surface
-// "still alive" during the BuildCmd gap), but `consumed` flips true once an
-// exit goroutine takes ownership — that prevents a fast-crashing resumed
-// session's exit goroutine from re-entering the restart and looping.
+// in the map until its successor is published (so HasPendingRestart / Running
+// surface "still alive" during the BuildCmd gap).
 //
 // resume distinguishes the two callers: KickRerender always sets true (the
 // agent re-emits its full conversation at the new PTY width via --resume);
@@ -27,23 +25,25 @@ import (
 // point of a recycle — via --session-id or no session flag at all,
 // depending on whether task.SessionID was cleared by the caller).
 type pendingRestart struct {
-	task     *model.Task
-	cfg      config.Config
-	rows     uint16
-	cols     uint16
-	resume   bool
-	consumed bool
+	task        *model.Task
+	cfg         config.Config
+	rows        uint16
+	cols        uint16
+	resume      bool
+	outgoingPID int
+	finalizing  bool
 }
 
 // Runner manages multiple agent sessions keyed by task ID.
 type Runner struct {
-	residentWorker ResidentWorkerIdentity
-	mu             sync.Mutex
-	mcpPort        int
-	sessions       map[string]*Session
-	stopped        map[string]bool // tracks task IDs where Stop was explicitly called
-	pendingRestart map[string]*pendingRestart
-	onFinish       func(taskID string, err error, stopped bool, lastOutput []byte)
+	residentWorker   ResidentWorkerIdentity
+	mu               sync.Mutex
+	mcpPort          int
+	sessions         map[string]*Session
+	stopped          map[string]bool // tracks task IDs where Stop was explicitly called
+	pendingRestart   map[string]*pendingRestart
+	onFinish         func(taskID string, err error, stopped bool, lastOutput []byte)
+	onRestartStarted func(taskID string, outgoingPID, successorPID int)
 
 	// needsInput is the set of task IDs the daemon's idle/needs-input watcher
 	// last flagged as blocked waiting on user input (the red ? in the TUI).
@@ -57,6 +57,7 @@ type Runner struct {
 	// a graceful shutdown would wait out the full prelaunch budget.
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
+	launchesClosed bool // guarded by mu
 }
 
 // SetMCPPort updates the listener port used by future task launches.
@@ -64,6 +65,14 @@ func (r *Runner) SetMCPPort(port int) {
 	r.mu.Lock()
 	r.mcpPort = port
 	r.mu.Unlock()
+}
+
+// OnRestartStarted registers the session owner's callback before launches.
+// The runner calls it before it begins observing the successor's exit.
+func (r *Runner) OnRestartStarted(fn func(taskID string, outgoingPID, successorPID int)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onRestartStarted = fn
 }
 
 // NewRunner creates a Runner. The onFinish callback is called (in a goroutine)
@@ -91,6 +100,10 @@ func NewRunner(onFinish func(taskID string, err error, stopped bool, lastOutput 
 // If resume is true, the agent reconnects to an existing conversation via --resume.
 // Returns an error if a session already exists for this task.
 func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (SessionHandle, error) {
+	return r.start(task, cfg, rows, cols, resume, nil)
+}
+
+func (r *Runner) start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool, restart *pendingRestart) (SessionHandle, error) {
 	if _, err := residentWorkerPreflight(task, cfg, r.residentWorker); err != nil {
 		return nil, err
 	}
@@ -98,8 +111,20 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 	// Start() calls for the same task ID could both pass an exists-check and
 	// overwrite each other, leaking PTY fds and sandbox cleanup closures.
 	r.mu.Lock()
-	if _, exists := r.sessions[task.ID]; exists {
+	if r.launchesClosed {
 		r.mu.Unlock()
+		return nil, context.Canceled
+	}
+	if r.pendingRestart[task.ID] != restart {
+		r.mu.Unlock()
+		return nil, ErrSessionStarting
+	}
+	if session, exists := r.sessions[task.ID]; exists {
+		unavailable := session == nil || r.stopped[task.ID] || !session.Alive()
+		r.mu.Unlock()
+		if unavailable {
+			return nil, ErrSessionStarting
+		}
 		return nil, fmt.Errorf("session already exists for task %s", task.ID)
 	}
 	// Place a nil sentinel so concurrent callers see the reservation.
@@ -131,6 +156,13 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		slog.Error("runner.Start: prelaunch failed", "task", task.ID, "err", err)
 		cleanup()
 		return nil, err
+	}
+	r.mu.Lock()
+	launchesClosed := r.launchesClosed
+	r.mu.Unlock()
+	if launchesClosed {
+		cleanup()
+		return nil, context.Canceled
 	}
 
 	if resume {
@@ -165,9 +197,26 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 	slog.Info("runner.Start: OK", "task", task.ID, "pid", sess.PID())
 
 	r.mu.Lock()
+	if r.launchesClosed {
+		delete(r.sessions, task.ID)
+		r.mu.Unlock()
+		_ = sess.Stop()
+		if sandboxCleanup != nil {
+			sandboxCleanup()
+		}
+		return nil, context.Canceled
+	}
 	r.sessions[task.ID] = sess
+	onRestartStarted := r.onRestartStarted
+	if restart != nil {
+		// The successor's exit belongs to it even if it happens immediately.
+		delete(r.pendingRestart, task.ID)
+	}
 	r.mu.Unlock()
 
+	if restart != nil && onRestartStarted != nil {
+		onRestartStarted(task.ID, restart.outgoingPID, sess.PID())
+	}
 	events.Emit(model.EventTypeSessionStarted, task.ID, map[string]any{
 		"pid":    sess.PID(),
 		"resume": resume,
@@ -207,32 +256,25 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 			r.onFinish(task.ID, exitErr, wasStopped, lastOutput)
 		}
 
-		// Take ownership of the pendingRestart entry. The entry STAYS in the
-		// map throughout r.Start so consumers (handleStream wait,
-		// HasPendingRestart, ListSessions, SessionStatus, RunningAndIdle) see
-		// the gap as "still alive" and don't tear down. The `consumed` flag
-		// prevents a fast-crashing resumed session's exit goroutine from
-		// reading the same entry and looping another restart — only the
-		// goroutine that flipped consumed=true runs the Start.
+		// The pending entry reserves the slot until Start publishes a successor
+		// or this outgoing process has reported the launch failure.
 		r.mu.Lock()
 		pending := r.pendingRestart[task.ID]
-		shouldRestart := pending != nil && !pending.consumed
-		if shouldRestart {
-			pending.consumed = true
-		}
+		// A late legacy StopScoped may have marked the dead session
+		// during onFinish. The replacement must own a clean stop state.
+		delete(r.stopped, task.ID)
 		delete(r.sessions, task.ID)
 		r.mu.Unlock()
 
-		if shouldRestart {
+		if pending != nil {
 			slog.Info("runner: restarting after kick", "task", task.ID, "cols", pending.cols, "rows", pending.rows, "resume", pending.resume)
-			_, rerr := r.Start(pending.task, pending.cfg, pending.rows, pending.cols, pending.resume)
-			// Clear the pending entry now that Start has returned; whether
-			// it succeeded (new session in the map) or failed, the gap is
-			// over and consumers should fall back to direct session lookup.
-			r.mu.Lock()
-			delete(r.pendingRestart, task.ID)
-			r.mu.Unlock()
+			_, rerr := r.start(pending.task, pending.cfg, pending.rows, pending.cols, pending.resume, pending)
 			if rerr != nil {
+				r.mu.Lock()
+				// Keep admission closed while publishing the failure, while
+				// reporting that the owner no longer has a pending launch.
+				pending.finalizing = true
+				r.mu.Unlock()
 				// Restart failed. The daemon's onFinish skipped the DB
 				// transition expecting a successful resume; without recovery
 				// the row stays InProgress with no live session. Re-fire
@@ -242,6 +284,9 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 				if r.onFinish != nil {
 					r.onFinish(task.ID, rerr, true, lastOutput)
 				}
+				r.mu.Lock()
+				delete(r.pendingRestart, task.ID)
+				r.mu.Unlock()
 			}
 		}
 	}()
@@ -260,11 +305,24 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 // own. Without this, calling Start directly on a desynced task returns
 // "session already exists for task X".
 func (r *Runner) StartOrReattach(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (SessionHandle, bool, error) {
-	if sess := r.Get(task.ID); sess != nil {
-		return sess, true, nil
+	if sess, err := r.attachableSession(task.ID); err != nil || sess != nil {
+		return sess, sess != nil, err
 	}
 	h, err := r.Start(task, cfg, rows, cols, resume)
 	return h, false, err
+}
+
+func (r *Runner) attachableSession(taskID string) (SessionHandle, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sess, reserved := r.sessions[taskID]
+	if r.pendingRestart[taskID] != nil || (reserved && (sess == nil || r.stopped[taskID] || !sess.Alive())) {
+		return nil, ErrSessionStarting
+	}
+	if sess == nil {
+		return nil, nil
+	}
+	return sess, nil
 }
 
 // Get returns the session for a task, or nil if not found.
@@ -347,7 +405,7 @@ func (r *Runner) getSession(taskID string) *Session {
 // Returns ErrSessionNotFound if no live session, or an error if a kick is
 // already pending. Stop failures propagate as-is.
 func (r *Runner) KickRerender(task *model.Task, cfg config.Config, rows, cols uint16) error {
-	return r.kickRerender(task, cfg, rows, cols, false, StopAgentOnly)
+	return r.kickRerender(task, cfg, rows, cols, false, StopAgentOnly, 0)
 }
 
 // KickRevive is an explicit operator recovery, allowed to restart an unsaved
@@ -362,16 +420,34 @@ func KickRevive(r SessionRunner, task *model.Task, cfg config.Config, rows, cols
 }
 
 func (r *Runner) Revive(task *model.Task, cfg config.Config, rows, cols uint16) error {
-	return r.kickRerender(task, cfg, rows, cols, true, StopAgentOnly)
+	return r.kickRerender(task, cfg, rows, cols, true, StopAgentOnly, 0)
 }
 
 // KickWidthRerender is only for guarded width repair; session switches and
 // revive keep KickRerender's non-escalating shutdown contract.
 func (r *Runner) KickWidthRerender(task *model.Task, cfg config.Config, rows, cols uint16) error {
-	return r.kickRerender(task, cfg, rows, cols, false, StopRerender)
+	return r.kickRerender(task, cfg, rows, cols, false, StopRerender, 0)
 }
 
-func (r *Runner) kickRerender(task *model.Task, cfg config.Config, rows, cols uint16, revive bool, scope StopScope) error {
+// KickWidthRerenderForPID requests width repair for a specific process. The
+// session owner checks its PID when it claims the PTY for restart.
+func KickWidthRerenderForPID(r SessionRunner, task *model.Task, cfg config.Config, rows, cols uint16, expectedPID int) error {
+	if owner, ok := r.(interface {
+		KickWidthRerenderForPID(*model.Task, config.Config, uint16, uint16, int) error
+	}); ok && expectedPID > 0 {
+		return owner.KickWidthRerenderForPID(task, cfg, rows, cols, expectedPID)
+	}
+	return ErrSessionCoordinationUnsupported
+}
+
+func (r *Runner) KickWidthRerenderForPID(task *model.Task, cfg config.Config, rows, cols uint16, expectedPID int) error {
+	if expectedPID <= 0 {
+		return ErrSessionNotFound
+	}
+	return r.kickRerender(task, cfg, rows, cols, false, StopRerender, expectedPID)
+}
+
+func (r *Runner) kickRerender(task *model.Task, cfg config.Config, rows, cols uint16, revive bool, scope StopScope, expectedPID int) error {
 	if task == nil {
 		return fmt.Errorf("nil task")
 	}
@@ -392,23 +468,34 @@ func (r *Runner) kickRerender(task *model.Task, cfg config.Config, rows, cols ui
 	}
 	r.mu.Lock()
 	sess := r.sessions[task.ID]
-	if sess == nil {
+	if sess == nil || (expectedPID > 0 && sess.PID() != expectedPID) {
 		r.mu.Unlock()
 		return ErrSessionNotFound
 	}
 	if _, exists := r.pendingRestart[task.ID]; exists {
 		r.mu.Unlock()
+		if expectedPID > 0 {
+			return ErrSessionStarting
+		}
 		return fmt.Errorf("kick already pending for task %s", task.ID)
+	}
+	if r.stopped[task.ID] || !sess.Alive() {
+		r.mu.Unlock()
+		if expectedPID > 0 {
+			return ErrSessionStarting
+		}
+		return ErrSessionNotFound
 	}
 	oldID := task.SessionID
 	// Publish a recovered ID only after reserving the pending restart.
 	task.SessionID = restartTask.SessionID
 	r.pendingRestart[task.ID] = &pendingRestart{
-		task:   task,
-		cfg:    cfg,
-		rows:   rows,
-		cols:   cols,
-		resume: resume,
+		task:        task,
+		cfg:         cfg,
+		rows:        rows,
+		cols:        cols,
+		resume:      resume,
+		outgoingPID: sess.PID(),
 	}
 	r.stopped[task.ID] = true
 	r.mu.Unlock()
@@ -461,12 +548,16 @@ func (r *Runner) Recycle(task *model.Task, cfg config.Config, rows, cols uint16)
 		r.mu.Unlock()
 		return fmt.Errorf("restart already pending for task %s", task.ID)
 	}
+	if r.stopped[task.ID] || !sess.Alive() {
+		r.mu.Unlock()
+		return ErrSessionNotFound
+	}
 	r.pendingRestart[task.ID] = &pendingRestart{
-		task:   task,
-		cfg:    cfg,
-		rows:   rows,
-		cols:   cols,
-		resume: false,
+		task:        task,
+		cfg:         cfg,
+		rows:        rows,
+		cols:        cols,
+		outgoingPID: sess.PID(),
 	}
 	r.stopped[task.ID] = true
 	r.mu.Unlock()
@@ -489,8 +580,20 @@ func (r *Runner) Recycle(task *model.Task, cfg config.Config, rows, cols uint16)
 func (r *Runner) HasPendingRestart(taskID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, ok := r.pendingRestart[taskID]
-	return ok
+	restart := r.pendingRestart[taskID]
+	return restart != nil && !restart.finalizing
+}
+
+// ObserveSessionLaunch snapshots the owner slot and its launch state together.
+// A failed restart still fences admission while reporting a retired process.
+func (r *Runner) ObserveSessionLaunch(taskID string) (sess *Session, starting bool, predecessor int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sess, reserved := r.sessions[taskID]
+	if restart := r.pendingRestart[taskID]; sess == nil && restart != nil {
+		return nil, !restart.finalizing, restart.outgoingPID
+	}
+	return sess, reserved && sess == nil, 0
 }
 
 // SetSessionForTest injects a live *Session into the runner's map without
@@ -518,15 +621,19 @@ func (r *Runner) SetPendingRestartForTest(taskID string, pending bool) {
 }
 
 // PendingRestartIDs returns the task IDs that have a queued kick-restart but
-// no current session in the runner. Used by the daemon's ListSessions RPC to
+// no live session in the runner. Used by the daemon's ListSessions RPC to
 // surface synthetic "alive" entries during the kick gap so daemon-client
 // reconcilers don't false-Complete the task.
 func (r *Runner) PendingRestartIDs() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.pendingRestartIDsLocked()
+}
+
+func (r *Runner) pendingRestartIDsLocked() []string {
 	out := make([]string, 0, len(r.pendingRestart))
 	for id := range r.pendingRestart {
-		if _, hasSess := r.sessions[id]; !hasSess {
+		if sess := r.sessions[id]; sess == nil || !sess.Alive() {
 			out = append(out, id)
 		}
 	}
@@ -538,31 +645,81 @@ func (r *Runner) Stop(taskID string) error { return r.StopScoped(taskID, StopTre
 
 // StopScoped stops a running session with the given scope (see StopScope).
 func (r *Runner) StopScoped(taskID string, scope StopScope) error {
+	return r.stopScoped(taskID, scope, false, 0)
+}
+
+func (r *Runner) StopSettled(taskID string) error {
+	return r.stopScoped(taskID, StopTree, true, 0)
+}
+
+// StopTreeForPID claims a settled session for reclaim while checking its PID.
+func (r *Runner) StopTreeForPID(taskID string, expectedPID int) error {
+	if expectedPID <= 0 {
+		return ErrSessionNotFound
+	}
+	return r.stopScoped(taskID, StopTree, true, expectedPID)
+}
+
+// CheckReclaimSessionRetired verifies that the task has no PTY or reserved slot.
+func (r *Runner) CheckReclaimSessionRetired(taskID string) error {
+	sess, err := r.attachableSession(taskID)
+	if err == nil && sess != nil {
+		return ErrSessionStarting
+	}
+	return err
+}
+
+func (r *Runner) stopScoped(taskID string, scope StopScope, settled bool, expectedPID int) error {
 	r.mu.Lock()
-	sess := r.sessions[taskID]
-	if sess == nil {
+	sess, reserved := r.sessions[taskID]
+	if settled && (r.pendingRestart[taskID] != nil || (reserved && sess == nil)) {
+		r.mu.Unlock()
+		return ErrSessionStarting
+	}
+	if sess == nil || (settled && !sess.Alive()) {
 		r.mu.Unlock()
 		return ErrSessionNotFound
+	}
+	if expectedPID > 0 {
+		if sess.PID() != expectedPID {
+			r.mu.Unlock()
+			return ErrSessionNotFound
+		}
+		if r.stopped[taskID] {
+			r.mu.Unlock()
+			return ErrSessionStarting
+		}
 	}
 	r.stopped[taskID] = true
 	r.mu.Unlock()
 	slog.Info("runner.Stop", "task", taskID, "pid", sess.PID(), "scope", scope.String())
-	err := sess.StopScoped(scope)
-	// Best-effort cleanup for a session that already detached itself to
-	// Claude Code's own background-session supervisor (see
-	// context/knowledge/gotchas/daemon-rpc.md) — the SIGTERM above can never
-	// reach it. Fire-and-forget so a claude CLI round-trip never adds
-	// latency to this call.
-	go reapOrphanedClaudeSessions(taskID, sess.WorkDir(), sess.claudeConfigDir())
+	err := sess.stopScoped(scope, expectedPID == 0)
+	if err != nil {
+		r.mu.Lock()
+		if r.sessions[taskID] == sess && r.pendingRestart[taskID] == nil {
+			delete(r.stopped, taskID)
+		}
+		r.mu.Unlock()
+	}
+	if expectedPID == 0 {
+		// Ordinary stops also clean up detached Claude sessions in the worktree.
+		// A PID-scoped stop cannot certify ownership of these sessions.
+		go reapOrphanedClaudeSessions(taskID, sess.WorkDir(), sess.claudeConfigDir())
+	}
 	return err
+}
+
+// CancelPendingStarts closes launch admission for daemon teardown and
+// cancels prelaunch before the daemon drains asynchronous callers.
+func (r *Runner) CancelPendingStarts() {
+	r.mu.Lock()
+	r.launchesClosed = true
+	r.mu.Unlock()
+	r.shutdownCancel()
 }
 
 // StopAll terminates all running sessions.
 func (r *Runner) StopAll() {
-	// Cancel the shutdown context first so any in-flight prelaunch
-	// (ollama brew start / cold model load) unblocks immediately. Doing
-	// this before iterating sessions means daemon shutdown doesn't sit
-	// on a 6-minute prelaunch budget waiting for the model to load.
 	r.shutdownCancel()
 
 	r.mu.Lock()
@@ -594,7 +751,7 @@ func (r *Runner) Running() []string {
 		}
 	}
 	for id := range r.pendingRestart {
-		if _, alreadyListed := r.sessions[id]; !alreadyListed {
+		if r.sessions[id] == nil {
 			ids = append(ids, id)
 		}
 	}
@@ -631,6 +788,29 @@ func (r *Runner) WorkDir(taskID string) string {
 func (r *Runner) Sessions() map[string]*Session {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.sessionsLocked()
+}
+
+// SessionsAndPendingLaunches snapshots handles and launch reservations at
+// once so a successor publishing mid-listing cannot disappear from both.
+func (r *Runner) SessionsAndPendingLaunches() (map[string]*Session, map[string]int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sessions := r.sessionsLocked()
+	pending := make(map[string]int)
+	for _, id := range r.pendingRestartIDsLocked() {
+		delete(sessions, id)
+		pending[id] = r.pendingRestart[id].outgoingPID
+	}
+	for id, sess := range r.sessions {
+		if sess == nil && r.pendingRestart[id] == nil {
+			pending[id] = 0
+		}
+	}
+	return sessions, pending
+}
+
+func (r *Runner) sessionsLocked() map[string]*Session {
 	out := make(map[string]*Session, len(r.sessions))
 	for id, sess := range r.sessions {
 		if sess != nil {
@@ -659,7 +839,7 @@ func (r *Runner) RunningAndIdle() (running, idle []string) {
 		}
 	}
 	for id := range r.pendingRestart {
-		if _, alreadyListed := r.sessions[id]; !alreadyListed {
+		if r.sessions[id] == nil {
 			running = append(running, id)
 		}
 	}

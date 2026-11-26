@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
@@ -66,7 +67,7 @@ func TestBoundedStopHops(t *testing.T) {
 }
 
 func TestSupRerender(t *testing.T) {
-	d, sc, _ := supE2E(t)
+	d, sc, database := supE2E(t)
 	// Bypass client fallback to prove both supervisor capabilities exist.
 	for _, method := range []string{"Daemon.StopRerender", "Daemon.KickWidthRerender"} {
 		t.Run(method, func(t *testing.T) {
@@ -87,6 +88,27 @@ func TestSupRerender(t *testing.T) {
 	err = c.StopScoped("missing", agent.StopRerender)
 	testutil.Error(t, err)
 	testutil.Contains(t, err.Error(), "session not found")
+
+	// The real supervisor must compare the PID when claiming the restart.
+	testutil.NoError(t, database.SetBackend("width-test", config.Backend{Command: "sleep 30"}))
+	task := &model.Task{ID: "width-test", Backend: "width-test", Worktree: t.TempDir()}
+	cfg := database.Config()
+	sess, err := c.Start(task, cfg, 24, 80, false)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = c.Stop(task.ID) })
+	pid := sess.PID()
+	testutil.ErrorIs(t, c.KickWidthRerenderForPID(task, cfg, 30, 98, pid+1), agent.ErrSessionNotFound)
+	testutil.False(t, c.HasPendingRestart(task.ID))
+	testutil.Equal(t, c.Get(task.ID).PID(), pid)
+	testutil.NoError(t, c.KickWidthRerenderForPID(task, cfg, 30, 98, pid))
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if next, err := sc.AttachableSession(task.ID); err == nil && next != nil && next.PID() != pid {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("PID-scoped width repair did not start a replacement")
 }
 
 func TestOldWidthKick(t *testing.T) {
@@ -98,6 +120,7 @@ func TestOldWidthKick(t *testing.T) {
 	c := &Client{rpc: jsonrpc.NewClient(clientConn), closed: make(chan struct{})}
 	t.Cleanup(func() { _ = c.Close(); _ = serverConn.Close() })
 	testutil.NoError(t, c.KickWidthRerender(&model.Task{ID: "a"}, config.DefaultConfig(), 30, 98))
+	testutil.ErrorIs(t, c.KickWidthRerenderForPID(&model.Task{ID: "a"}, config.DefaultConfig(), 30, 98, 123), agent.ErrSessionCoordinationUnsupported)
 	peer.mu.Lock()
 	defer peer.mu.Unlock()
 	testutil.Equal(t, peer.calls, 1)
@@ -141,4 +164,15 @@ func TestOldRerenderStop(t *testing.T) {
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
 	testutil.DeepEqual(t, fd.stopScopes, []agent.StopScope{agent.StopAgentOnly})
+}
+
+func TestOldSettledStop(t *testing.T) {
+	fd := newFakeDaemon(t)
+	c := fakeClient(t, fd)
+	err := c.StopSettled("a")
+	testutil.ErrorIs(t, err, agent.ErrSessionCoordinationUnsupported)
+	testutil.Contains(t, err.Error(), "Restart Session Supervisor")
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	testutil.Equal(t, len(fd.stopScopes), 0)
 }

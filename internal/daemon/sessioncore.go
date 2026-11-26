@@ -3,8 +3,10 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -33,6 +35,13 @@ const exitInfoCacheMaxWait = 5 * time.Second
 // exitInfoCachePollInterval is how often awaitExitInfoCached re-checks the cache.
 const exitInfoCachePollInterval = 2 * time.Millisecond
 
+// Keep a short chain of retired processes while both stream hops reconnect.
+// The age limit also covers a cold backend prelaunch before a managed restart.
+const (
+	retainedExitCount = 8
+	retainedExitTTL   = 10 * time.Minute
+)
+
 // sessionCore is the reusable session-serving substrate: the agent.Runner, the
 // per-task stream-conn registry, the brief exit-info cache, and the R/S stream
 // handler + session-scoped JSON-RPC methods. It is the seam the daemon mounts
@@ -57,32 +66,40 @@ type sessionCore struct {
 	runner agent.SessionRunner
 	cfgFn  func() config.Config
 	done   <-chan struct{}
+	// The daemon still owns DB status while its in-process exit callback runs.
+	keepFinalizingInList bool
 
 	mu      sync.Mutex
-	streams map[string][]net.Conn // taskID → connected stream clients
+	streams map[string][]boundStream // taskID → connected stream clients
 	// exitInfos is taskID → cached exit entry (brief). One struct per task keeps
 	// the info, its producing session and its write generation in lockstep under
 	// c.mu: an overwrite replaces all of them at once, so a stale owner can never
 	// pair with a fresh ExitInfo.
 	exitInfos map[string]exitEntry
-	exitGen   uint64 // bumped on every exit write; entries carry the value they were written at
+	// PID-scoped readers can follow a restart even if its successor already
+	// exited. Legacy readers still consume only the task's latest exit.
+	recentExits map[string][]exitEntry
+	exitGen     uint64 // bumped on every exit write; entries carry the value they were written at
+}
+
+type boundStream struct {
+	conn net.Conn
+	pid  int
 }
 
 // rawSessionLister is the in-process runner's listing surface: it returns live
 // *agent.Session handles. *agent.Runner satisfies it; a supervisor-client does
-// not (it has no local sessions to iterate). ListSessions type-asserts to this
-// for the OFF/supervisor path so that path stays byte-identical.
+// not (it has no local sessions to iterate).
 type rawSessionLister interface {
-	Sessions() map[string]*agent.Session
-	PendingRestartIDs() []string
+	SessionsAndPendingLaunches() (map[string]*agent.Session, map[string]int)
 }
 
 // sessionInfoLister is the supervisor-client's listing surface: it relays the
 // already-built SessionInfo (synthetic pending-restart entries included) from
 // the supervisor, because the daemon cannot iterate the supervisor's in-process
-// sessions. *client.Client satisfies it via ListSessionInfo.
+// sessions. *client.Client satisfies it via ListSessionInfoChecked.
 type sessionInfoLister interface {
-	ListSessionInfo() []SessionInfo
+	ListSessionInfoChecked() ([]SessionInfo, error)
 }
 
 // sessionProber is the supervisor-client's checked single-session probe.
@@ -99,11 +116,12 @@ type sessionProber interface {
 // ownership of the runner (so it controls onFinish) and the done channel.
 func newSessionCore(runner agent.SessionRunner, cfgFn func() config.Config, done <-chan struct{}) *sessionCore {
 	return &sessionCore{
-		runner:    runner,
-		cfgFn:     cfgFn,
-		done:      done,
-		streams:   make(map[string][]net.Conn),
-		exitInfos: make(map[string]exitEntry),
+		runner:      runner,
+		cfgFn:       cfgFn,
+		done:        done,
+		streams:     make(map[string][]boundStream),
+		exitInfos:   make(map[string]exitEntry),
+		recentExits: make(map[string][]exitEntry),
 	}
 }
 
@@ -116,17 +134,83 @@ type exitEntry struct {
 	owner agent.SessionHandle
 	// gen is the exitGen value the entry was written at.
 	gen uint64
-	// consumed marks an entry GetExitInfo already handed out. It stays as a
-	// payload-free tombstone so awaitExitInfoCached can tell "already fetched"
-	// from "not written yet" instead of waiting out its bound.
+	// consumed marks an entry already handed out to a legacy reader.
 	consumed bool
 }
 
-// recordExitLocked caches ei for taskID stamped with the exiting session
-// (nil = unknown), replacing any previous entry wholesale. The caller must hold c.mu.
+// recordExitLocked records the exit for both legacy and PID-scoped readers.
+// The caller must hold c.mu.
 func (c *sessionCore) recordExitLocked(taskID string, ei ExitInfo, owner agent.SessionHandle) {
+	c.exitInfos[taskID] = c.cacheExitLocked(taskID, ei, owner)
+}
+
+func (c *sessionCore) cacheExitLocked(taskID string, ei ExitInfo, owner agent.SessionHandle) exitEntry {
 	c.exitGen++
-	c.exitInfos[taskID] = exitEntry{info: ei, owner: owner, gen: c.exitGen}
+	entry := exitEntry{info: ei, owner: owner, gen: c.exitGen}
+	if ei.PID > 0 {
+		history := slices.DeleteFunc(c.recentExits[taskID], func(older exitEntry) bool {
+			return older.info.PID == ei.PID
+		})
+		if len(history) == retainedExitCount {
+			history = slices.Delete(history, 0, 1)
+		}
+		c.recentExits[taskID] = append(history, exitEntry{info: ei, gen: entry.gen})
+	}
+	gen := entry.gen
+	time.AfterFunc(retainedExitTTL, func() { c.expireExit(taskID, gen) })
+	return entry
+}
+
+func (c *sessionCore) expireExit(taskID string, generation uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if latest := c.exitInfos[taskID]; latest.gen == generation {
+		// Keep the latest PID for owner validation without retaining its
+		// output or handle after stream readers have settled.
+		c.exitInfos[taskID] = exitEntry{
+			info: ExitInfo{PID: latest.info.PID, StreamLost: latest.info.StreamLost},
+			gen:  generation, consumed: true,
+		}
+	}
+	history := slices.DeleteFunc(c.recentExits[taskID], func(entry exitEntry) bool {
+		return entry.gen == generation
+	})
+	if len(history) == 0 {
+		delete(c.recentExits, taskID)
+	} else {
+		c.recentExits[taskID] = history
+	}
+}
+
+// linkRestart updates the existing predecessor without changing which process
+// exited last. A failed prelaunch replaces that same PID's record instead.
+func (c *sessionCore) linkRestart(taskID string, outgoingPID, successorPID int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, entry := range c.recentExits[taskID] {
+		if entry.info.PID == outgoingPID && entry.info.PendingRestart {
+			entry.info.RestartSuccessorPID = successorPID
+			c.recentExits[taskID][i] = entry
+			if latest := c.exitInfos[taskID]; latest.gen == entry.gen {
+				latest.info.RestartSuccessorPID = successorPID
+				c.exitInfos[taskID] = latest
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// finishedPID identifies the producing session. On a restart failure the
+// runner has removed the old handle and keeps the slot reserved while it
+// reports the failure for the same outgoing process.
+func (c *sessionCore) finishedPID(taskID string, owner agent.SessionHandle) int {
+	if owner != nil {
+		return owner.PID()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.exitInfos[taskID].info.PID
 }
 
 // Ping verifies the session server is responsive.
@@ -171,12 +255,31 @@ func (c *sessionCore) StartSession(req *StartReq, resp *StartResp) error {
 		// implicit timing property, not a contract).
 		resp.Ambiguous = errors.Is(err, agent.ErrStartAmbiguous)
 		resp.ResumeUnavailable = errors.Is(err, agent.ErrResumeUnavailable)
+		resp.SessionStarting = errors.Is(err, agent.ErrSessionStarting)
 		return nil
 	}
 	resp.PID = sess.PID()
 	resp.SessionID = task.SessionID
 	slog.Info("rpc.StartSession ok", "task", req.TaskID, "pid", resp.PID)
 	return nil
+}
+
+// AttachableSession consults the session owner instead of cached stream
+// liveness. Legacy readers can keep observing a PTY while it retires.
+func (c *sessionCore) AttachableSession(req *TaskIDReq, resp *AttachableSessionResp) error {
+	sess, err := agent.AttachableSession(c.runner, req.TaskID)
+	if errors.Is(err, agent.ErrSessionStarting) {
+		resp.Pending = true
+		return nil
+	}
+	if errors.Is(err, agent.ErrSessionCoordinationUnsupported) {
+		resp.Unsupported = true
+		return nil
+	}
+	if sess != nil {
+		resp.PID = sess.PID()
+	}
+	return err
 }
 
 // StopSession stops a running session.
@@ -192,11 +295,68 @@ func (c *sessionCore) StopSession(req *StopReq, resp *StatusResp) error {
 	return nil
 }
 
+// StopSettledSession rejects the operation if a launch or a restart is in
+// flight. The runner makes that decision before it claims the stop target.
+func (c *sessionCore) StopSettledSession(req *TaskIDReq, resp *StatusResp) error {
+	stopper, ok := c.runner.(agent.SettledSessionStopper)
+	if !ok {
+		resp.Error = "settled session stop is unavailable"
+		return nil
+	}
+	if err := stopper.StopSettled(req.TaskID); err != nil {
+		resp.Error = err.Error()
+		return nil
+	}
+	resp.OK = true
+	return nil
+}
+
 // StopRerender is a separate capability so older peers reject the request
 // instead of treating its unknown scope as StopTree. Callers must pass the
 // resumable-transcript guard before requesting this stop.
 func (c *sessionCore) StopRerender(req *TaskIDReq, resp *StatusResp) error {
 	return c.StopSession(&StopReq{TaskID: req.TaskID, Scope: agent.StopRerender}, resp)
+}
+
+// StopRerenderForPID limits the stop to the process observed before repair.
+func (c *sessionCore) StopRerenderForPID(req *StopReq, resp *StatusResp) error {
+	if req.ExpectedPID <= 0 {
+		resp.Error = "rerender stop requires a positive expected PID"
+		return nil
+	}
+	if err := agent.StopRerenderForPID(c.runner, req.TaskID, req.ExpectedPID); err != nil {
+		resp.Error = err.Error()
+		return nil
+	}
+	resp.OK = true
+	return nil
+}
+
+// StopTreeForPID stops exactly the process named by the caller. A zero PID
+// requests a read-only check that the owner has no active or pending session.
+func (c *sessionCore) StopTreeForPID(req *StopReq, resp *StatusResp) error {
+	owner, ok := c.runner.(agent.HeraReclaimSessionOwner)
+	if !ok {
+		resp.Error = agent.ErrSessionCoordinationUnsupported.Error()
+		return nil
+	}
+	var err error
+	if req.ExpectedPID == 0 {
+		err = owner.CheckReclaimSessionRetired(req.TaskID)
+	} else {
+		err = owner.StopTreeForPID(req.TaskID, req.ExpectedPID)
+	}
+	if errors.Is(err, agent.ErrSessionStopUnconfirmed) {
+		slog.Warn("rpc.StopTreeForPID: stop outcome unconfirmed", "task", req.TaskID, "pid", req.ExpectedPID, "err", err)
+		resp.Error = agent.ErrSessionStopUnconfirmed.Error()
+		return nil
+	}
+	if err != nil {
+		resp.Error = err.Error()
+		return nil
+	}
+	resp.OK = true
+	return nil
 }
 
 // StopAll stops all running sessions.
@@ -210,7 +370,29 @@ func (c *sessionCore) StopAll(_ *Empty, resp *StatusResp) error {
 
 // SessionStatus returns info about a single session.
 func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
-	sess := c.runner.Get(req.TaskID)
+	var sess agent.SessionHandle
+	if runner, ok := c.runner.(*agent.Runner); ok {
+		// Hold the exit cache across the owner observation so an exit
+		// from the observed reservation cannot become its baseline.
+		c.mu.Lock()
+		local, starting, predecessor := runner.ObserveSessionLaunch(req.TaskID)
+		resp.LastExitPID = c.latestExitPIDLocked(req.TaskID)
+		c.mu.Unlock()
+		if local == nil {
+			resp.TaskID, resp.Alive, resp.RestartFromPID = req.TaskID, starting, predecessor
+			return nil
+		}
+		sess = local
+	} else {
+		defer func() {
+			if resp.LastExitPID == 0 {
+				c.mu.Lock()
+				resp.LastExitPID = c.latestExitPIDLocked(req.TaskID)
+				c.mu.Unlock()
+			}
+		}()
+		sess = c.runner.Get(req.TaskID)
+	}
 	if sess == nil {
 		resp.TaskID = req.TaskID
 		// Supervisor mode: a nil handle may only mean the probe to the
@@ -223,7 +405,7 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 				slog.Warn("rpc.SessionStatus: supervisor probe failed, not reporting death", "task", req.TaskID, "err", err)
 				return err
 			}
-			if info.Alive {
+			if info.Alive || info.PID != 0 || info.LastExitPID != 0 {
 				// Get missed on a transient failure but the supervisor does
 				// hold the session: report what it says, not a false death.
 				*resp = info
@@ -254,7 +436,7 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 			slog.Warn("rpc.SessionStatus: cached handle is closed and the supervisor cannot be asked, not reporting death", "task", req.TaskID, "err", err)
 			return err
 		}
-		if info.Alive {
+		if info.Alive || info.PID != 0 || info.LastExitPID != 0 {
 			*resp = info
 			resp.TaskID = req.TaskID
 			return nil
@@ -276,6 +458,13 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 	return nil
 }
 
+func (c *sessionCore) latestExitPIDLocked(taskID string) int {
+	if latest := c.exitInfos[taskID].info; !latest.StreamLost {
+		return latest.PID
+	}
+	return 0
+}
+
 // ListSessions returns info about all running sessions, plus synthetic
 // Alive=true entries for tasks with a queued kick-restart but no current
 // session (the brief gap between exit and Start). Without these synthetic
@@ -286,28 +475,38 @@ func (c *sessionCore) ListSessions(_ *Empty, resp *ListResp) error {
 	// already-built SessionInfo. The daemon holds no local *agent.Session set to
 	// iterate, so the in-process path below cannot apply.
 	if lister, ok := c.runner.(sessionInfoLister); ok {
-		resp.Sessions = lister.ListSessionInfo()
-		return nil
+		var err error
+		resp.Sessions, err = lister.ListSessionInfoChecked()
+		return err
 	}
 
 	// In-process runner backend (OFF / the supervisor itself): build SessionInfo
-	// from the live *agent.Session set + synthetic pending-restart entries.
-	// Byte-identical to pre-P2.
+	// from one snapshot of handles and synthetic pending-restart entries.
 	rl, ok := c.runner.(rawSessionLister)
 	if !ok {
 		return nil
 	}
-	sessions := rl.Sessions()
-	pending := rl.PendingRestartIDs()
+	c.mu.Lock()
+	sessions, pending := rl.SessionsAndPendingLaunches()
 	resp.Sessions = make([]SessionInfo, 0, len(sessions)+len(pending))
+	for id, predecessor := range pending {
+		resp.Sessions = append(resp.Sessions, SessionInfo{
+			TaskID:         id,
+			Alive:          true,
+			RestartFromPID: predecessor,
+			LastExitPID:    c.latestExitPIDLocked(id),
+		})
+	}
+	c.mu.Unlock()
 	for id, sess := range sessions {
 		cols, rows := sess.PTYSize()
 		initCols, initRows := sess.InitialPTYSize()
+		alive := sess.Alive()
 		resp.Sessions = append(resp.Sessions, SessionInfo{
 			BridgeGeneration: agent.SessionBridgeGeneration(sess),
 			TaskID:           id,
-			Alive:            sess.Alive(),
-			Idle:             sess.IsIdle(),
+			Alive:            alive || c.keepFinalizingInList,
+			Idle:             alive && sess.IsIdle(),
 			PID:              sess.PID(),
 			Cols:             cols,
 			Rows:             rows,
@@ -315,14 +514,6 @@ func (c *sessionCore) ListSessions(_ *Empty, resp *ListResp) error {
 			InitialRows:      initRows,
 			WorkDir:          sess.WorkDir(),
 			TotalWritten:     sess.TotalWritten(),
-		})
-	}
-	// Synthetic entries for the kick-restart gap. Mirrors SessionStatus's
-	// Alive=true synthetic when a single-task lookup hits the same window.
-	for _, id := range pending {
-		resp.Sessions = append(resp.Sessions, SessionInfo{
-			TaskID: id,
-			Alive:  true,
 		})
 	}
 	return nil
@@ -367,12 +558,25 @@ func (c *sessionCore) WriteInput(req *WriteReq, resp *StatusResp) error {
 
 // Resize changes a session's PTY dimensions.
 func (c *sessionCore) Resize(req *ResizeReq, resp *StatusResp) error {
-	sess := c.getStarting(req.TaskID)
-	if sess == nil {
-		resp.Error = "session not found"
+	return resizeSession(c.getStarting(req.TaskID), req, resp, 0)
+}
+
+// ResizeForPID resizes only the requested process, including when the daemon
+// relays the request to its supervisor.
+func (c *sessionCore) ResizeForPID(req *ResizeReq, resp *StatusResp) error {
+	if req.ExpectedPID <= 0 {
+		resp.Error = "resize requires a positive expected PID"
 		return nil
 	}
-	if err := sess.Resize(req.Rows, req.Cols); err != nil {
+	return resizeSession(c.runner.Get(req.TaskID), req, resp, req.ExpectedPID)
+}
+
+func resizeSession(sess agent.SessionHandle, req *ResizeReq, resp *StatusResp, expectedPID int) error {
+	if sess == nil {
+		resp.Error = agent.ErrSessionNotFound.Error()
+		return nil
+	}
+	if err := agent.ResizeSessionForPID(sess, req.Rows, req.Cols, expectedPID); err != nil {
 		resp.Error = err.Error()
 		return nil
 	}
@@ -389,14 +593,24 @@ func (c *sessionCore) Resize(req *ResizeReq, resp *StatusResp) error {
 // actually invoked in ON mode (the daemon's API client targets supervisor.sock),
 // but keeping it uniform on the core means a future direct caller works too.
 func (c *sessionCore) KickRerender(req *KickReq, resp *StatusResp) error {
-	return c.kickRerender(req, resp, false)
+	return c.kickRerender(req, resp, false, 0)
 }
 
 func (c *sessionCore) KickWidthRerender(req *KickReq, resp *StatusResp) error {
-	return c.kickRerender(req, resp, true)
+	return c.kickRerender(req, resp, true, 0)
 }
 
-func (c *sessionCore) kickRerender(req *KickReq, resp *StatusResp, widthRepair bool) error {
+// KickWidthRerenderForPID provides a separate capability so an older owner
+// cannot ignore the PID and kick a replacement through its existing RPC.
+func (c *sessionCore) KickWidthRerenderForPID(req *KickReq, resp *StatusResp) error {
+	if req.ExpectedPID <= 0 {
+		resp.Error = agent.ErrSessionNotFound.Error()
+		return nil
+	}
+	return c.kickRerender(req, resp, true, req.ExpectedPID)
+}
+
+func (c *sessionCore) kickRerender(req *KickReq, resp *StatusResp, widthRepair bool, expectedPID int) error {
 	slog.Info("rpc.KickRerender", "task", req.TaskID, "cols", req.Cols, "rows", req.Rows, "width_repair", widthRepair)
 	task := &model.Task{
 		ID:              req.TaskID,
@@ -416,7 +630,11 @@ func (c *sessionCore) kickRerender(req *KickReq, resp *StatusResp, widthRepair b
 	cfg := c.cfgFn()
 	cfg.MCPPort = req.MCPPort
 	kick := c.runner.KickRerender
-	if widthRepair {
+	if expectedPID > 0 {
+		kick = func(task *model.Task, cfg config.Config, rows, cols uint16) error {
+			return agent.KickWidthRerenderForPID(c.runner, task, cfg, rows, cols, expectedPID)
+		}
+	} else if widthRepair {
 		kick = func(task *model.Task, cfg config.Config, rows, cols uint16) error {
 			return agent.KickWidthRerender(c.runner, task, cfg, rows, cols)
 		}
@@ -428,6 +646,9 @@ func (c *sessionCore) kickRerender(req *KickReq, resp *StatusResp, widthRepair b
 	if err := kick(task, cfg, req.Rows, req.Cols); err != nil {
 		slog.Error("rpc.KickRerender failed", "task", req.TaskID, "err", err, "width_repair", widthRepair)
 		resp.Error = err.Error()
+		if expectedPID > 0 && errors.Is(err, agent.ErrResumeUnavailable) {
+			resp.Error = agent.ErrResumeUnavailable.Error()
+		}
 		return nil
 	}
 	resp.OK = true
@@ -479,24 +700,31 @@ func (c *sessionCore) Recycle(req *RecycleReq, resp *StatusResp) error {
 // StreamLost verdict leaves task status unchanged on every consumer.
 func (c *sessionCore) GetExitInfo(req *TaskIDReq, resp *ExitInfo) error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	e, ok := c.exitInfos[req.TaskID]
-	if ok && !e.consumed { // consume once
+	if req.ExpectedPID > 0 {
+		for _, entry := range c.recentExits[req.TaskID] {
+			if entry.info.PID == req.ExpectedPID {
+				*resp = entry.info
+				return nil
+			}
+		}
+	} else if req.ExpectedPID == 0 && ok && !e.consumed {
 		*resp = e.info
-		c.exitInfos[req.TaskID] = exitEntry{owner: e.owner, gen: e.gen, consumed: true}
-	} else {
-		*resp = ExitInfo{StreamLost: true}
-		slog.Info("rpc.GetExitInfo: no recorded exit, reporting stream-lost (status unchanged)", "task", req.TaskID, "consumed", ok)
+		e.consumed = true
+		c.exitInfos[req.TaskID] = e
+		return nil
 	}
-	c.mu.Unlock()
-
+	*resp = ExitInfo{StreamLost: true}
+	slog.Info("rpc.GetExitInfo: no recorded exit, reporting stream-lost (status unchanged)", "task", req.TaskID, "expected_pid", req.ExpectedPID)
 	return nil
 }
 
 // registerStream registers a stream connection for a task.
-func (c *sessionCore) registerStream(taskID string, conn net.Conn) {
+func (c *sessionCore) registerStream(taskID string, conn net.Conn, pid int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.streams[taskID] = append(c.streams[taskID], conn)
+	c.streams[taskID] = append(c.streams[taskID], boundStream{conn, pid})
 }
 
 // unregisterStream removes a stream connection for a task.
@@ -504,12 +732,37 @@ func (c *sessionCore) unregisterStream(taskID string, conn net.Conn) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	conns := c.streams[taskID]
-	for i, cc := range conns {
-		if cc == conn {
-			c.streams[taskID] = append(conns[:i], conns[i+1:]...)
-			return
+	for i, stream := range conns {
+		if stream.conn == conn {
+			conns = slices.Delete(conns, i, i+1)
+			if len(conns) == 0 {
+				delete(c.streams, taskID)
+			} else {
+				c.streams[taskID] = conns
+			}
+			break
 		}
 	}
+}
+
+// takeExitedStreamsLocked removes only streams bound to the exiting process.
+// Unknown-PID records cannot close any process-scoped stream.
+func (c *sessionCore) takeExitedStreamsLocked(taskID string, pid int) []net.Conn {
+	var exited []net.Conn
+	conns := c.streams[taskID]
+	conns = slices.DeleteFunc(conns, func(stream boundStream) bool {
+		if stream.pid != pid {
+			return false
+		}
+		exited = append(exited, stream.conn)
+		return true
+	})
+	if len(conns) == 0 {
+		delete(c.streams, taskID)
+	} else {
+		c.streams[taskID] = conns
+	}
+	return exited
 }
 
 // handleStream processes a stream connection. The client sends a JSON
@@ -555,10 +808,15 @@ func (c *sessionCore) handleStream(conn net.Conn) {
 		slog.Warn("stream: session not found", "task", header.TaskID)
 		return
 	}
+	pid := sess.PID()
+	if header.ExpectedPID > 0 && pid != header.ExpectedPID {
+		slog.Info("stream: process changed before attachment", "task", header.TaskID, "expected_pid", header.ExpectedPID, "pid", pid)
+		return
+	}
 
 	slog.Info("stream connected", "task", header.TaskID, "since", header.Since)
 	attachGen := c.dropStaleExitInfo(header.TaskID, sess)
-	c.registerStream(header.TaskID, conn)
+	c.registerStream(header.TaskID, conn, pid)
 	defer c.unregisterStream(header.TaskID, conn)
 
 	// AddWriterFromTolerant replays only [Since, currentTotal) before attaching
@@ -566,15 +824,27 @@ func (c *sessionCore) handleStream(conn net.Conn) {
 	// see the daemon ring replayed on top. Tolerant variant: conn.Write may
 	// block on kernel socket flow control, so the replay runs outside the
 	// session mutex (accepting a tiny gap rather than stalling readLoop).
-	sess.AddWriterFromTolerant(conn, header.Since)
+	if scoped, ok := sess.(interface {
+		AddWriterFromPIDTolerant(io.Writer, uint64, int) bool
+	}); ok && pid > 0 {
+		if !scoped.AddWriterFromPIDTolerant(conn, header.Since, pid) {
+			return
+		}
+	} else {
+		sess.AddWriterFromTolerant(conn, header.Since)
+	}
 	defer sess.RemoveWriter(conn)
+	done := sess.Done()
+	if scoped, ok := sess.(interface{ ProcessDone(int) <-chan struct{} }); ok && pid > 0 {
+		done = scoped.ProcessDone(pid)
+	}
 
 	// Block until the session exits or the client disconnects.
 	// We detect client disconnect by trying to read from the connection.
 	// The client doesn't send anything on the stream after the header,
 	// so a read will block until the connection is closed.
 	select {
-	case <-sess.Done():
+	case <-done:
 		// The process exited. Two things race off sess.Done(): (1) THIS select
 		// returns → handleConn's deferred conn.Close fires → the stream client sees
 		// EOF and fetches GetExitInfo; (2) the runner's exit goroutine runs onFinish,
@@ -587,7 +857,7 @@ func (c *sessionCore) handleStream(conn net.Conn) {
 		// returning, guaranteeing the EOF the client observes is always post-cache.
 		// This applies in both modes (daemon→TUI and supervisor→daemon) — the relay
 		// fetch races the cache identically.
-		c.awaitExitInfoCached(header.TaskID, sess, attachGen, exitInfoCacheMaxWait)
+		c.awaitExitInfoCached(header.TaskID, sess, pid, attachGen, exitInfoCacheMaxWait)
 		slog.Info("stream: session exited", "task", header.TaskID)
 	case <-c.done:
 		slog.Info("stream: daemon shutting down", "task", header.TaskID)
@@ -622,6 +892,15 @@ func (c *sessionCore) dropStaleExitInfo(taskID string, sess agent.SessionHandle)
 	if !ok {
 		return gen
 	}
+	if e.info.PID > 0 {
+		// The previous process may still be fetching its scoped record after
+		// the replacement attaches. Hide it from unscoped readers only.
+		if e.info.PID != sess.PID() {
+			e.consumed = true
+			c.exitInfos[taskID] = e
+		}
+		return gen
+	}
 	if e.consumed && e.owner != sess {
 		// A consumed tombstone carries no payload, so dropping it loses nothing.
 		// Keeping one the attaching session does not own would let await settle on
@@ -652,17 +931,24 @@ func (c *sessionCore) dropStaleExitInfo(taskID string, sess agent.SessionHandle)
 // could otherwise precede the cache write. A consumed entry (already fetched by
 // the relay) or a bound timeout simply returns — the residual is rare and the
 // fetch that consumed it already delivered the real ExitInfo.
-func (c *sessionCore) awaitExitInfoCached(taskID string, sess agent.SessionHandle, attachGen uint64, max time.Duration) {
+func (c *sessionCore) awaitExitInfoCached(taskID string, sess agent.SessionHandle, pid int, attachGen uint64, max time.Duration) {
 	deadline := time.Now().Add(max)
 	for {
 		c.mu.Lock()
 		e, ok := c.exitInfos[taskID]
-		// Settled when the entry is sess's own (consumed or not), written after
-		// this stream attached (sess's exit, or a later incarnation that
-		// overwrote it), or unattributable AND unconsumed (real payload). An older
-		// incarnation's leftover, or a consumed tombstone sess does not own,
-		// keeps us waiting: settling on a tombstone would serve a zero ExitInfo.
-		settled := ok && (e.owner == sess || e.gen > attachGen || (e.owner == nil && !e.consumed))
+		// Legacy streams can settle on a newer write or their session's own
+		// legacy record. A scoped stream waits for its PID even when another
+		// process's record has already arrived.
+		settled := ok && ((pid == 0 && e.gen > attachGen) ||
+			(e.info.PID == 0 && (e.owner == sess || (e.owner == nil && !e.consumed))))
+		if pid > 0 {
+			for _, entry := range c.recentExits[taskID] {
+				if entry.info.PID == pid {
+					settled = true
+					break
+				}
+			}
+		}
 		c.mu.Unlock()
 		if settled || time.Now().After(deadline) {
 			return

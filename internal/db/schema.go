@@ -124,6 +124,16 @@ func (d *DB) createTables() error {
 	// when never written); the failure projection reports it as recorded_at.
 	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN result_at   TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
 
+	// A resumed session may only promote the task if no stop was recorded
+	// after it began. Keep this internal counter on the task, including across
+	// archive and unarchive, and out of full-row edits.
+	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN stop_generation INTEGER NOT NULL DEFAULT 0`) //nolint:errcheck
+
+	// The local TUI records which PTY a Hera reclaim stopped so the daemon
+	// can finish the task on that PTY's observed exit, even after a TUI restart.
+	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN hera_reclaim_pid INTEGER NOT NULL DEFAULT 0`)             //nolint:errcheck
+	d.conn.Exec(`ALTER TABLE tasks ADD COLUMN hera_reclaim_settled_binding INTEGER NOT NULL DEFAULT 0`) //nolint:errcheck
+
 	// archetype (add-diligence-profiles): the authoritative model-resolution key
 	// read by agent.ResolveModel. Idempotent ADD for databases predating it;
 	// existing rows read empty (no archetype → no profile consulted).
@@ -593,6 +603,9 @@ func (d *DB) createHeraTables() error {
 	d.conn.Exec(`ALTER TABLE hera_bindings ADD COLUMN tokens_cache_read INTEGER NOT NULL DEFAULT 0`)     //nolint:errcheck
 	d.conn.Exec(`ALTER TABLE hera_bindings ADD COLUMN tokens_output INTEGER NOT NULL DEFAULT 0`)         //nolint:errcheck
 	d.conn.Exec(`ALTER TABLE hera_bindings ADD COLUMN cost_usd_accrued REAL NOT NULL DEFAULT 0`)         //nolint:errcheck
+	// Empty records use the legacy binding-end reason until they are settled.
+	d.conn.Exec(`ALTER TABLE hera_bindings ADD COLUMN nuke_reclaim TEXT NOT NULL DEFAULT ''`)           //nolint:errcheck
+	d.conn.Exec(`ALTER TABLE hera_bindings ADD COLUMN resident_reclaim_lease TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
 
 	ddl := `
 		CREATE TABLE IF NOT EXISTS hera_orchestrators (
@@ -682,6 +695,8 @@ func (d *DB) createHeraTables() error {
 			started_at      TEXT NOT NULL,
 			ended_at        TEXT,
 			end_reason      TEXT,
+			nuke_reclaim    TEXT NOT NULL DEFAULT '',
+			resident_reclaim_lease TEXT NOT NULL DEFAULT '',
 			-- Token/cost accrual columns (add-coordinator-cost-estimate). Raw
 			-- per-rate-class totals are a full-resum overwrite on every Stop-hook
 			-- invocation (monotonic, idempotent — see design.md Decision 1).

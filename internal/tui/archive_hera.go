@@ -118,6 +118,10 @@ func (a *App) plainArchive(id, name string, archived bool) {
 		}
 	case errors.Is(err, db.ErrHeraRoleLive):
 		a.flashNotice("Archive refused: a hera role is still live on this task")
+	case errors.Is(err, db.ErrHeraReclaimInProgress):
+		a.flashNotice("The task is being reclaimed")
+	case !archived && remoteArchiveRefused(err):
+		a.flashNotice(err.Error())
 	case archived && remoteArchiveRefused(err):
 		var ae *apiclient.Error
 		_ = errors.As(err, &ae)

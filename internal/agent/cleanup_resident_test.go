@@ -142,3 +142,20 @@ func TestRemoteBranchExists_UnreachableOrigin(t *testing.T) {
 	testutil.False(t, present)
 	testutil.Error(t, err)
 }
+
+func TestTaskGitRepositoryPreservesMetadataPathBytes(t *testing.T) {
+	parent := t.TempDir()
+	metadata := filepath.Join(parent, "metadata ")
+	plain := filepath.Join(parent, "metadata")
+	residentCleanupGit(t, parent, "init", "--separate-git-dir", metadata, "checkout")
+	residentCleanupGit(t, parent, "init", "--bare", plain)
+	checkout := filepath.Join(parent, "checkout")
+	identity, err := TaskGitRepositoryID(context.Background(), checkout)
+	testutil.NoError(t, err)
+	testutil.True(t, SamePath(metadata, identity))
+	testutil.False(t, SamePath(plain, identity))
+	testutil.False(t, worktreeRefOperationPending(context.Background(), checkout))
+
+	testutil.NoError(t, os.Mkdir(filepath.Join(metadata, "rebase-merge"), 0o700))
+	testutil.True(t, worktreeRefOperationPending(context.Background(), checkout))
+}

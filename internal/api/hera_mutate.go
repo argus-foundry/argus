@@ -291,16 +291,16 @@ func (s *Server) handleHeraNukeOrch(w http.ResponseWriter, r *http.Request) {
 	// Refuse the whole cascade (409) before any side effect when a pending
 	// graduate is anywhere in the subtree; fail closed on an unreadable check.
 	if err := hera.CheckNukeSubtree(s.db, subtree); err != nil {
-		s.writeNukeRefusal(w, "orch", id, err)
+		s.writeNukeRefusal(w, "orch", id, err, "graduation check failed")
 		return
 	}
 	p := hera.PreviewNukeSubtree(s.db, subtree)
 	reclaimed, bg, nerr := hera.NukeSubtree(s.db, s.nukeRunner(), subtree)
+	s.goHeraBG(bg)
 	if nerr != nil {
-		s.writeNukeRefusal(w, "orch", id, nerr)
+		s.writeNukeRefusal(w, "orch", id, nerr, "hera nuke failed")
 		return
 	}
-	s.goHeraBG(bg)
 	uxlog.Log("[api-hera] nuke orch %d: %d orchestrators, %d tasks reclaimed", id, len(subtree), len(reclaimed))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "preview": p})
 }
@@ -324,10 +324,14 @@ func (s *Server) handleHeraNukeRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := hera.CheckNukeTask(s.db, rv.TaskID); err != nil {
-		s.writeNukeRefusal(w, "role", id, err)
+		s.writeNukeRefusal(w, "role", id, err, "graduation check failed")
 		return
 	}
-	bg := hera.NukeSingleRole(s.db, s.nukeRunner(), rv)
+	bg, err := hera.NukeSingleRole(s.db, s.nukeRunner(), rv)
+	if err != nil {
+		s.writeNukeRefusal(w, "role", id, err, "hera nuke failed")
+		return
+	}
 	s.goHeraBG(bg)
 	uxlog.Log("[api-hera] nuke role %d", id)
 	heraOK(w)
@@ -335,13 +339,17 @@ func (s *Server) handleHeraNukeRole(w http.ResponseWriter, r *http.Request) {
 
 // writeNukeRefusal maps a nuke pre-check failure to 409 for a pending
 // graduation and 500 (fail closed) for an unreadable check.
-func (s *Server) writeNukeRefusal(w http.ResponseWriter, what string, id int64, err error) {
+func (s *Server) writeNukeRefusal(w http.ResponseWriter, what string, id int64, err error, fallback string) {
 	uxlog.Log("[resident] api nuke %s %d refused: %v", what, id, err)
 	if errors.Is(err, db.ErrGraduationPending) {
 		writeErr(w, http.StatusConflict, "", db.ErrGraduationPending)
 		return
 	}
-	writeErr(w, http.StatusInternalServerError, "graduation check failed", err)
+	if errors.Is(err, db.ErrHeraReclaimInProgress) || errors.Is(err, db.ErrResidentProtected) {
+		writeErr(w, http.StatusConflict, "", err)
+		return
+	}
+	writeErr(w, http.StatusInternalServerError, fallback, err)
 }
 
 // nukeRunner returns the session runner as an interface value, or nil when the

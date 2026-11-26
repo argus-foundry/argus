@@ -46,6 +46,7 @@ import (
 	// factory with internal/todo so cfg.Todo.Backend = "things3" resolves.
 	_ "github.com/argus-foundry/argus/internal/todo/things3"
 	"github.com/argus-foundry/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/voice"
 )
 
 // prPollInterval is the cadence at which the daemon refreshes cached PR review
@@ -124,30 +125,28 @@ func DefaultPIDPath() string {
 // ExitInfo holds the exit state of a finished session, cached briefly
 // so clients can query it after the stream closes.
 type ExitInfo struct {
-	Err            string
-	Stopped        bool
-	LastOutput     []byte
-	StreamLost     bool // true when stream disconnected but process exit not confirmed
-	PendingRestart bool // true when a kick-restart is queued (TUI must skip status flip)
+	PID                 int
+	Err                 string
+	Stopped             bool
+	LastOutput          []byte
+	StreamLost          bool // true when stream disconnected but process exit not confirmed
+	PendingRestart      bool // true when a kick-restart is queued (TUI must skip status flip)
+	RestartSuccessorPID int  // exact successor once the owner publishes a managed restart
 }
 
-// CleanExit is the single, authoritative predicate for "the agent process
-// exited on its own, normally" — the ONLY condition under which a task may be
-// marked Complete. Everything else (explicit stop, non-zero exit / crash,
-// fast-fail launch surfaced as an error, or an unconfirmed stream loss) is a
-// recoverable exit and lands the task in InReview so the user can resume.
+// CleanExit is the authoritative predicate for a normal process exit.
+// Ordinary confirmed exits are recoverable unless they are clean. A deliberate
+// Hera reclaim records its separate terminal intent before stopping.
 //
-// Both status-flip sites — the daemon's transitionTaskOnExit (authoritative for
-// headless/PWA) and the TUI's handleSessionExitUI (an idempotent retry that can
-// win the race) — MUST derive their decision from this one predicate so they
-// can never disagree. The rule is intentionally timing-independent: a missing
+// The daemon and standalone TUI use this predicate for the sessions they own.
+// The rule is timing-independent: a missing
 // binary / crash arrives as a non-empty Err, so we never need a wall-clock
 // heuristic to tell "did real work happen" in the common case.
 func (e ExitInfo) CleanExit() bool {
 	return !e.Stopped && e.Err == "" && !e.StreamLost
 }
 
-// NoEvidenceOfExit reports whether e is the all-zero value: no error, not
+// NoEvidenceOfExit reports whether e is the all-zero value: no PID, no error, not
 // stopped, not stream-lost, no pending restart and no captured output. A real
 // exit carries at least the PTY's final ring tail (every agent TUI emits
 // bytes), so this shape is what an OLD server answers for "nothing recorded"
@@ -156,7 +155,8 @@ func (e ExitInfo) CleanExit() bool {
 // exits 0 having printed nothing at all lands in_review via the tick
 // reconciler instead of complete — recoverable, and the safe direction.
 func (e ExitInfo) NoEvidenceOfExit() bool {
-	return e.Err == "" && !e.Stopped && !e.StreamLost && !e.PendingRestart && len(e.LastOutput) == 0
+	return e.PID == 0 && e.Err == "" && !e.Stopped && !e.StreamLost && !e.PendingRestart &&
+		e.RestartSuccessorPID == 0 && len(e.LastOutput) == 0
 }
 
 // Daemon manages agent sessions and exposes them over a Unix socket.
@@ -174,6 +174,8 @@ type Daemon struct {
 	db       *db.DB
 	listener net.Listener
 	done     chan struct{}
+	exitCtx  context.Context
+	endExits context.CancelFunc
 
 	// devStackScan / devStackStop override the dev-stack sweeper's process scan
 	// and stop (nil = the real agent functions). Test seams, set before Serve.
@@ -190,6 +192,8 @@ type Daemon struct {
 	mcpServer          *mcp.Server       // set when KB is enabled, shut down in cleanup
 	kbIndexer          *kb.Indexer       // set when KB is enabled, stopped in cleanup
 	apiServer          *api.Server       // set when API is enabled, shut down in cleanup
+	voiceHook          *voice.Webhook    // optional loopback notify-back; stopped in cleanup
+	voiceWatchDone     chan struct{}     // detector when the API server is absent
 	runtimeSource      api.RuntimeSource // wired by main before Serve; backs /api/runtime
 	restoreBridgeUsage func()
 	scheduler          *scheduler.Scheduler // recurring scheduled-task firer; always started
@@ -360,9 +364,12 @@ func (d *Daemon) BootInfo() (BootInfoResp, error) {
 
 // New creates a new Daemon.
 func New(database *db.DB) *Daemon {
+	exitCtx, endExits := context.WithCancel(context.Background()) //nolint:gosec // G118: Shutdown calls endExits
 	d := &Daemon{
 		db:        database,
 		done:      make(chan struct{}),
+		exitCtx:   exitCtx,
+		endExits:  endExits,
 		ready:     make(chan struct{}),
 		bootedAt:  time.Now(),
 		clipboard: clipboard.New(),
@@ -415,18 +422,24 @@ func New(database *db.DB) *Daemon {
 		// from the tview main goroutine (the gotcha at daemon-rpc.md:9).
 		// The exiting session is still in the runner's map here; stamp it as the
 		// ExitInfo's owner so stream attaches can tell a stale entry by identity.
+		owner := d.runner.Get(taskID)
 		d.handleSessionExitOwned(taskID, ExitInfo{
+			PID:            d.finishedPID(taskID, owner),
 			Err:            errStr,
 			Stopped:        stopped,
 			LastOutput:     lastOutput,
 			PendingRestart: d.runner.HasPendingRestart(taskID),
-		}, d.runner.Get(taskID))
+		}, owner)
 	}, database.IsResidentWorker)
 
 	// Mount the session-serving substrate. The daemon owns the runner (and thus
 	// the onFinish wiring above); the core owns the stream registry, exit cache,
 	// and the session RPC + stream handler, all promoted onto *Daemon.
 	d.sessionCore = newSessionCore(runner, d.db.Config, d.done)
+	d.keepFinalizingInList = true
+	runner.OnRestartStarted(func(taskID string, outgoingPID, successorPID int) {
+		d.linkRestart(taskID, outgoingPID, successorPID)
+	})
 
 	return d
 }
@@ -453,16 +466,52 @@ func (d *Daemon) handleSessionExit(taskID string, ei ExitInfo) {
 	d.handleSessionExitOwned(taskID, ei, nil)
 }
 
-// handleSessionExitOwned is handleSessionExit with the exiting session known
-// (in-process runner path); owner stamps the cached ExitInfo for identity-based
-// staleness checks. nil = unknown (relay-sourced).
+// handleSessionExitOwned applies effects only to the process that exited.
 func (d *Daemon) handleSessionExitOwned(taskID string, ei ExitInfo, owner agent.SessionHandle) {
-	slog.Info("session exited", "task", taskID, "stopped", ei.Stopped, "err", ei.Err, "streamLost", ei.StreamLost, "pending", ei.PendingRestart, "lastOutputBytes", len(ei.LastOutput))
+	slog.Info("session exited", "task", taskID, "pid", ei.PID, "stopped", ei.Stopped, "err", ei.Err, "streamLost", ei.StreamLost, "pending", ei.PendingRestart, "lastOutputBytes", len(ei.LastOutput))
 
+	if ei.PendingRestart && ei.RestartSuccessorPID > 0 && d.linkRestart(taskID, ei.PID, ei.RestartSuccessorPID) {
+		// This updates an exit already relayed.
+		return
+	}
+
+	if !ei.StreamLost && !ei.PendingRestart {
+		// Coordinated resume can run as soon as the supervisor retires the
+		// old PTY. Its task lock covers start through the persisted launch.
+		unlock, err := d.db.LockSessionMutation(d.exitCtx, taskID)
+		if err != nil {
+			slog.Warn("session exit: could not lock task", "task", taskID, "err", err)
+			ei.StreamLost = true
+		} else {
+			defer unlock()
+			if d.sessionExitAlreadyFinalized(taskID, ei.PID) {
+				return
+			}
+			ei.StreamLost = !d.finalizeSessionExit(taskID, ei)
+		}
+	}
+	d.publishSessionExit(taskID, ei, owner)
+}
+
+// publishSessionExit records a processed exit and delivers its lifecycle event.
+func (d *Daemon) publishSessionExit(taskID string, ei ExitInfo, owner agent.SessionHandle) {
+	pid := ei.PID
+	if pid == 0 && owner != nil {
+		pid = owner.PID()
+		if ei.StreamLost {
+			ei.PID = pid
+		}
+	}
 	d.mu.Lock()
-	d.recordExitLocked(taskID, ei, owner)
-	conns := d.streams[taskID]
-	delete(d.streams, taskID)
+	latest := d.exitInfos[taskID]
+	// An unconfirmed relay cannot replace a confirmed exit record for
+	// another process, or be reported as that process's observed exit.
+	if ei.PendingRestart && ei.RestartSuccessorPID > 0 && latest.info.PID == ei.RestartSuccessorPID {
+		d.cacheExitLocked(taskID, ei, owner)
+	} else if !ei.StreamLost || latest.info.PID == 0 || (latest.info.PID == pid && latest.info.StreamLost) {
+		d.recordExitLocked(taskID, ei, owner)
+	}
+	conns := d.takeExitedStreamsLocked(taskID, pid)
 	d.mu.Unlock()
 
 	if ei.StreamLost {
@@ -473,45 +522,84 @@ func (d *Daemon) handleSessionExitOwned(taskID string, ei ExitInfo, owner agent.
 		return
 	}
 
-	// Flip the DB row out of InProgress. Without this, a daemon-only setup
-	// (web-app users with no TUI attached) leaves the row stuck in_progress
-	// forever — the API then reports idle:true and the PWA pops a Resume modal
-	// for a task whose agent has already exited. The TUI's HandleSessionExit also
-	// runs this transition; both sites are guarded by the StatusInProgress check,
-	// so whichever fires first wins and the other becomes a no-op.
-	//
-	// SKIP when a kick-restart is in flight (KickRerender stopped the session and
-	// queued a same-task Start). Transitioning here would race the restart and
-	// leave the row in the wrong state mid-flip.
-	if !ei.PendingRestart {
-		d.transitionTaskOnExit(taskID, ei.CleanExit())
-	}
-
-	// Capture session ID for backends that mint it themselves post-exit (codex
-	// via state_5.sqlite, pi via session-file scan; Claude refreshes on /clear).
-	// In supervisor mode the daemon still owns this — it reads the worktree-scoped
-	// backend state, which lives on the shared filesystem both processes see, and
-	// the relay only fires after the supervisor observed Cmd.Wait, so the state
-	// file is already written (design §5: recapture daemon-side on the exit relay).
-	go d.captureSessionIDPostExit(taskID)
-
 	// Signal stream EOF to all connected clients by closing their connections.
 	slog.Info("session exited, closing stream clients", "task", taskID, "clients", len(conns))
 	for _, conn := range conns {
 		conn.Close() //nolint:errcheck // best-effort EOF signal; conn is being discarded
 	}
 
-	// Clear any agent-staged clipboard for the finished task — the agent that
-	// staged it is gone; the user shouldn't see a stale copy button.
-	d.clipboard.Clear(taskID)
-
 	// Surface session lifecycle to plugins. Fired AFTER the DB transition so an
 	// SSE subscriber waking on this event sees a coherent snapshot.
 	events.Emit(model.EventTypeSessionExited, taskID, map[string]any{
+		"pid":             ei.PID,
 		"stopped":         ei.Stopped,
 		"err":             ei.Err,
 		"pending_restart": ei.PendingRestart,
 	})
+}
+
+func (d *Daemon) sessionExitAlreadyFinalized(taskID string, pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, entry := range d.recentExits[taskID] {
+		if entry.info.PID == pid {
+			return !entry.info.StreamLost && !entry.info.PendingRestart
+		}
+	}
+	return false
+}
+
+// finalizeSessionExit is called with exclusive ownership of the task's
+// lifecycle. Probe the supervisor directly: runner.Get may be a cached
+// stream, while the supervisor already has (or retired) a replacement.
+func (d *Daemon) finalizeSessionExit(taskID string, ei ExitInfo) bool {
+	if owner, ok := d.supClient.(sessionProber); ok {
+		if ei.PID == 0 {
+			slog.Warn("session exit: supervisor did not identify the retiring process; restart Session Supervisor from System in Settings", "task", taskID)
+			return false
+		}
+		info, err := owner.ProbeSession(taskID)
+		if err != nil || info.Alive ||
+			(info.PID != 0 && info.PID != ei.PID) ||
+			(info.LastExitPID != 0 && info.LastExitPID != ei.PID) {
+			slog.Info("session exit: current owner did not confirm retired process", "task", taskID, "pid", ei.PID,
+				"owner_pid", info.PID, "last_exit_pid", info.LastExitPID, "err", err)
+			return false
+		}
+	}
+
+	armedPID, err := d.db.HeraReclaimStopPID(taskID)
+	if err != nil && !errors.Is(err, db.ErrTaskNotFound) {
+		slog.Warn("session exit: could not read reclaim intent", "task", taskID, "pid", ei.PID, "err", err)
+		return false
+	}
+	reclaim := ei.PID > 0 && armedPID == ei.PID
+	forceComplete := false
+	if reclaim {
+		task, err := d.db.Get(taskID)
+		if err != nil {
+			slog.Warn("session exit: could not load reclaim task", "task", taskID, "pid", ei.PID, "err", err)
+			return false
+		}
+		forceComplete = task.Archived && !task.IsResident()
+	}
+	if !d.transitionTaskOnExit(taskID, ei.CleanExit() || forceComplete) {
+		return false
+	}
+	// Clear only after the terminal transition commits. If we stop between
+	// these writes, recovery sees the same PID and an already-terminal row.
+	if reclaim {
+		if err := d.db.ClearHeraReclaimStop(taskID, ei.PID); err != nil {
+			slog.Warn("session exit: could not clear finalized reclaim intent", "task", taskID, "pid", ei.PID, "err", err)
+			return false
+		}
+	}
+	d.captureSessionIDPostExit(taskID)
+	d.clipboard.Clear(taskID)
+	return true
 }
 
 // Runner returns the underlying session runner. Typed as agent.SessionRunner
@@ -522,19 +610,10 @@ func (d *Daemon) Runner() agent.SessionRunner {
 }
 
 // captureSessionIDPostExit refreshes a task's session UUID from backend state.
-// Runs in its own goroutine from onFinish so it never blocks the runner exit
-// path. The recapture decision is delegated to agent.NeedsSessionRecapture:
+// The recapture decision is delegated to agent.NeedsSessionRecapture:
 // codex/pi capture once (while SessionID is empty), Claude refreshes on every
 // exit (a /clear mints a new UUID under ~/.claude/projects), unknown backends
-// never recapture. Concurrent TUI-side capture is harmless: both paths run
-// CaptureSessionID, a pure read of the same backend state, so last-writer-wins
-// produces the same value in the common case.
-//
-// Edge case: if the user starts a brand-new session for the same task in
-// the few-ms gap between onFinish and the TUI's QueueUpdateDraw, the two
-// captures could observe different "newest" rows. The resulting SessionID
-// still points at a valid session for the same task, so we intentionally
-// accept this benign drift rather than serialize the two paths.
+// never recapture. Connected clients leave this write to the daemon.
 //
 // No-op for unknown backends (dispatcher returns ("", nil)), for unchanged IDs
 // (the common no-/clear Claude exit), and for tasks already deleted before the
@@ -567,16 +646,14 @@ func (d *Daemon) captureSessionIDPostExit(taskID string) {
 	if sid == "" || sid == t.SessionID {
 		return // Unrecognized backend, or no change (common no-/clear exit).
 	}
-	t2, err := d.db.Get(taskID)
-	if err != nil || t2 == nil {
-		return
-	}
-	t2.SessionID = sid
-	if uerr := d.db.Update(t2); uerr != nil {
+	written, uerr := d.db.RefreshSessionID(taskID, t.SessionID, sid)
+	if uerr != nil {
 		slog.Warn("daemon: session ID persist failed", "task", taskID, "err", uerr)
 		return
 	}
-	slog.Info("daemon: session ID captured", "task", taskID, "sid", sid)
+	if written {
+		slog.Info("daemon: session ID captured", "task", taskID, "sid", sid)
+	}
 }
 
 // transitionTaskOnExit flips an InProgress task to its terminal status when
@@ -585,9 +662,8 @@ func (d *Daemon) captureSessionIDPostExit(taskID string) {
 // the task in Complete; every other exit (explicit stop, crash, missing-binary
 // launch failure, unconfirmed stream loss) lands in InReview so the user can
 // resume rather than having a still-unfinished task silently marked done.
-// No-op if the row has already moved on (e.g., the TUI's HandleSessionExit
-// won the race, or the user manually changed status mid-exit).
-func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
+// No-op if the row has already moved on (e.g., the user changed status mid-exit).
+func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) bool {
 	// Hera worker finish policy (BUG-050, locked decision #4) — the EXIT-HOOK
 	// BACKSTOP. The PRIMARY trigger is hera_status("done") in the MCP arm
 	// (Claude workers finish their report and go idle rather than exiting); this
@@ -602,30 +678,34 @@ func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
 		slog.Warn("session exit: hera worker roll failed (using default policy)", "task", taskID, "err", err)
 	} else if flipped {
 		slog.Info("session exit: hera worker rolled to in_review", "task", taskID)
-		return
+		return true
 	}
 
 	// Non-worker (or worker no longer in_progress): unchanged #707 logic.
 	t, err := d.db.Get(taskID)
-	if err != nil || t == nil || t.Status != model.StatusInProgress {
-		return
+	if err != nil {
+		return errors.Is(err, db.ErrTaskNotFound)
+	}
+	if t == nil || t.Status != model.StatusInProgress {
+		return true
 	}
 	if t.IsResident() {
 		// The resident stays in_progress permanently; the ensure-running loop
 		// (not a status flip) handles its exit.
 		residentLog("[resident] session exit task=%s clean=%t (status unchanged)", taskID, cleanExit)
-		return
+		return true
 	}
 	if cleanExit {
 		t.SetStatus(model.StatusComplete)
 	} else {
 		t.SetStatus(model.StatusInReview)
 	}
-	if uerr := d.db.Update(t); uerr != nil {
+	if uerr := d.db.SetStatus(taskID, t.Status); uerr != nil {
 		slog.Warn("session exit: status update failed", "task", taskID, "err", uerr)
-		return
+		return false
 	}
 	slog.Info("session exit: status flipped", "task", taskID, "status", t.Status.String())
+	return true
 }
 
 // heraSpawnWorker performs the transactional born-bound worker spawn (M4). It
@@ -1333,23 +1413,41 @@ func (d *Daemon) probeUsageBudgetOnce(ctx context.Context) {
 func (d *Daemon) runHeraReclaimSweeper() {
 	ticker := time.NewTicker(heraReclaimSweepInterval)
 	defer ticker.Stop()
+	// The supervisor retains exit receipts for less than the worktree sweep
+	// interval. Recover missing relays before that evidence expires.
+	recovery := time.NewTicker(15 * time.Second)
+	defer recovery.Stop()
 
 	for {
 		select {
 		case <-d.done:
 			return
-		case <-ticker.C:
-			if sum, err := hera.ReconcileHeraReclaims(d.db, d.runner); err != nil {
-				slog.Warn("hera reclaim sweep failed", "err", err)
-			} else if sum.Candidates > 0 {
-				slog.Info("hera reclaim sweep",
-					"candidates", sum.Candidates,
-					"worktrees_retried", sum.WorktreesRetried,
-					"stacked_branches_deleted", sum.StackedBranchesDeleted,
-					"pruned", sum.Pruned,
-					"skipped_live_session", sum.SkippedLiveSession)
+		case <-recovery.C:
+			recovered := d.recoverHeraReclaimExits()
+			pending, err := d.db.HasPendingResidentReclaims()
+			if err != nil {
+				slog.Warn("hera reclaim: read pending resident cleanup", "err", err)
 			}
+			if recovered > 0 || pending {
+				d.sweepHeraReclaims()
+			}
+		case <-ticker.C:
+			d.recoverHeraReclaimExits()
+			d.sweepHeraReclaims()
 		}
+	}
+}
+
+func (d *Daemon) sweepHeraReclaims() {
+	if sum, err := hera.ReconcileHeraReclaims(d.db, d.runner); err != nil {
+		slog.Warn("hera reclaim sweep failed", "err", err)
+	} else if sum.Candidates > 0 {
+		slog.Info("hera reclaim sweep",
+			"candidates", sum.Candidates,
+			"worktrees_retried", sum.WorktreesRetried,
+			"stacked_branches_deleted", sum.StackedBranchesDeleted,
+			"pruned", sum.Pruned,
+			"skipped_live_session", sum.SkippedLiveSession)
 	}
 }
 
@@ -1728,6 +1826,21 @@ func (d *Daemon) Serve(sockPath string) error {
 		}
 	}
 
+	// Voice notify-back. Empty webhook_url is a no-op until config.toml sets a
+	// loopback URL; the hook reads config on each event, so a reload applies
+	// without a restart. It does not depend on the MCP or REST servers.
+	d.voiceHook = voice.NewWebhook(
+		func() string { return d.cfgFn().Voice.WebhookURL },
+		func(id string) string {
+			t, err := d.db.Get(id)
+			if err != nil || t == nil {
+				return ""
+			}
+			return t.Name
+		},
+	)
+	d.voiceHook.Start()
+
 	// Start MCP HTTP server and KB indexer (only when KB is enabled in settings).
 	// One claude.ai artifact publisher, shared by the MCP artifact_publish
 	// tool and POST /api/artifacts/publish (add-argus-artifact-publish).
@@ -1854,6 +1967,7 @@ func (d *Daemon) Serve(sockPath string) error {
 			if d.mcpServer != nil {
 				d.mcpServer.SetAPIGetter(apiSrv.ReadOnlyGet)
 				d.mcpServer.SetAccountMover(apiSrv.MoveTaskAccount)
+				d.mcpServer.SetVoice(voice.NewRouter(apiSrv.VoiceOperator()), token)
 			}
 			// Wire the events.Sink to the API server's event bus so emission
 			// sites (db, orch, runner, this file) feed /api/events/stream.
@@ -1877,6 +1991,16 @@ func (d *Daemon) Serve(sockPath string) error {
 				}
 			}
 		}
+	}
+
+	if d.apiServer == nil {
+		d.voiceWatchDone = make(chan struct{})
+		go func() {
+			defer close(d.voiceWatchDone)
+			api.WatchVoiceNeedsInput(d.done, func() bool {
+				return strings.TrimSpace(d.cfgFn().Voice.WebhookURL) != ""
+			}, d.db, d.runner)
+		}()
 	}
 
 	// Resident agent ensure-running loop (add-resident-agent D3). Runs after
@@ -1965,6 +2089,7 @@ func (d *Daemon) Shutdown() {
 	// with "close of closed channel".
 	first := false
 	d.shutdownOnce.Do(func() {
+		d.endExits()
 		close(d.done)
 		first = true
 	})
@@ -1989,6 +2114,24 @@ func (d *Daemon) Shutdown() {
 // the cleanup goroutine and leaving zombie agent processes + stale files.
 func (d *Daemon) cleanup() {
 	slog.Info("daemon shutting down")
+	// Voice jobs share the runner. Drain them before stopping sessions or
+	// detaching from the supervisor.
+	if d.mcpServer != nil {
+		if runner, ok := d.runner.(*agent.Runner); ok {
+			runner.CancelPendingStarts()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := d.mcpServer.Shutdown(ctx); err != nil {
+			slog.Error("mcp server shutdown", "err", err)
+		}
+		cancel()
+	}
+	if d.voiceHook != nil {
+		d.voiceHook.Stop()
+	}
+	if d.voiceWatchDone != nil {
+		<-d.voiceWatchDone
+	}
 
 	// Shut down the API HTTP server if running.
 	if d.apiServer != nil {
@@ -2054,15 +2197,6 @@ func (d *Daemon) cleanup() {
 	// Stop the KB indexer if running.
 	if d.kbIndexer != nil {
 		d.kbIndexer.Stop()
-	}
-
-	// Shut down the MCP HTTP server if running.
-	if d.mcpServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := d.mcpServer.Shutdown(ctx); err != nil {
-			slog.Error("mcp server shutdown", "err", err)
-		}
 	}
 
 	// Only clean up socket and PID files if we still own them.

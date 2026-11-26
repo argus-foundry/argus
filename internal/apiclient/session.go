@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +26,8 @@ var _ agent.SessionHandle = (*Session)(nil)
 // scrollback in-process, full history available via /api/tasks/{id}/output
 // from the on-disk session log on the server.
 const defaultRingBufSize = 256 * 1024
+
+var errStreamProcessChanged = errors.New("terminal stream process changed")
 
 // Session implements agent.SessionHandle over the REST API. A long-lived
 // SSE goroutine reads /api/tasks/{id}/stream into a local ring buffer; the
@@ -67,7 +71,7 @@ func newSession(taskID string, p *Provider) *Session {
 	}
 }
 
-// PID returns the cached agent PID. Populated by refreshTask().
+// PID identifies the process attached to the stream, once connected.
 func (s *Session) PID() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,15 +117,23 @@ func (s *Session) LastUserInput() time.Time {
 
 // Resize POSTs to /api/tasks/{id}/resize.
 func (s *Session) Resize(rows, cols uint16) error {
-	resp, err := s.p.c.Resize(context.Background(), s.taskID, rows, cols)
+	_, err := s.ResizeForRerender(rows, cols, RerenderResizeOptions{})
+	return err
+}
+
+// ResizeForRerender asks the session owner to resize and evaluate a rerender.
+func (s *Session) ResizeForRerender(rows, cols uint16, options RerenderResizeOptions) (*ResizeResp, error) {
+	resp, err := s.p.c.ResizeForRerender(context.Background(), s.taskID, rows, cols, options)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	s.mu.Lock()
-	s.cols = resp.Cols
-	s.rows = resp.Rows
-	s.mu.Unlock()
-	return nil
+	if resp.Deferred != "stale_session" {
+		s.mu.Lock()
+		s.cols = resp.Cols
+		s.rows = resp.Rows
+		s.mu.Unlock()
+	}
+	return resp, nil
 }
 
 // RecentOutput returns the full ring buffer contents.
@@ -203,9 +215,7 @@ func (s *Session) PTYSize() (cols, rows int) {
 	return sz.Cols, sz.Rows
 }
 
-// InitialPTYSize returns the dimensions captured the first time the stream
-// observed a size. The TUI uses this to detect "started narrow" sessions
-// whose scrollback won't re-flow on SIGWINCH. Cached on first sync.
+// InitialPTYSize returns the initial size of the process attached to the stream.
 func (s *Session) InitialPTYSize() (cols, rows int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -351,6 +361,10 @@ func (s *Session) runStream() {
 	const maxRetries = 2
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		exited, err := s.streamOnce()
+		if errors.Is(err, errStreamProcessChanged) {
+			s.followReplacement()
+			return
+		}
 		if exited {
 			s.close()
 			// On a server-confirmed exit, err==nil. We set Stopped=true so the
@@ -362,13 +376,13 @@ func (s *Session) runStream() {
 			// wrongly Complete. The remote daemon's own transitionTaskOnExit holds
 			// the authoritative status, surfaced to this TUI via /api/tasks.
 			// (Pinned by the OnSessionExit test in methods_test.go.)
-			s.p.removeSession(s.taskID, SessionExitInfo{Err: errString(err), Stopped: err == nil})
+			s.p.removeSession(s, SessionExitInfo{Err: errString(err), Stopped: err == nil})
 			return
 		}
 		select {
 		case <-s.streamCtx.Done():
 			s.close()
-			s.p.removeSession(s.taskID, SessionExitInfo{StreamLost: true})
+			s.p.removeSession(s, SessionExitInfo{StreamLost: true})
 			return
 		case <-s.p.closed:
 			s.close()
@@ -378,7 +392,40 @@ func (s *Session) runStream() {
 	}
 	uxlog.Log("[apiclient] stream task=%s exhausted retries, treating as stream lost", s.taskID)
 	s.close()
-	s.p.removeSession(s.taskID, SessionExitInfo{StreamLost: true})
+	s.p.removeSession(s, SessionExitInfo{StreamLost: true})
+}
+
+func (s *Session) followReplacement() {
+	ctx, cancel := context.WithTimeout(s.streamCtx, 6*time.Minute)
+	defer cancel()
+	previous := s.PID()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		snapshot, err := s.p.c.GetOutput(ctx, s.taskID, 1, false)
+		if err == nil && snapshot.PID > 0 && snapshot.PID != previous {
+			s.p.replaceStream(s, snapshot.PID)
+			return
+		}
+		// A stale snapshot can mean an actual exit or a launch gap. The
+		// daemon remains authoritative for deciding which one occurred.
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict {
+			task, taskErr := s.p.c.GetTask(ctx, s.taskID)
+			if IsNotFound(taskErr) || (taskErr == nil && task.Status != "in_progress" && !task.Live) {
+				s.close()
+				s.p.removeSession(s, SessionExitInfo{Stopped: true})
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			s.close()
+			s.p.removeSession(s, SessionExitInfo{StreamLost: true})
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // streamOnce opens one SSE connection and reads until EOF or context cancel.
@@ -387,17 +434,35 @@ func (s *Session) runStream() {
 //   - exited == false → connection dropped without exit → caller decides
 //     whether to retry
 func (s *Session) streamOnce() (bool, error) {
-	resp, err := s.p.c.StreamOutput(s.streamCtx, s.taskID, s.buf.TotalWritten())
+	resp, err := s.p.c.StreamOutputForPID(s.streamCtx, s.taskID, s.buf.TotalWritten(), s.PID())
 	if err != nil {
 		var apiErr *Error
-		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
-			// Server has no session for this task. Treat as exited.
-			return true, err
+		if errors.As(err, &apiErr) {
+			switch apiErr.Status {
+			case http.StatusConflict:
+				return false, errStreamProcessChanged
+			case http.StatusNotFound:
+				return true, err
+			}
 		}
 		uxlog.Log("[apiclient] stream task=%s connect failed: %v", s.taskID, err)
 		return false, err
 	}
 	defer resp.Body.Close()
+	pid, _ := strconv.Atoi(resp.Header.Get("X-Argus-Session-Pid"))
+	if pid > 0 {
+		cols, _ := strconv.Atoi(resp.Header.Get("X-Argus-Session-Initial-Cols"))
+		rows, _ := strconv.Atoi(resp.Header.Get("X-Argus-Session-Initial-Rows"))
+		s.mu.Lock()
+		if s.pid != 0 && s.pid != pid {
+			// After a stream drop this URL may resolve to a new PTY. The
+			// old cursor and history width belong to the previous process.
+			s.mu.Unlock()
+			return false, errStreamProcessChanged
+		}
+		s.pid, s.initCols, s.initRows = pid, cols, rows
+		s.mu.Unlock()
+	}
 
 	reader := bufio.NewReader(resp.Body)
 	var event string
@@ -429,6 +494,12 @@ func (s *Session) streamOnce() (bool, error) {
 		data := strings.TrimSpace(line[len("data:"):])
 		switch event {
 		case "exit":
+			var exit struct {
+				Rerendering bool `json:"rerendering"`
+			}
+			if json.Unmarshal([]byte(data), &exit) == nil && exit.Rerendering {
+				return false, errStreamProcessChanged
+			}
 			return true, nil
 		case "clipboard":
 			// Ignored — handled separately by the apiclient consumer if any.

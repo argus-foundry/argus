@@ -157,6 +157,12 @@ func (p *Provider) Stop(taskID string) error {
 	return p.c.StopTask(context.Background(), taskID)
 }
 
+// SwitchClaudeSession asks the server to persist and start the selected transcript.
+func (p *Provider) SwitchClaudeSession(taskID, sessionID string) error {
+	req := map[string]string{"session_id": sessionID}
+	return p.c.doJSON(context.Background(), "POST", "/api/tasks/"+taskID+"/claude-session", req, nil)
+}
+
 // StopScoped ignores scope: the REST stop endpoint has no scope parameter,
 // so a remote-TUI stop is always a full stop (named gap,
 // stop-finished-task-sessions).
@@ -305,14 +311,32 @@ func (p *Provider) getOrCreateSession(taskID string) *Session {
 	return s
 }
 
+// replaceStream retains the pane's retired handle until it can re-resolve to a
+// fresh source. A managed replacement does not fire the normal exit callback.
+func (p *Provider) replaceStream(old *Session, pid int) {
+	p.mu.Lock()
+	if p.sessions[old.taskID] == old {
+		next := newSession(old.taskID, p)
+		next.pid = pid
+		p.sessions[old.taskID] = next
+		go next.runStream()
+	}
+	p.mu.Unlock()
+	old.close()
+}
+
 // removeSession deletes a session from the map and fires the onSessionExit
 // callback. Called by the stream reader on EOF or by Close.
-func (p *Provider) removeSession(taskID string, info SessionExitInfo) {
+func (p *Provider) removeSession(s *Session, info SessionExitInfo) {
 	p.mu.Lock()
-	delete(p.sessions, taskID)
+	if p.sessions[s.taskID] != s {
+		p.mu.Unlock()
+		return
+	}
+	delete(p.sessions, s.taskID)
 	fn := p.onSessionExit
 	p.mu.Unlock()
 	if fn != nil {
-		fn(taskID, info)
+		fn(s.taskID, info)
 	}
 }

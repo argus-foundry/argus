@@ -289,6 +289,18 @@ func (m *residentManager) tick() {
 		return // a kick or task_recycle is mid-flight; it owns the restart
 	}
 
+	unlock, acquired, err := m.db.TryLockSessionMutation(task.ID)
+	if err != nil || !acquired {
+		residentLog("[resident] session lifecycle busy task=%s err=%v", task.ID, err)
+		return
+	}
+	defer unlock()
+	task, err = m.db.Get(task.ID)
+	if err != nil {
+		residentLog("[resident] reload before restart failed: %v", err)
+		return
+	}
+
 	m.mu.Lock()
 	m.aliveSince = time.Time{}
 	if now.Before(m.nextAttempt) {

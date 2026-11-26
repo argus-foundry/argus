@@ -1,14 +1,18 @@
 package hera
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
+	"github.com/argus-foundry/argus/internal/mergesafety"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -18,6 +22,17 @@ import (
 type fakeSessionChecker struct{ live map[string]bool }
 
 func (f *fakeSessionChecker) HasSession(taskID string) bool { return f.live[taskID] }
+
+type fakeReclaimOwner struct {
+	fakeSessionChecker
+	check func(string) error
+}
+
+func (f *fakeReclaimOwner) CheckReclaimSessionRetired(id string) error { return f.check(id) }
+
+func (f *fakeReclaimOwner) StopTreeForPID(string, int) error {
+	return errors.New("reclaim sweep should never signal the session")
+}
 
 func newLeakedWorktreeDir(t *testing.T) string {
 	t.Helper()
@@ -165,7 +180,7 @@ func TestReconcileHeraReclaims_LiveBindingNeverTouched(t *testing.T) {
 	testutil.Equal(t, got.ID, task.ID)
 }
 
-func TestReconcileHeraReclaims_LiveSessionRetriesButDoesNotPrune(t *testing.T) {
+func TestReconcileHeraReclaims_LiveSessionKeepsWorktreeAndRow(t *testing.T) {
 	d, err := db.OpenInMemory()
 	testutil.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
@@ -178,16 +193,66 @@ func TestReconcileHeraReclaims_LiveSessionRetriesButDoesNotPrune(t *testing.T) {
 	sum, err := ReconcileHeraReclaims(d, runner)
 	testutil.NoError(t, err)
 	testutil.Equal(t, sum.Candidates, 1)
-	testutil.Equal(t, sum.WorktreesRetried, 1)
+	testutil.Equal(t, sum.WorktreesRetried, 0)
 	testutil.Equal(t, sum.Pruned, 0)
 	testutil.Equal(t, sum.SkippedLiveSession, 1)
 
 	_, statErr := os.Stat(wt)
-	testutil.True(t, os.IsNotExist(statErr))
+	testutil.NoError(t, statErr)
 
 	got, err := d.Get(task.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, got.ID, task.ID)
+}
+
+func TestReconcileHeraReclaimsWaitsForExitAndOwner(t *testing.T) {
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	worktree := newLeakedWorktreeDir(t)
+	task := &model.Task{Name: "retiring", Status: model.StatusInProgress, Worktree: worktree, Archived: true}
+	seedNukedTask(t, d, task)
+	const pid = 42
+	armed, err := d.ArmHeraReclaimStop(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.True(t, armed)
+	var checks int
+	var ownerErr error
+	runner := &fakeReclaimOwner{check: func(id string) error {
+		checks++
+		testutil.Equal(t, id, task.ID)
+		unlock, acquired, err := d.TryLockSessionMutation(id)
+		testutil.NoError(t, err)
+		if acquired {
+			unlock()
+			t.Fatal("sweep checked the owner without the session mutation lock")
+		}
+		return ownerErr
+	}}
+
+	sum, err := ReconcileHeraReclaims(d, runner)
+	testutil.NoError(t, err)
+	testutil.Equal(t, checks, 0)
+	testutil.Equal(t, sum.Pruned, 0)
+	testutil.True(t, agent.DirExists(worktree))
+
+	consumed, err := d.ConsumeHeraReclaimStop(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.True(t, consumed)
+	for _, status := range []error{agent.ErrSessionStarting, agent.ErrSessionCoordinationUnsupported} {
+		ownerErr = status
+		sum, err = ReconcileHeraReclaims(d, runner)
+		testutil.NoError(t, err)
+		testutil.Equal(t, sum.Pruned, 0)
+		testutil.True(t, agent.DirExists(worktree))
+	}
+
+	ownerErr = nil
+	sum, err = ReconcileHeraReclaims(d, runner)
+	testutil.NoError(t, err)
+	testutil.Equal(t, checks, 3)
+	testutil.Equal(t, sum.Pruned, 1)
+	testutil.False(t, agent.DirExists(worktree))
 }
 
 // TestReconcileHeraReclaims_ExcludedStackedBranchStays exercises the
@@ -198,6 +263,7 @@ func TestReconcileHeraReclaims_LiveSessionRetriesButDoesNotPrune(t *testing.T) {
 // safe — but M's branch was recorded operator-excluded, so it must survive
 // untouched while X's is deleted.
 func TestReconcileHeraReclaims_ExcludedStackedBranchStays(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	d, err := db.OpenInMemory()
 	testutil.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
@@ -235,4 +301,208 @@ func TestReconcileHeraReclaims_ExcludedStackedBranchStays(t *testing.T) {
 
 	testutil.Equal(t, gitBranchExists(dir, "x-branch"), false)
 	testutil.Equal(t, gitBranchExists(dir, "m-branch"), true)
+}
+
+func TestStackedReclaimPreservesLeasedResidentBranchAfterPrune(t *testing.T) {
+	root := &model.Task{ID: "root", Name: "Root", Project: "p", Branch: "root-branch"}
+	worker := &model.Task{ID: "worker", Name: "Worker", Project: "p", Branch: "argus/worker", BaseBranch: root.Branch}
+	tip := &model.Task{ID: "tip", Name: "Tip", Project: "p", Branch: "tip-branch", BaseBranch: worker.Branch}
+	d, _, view := residentWorkerNukeFixture(t, worker)
+	repo := initGitRepo(t, t.TempDir())
+	gitRun(t, repo, "branch", root.Branch)
+	gitRun(t, repo, "branch", worker.Branch)
+	gitRun(t, repo, "branch", tip.Branch)
+	gitRun(t, repo, "update-ref", "refs/remotes/origin/"+worker.Branch, worker.Branch)
+	testutil.NoError(t, d.SetProject(worker.Project, config.Project{Path: repo}))
+	testutil.NoError(t, d.Add(root))
+	testutil.NoError(t, d.Add(tip))
+	binding, err := d.HeraLiveBindingByRole(view.RoleID)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.NukeResidentWorkerBinding(view.RoleID, binding.ID, &db.HeraReclaimLease{RepoDir: repo, Branch: worker.Branch, Tip: "old"}))
+	byBase := map[string]*model.Task{root.Branch: worker, worker.Branch: tip}
+	safeTips := map[string]mergesafety.Verdict{tip.Branch: {Safe: true}}
+	repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
+	testutil.NoError(t, err)
+	for _, prune := range []bool{false, true} {
+		if prune {
+			pruned, _, err := d.PruneHeraReclaimedTask(worker.ID)
+			testutil.NoError(t, err)
+			testutil.Equal(t, len(pruned), 1)
+		}
+		deleted := reconcileStackedBranches(context.Background(), d, d.Config(), repository, byBase, root, safeTips, false)
+		testutil.Equal(t, deleted, 0)
+		testutil.True(t, gitBranchExists(repo, worker.Branch))
+	}
+}
+
+func TestStackTasksUseSharedGitRepositoryIdentity(t *testing.T) {
+	repo := initGitRepo(t, t.TempDir())
+	otherRepo := initGitRepo(t, t.TempDir())
+	linked := filepath.Join(t.TempDir(), "linked")
+	gitRun(t, repo, "worktree", "add", "--detach", linked)
+	otherLinked := filepath.Join(t.TempDir(), "other-linked")
+	gitRun(t, otherRepo, "worktree", "add", "--detach", otherLinked)
+	cfg := config.Config{Projects: map[string]config.Project{
+		"local": {Path: repo}, "linked": {Path: linked}, "other": {Path: otherRepo},
+	}}
+	same := &model.Task{ID: "same", Project: "other", Worktree: linked, Branch: "child", BaseBranch: "base"}
+	other := &model.Task{ID: "other", Project: "local", Worktree: otherLinked, Branch: "child", BaseBranch: "base"}
+	repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
+	testutil.NoError(t, err)
+	got := StackTasksInRepository(context.Background(), cfg, repository, []*model.Task{same, other})
+	testutil.Equal(t, len(got), 1)
+	testutil.Equal(t, got["base"], same)
+}
+
+func TestStackedDeletePreservesSuccessorAfterOldTaskDisappears(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initGitRepo(t, t.TempDir())
+	remote := t.TempDir()
+	gitRun(t, remote, "init", "--bare")
+	gitRun(t, repo, "remote", "add", "origin", remote)
+	const branch = "argus/worker"
+	gitRun(t, repo, "branch", branch)
+	gitRun(t, repo, "push", "origin", branch)
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	testutil.NoError(t, d.SetProject("p", config.Project{Path: repo}))
+	old := &model.Task{ID: "old", Name: "Old worker", Project: "p", Branch: branch}
+	testutil.NoError(t, d.Add(old))
+	testutil.NoError(t, d.Delete(old.ID))
+	testutil.NoError(t, d.Add(&model.Task{ID: "new", Name: "New worker", Project: "p", Branch: branch}))
+
+	repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
+	testutil.NoError(t, err)
+	testutil.False(t, DeleteStackedTaskBranch(context.Background(), d, old.ID, repository, branch, agent.TaskGitBranchTip(context.Background(), repo, branch)))
+	gitRun(t, repo, "show-ref", "--verify", "refs/heads/"+branch)
+	gitRun(t, remote, "show-ref", "--verify", "refs/heads/"+branch)
+}
+
+func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
+	for _, name := range []string{"original origin", "changed origin", "changed remote tip", "changed local tip", "linked successor", "checked-out local branch", "paused rebase", "tip moves during deletion", "origin moves during push", "rewritten origin with push hook", "origin path with trailing whitespace", "ambiguous origin line break", "alternate Git config with ambiguous origin"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			repo := initGitRepo(t, t.TempDir())
+			first, second := t.TempDir(), t.TempDir()
+			if name == "origin path with trailing whitespace" {
+				first, second = filepath.Join(first, "origin "), filepath.Join(first, "origin")
+				testutil.NoError(t, os.Mkdir(first, 0o700))
+				testutil.NoError(t, os.Mkdir(second, 0o700))
+			}
+			gitRun(t, first, "init", "--bare")
+			gitRun(t, second, "init", "--bare")
+			gitRun(t, repo, "remote", "add", "origin", first)
+			const branch = "argus/child"
+			gitRun(t, repo, "branch", branch)
+			if name == "paused rebase" {
+				linked := filepath.Join(t.TempDir(), "rebasing checkout")
+				gitRun(t, repo, "worktree", "add", linked, branch)
+				addGitCommit(t, linked, "topic.txt", "topic")
+				addGitCommit(t, repo, "base.txt", "base")
+				rebase := exec.Command("git", "-C", linked, "rebase", "--exec", "false", "master")
+				out, err := rebase.CombinedOutput()
+				testutil.Error(t, err)
+				testutil.Contains(t, string(out), "execution failed")
+				if err := exec.Command("git", "-C", linked, "branch", "-D", "--", branch).Run(); err == nil {
+					t.Fatal("Git must protect the branch while a linked checkout is rebasing")
+				}
+			}
+			gitRun(t, repo, "push", "origin", branch)
+			gitRun(t, repo, "push", second, branch)
+			hookMark := filepath.Join(t.TempDir(), "hook-ran")
+			if name == "ambiguous origin line break" || name == "alternate Git config with ambiguous origin" {
+				gitRun(t, repo, "config", "--replace-all", "remote.origin.pushurl", first+"\n"+second)
+			}
+			if name == "alternate Git config with ambiguous origin" {
+				alternate := filepath.Join(t.TempDir(), "client.gitconfig")
+				testutil.NoError(t, os.WriteFile(alternate, []byte("[remote \"origin\"]\nurl = "+first+"\n"), 0o600))
+				t.Setenv("GIT_CONFIG", alternate)
+			}
+			if name == "rewritten origin with push hook" {
+				gitRun(t, repo, "config", "--add", "url."+first+".insteadOf", "outbound-argus")
+				gitRun(t, repo, "config", "--add", "url."+second+".insteadOf", first)
+				gitRun(t, repo, "remote", "set-url", "--push", "origin", "outbound-argus")
+				hooks := t.TempDir()
+				gitRun(t, repo, "config", "core.hooksPath", hooks)
+				const hook = `#!/bin/sh
+[ "$1" = origin ] || exit 1
+: > "$ARGUS_TEST_STACK_HOOK_MARK"
+`
+				testutil.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-push"), []byte(hook), 0o700))
+				t.Setenv("ARGUS_TEST_STACK_HOOK_MARK", hookMark)
+			}
+			repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
+			testutil.NoError(t, err)
+			tip := agent.TaskGitBranchTip(context.Background(), repo, branch)
+			switch name {
+			case "changed origin":
+				gitRun(t, repo, "remote", "set-url", "origin", second)
+			case "changed remote tip":
+				addGitCommit(t, repo, "new.txt", "new")
+				gitRun(t, repo, "push", first, "HEAD:refs/heads/"+branch)
+			case "changed local tip":
+				addGitCommit(t, repo, "new.txt", "new")
+				gitRun(t, repo, "branch", "-f", branch, "HEAD")
+			case "checked-out local branch":
+				gitRun(t, repo, "worktree", "add", filepath.Join(t.TempDir(), "child"), branch)
+			case "origin moves during push":
+				realGit, err := exec.LookPath("git")
+				testutil.NoError(t, err)
+				bin := t.TempDir()
+				const shim = `#!/bin/sh
+case "$*" in
+  *":refs/heads/argus/child"*) "$ARGUS_TEST_STACK_REAL_GIT" remote set-url origin "$ARGUS_TEST_STACK_REDIRECT" || exit 1 ;;
+esac
+exec "$ARGUS_TEST_STACK_REAL_GIT" "$@"
+`
+				testutil.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(shim), 0o700))
+				t.Setenv("ARGUS_TEST_STACK_REAL_GIT", realGit)
+				t.Setenv("ARGUS_TEST_STACK_REDIRECT", second)
+				t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			case "tip moves during deletion":
+				addGitCommit(t, repo, "new.txt", "new")
+				realGit, err := exec.LookPath("git")
+				testutil.NoError(t, err)
+				bin := t.TempDir()
+				const shim = `#!/bin/sh
+if [ "$1" = update-ref ] && [ "$2" = --no-deref ]; then
+  "$ARGUS_TEST_STACK_REAL_GIT" update-ref refs/heads/argus/child HEAD || exit 1
+fi
+exec "$ARGUS_TEST_STACK_REAL_GIT" "$@"
+`
+				testutil.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(shim), 0o700))
+				t.Setenv("ARGUS_TEST_STACK_REAL_GIT", realGit)
+				t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			}
+			d, err := db.OpenInMemory()
+			testutil.NoError(t, err)
+			t.Cleanup(func() { _ = d.Close() })
+			testutil.NoError(t, d.SetProject("p", config.Project{Path: repo}))
+			testutil.NoError(t, d.Add(&model.Task{ID: "child", Name: "Child", Project: "p", Branch: branch}))
+
+			if name == "linked successor" {
+				linked := filepath.Join(t.TempDir(), "successor")
+				gitRun(t, repo, "worktree", "add", "--detach", linked)
+				testutil.NoError(t, d.SetProject("other", config.Project{Path: initGitRepo(t, t.TempDir())}))
+				testutil.NoError(t, d.Add(&model.Task{ID: "successor", Name: "Successor", Project: "other", Worktree: linked, Branch: branch}))
+			}
+			localDeleted := name == "original origin" || name == "changed remote tip" || name == "origin moves during push" || name == "rewritten origin with push hook" || name == "origin path with trailing whitespace" || name == "ambiguous origin line break" || name == "alternate Git config with ambiguous origin"
+			remoteDeleted := name == "original origin" || name == "checked-out local branch" || name == "paused rebase" || name == "origin moves during push" || name == "rewritten origin with push hook" || name == "origin path with trailing whitespace"
+			testutil.Equal(t, DeleteStackedTaskBranch(context.Background(), d, "child", repository, branch, tip), localDeleted || remoteDeleted)
+			testutil.Equal(t, gitBranchExists(repo, branch), !localDeleted)
+			testutil.Equal(t, gitBranchExists(first, branch), !remoteDeleted)
+			testutil.True(t, gitBranchExists(second, branch))
+			if name == "rewritten origin with push hook" {
+				_, err := os.Stat(hookMark)
+				testutil.NoError(t, err)
+			}
+			if remoteDeleted {
+				testutil.False(t, gitBranchExists(repo, "origin/"+branch))
+			}
+			if name == "tip moves during deletion" {
+				testutil.Equal(t, agent.TaskGitBranchTip(context.Background(), repo, branch), agent.TaskGitBranchTip(context.Background(), repo, "master"))
+			}
+		})
+	}
 }

@@ -38,6 +38,13 @@ func TestFileLoader_NilAndEmptyAreNoOps(t *testing.T) {
 	})
 }
 
+func TestFileLoader_VoiceWebhookURL(t *testing.T) {
+	path := writeFile(t, "[voice]\nwebhook_url = \"http://127.0.0.1:9/hook\"\n")
+	got := NewFileLoader(path).Apply(DefaultConfig())
+	testutil.Equal(t, got.Voice.WebhookURL, "http://127.0.0.1:9/hook")
+	testutil.Equal(t, DefaultConfig().Voice.WebhookURL, "")
+}
+
 func TestFileLoader_MissingFileIsNotAnError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
 	l := NewFileLoader(path)

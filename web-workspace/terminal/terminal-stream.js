@@ -3,9 +3,21 @@ import { log } from '../core/api.js';
 
 const MAX_PENDING_BYTES = 2 * 1024 * 1024;
 
+function snapshotCursor(response) {
+  const pid = outputCursor(response.headers.get('X-Argus-Session-Pid') ?? '0');
+  const recorded = response.headers.get('X-Source') === 'log';
+  return { pid, recorded, cursor: recorded && !pid ? 0 : outputCursor(response.headers.get('X-Output-Total')) };
+}
+
+function requireLiveSnapshot(task, recorded, pid) {
+  if (isInteractive(task) && recorded && !pid) {
+    throw Object.assign(new Error('Waiting for live terminal snapshot'), { status: 409 });
+  }
+}
+
 export class TerminalStream {
   constructor(api, task, signal, hooks) {
-    Object.assign(this, { api, task, signal, hooks, cursor: 0, attempts: 0, version: 0 });
+    Object.assign(this, { api, task, signal, hooks, cursor: 0, pid: 0, attempts: 0, version: 0 });
     this.path = '/api/tasks/' + encodeURIComponent(task.id);
     this.active = true;
     this.pendingBytes = 0;
@@ -15,20 +27,28 @@ export class TerminalStream {
 
   async start() {
     const version = ++this.version;
-    await this.snapshot(undefined, undefined, Infinity, version);
+    try { await this.snapshot(undefined, undefined, Infinity, version); }
+    catch (error) {
+      if (!this.active || version !== this.version) return;
+      if (error.status !== 409) throw error;
+      this.reconnect();
+      return;
+    }
     if (!this.active || version !== this.version) return;
     if (isInteractive(this.task)) this.open();
     else this.hooks.state('Recorded output', 'recorded', false);
   }
 
   async snapshot(size, task, deadline = Infinity, version = this.version) {
-    let bytes = new Uint8Array(), cursor = 0;
+    let bytes = new Uint8Array(), cursor = 0, pid = 0;
     try {
       const signal = requestSignal(this.signal, Math.max(1, Math.min(10000, deadline - Date.now())));
       const response = await this.api.request(this.path + '/output?bytes=1048576', { signal });
       bytes = new Uint8Array(await response.arrayBuffer());
       if (!this.active || version !== this.version) return;
-      cursor = outputCursor(response.headers.get('X-Output-Total'));
+      const snapshot = snapshotCursor(response);
+      requireLiveSnapshot(task ?? this.task, snapshot.recorded, snapshot.pid);
+      ({ cursor, pid } = snapshot);
     } catch (error) {
       if (!this.active || version !== this.version) return;
       if (error.status !== 404) throw error;
@@ -39,6 +59,7 @@ export class TerminalStream {
     else await this.hooks.write(bytes);
     if (!this.active || version !== this.version) return;
     this.cursor = cursor;
+    this.pid = pid;
     this.needsReplacement = false;
     log('terminal', 'snapshot loaded', { bytes: bytes.byteLength });
   }
@@ -68,7 +89,9 @@ export class TerminalStream {
   open() {
     if (!this.active || this.suspended) return;
     this.close();
-    const source = new EventSource(this.api.streamUrl(this.path + '/stream?since=' + this.cursor));
+    const query = new URLSearchParams({ since: this.cursor });
+    if (this.pid) query.set('expected_pid', this.pid);
+    const source = new EventSource(this.api.streamUrl(this.path + '/stream?' + query));
     this.source = source;
     let opened = false;
     const current = () => this.active && this.source === source;
@@ -225,17 +248,20 @@ export class TerminalStream {
       const task=await this.api.json(this.path,{signal});
       if(!this.active || version!==this.version)return;
       const [size,response]=await Promise.all([this.size(task,signal),this.api.request(this.path+'/output?bytes=1048576',{signal})]);
-      const bytes=new Uint8Array(await response.arrayBuffer()),cursor=outputCursor(response.headers.get('X-Output-Total'));
+      const bytes=new Uint8Array(await response.arrayBuffer());
+      const {cursor,pid,recorded}=snapshotCursor(response);
       if(!this.active || version!==this.version)return;
       if(!terminalSize(size))throw new Error('Invalid terminal dimensions');
+      requireLiveSnapshot(task, recorded, pid);
       const current=this.hooks.currentSize?.();
-      const remaining=this.needsReplacement ? null : retainedOutput(this.cursor,cursor,bytes);
+      const remaining=this.needsReplacement || pid!==this.pid || (recorded && !pid)
+        ? null : retainedOutput(this.cursor,cursor,bytes);
       this.hooks.updateTask?.(task);
       this.needsReplacement=true;
       if(remaining && current?.cols===size.cols && current?.rows===size.rows)await this.hooks.write(remaining);
       else await this.hooks.replace(bytes,size,task);
       if(!this.active || version!==this.version)return;
-      this.cursor=cursor;this.task=task;
+      this.cursor=cursor;this.pid=pid;this.task=task;
       this.needsReplacement=false;
       if(isInteractive(task))this.open();else this.hooks.state('Recorded output','recorded',false);
       log('terminal','cached output resumed',{bytes:remaining?.byteLength??bytes.byteLength});

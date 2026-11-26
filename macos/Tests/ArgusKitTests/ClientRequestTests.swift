@@ -192,22 +192,65 @@ struct ClientRequestTests {
 
     // MARK: - Output headers
 
-    @Test("output parses X-Output-Total and X-Source headers")
+    @Test("output parses the cursor and its session PID")
     func outputHeaders() async throws {
         MockURLProtocol.handler = { req in
             let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1",
-                                       headerFields: ["X-Output-Total": "4096", "X-Source": "log",
+                                       headerFields: ["X-Output-Total": "4096", "X-Source": "live",
+                                                      "X-Argus-Session-Pid": "123",
                                                       "Content-Type": "text/plain"])!
             return (resp, Data("terminal bytes".utf8))
         }
         let out = try await makeClient().output(taskID: "t1", tailBytes: 1024, clean: true)
         #expect(out.total == 4096)
-        #expect(out.source == "log")
+        #expect(out.source == "live")
+        #expect(out.sessionPID == 123)
         #expect(String(decoding: out.data, as: UTF8.self) == "terminal bytes")
 
         let items = queryItems(MockURLProtocol.lastRequest)
         #expect(items["bytes"] == "1024")
         #expect(items["clean"] == "1")
+    }
+
+    @Test("output retries a stale snapshot until the replacement is ready")
+    func outputRetriesStaleSession() async throws {
+        MockURLProtocol.handler = { req in
+            let attempt = MockURLProtocol.lock.withLock { MockURLProtocol.requestLog.count }
+            if attempt <= 2 {
+                let response = HTTPURLResponse(url: req.url!, statusCode: 409, httpVersion: "HTTP/1.1",
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, Data(#"{"error":"session changed while reading output","code":"stale_session"}"#.utf8))
+            }
+            let response = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                                           headerFields: ["X-Argus-Session-Pid": "456", "X-Output-Total": "11"])!
+            return (response, Data("replacement".utf8))
+        }
+        let snapshot = try await makeClient().output(taskID: "t1")
+        #expect(snapshot.sessionPID == 456)
+        #expect(snapshot.total == 11)
+        #expect(String(decoding: snapshot.data, as: UTF8.self) == "replacement")
+        #expect(MockURLProtocol.lock.withLock { MockURLProtocol.requestLog.count } == 3)
+    }
+
+    @Test("canceling a stale snapshot stops its retry")
+    func outputCancelsStaleSessionRetry() async {
+        let (requests, signal) = AsyncStream<Void>.makeStream()
+        MockURLProtocol.handler = { req in
+            defer { signal.yield(()) }
+            let response = HTTPURLResponse(url: req.url!, statusCode: 409, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, Data(#"{"code":"stale_session"}"#.utf8))
+        }
+        let client = makeClient()
+        let loading = _Concurrency.Task { try await client.output(taskID: "t1") }
+        var seen = requests.makeAsyncIterator()
+        await seen.next()
+        loading.cancel()
+        if case .success = await loading.result {
+            Issue.record("Canceled terminal snapshot completed successfully")
+        }
+        #expect(MockURLProtocol.lock.withLock { MockURLProtocol.requestLog.count } == 1)
+        signal.finish()
     }
 
     // MARK: - Raw task pin round-trip (add-mac-keybinding-parity Stage 1 red:
@@ -578,13 +621,27 @@ struct ClientRequestTests {
                                  headers: ["Content-Type": "text/event-stream"],
                                  body: Data("data: aGk=\n\n".utf8))
         let client = makeClient()
-        for try await _ in client.terminalStream(taskID: "42", since: 7) { break }
+        for try await _ in client.terminalStream(taskID: "42", since: 7, expectedPID: 42) { break }
 
         let req = MockURLProtocol.lastRequest
         #expect(req?.value(forHTTPHeaderField: "Authorization") == "Bearer secret-token")
         let items = queryItems(req)
         #expect(items["token"] == nil)
         #expect(items["since"] == "7")
+        #expect(items["expected_pid"] == "42")
         #expect(req?.url?.absoluteString.contains("secret-token") == false)
+    }
+
+    @Test("terminal stream parses a stale cursor conflict")
+    func streamStaleCursor() async throws {
+        MockURLProtocol.stubJSON(status: 409, body: Data(#"{"error":"session changed","code":"stale_session"}"#.utf8))
+        do {
+            for try await _ in makeClient().terminalStream(taskID: "42", since: 7, expectedPID: 42) {
+                Issue.record("a rejected cursor must not open a stream")
+            }
+            Issue.record("expected a stale session conflict")
+        } catch let error as ArgusError {
+            #expect(error.isStaleSession)
+        }
     }
 }

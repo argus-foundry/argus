@@ -18,6 +18,7 @@ import (
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/gitutil"
+	herasvc "github.com/argus-foundry/argus/internal/hera"
 	"github.com/argus-foundry/argus/internal/mergesafety"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/tui/hera"
@@ -145,9 +146,11 @@ func (a *App) classifyTasksConcurrentlyVerdicts(ids []string) map[string]mergesa
 // not-safe candidate that never opened a standalone PR of its own, rescued
 // because the stack's tip did.
 type stackedBranchCandidate struct {
-	TaskID string
-	Branch string
-	Tier   string
+	TaskID     string
+	Branch     string
+	Tier       string
+	Repository agent.TaskGitRepository
+	Tip        string
 }
 
 // walkBranchStackForward mirrors internal/hera/reclaim_sweep.go's
@@ -200,18 +203,14 @@ func walkBranchStackForward(x *model.Task, byBaseBranch map[string]*model.Task) 
 // respects) the exclusion this pass and heraReviewStackedBranches offer.
 //
 // A branch the operator has already excluded (db.ExcludedCleanupBranches) is
-// skipped and never re-offered. tipVerdicts is shared across every
-// notSafeIDs candidate processed in this single (sequential, not concurrent)
-// call, so a stack tip common to several candidates is classified — and, for
-// Tier B, network-queried — exactly once (mergesafety.ClassifyStackInferred's
-// own contract); since this function never fans candidates out across
-// goroutines, tipVerdicts needs no synchronization of its own here.
+// skipped and never re-offered. Verdicts are reused within one Git repository
+// so similarly named refs in another repository cannot share merge evidence.
 //
 // MUST be called off the UI thread — Tier A/B classification shells out to
 // git and, for Tier B, the network. Local-mode only (needs a real *db.DB);
 // returns nil in remote mode, matching every other *db.DB-specific helper in
 // this file.
-func (a *App) classifyStackedBranchesForCascade(ctx context.Context, notSafeIDs []string, inCascade map[string]bool, tipVerdicts map[string]mergesafety.Verdict) []stackedBranchCandidate {
+func (a *App) classifyStackedBranchesForCascade(ctx context.Context, notSafeIDs []string, inCascade map[string]bool) []stackedBranchCandidate {
 	d, ok := a.db.(*db.DB)
 	if !ok {
 		return nil
@@ -220,50 +219,58 @@ func (a *App) classifyStackedBranchesForCascade(ctx context.Context, notSafeIDs 
 	if err != nil {
 		return nil
 	}
-	byBaseBranch := make(map[string]*model.Task, len(allTasks))
 	byID := make(map[string]*model.Task, len(allTasks))
 	for _, t := range allTasks {
 		byID[t.ID] = t
-		if t.BaseBranch != "" {
-			byBaseBranch[t.BaseBranch] = t
-		}
 	}
 
 	cfg := d.Config()
 	var out []stackedBranchCandidate
-	seenBranch := make(map[string]bool)
+	type repositoryBranch struct{ repository, branch string }
+	seenBranch := make(map[repositoryBranch]bool)
+	type mergeTarget struct{ repository, slug, defaultRef, defaultShort string }
+	tipVerdictsByTarget := make(map[mergeTarget]map[string]mergesafety.Verdict)
 	for _, id := range notSafeIDs {
 		x := byID[id]
 		if x == nil {
 			continue
 		}
-		chain, _, ok := walkBranchStackForward(x, byBaseBranch)
-		if !ok || len(chain) == 0 {
-			continue // no descendant in this scope, or a cycle — nothing to rescue
-		}
-
-		repoDir := agent.ResolveDir(x, cfg)
-		if repoDir == "" {
+		directory := agent.ResidentCleanupRepository(ctx, x.Worktree, agent.ResolveDir(x, cfg))
+		repo, err := agent.CaptureTaskGitRepository(ctx, directory)
+		if err != nil {
 			continue
 		}
-		repoSlug := ""
-		if slug, slugOK := gitutil.ResolveDefaultRepo(ctx, repoDir); slugOK {
-			repoSlug = slug
+		identity, err := agent.TaskGitRepositoryIDForTask(ctx, x, cfg)
+		if err != nil || !agent.SamePath(identity, repo.CommonDir) {
+			continue
 		}
-		proj := cfg.Projects[x.Project]
-		defaultShort, defaultRef, dErr := gitutil.ResolveDefaultBranch(repoDir, proj.Branch)
+		repoDir := repo.Directory
+		byBaseBranch := herasvc.StackTasksInRepository(ctx, cfg, repo, allTasks)
+		chain, _, ok := walkBranchStackForward(x, byBaseBranch)
+		if !ok || len(chain) == 0 {
+			continue
+		}
+		repoSlug, defaultRef, defaultShort, dErr := herasvc.StackMergeSafetyContext(ctx, cfg, x, repo)
 		if dErr != nil {
 			continue
 		}
+		target := mergeTarget{repo.Stamp, repoSlug, defaultRef, defaultShort}
+		tipVerdicts := tipVerdictsByTarget[target]
+		if tipVerdicts == nil {
+			tipVerdicts = make(map[string]mergesafety.Verdict)
+			tipVerdictsByTarget[target] = tipVerdicts
+		}
 
 		for _, y := range chain {
-			if inCascade[y.ID] || seenBranch[y.Branch] {
+			key := repositoryBranch{repo.Stamp, y.Branch}
+			if inCascade[y.ID] || seenBranch[key] {
 				continue
 			}
 			excluded, eErr := d.ExcludedCleanupBranches(y.ID)
 			if eErr != nil || slices.Contains(excluded, y.Branch) {
 				continue
 			}
+			expectedTip := agent.TaskGitBranchTip(ctx, repoDir, y.Branch)
 			v, vErr := a.classifyStackInferredFn(ctx, mergesafety.StackParams{
 				Task:         y,
 				ByBaseBranch: byBaseBranch,
@@ -275,8 +282,8 @@ func (a *App) classifyStackedBranchesForCascade(ctx context.Context, notSafeIDs 
 			if vErr != nil || !v.Safe {
 				continue
 			}
-			seenBranch[y.Branch] = true
-			out = append(out, stackedBranchCandidate{TaskID: y.ID, Branch: y.Branch, Tier: v.Tier})
+			seenBranch[key] = true
+			out = append(out, stackedBranchCandidate{TaskID: y.ID, Branch: y.Branch, Tier: v.Tier, Repository: repo, Tip: expectedTip})
 		}
 	}
 	return out

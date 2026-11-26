@@ -2229,7 +2229,7 @@ async function api(path, opts = {}) {
     if (!isUpload) baseHeaders['Content-Type'] = 'application/json';
     const r = await fetch(API + path, {
       ...fetchOpts,
-      signal: controller.signal,
+      signal: fetchOpts.signal ? AbortSignal.any([controller.signal, fetchOpts.signal]) : controller.signal,
       headers: { ...baseHeaders, ...(fetchOpts.headers || {}) }
     });
     if (r.status === 401) { logout(); throw new Error('unauthorized'); }
@@ -2242,6 +2242,7 @@ async function api(path, opts = {}) {
 function logout() {
   localStorage.removeItem('argus-token');
   TOKEN = '';
+  closeDetail();
   stopProviderUsage();
   // Stop the poll loop. Without this, setInterval keeps calling refresh(),
   // which 401s with the empty token and would trip the offline screen
@@ -2307,6 +2308,8 @@ async function refresh() {
         // Mirror openDetail()'s window.currentTask write so Playwright specs
         // and any test hook reading `window.currentTask` see live state.
         window.currentTask = fresh;
+        const title = document.getElementById('detail-title');
+        if (title.textContent !== fresh.name) title.textContent = fresh.name;
         if (menuChanged) {
           document.getElementById('detail-subtitle').textContent =
             `${fresh.project} · ${statusLabel(effectiveStatus(fresh))}${fresh.elapsed ? ' · ' + fresh.elapsed : ''}`;
@@ -2318,7 +2321,7 @@ async function refresh() {
           // the user may still be reading agent output and the keyboard
           // suddenly disappearing mid-conversation would be jarring. A live
           // session going active↔idle is NOT a flip: it stays interactive.
-          if (!wasInteractive && isInteractive(fresh)) {
+          if (!terminalRecovery && !wasInteractive && isInteractive(fresh)) {
             attachTerminal(fresh);
             // resumeTask() awaits refresh() and would call attachTerminal a
             // second time; signal that this branch already handled it so it
@@ -2359,8 +2362,7 @@ function showOffline() {
   // Tear down terminal/SSE so we don't leave the EventSource auto-reconnecting
   // in the background while the offline view is showing. The detail view also
   // closes so the user lands on the task list when reconnect succeeds.
-  closeStream();
-  destroyTerm();
+  detachTaskTerminal();
   closeOverflowMenu();
   closePromptModal();
   closeInputsModal();
@@ -2369,7 +2371,6 @@ function showOffline() {
   closeArtifactsView();
   const dv = document.getElementById('detail-view');
   if (dv) { dv.classList.remove('open'); dv.style.transform = ''; }
-  currentTask = null;
   document.getElementById('main-app').style.display = 'none';
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('offline-screen').classList.add('shown');
@@ -2672,9 +2673,15 @@ function effectiveStatus(t) {
 }
 
 // --- Task Detail ---
+let detailViewGen = 0;
+
 async function openDetail(id) {
-  currentTask = tasks.find(t => t.id === id);
-  if (!currentTask) return;
+  const task = tasks.find(t => t.id === id);
+  if (!task) return;
+  cancelTerminalRecovery();
+  ++detailViewGen;
+  currentTask = task;
+  setActionButtons(false);
   dropRestartQueue();
   // Test hook: top-level `let` doesn't auto-attach to window, but Playwright
   // specs need to read/mutate the active task to drive paths like the empty
@@ -2716,12 +2723,20 @@ async function openDetail(id) {
 // attach an SSE stream for the previous task on top of the new task's
 // terminal.
 let attachGen = 0;
+let attachmentAbort = null;
 
-async function attachTerminal(task) {
+async function attachTerminal(task, recovery = null) {
+  if (!task || currentTask?.id !== task.id || (!recovery && terminalRecovery)) return false;
+  attachmentAbort?.abort();
+  attachmentAbort = new AbortController();
+  const signal = recovery
+    ? AbortSignal.any([attachmentAbort.signal, recovery.controller.signal])
+    : attachmentAbort.signal;
   closeStream();
   destroyTerm();
 
   const myGen = ++attachGen;
+  if (recovery) recovery.generation = myGen;
 
   // Always mount xterm. Non-running tasks (Done / Pending / In Review) replay
   // their scrollback through the same widget so escape sequences are executed
@@ -2745,15 +2760,20 @@ async function attachTerminal(task) {
     // then attaches live -- no gap, no duplicate. The previous path skipped
     // the disk replay and only got the 256KB ring buffer via SSE, silently
     // truncating history for any session that emitted more than that.
-    const result = await loadStaticOutput(task.id);
-    if (myGen !== attachGen) return;
+    const result = await loadStaticOutput(task.id, signal);
+    if (myGen !== attachGen || currentTask?.id !== task.id || !term) return false;
+    if (result.stale || result.source === 'log') {
+      if (!recovery) pollAndRecoverFromRerenderExit(task.id);
+      return false;
+    }
     // result.ok=false (404 / 5xx / network) is intentionally NOT a gate
     // here: the SSE stream can still deliver live output even if the disk
     // fetch failed. loadStaticOutput already wrote a "(no output yet)" or
     // "(failed to load output)" placeholder into xterm; with since=0 the
     // server replays the full ring (legacy AddWriter behaviour), so the
     // user always gets *something* without a stuck "connecting…" state.
-    openStream(task.id, result.since);
+    const accepted = openStream(task.id, result.since, result.pid, recovery?.controller.signal);
+    if (recovery && !await accepted) return false;
   } else {
     // Non-interactive: in_progress with no live session (ghost or mid
     // kill+resume restart) or truly stopped (pending / in_review / complete). Both paths just replay the
@@ -2764,8 +2784,9 @@ async function attachTerminal(task) {
     // the overflow menu when applicable, which is enough recovery surface
     // and avoids a jarring modal every time the user enters the view.
     document.getElementById('term-status').style.display = 'none';
-    await loadStaticOutput(task.id);
+    await loadStaticOutput(task.id, signal);
   }
+  return myGen === attachGen;
 }
 
 // isCtrlZ reports whether a KeyboardEvent is a bare Ctrl+Z — the SIGTSTP
@@ -2969,7 +2990,7 @@ const RESTART_FLUSH_SETTLE_MS = 500;       // let the resumed TUI enter raw mode
 let restartQueue = null; // { taskId, items: string[], bytes, recovering, flushing, timer }
 // Task whose recovery poll is running. Separate from the queue so a late exit
 // event / 404'd stream can't start a second loop after the queue was dropped.
-let recoveringTaskId = null;
+let terminalRecovery = null;
 
 function armRestartWatchdog() {
   const q = restartQueue;
@@ -3546,7 +3567,7 @@ function keepPlaceOnScroll() {
   postResize(currentTask.id, lastTerm.cols, lastTerm.rows);
 }
 
-function openStream(id, since) {
+function openStream(id, since, pid, recoverySignal) {
   // EventSource doesn't support custom headers, so pass the token as a query
   // param. Auth middleware accepts both Bearer headers and ?token=.
   // `since` is the byte cursor returned by /output as X-Output-Total -- the
@@ -3558,15 +3579,33 @@ function openStream(id, since) {
   if (typeof since === 'number' && since > 0) {
     url += '&since=' + since;
   }
+  if (Number.isSafeInteger(pid) && pid > 0) {
+    url += '&expected_pid=' + pid;
+  }
   const es = new EventSource(url);
   evtSource = es;
+  let awaitingAcceptance = Boolean(recoverySignal);
+  let resolveAcceptance;
+  const accepted = new Promise(resolve => { resolveAcceptance = resolve; });
+  const settleAcceptance = value => {
+    awaitingAcceptance = false;
+    recoverySignal?.removeEventListener('abort', abortAttempt);
+    resolveAcceptance(value);
+  };
+  const abortAttempt = () => {
+    if (evtSource === es) closeStream();
+    settleAcceptance(false);
+  };
+  recoverySignal?.addEventListener('abort', abortAttempt, { once: true });
   es.onopen = () => {
+    if (evtSource !== es) return;
+    settleAcceptance(true);
     showTermStatus('live', 'live');
     // See flushRestartQueueWhenLive for why this isn't an unconditional flush.
     if (restartQueue && restartQueue.taskId === id) flushRestartQueueWhenLive(id);
   };
   es.onmessage = (e) => {
-    if (!term) return;
+    if (evtSource !== es || !term) return;
     try {
       const bytes = b64ToBytes(e.data);
       bufferOrWrite(bytes);
@@ -3575,6 +3614,7 @@ function openStream(id, since) {
     }
   };
   es.addEventListener('exit', (e) => {
+    if (evtSource !== es) return;
     closeStream();
     // Two signals indicate a rerender restart is in flight:
     //   1. The exit event payload's `rerendering` field — the daemon
@@ -3601,6 +3641,7 @@ function openStream(id, since) {
     }
   });
   es.addEventListener('clipboard', (e) => {
+    if (evtSource !== es) return;
     try {
       const payload = JSON.parse(e.data);
       if (payload.cleared) {
@@ -3613,11 +3654,18 @@ function openStream(id, since) {
     }
   });
   es.onerror = () => {
+    if (evtSource !== es) return;
     if (es.readyState === EventSource.CLOSED) {
+      if (awaitingAcceptance) {
+        closeStream();
+        settleAcceptance(false);
+        return;
+      }
       // The stream 404s when it was opened inside the restart gap (the
       // resize kick can land before openStream). EventSource won't retry an
       // HTTP error, so run the same recovery the exit event would.
-      if (restartQueue && restartQueue.taskId === id) {
+      if (evtSource === es && ((restartQueue && restartQueue.taskId === id) || pid > 0)) {
+        closeStream();
         pollAndRecoverFromRerenderExit(id);
         return;
       }
@@ -3627,6 +3675,7 @@ function openStream(id, since) {
     }
     // EventSource auto-reconnects unless we explicitly close. Let it.
   };
+  return accepted;
 }
 
 function closeStream() {
@@ -3634,6 +3683,20 @@ function closeStream() {
     try { evtSource.close(); } catch(e) {}
     evtSource = null;
   }
+}
+
+function detachTaskTerminal() {
+  ++detailViewGen;
+  setActionButtons(false);
+  ++attachGen;
+  attachmentAbort?.abort();
+  attachmentAbort = null;
+  cancelTerminalRecovery();
+  closeStream();
+  dropRestartQueue();
+  destroyTerm();
+  currentTask = null;
+  window.currentTask = null;
 }
 
 // After an SSE `event: exit` triggered by a daemon-initiated rerender, poll
@@ -3645,31 +3708,63 @@ function closeStream() {
 // (typical 1-3s, sometimes longer on cold sandbox) much better than a fixed
 // timeout. If the user navigated away in the meantime, no-op.
 async function pollAndRecoverFromRerenderExit(id) {
-  if (!currentTask || currentTask.id !== id) { dropRestartQueue(); return; }
-  // The exit event and a 404'd stream can both fire for one restart.
-  if (recoveringTaskId === id) return;
-  recoveringTaskId = id;
+  if (currentTask?.id !== id) return;
+  if (terminalRecovery?.id === id && terminalRecovery.generation === attachGen) return;
+  cancelTerminalRecovery();
+  const recovery = { id, generation: attachGen, controller: new AbortController() };
+  terminalRecovery = recovery;
+  const deadline = setTimeout(() => {
+    if (!ownsTerminalRecovery(recovery)) return;
+    ++attachGen;
+    endTerminalRecovery(recovery);
+    recovery.controller.abort();
+    terminalRecovery = null;
+  }, 15000);
   try {
-    await recoverFromRerenderExit(id);
+    await recoverFromRerenderExit(recovery);
   } finally {
-    if (recoveringTaskId === id) recoveringTaskId = null;
+    clearTimeout(deadline);
+    if (terminalRecovery === recovery) terminalRecovery = null;
   }
 }
 
-async function recoverFromRerenderExit(id) {
+function ownsTerminalRecovery(recovery) {
+  return terminalRecovery === recovery && currentTask?.id === recovery.id && attachGen === recovery.generation;
+}
+
+function cancelTerminalRecovery() {
+  if (!terminalRecovery) return;
+  const id = terminalRecovery.id;
+  terminalRecovery.controller.abort();
+  terminalRecovery = null;
+  if (restartQueue?.taskId === id) {
+    restartQueue.recovering = false;
+    armRestartWatchdog();
+  }
+}
+
+function endTerminalRecovery(recovery) {
+  if (restartQueue?.taskId === recovery.id) {
+    dropRestartQueue();
+    showToast('Agent did not restart — queued input discarded');
+  }
+  showTermStatus('session ended', 'error');
+}
+
+async function recoverFromRerenderExit(recovery) {
+  const { id, controller } = recovery;
   beginRestartQueue(id);
   restartQueue.recovering = true;
   showTermStatus('rerendering…', 'reconnecting');
-  const start = Date.now();
-  const deadline = start + 15000; // 15s upper bound — covers cold-start sandboxed Claude/Codex
-  while (Date.now() < deadline) {
-    if (!currentTask || currentTask.id !== id) { dropRestartQueue(); return; } // user moved on
+  while (ownsTerminalRecovery(recovery)) {
     try {
       const res = await fetch(API + `/api/tasks/${id}`, {
+        signal: controller.signal,
         headers: { 'Authorization': 'Bearer ' + TOKEN }
       });
       if (res.ok) {
         const t = await res.json();
+        if (!ownsTerminalRecovery(recovery)) return;
         // Wait for the restarted session to actually exist. Status stays
         // in_progress through the whole kill+resume gap, so a status-only
         // check attached immediately: the compose bar mounted over a stream
@@ -3681,27 +3776,23 @@ async function recoverFromRerenderExit(id) {
         if (isInteractive(t)) {
           currentTask = t;
           window.currentTask = t;
-          attachTerminal(t);
-          // Recovery is done; the new stream's onopen flushes (after a live
-          // check). Hand the deadline back to the watchdog so a stream that
-          // never opens can't strand the queue.
-          if (restartQueue && restartQueue.taskId === id) {
-            restartQueue.recovering = false;
-            armRestartWatchdog();
+          const attached = await attachTerminal(t, recovery);
+          if (!ownsTerminalRecovery(recovery)) return;
+          if (attached) {
+            if (restartQueue?.taskId === id) {
+              restartQueue.recovering = false;
+              armRestartWatchdog();
+            }
+            return;
           }
-          return;
         }
       }
     } catch (e) {
       // Transient network error — fall through to retry.
     }
-    await new Promise(r => setTimeout(r, 250));
+    if (ownsTerminalRecovery(recovery)) await new Promise(r => setTimeout(r, 250));
   }
-  if (restartQueue && restartQueue.taskId === id) {
-    dropRestartQueue();
-    showToast('Agent did not restart — queued input discarded');
-  }
-  showTermStatus('session ended', 'error');
+  if (ownsTerminalRecovery(recovery)) endTerminalRecovery(recovery);
 }
 
 // --- Agent-staged clipboard ---
@@ -3819,7 +3910,9 @@ function b64ToBytes(s) {
   return out;
 }
 
-async function loadStaticOutput(id) {
+async function loadStaticOutput(id, signal) {
+  const target = term;
+  const current = () => target && term === target && !signal?.aborted;
   // Replay raw PTY bytes into the xterm widget so the user sees the same final
   // screen the agent rendered. NO `clean=1` — xterm.js's parser executes the
   // ANSI sequences itself, and the server-side sanitizer's regex doesn't fully
@@ -3838,23 +3931,24 @@ async function loadStaticOutput(id) {
   // for active tasks then opens an SSE stream) still gets a live attach.
   let r;
   try {
-    r = await api(`/api/tasks/${id}/output?bytes=${STATIC_OUTPUT_MAX_BYTES}`);
+    r = await api(`/api/tasks/${id}/output?bytes=${STATIC_OUTPUT_MAX_BYTES}`, { signal });
   } catch(e) {
-    if (term) term.write('\x1b[31m(failed to load output)\x1b[0m\r\n');
+    if (current()) target.write('\x1b[31m(failed to load output)\x1b[0m\r\n');
     return { since: 0, ok: false };
   }
   // Race: user navigated away before the fetch resolved.
-  if (!term) return { since: 0, ok: false };
+  if (!current()) return { since: 0, ok: false };
   if (!r.ok) {
+    if (r.status === 409) return { since: 0, ok: false, stale: true };
     // 404 = no log yet (Pending task that never started). "no output yet"
     // reads better than "no output available" for the common Pending case
     // since the user can still resume the task to populate it. Other errors
     // are flagged red as a real failure.
     if (r.status === 404) {
-      term.write('\x1b[2m(no output yet)\x1b[0m\r\n');
+      target.write('\x1b[2m(no output yet)\x1b[0m\r\n');
       return { since: 0, ok: true };
     }
-    term.write('\x1b[31m(failed to load output)\x1b[0m\r\n');
+    target.write('\x1b[31m(failed to load output)\x1b[0m\r\n');
     return { since: 0, ok: false };
   }
   // X-Output-Total is the disk-log byte size at read time. Pair it with
@@ -3870,26 +3964,46 @@ async function loadStaticOutput(id) {
   // through the URL param.
   const totalHeader = r.headers.get('X-Output-Total');
   const since = totalHeader ? Number(totalHeader) : 0;
-  const buf = await r.arrayBuffer();
-  if (!term) return { since, ok: false };
+  const pid = Number(r.headers.get('X-Argus-Session-Pid') || 0);
+  const source = r.headers.get('X-Source') || '';
+  let buf;
+  try {
+    buf = await r.arrayBuffer();
+  } catch (e) {
+    if (current()) target.write('\x1b[31m(failed to load output)\x1b[0m\r\n');
+    return { since: 0, ok: false };
+  }
+  if (!current()) return { since, ok: false };
   if (buf.byteLength === 0) {
-    term.write('\x1b[2m(no output yet)\x1b[0m\r\n');
-    return { since, ok: true };
+    target.write('\x1b[2m(no output yet)\x1b[0m\r\n');
+    return { since, pid, source, ok: true };
   }
   // Defer the write until after setupTerm()'s rAF fit() has set proper
   // dimensions — writing into a default 80x24 terminal would misplace cursor
   // moves in the replay. fetch + arrayBuffer are typically 5+ms even on
   // localhost which usually wins the race, but the explicit double-rAF makes
   // it deterministic.
-  await new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
-  if (!term) return { since, ok: false };
+  await waitForTerminalRender(done => requestAnimationFrame(() => requestAnimationFrame(done)), signal);
+  if (!current()) return { since, ok: false };
   // Uint8Array (not string) preserves raw bytes — high-byte content in status
   // bars round-trips through JS's UTF-8 string path otherwise. Same pattern as
   // the SSE write path (see web-remote gotcha "base64 SSE chunks → Uint8Array").
-  term.write(new Uint8Array(buf), () => {
-    if (term) term.scrollToBottom();
+  await waitForTerminalRender(done => target.write(new Uint8Array(buf), done), signal);
+  if (!current()) return { since, ok: false };
+  target.scrollToBottom();
+  return { since, pid, source, ok: true };
+}
+
+function waitForTerminalRender(schedule, signal) {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise(resolve => {
+    const canceled = () => resolve();
+    signal?.addEventListener('abort', canceled, { once: true });
+    schedule(() => {
+      signal?.removeEventListener('abort', canceled);
+      resolve();
+    });
   });
-  return { since, ok: true };
 }
 
 function renderOverflowMenu() {
@@ -4141,11 +4255,13 @@ function setActionButtons(disabled) {
 let resumeReattachHandled = false;
 
 async function resumeTask() {
-  if (actionBusy) return;
+  if (actionBusy || !currentTask) return;
+  const id = currentTask.id;
+  const view = detailViewGen;
   setActionButtons(true);
   resumeReattachHandled = false;
   try {
-    const r = await api(`/api/tasks/${currentTask.id}/resume`, { method: 'POST' });
+    const r = await api(`/api/tasks/${id}/resume`, { method: 'POST' });
     if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'resume failed'); }
     // refresh() syncs currentTask + subtitle + overflow menu inline when a
     // watched field flips. For a non-interactive \u2192 interactive flip the
@@ -4154,62 +4270,80 @@ async function resumeTask() {
     // complete \u2192 in_progress) don't hit that branch, so we fall
     // through to attach here.
     await refresh();
-    if (!resumeReattachHandled) attachTerminal(currentTask);
+    if (view === detailViewGen && !resumeReattachHandled) attachTerminal(currentTask);
   } catch(e) {
-    showToast('Resume failed: ' + e.message);
+    if (view === detailViewGen) showToast('Resume failed: ' + e.message);
   } finally {
-    setActionButtons(false);
+    if (view === detailViewGen) setActionButtons(false);
   }
 }
 
 async function renameTask() {
   if (!currentTask) return;
+  const { id } = currentTask;
+  const view = detailViewGen;
   const next = prompt('Rename task', currentTask.name);
   if (!next || next === currentTask.name) return;
   try {
-    const r = await api(`/api/tasks/${currentTask.id}/rename`, {
+    const r = await api(`/api/tasks/${id}/rename`, {
       method: 'POST',
       body: JSON.stringify({ name: next }),
     });
     if (!r.ok) throw new Error((await r.json()).error || 'rename failed');
-    currentTask.name = next;
-    document.getElementById('detail-title').textContent = next;
+    if (view === detailViewGen) {
+      currentTask.name = next;
+      document.getElementById('detail-title').textContent = next;
+    }
     refresh();
-  } catch(e) { showToast('Rename failed: ' + e.message); }
+  } catch(e) { if (view === detailViewGen) showToast('Rename failed: ' + e.message); }
 }
 
 async function forkTask() {
   if (!currentTask) return;
+  const { id } = currentTask;
+  const view = detailViewGen;
   const name = prompt('Fork name', currentTask.name + '-fork');
   if (!name) return;
   try {
-    const r = await api(`/api/tasks/${currentTask.id}/fork`, {
+    const r = await api(`/api/tasks/${id}/fork`, {
       method: 'POST',
       body: JSON.stringify({ name }),
     });
     if (!r.ok) throw new Error((await r.json()).error || 'fork failed');
     const created = await r.json();
-    closeDetail();
     await refresh();
-    if (created.id) openDetail(created.id);
-  } catch(e) { showToast('Fork failed: ' + e.message); }
+    if (view !== detailViewGen) return;
+    if (created.id && tasks.some(task => task.id === created.id)) openDetail(created.id);
+    else closeDetail();
+  } catch(e) { if (view === detailViewGen) showToast('Fork failed: ' + e.message); }
 }
 
 async function setArchive(archived) {
   if (!currentTask) return;
+  const { id } = currentTask;
+  const view = detailViewGen;
   try {
     const path = archived ? 'archive' : 'unarchive';
-    const r = await api(`/api/tasks/${currentTask.id}/${path}`, { method: 'POST' });
+    const r = await api(`/api/tasks/${id}/${path}`, { method: 'POST' });
     if (!r.ok) {
       // A hera-bound task can be refused (409) with the hera verdict's reason.
       let msg = 'archive failed';
       try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (_) {}
       throw new Error(msg);
     }
-    currentTask.archived = archived;
-    closeDetail();
+    if (currentTask?.id === id) {
+      if (view === detailViewGen) {
+        closeDetail();
+      } else {
+        const reopened = detailViewGen;
+        const latest = await api(`/api/tasks/${id}`);
+        const fresh = latest.ok ? await latest.json() : null;
+        if (reopened === detailViewGen && (latest.status === 404 ||
+            (fresh && (fresh.archived === true) !== (listFilter === FILTER_ARCHIVED)))) closeDetail();
+      }
+    }
     refresh();
-  } catch(e) { showToast(e.message); }
+  } catch(e) { if (view === detailViewGen) showToast(e.message); }
 }
 
 function setListFilter(f) {
@@ -4250,27 +4384,27 @@ function clearTaskSearch() {
 }
 
 async function deleteTask() {
-  if (actionBusy) return;
+  if (actionBusy || !currentTask) return;
+  const { id } = currentTask;
+  const view = detailViewGen;
   if (!confirm('Delete task "' + currentTask.name + '"?')) return;
   setActionButtons(true);
   try {
-    const id = currentTask.id;
-    await api(`/api/tasks/${id}`, { method: 'DELETE' });
+    const r = await api(`/api/tasks/${id}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error((await r.json()).error || 'delete failed');
     try { localStorage.removeItem(inputHistoryKey(id)); } catch {}
     inputBuffers.delete(id);
-    closeDetail();
+    if (currentTask?.id === id) closeDetail();
     refresh();
   } catch(e) {
-    showToast('Delete failed: ' + e.message);
+    if (view === detailViewGen) showToast('Delete failed: ' + e.message);
   } finally {
-    setActionButtons(false);
+    if (view === detailViewGen) setActionButtons(false);
   }
 }
 
 function closeDetail() {
-  closeStream();
-  dropRestartQueue();
-  destroyTerm();
+  detachTaskTerminal();
   closeOverflowMenu();
   closeFilesView();
   closeArtifactsView();
@@ -4282,14 +4416,13 @@ function closeDetail() {
   // so the next opened task gets a fresh field.
   const ci = document.getElementById('compose-input');
   if (ci) ci.value = '';
-  currentTask = null;
-  window.currentTask = null;
   const dv = document.getElementById('detail-view');
   dv.classList.remove('open');
   dv.style.transform = '';
   const header = dv.querySelector('.detail-header');
   if (header) header.classList.remove('compact');
-  document.getElementById('tasks-view').style.display = 'block';
+  const selectedTab = document.querySelector('.tab.active')?.dataset.tab;
+  document.getElementById('tasks-view').style.display = selectedTab === 'tasks' ? 'block' : 'none';
 }
 
 // --- Original Prompt Modal ---
@@ -5913,8 +6046,7 @@ function switchTab(tab) {
   closeInputsModal();
   closeLinksModal();
   closeHotkeysModal();
-  closeStream();
-  destroyTerm();
+  detachTaskTerminal();
   stopSystemMetrics(); // halt the metrics poller; loadSettings restarts it for the Settings tab
   stopProviderUsage();
   if (tab === 'tasks') refresh();
