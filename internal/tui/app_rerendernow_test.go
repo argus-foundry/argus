@@ -9,6 +9,7 @@ import (
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 	"github.com/argus-foundry/argus/internal/uxlog"
@@ -55,14 +56,73 @@ func TestRerenderNow_IdleDrift_Kicks_SettingOff(t *testing.T) {
 	r.press(t, 100, nil, nil, "kicked")
 	waitRerender(t, r.sess.stopCalled.Load)
 	testutil.Equal(t, agent.StopScope(r.sess.stopScope.Load()), agent.StopRerender)
-	readUI(t, r.app.tapp, func() { testutil.True(t, r.app.pendingRerenderRestart[r.task.ID]) })
+	readUI(t, r.app.tapp, func() { testutil.True(t, r.app.hasPendingRerenderRestart(r.task.ID)) })
 }
 
 func TestRerenderNow_NoDrift_IsNoop(t *testing.T) {
 	r := newNowRig(t, "hk-noop", 100)
 	r.press(t, 105, nil, nil, "noop-no-drift") // 5 cols < margin
 	testutil.False(t, r.sess.stopCalled.Load())
-	readUI(t, r.app.tapp, func() { testutil.False(t, r.app.pendingRerenderRestart[r.task.ID]) })
+	readUI(t, r.app.tapp, func() { testutil.False(t, r.app.hasPendingRerenderRestart(r.task.ID)) })
+}
+
+func TestRerenderNow_ConfirmedStopFencesDeferredRestart(t *testing.T) {
+	r := newNowRig(t, "hk-stop", 20)
+	d := r.app.db.(*db.DB)
+	r.press(t, 100, nil, nil, "kicked")
+	readUI(t, r.app.tapp, func() {
+		testutil.True(t, r.app.hasPendingRerenderRestart(r.task.ID))
+		r.app.mode = modeAgent
+		r.app.agentState.Reset(r.task.ID, r.task.Name)
+		r.app.agentPane.SetSession(r.sess)
+	})
+
+	testutil.NoError(t, d.RecordSessionStop(r.task.ID))
+	runner := &recordStartRunner{Runner: agent.NewRunner(nil), started: make(chan *model.Task, 1)}
+	readUI(t, r.app.tapp, func() {
+		r.app.runner = runner
+		r.app.handleSessionExitUI(r.task.ID, false, false)
+		testutil.False(t, r.app.hasPendingRerenderRestart(r.task.ID))
+		testutil.Nil(t, r.app.agentPane.Session())
+	})
+	testutil.Equal(t, len(runner.started), 0)
+	stored, err := d.Get(r.task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, stored.Status, model.StatusInReview)
+}
+
+func TestRerenderNow_ConfirmedStopPreventsKickOfDrainingSession(t *testing.T) {
+	r := newNowRig(t, "hk-stopping", 20)
+	d := r.app.db.(*db.DB)
+	testutil.NoError(t, d.RecordSessionStop(r.task.ID))
+	r.press(t, 100, nil, nil, "error")
+	testutil.False(t, r.sess.stopCalled.Load())
+	readUI(t, r.app.tapp, func() {
+		testutil.False(t, r.app.hasPendingRerenderRestart(r.task.ID))
+	})
+}
+
+func TestRerenderNow_OldExitDoesNotClobberManualResume(t *testing.T) {
+	r := newNowRig(t, "hk-resumed", 20)
+	d := r.app.db.(*db.DB)
+	r.press(t, 100, nil, nil, "kicked")
+	testutil.NoError(t, d.RecordSessionStop(r.task.ID))
+	replacement := &fakeKickSession{pid: 32, alive: true, initCols: 100}
+	testutil.NoError(t, d.RecordResumedSession(r.task.ID, replacement.pid, r.task.SessionID, r.task.SessionID))
+
+	readUI(t, r.app.tapp, func() {
+		r.app.runner = getRunner{Runner: agent.NewRunner(nil), sess: replacement}
+		r.app.mode = modeAgent
+		r.app.agentState.Reset(r.task.ID, r.task.Name)
+		r.app.agentPane.SetTaskID(r.task.ID)
+		r.app.handleSessionExitUI(r.task.ID, false, false)
+		testutil.False(t, r.app.hasPendingRerenderRestart(r.task.ID))
+		testutil.True(t, r.app.agentPane.Session() == replacement)
+	})
+	stored, err := d.Get(r.task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, stored.Status, model.StatusInProgress)
+	testutil.Equal(t, stored.AgentPID, replacement.pid)
 }
 
 // The hotkey bypasses the attach cache (a second press at the same width is not

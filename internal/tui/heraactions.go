@@ -1129,7 +1129,13 @@ func (a *App) heraDoForceRecycle(role *hera.RoleView) {
 		a.statusbar.SetError("Force recycle: unavailable in this mode")
 		return
 	}
-	taskID := roleReclaimTask(role)
+	binding, err := d.HeraLiveBindingByRole(role.RoleID)
+	if err != nil {
+		a.statusbar.SetError("Force recycle failed: " + err.Error())
+		uxlog.Log("[hera-view] force recycle failed: role=%d: %v", role.RoleID, err)
+		return
+	}
+	taskID := binding.ArgusTaskID
 	if task, err := d.Get(taskID); err == nil && task.IsResident() {
 		if a.daemonClient == nil {
 			a.statusbar.SetError("Resident recycle requires the daemon")
@@ -1147,11 +1153,19 @@ func (a *App) heraDoForceRecycle(role *hera.RoleView) {
 		}()
 		return
 	}
+	sess := a.runner.Get(taskID)
+	live := sess != nil && sess.Alive()
+	generation, unlock, err := a.lockDeferredSessionRestart(taskID, live)
+	if err != nil {
+		a.statusbar.SetError("Force recycle failed: " + err.Error())
+		uxlog.Log("[hera-view] force recycle failed: role=%d: %v", role.RoleID, err)
+		return
+	}
+	defer unlock()
+
 	sessionID := ""
-	if taskID != "" {
-		if t, err := d.Get(taskID); err == nil && t != nil {
-			sessionID = t.SessionID
-		}
+	if t, err := d.Get(taskID); err == nil {
+		sessionID = t.SessionID
 	}
 	// Mirror maybeKickRerender's pendingRerenderRestart bookkeeping (app.go):
 	// RecycleCoord's kill+respawn is the same "session dies non-cleanly, a
@@ -1160,14 +1174,12 @@ func (a *App) heraDoForceRecycle(role *hera.RoleView) {
 	// it too rather than falling through to the generic crash/stop path —
 	// otherwise a coordinator open in the plain (non-hera) agent view flashes
 	// an "exited" state instead of resuming gaplessly in place.
-	if taskID != "" {
-		a.pendingRerenderRestart[taskID] = true
+	if live {
+		a.pendingRerenderRestart[taskID] = generation
 	}
 	rr := daemon.NewHeraRecycleRunner(d, runner, d.Config)
 	if err := herasvc.RecycleCoord(d, rr, role.RoleID, sessionID, herasvc.RecycleHumanForced); err != nil {
-		if taskID != "" {
-			delete(a.pendingRerenderRestart, taskID)
-		}
+		delete(a.pendingRerenderRestart, taskID)
 		a.statusbar.SetError("Force recycle failed: " + err.Error())
 		uxlog.Log("[hera-view] force recycle failed: role=%d: %v", role.RoleID, err)
 		return

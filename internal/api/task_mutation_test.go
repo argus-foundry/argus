@@ -2,17 +2,150 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
+	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
-
 	"github.com/argus-foundry/argus/internal/testutil"
+	"github.com/argus-foundry/argus/internal/voice"
 )
+
+func TestMissingSessionMutationDoesNotCreateLockFiles(t *testing.T) {
+	s, _ := testServer(t)
+	path := filepath.Join(t.TempDir(), "data.sql")
+	d, err := db.Open(path)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	s.db = d
+
+	for _, action := range []string{"stop", "resume", "restart"} {
+		t.Run(action, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			s.routes().ServeHTTP(w, authedReq(http.MethodPost, "/api/tasks/missing/"+action, ""))
+			testutil.Equal(t, w.Code, http.StatusNotFound)
+		})
+	}
+	_, err = os.Stat(path + ".session-locks")
+	testutil.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestSessionMutationsRefuseWhileNativeTUIHoldsLock(t *testing.T) {
+	s, d := testServer(t)
+	task := &model.Task{Name: "Review", Status: model.StatusInReview}
+	testutil.NoError(t, d.Add(task))
+	unlock, acquired, err := d.TryLockSessionMutation(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, acquired)
+	defer unlock()
+
+	for _, action := range []string{"stop", "resume", "restart"} {
+		t.Run(action, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			s.routes().ServeHTTP(w, authedReq(http.MethodPost, "/api/tasks/"+task.ID+"/"+action, ""))
+			testutil.Equal(t, w.Code, http.StatusConflict)
+			testutil.Contains(t, w.Body.String(), "agent_restarting")
+		})
+	}
+	ctx := context.Background()
+	op := s.VoiceOperator()
+	for _, err := range []error{op.Stop(ctx, task.ID), op.Resume(ctx, task.ID, false)} {
+		var opErr *voice.OpError
+		if !errors.As(err, &opErr) {
+			t.Fatalf("expected a voice operation error, got %v", err)
+		}
+		testutil.Equal(t, opErr.Code, "agent_restarting")
+	}
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Status, model.StatusInReview)
+}
+
+func TestRESTStopRefusesReservedSession(t *testing.T) {
+	s, d := testServer(t)
+	run := agent.NewRunner(nil)
+	s.runner = run
+	task := &model.Task{Name: "Review", Status: model.StatusInReview}
+	testutil.NoError(t, d.Add(task))
+	run.SetSessionForTest(task.ID, nil)
+
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, authedReq(http.MethodPost, "/api/tasks/"+task.ID+"/stop", ""))
+	testutil.Equal(t, w.Code, http.StatusConflict)
+	testutil.Contains(t, w.Body.String(), "agent_restarting")
+}
+
+func TestRESTStopFencesResidentRestartWithoutChangingStatus(t *testing.T) {
+	s, d := testServer(t)
+	resident, _, err := d.EnsureResidentTask(t.TempDir())
+	testutil.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, authedReq(http.MethodPost, "/api/tasks/"+resident.ID+"/stop", ""))
+	testutil.Equal(t, w.Code, http.StatusOK)
+	row, err := d.Get(resident.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Status, model.StatusInProgress)
+	generation, err := d.SessionStopGeneration(resident.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, generation, int64(1))
+}
+
+func TestRESTStopRefusesQueuedRestart(t *testing.T) {
+	s, d := testServer(t)
+	exiting, allowRestart := make(chan struct{}), make(chan struct{})
+	var firstExit, release sync.Once
+	unblock := func() { release.Do(func() { close(allowRestart) }) }
+	run := agent.NewRunner(func(string, error, bool, []byte) {
+		firstExit.Do(func() {
+			close(exiting)
+			<-allowRestart
+		})
+	})
+	s.runner = run
+	t.Cleanup(run.StopAll)
+	t.Cleanup(unblock)
+	testutil.NoError(t, d.SetBackend("plain", config.Backend{Command: "sleep 60"}))
+	task := &model.Task{Name: "Review", Backend: "plain", Worktree: t.TempDir(), Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	initial, err := run.Start(task, d.Config(), 24, 80, false)
+	testutil.NoError(t, err)
+	testutil.NoError(t, run.Revive(task, d.Config(), 24, 80))
+	select {
+	case <-exiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("outgoing session did not exit")
+	}
+	testutil.True(t, run.HasPendingRestart(task.ID))
+
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, authedReq(http.MethodPost, "/api/tasks/"+task.ID+"/stop", ""))
+	unblock()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		sess := run.Get(task.ID)
+		if sess != nil && sess.Alive() && sess.PID() != initial.PID() {
+			testutil.Equal(t, w.Code, http.StatusConflict)
+			testutil.Contains(t, w.Body.String(), "agent_restarting")
+			row, err := d.Get(task.ID)
+			testutil.NoError(t, err)
+			testutil.Equal(t, row.Status, model.StatusInProgress)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("replacement session did not start")
+}
 
 func TestHandleResumeRestartCanceledLock(t *testing.T) {
 	for _, action := range []string{"resume", "restart"} {

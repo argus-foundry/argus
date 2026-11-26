@@ -104,16 +104,29 @@ func TestSessionStopGenerationFencesResumedSession(t *testing.T) {
 	testutil.Equal(t, row.Status, model.StatusInReview)
 }
 
-func TestRecordSessionStopRejectsResidentAndMissingTasks(t *testing.T) {
+func TestRecordSessionStopPreservesResidentStatus(t *testing.T) {
 	d := testDB(t)
 	resident, _, err := d.EnsureResidentTask(t.TempDir())
 	testutil.NoError(t, err)
-	testutil.ErrorIs(t, d.RecordSessionStop(resident.ID), ErrResidentProtected)
 	generation, err := d.SessionStopGeneration(resident.ID)
 	testutil.NoError(t, err)
-	testutil.Equal(t, generation, int64(0))
+	testutil.NoError(t, d.RecordSessionStop(resident.ID))
+	nextGeneration, err := d.SessionStopGeneration(resident.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, nextGeneration, generation+1)
+	row, err := d.Get(resident.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Status, model.StatusInProgress)
+
+	row, err = d.RecordResumedSessionIfUnstopped(resident.ID, 123, "", "", generation)
+	testutil.NoError(t, err)
+	testutil.Nil(t, row)
+}
+
+func TestRecordSessionStopRejectsMissingTask(t *testing.T) {
+	d := testDB(t)
 	testutil.ErrorIs(t, d.RecordSessionStop("missing"), ErrTaskNotFound)
-	_, err = d.SessionStopGeneration("missing")
+	_, err := d.SessionStopGeneration("missing")
 	testutil.ErrorIs(t, err, ErrTaskNotFound)
 	_, err = d.RecordResumedSessionIfUnstopped("missing", 123, "", "", 0)
 	testutil.ErrorIs(t, err, ErrTaskNotFound)

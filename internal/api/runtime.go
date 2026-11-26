@@ -133,6 +133,13 @@ func (s *Server) handlePatchTaskRuntime(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusServiceUnavailable, "task operation canceled", err)
 		return
 	}
+	if req.Apply == applyRestart {
+		unlockSession, ok := s.lockSessionMutationHTTP(w, id)
+		if !ok {
+			return
+		}
+		defer unlockSession()
+	}
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)

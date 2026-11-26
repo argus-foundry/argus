@@ -108,7 +108,7 @@ func TestKeepPlace_KickMatrix(t *testing.T) {
 				// The drift anchor survives a deferral so a later bind still sees it.
 				readUI(t, r.app.tapp, func() {
 					testutil.Equal(t, r.app.committedCols[r.task.ID], uint16(100))
-					testutil.False(t, r.app.pendingRerenderRestart[r.task.ID])
+					testutil.False(t, r.app.hasPendingRerenderRestart(r.task.ID))
 				})
 			}
 		})

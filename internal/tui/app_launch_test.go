@@ -13,10 +13,101 @@ import (
 type launchTestRunner struct {
 	*agent.Runner
 	start func(*model.Task, bool) (agent.SessionHandle, error)
+	get   func() agent.SessionHandle
 }
 
 func (r launchTestRunner) Start(task *model.Task, _ config.Config, _, _ uint16, resume bool) (agent.SessionHandle, error) {
 	return r.start(task, resume)
+}
+
+func (r launchTestRunner) Get(id string) agent.SessionHandle {
+	if r.get != nil {
+		return r.get()
+	}
+	return r.Runner.Get(id)
+}
+
+func TestStartSessionSerializesWithStopFinalization(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{ID: "review", Name: "Review", Status: model.StatusInReview}
+	testutil.NoError(t, d.Add(task))
+	started := 0
+	runner := launchTestRunner{Runner: agent.NewRunner(nil), start: func(*model.Task, bool) (agent.SessionHandle, error) {
+		started++
+		unlock, acquired, err := d.TryLockSessionMutation(task.ID)
+		if acquired {
+			defer unlock()
+		}
+		testutil.NoError(t, err)
+		testutil.False(t, acquired)
+		return &moveTestSession{idle: true}, nil
+	}}
+	app := New(d, runner, false)
+
+	unlock, acquired, err := d.TryLockSessionMutation(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, acquired)
+	func() {
+		defer unlock()
+		app.startSession(task)
+		testutil.Equal(t, started, 0)
+		testutil.NoError(t, d.RecordSessionStop(task.ID))
+	}()
+
+	app.startSession(task)
+	testutil.Equal(t, started, 1)
+	stored, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, stored.Status, model.StatusInProgress)
+}
+
+func TestStartSessionPreservesWinningResume(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{ID: "review", Name: "Review", Status: model.StatusInReview}
+	testutil.NoError(t, d.Add(task))
+	var winner agent.SessionHandle
+	runner := launchTestRunner{Runner: agent.NewRunner(nil),
+		get: func() agent.SessionHandle { return winner },
+		start: func(*model.Task, bool) (agent.SessionHandle, error) {
+			t.Fatal("native start attempted to replace the winning session")
+			return nil, nil
+		},
+	}
+	app := New(d, runner, false)
+
+	winner = &moveTestSession{idle: true}
+	testutil.NoError(t, d.RecordResumedSession(task.ID, winner.PID(), "", "winning-session"))
+	app.startSession(task)
+
+	stored, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, stored.Status, model.StatusInProgress)
+	testutil.Equal(t, stored.SessionID, "winning-session")
+	testutil.Equal(t, stored.AgentPID, winner.PID())
+}
+
+func TestStartSessionFailurePreservesSessionPublishedByOwner(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{ID: "review", Name: "Review", Status: model.StatusInReview, SessionID: "previous-session"}
+	testutil.NoError(t, d.Add(task))
+	var winner agent.SessionHandle
+	runner := launchTestRunner{Runner: agent.NewRunner(nil),
+		get: func() agent.SessionHandle { return winner },
+		start: func(*model.Task, bool) (agent.SessionHandle, error) {
+			winner = &moveTestSession{idle: true}
+			testutil.NoError(t, d.RecordResumedSession(task.ID, winner.PID(), "previous-session", "winning-session"))
+			return nil, errors.New("owner started a session first")
+		},
+	}
+	app := New(d, runner, false)
+
+	app.startSession(task)
+
+	stored, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, stored.Status, model.StatusInProgress)
+	testutil.Equal(t, stored.SessionID, "winning-session")
+	testutil.Equal(t, stored.AgentPID, winner.PID())
 }
 
 func TestStartSessionPreservesStopDuringRunnerReply(t *testing.T) {

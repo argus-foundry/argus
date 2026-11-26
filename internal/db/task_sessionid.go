@@ -124,8 +124,8 @@ func scanStopGeneration(id string, row *sql.Row) (int64, error) {
 	return generation, err
 }
 
-// RecordSessionStop records a confirmed stop and advances its generation even
-// if the session was stopped while its task was already InReview.
+// RecordSessionStop advances the generation after a confirmed stop. Ordinary
+// tasks move to InReview and the resident keeps its fixed status.
 func (d *DB) RecordSessionStop(id string) error {
 	var previous, kind string
 	err := d.WithTx(func(tx *sql.Tx) error {
@@ -136,13 +136,13 @@ func (d *DB) RecordSessionStop(id string) error {
 		if err != nil {
 			return err
 		}
-		if kind == model.KindResident {
-			return fmt.Errorf("%w (task %s)", ErrResidentProtected, id)
+		if kind == model.KindResident || previous == model.StatusInReview.String() {
+			return nil
 		}
 		_, err = tx.Exec(`UPDATE tasks SET status=? WHERE id=?`, model.StatusInReview.String(), id)
 		return err
 	})
-	if err == nil && previous != model.StatusInReview.String() {
+	if err == nil && kind != model.KindResident && previous != model.StatusInReview.String() {
 		events.Emit(model.EventTypeTaskStatusChanged, id, map[string]string{
 			"from": previous, "to": model.StatusInReview.String(),
 		})

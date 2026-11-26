@@ -11,6 +11,7 @@ import (
 	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/app/agentview"
 	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/uxlog"
 	"github.com/argus-foundry/argus/internal/voice"
@@ -141,6 +142,11 @@ func (a apiVoice) Stop(ctx context.Context, taskID string) error {
 		return &voice.OpError{Speech: "That was canceled.", Code: "canceled"}
 	}
 	defer unlock()
+	unlockSession, err := a.lockSessionMutation(taskID)
+	if err != nil {
+		return err
+	}
+	defer unlockSession()
 	t, err := a.s.db.Get(taskID)
 	if err != nil || t == nil {
 		return &voice.OpError{Speech: "I can't find that workflow.", Code: "not_found"}
@@ -178,6 +184,11 @@ func (a apiVoice) Resume(ctx context.Context, taskID string, force bool) error {
 		return &voice.OpError{Speech: "That was canceled.", Code: "canceled"}
 	}
 	defer unlock()
+	unlockSession, err := a.lockSessionMutation(taskID)
+	if err != nil {
+		return err
+	}
+	defer unlockSession()
 	task, err := a.s.db.Get(taskID)
 	if err != nil || task == nil {
 		return &voice.OpError{Speech: "I can't find that workflow.", Code: "not_found"}
@@ -215,6 +226,20 @@ func (a apiVoice) Resume(ctx context.Context, taskID string, force bool) error {
 	slog.Info("[voice] resumed", "task", taskID)
 	uxlog.Log("[voice] resumed task=%s", taskID)
 	return nil
+}
+
+func (a apiVoice) lockSessionMutation(taskID string) (func(), error) {
+	unlock, err := a.s.tryLockExistingSessionMutation(taskID)
+	switch {
+	case errors.Is(err, db.ErrTaskNotFound):
+		return nil, &voice.OpError{Speech: "I can't find that workflow.", Code: "not_found"}
+	case errors.Is(err, agent.ErrSessionStarting):
+		return nil, &voice.OpError{Speech: "The agent is starting or restarting.", Code: "agent_restarting"}
+	case err != nil:
+		uxlog.Log("[voice] session operation lock failed task=%s err=%v", taskID, err)
+		return nil, &voice.OpError{Speech: "I couldn't coordinate a session operation.", Code: "session_lock_failed"}
+	}
+	return unlock, nil
 }
 
 func voiceLaunchAmbiguous(spoken string) *voice.OpError {

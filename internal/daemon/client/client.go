@@ -457,6 +457,9 @@ func (c *Client) Stop(taskID string) error { return c.StopScoped(taskID, agent.S
 func (c *Client) StopSettled(taskID string) error {
 	var resp daemon.StatusResp
 	if err := c.call("Daemon.StopSettledSession", &daemon.TaskIDReq{TaskID: taskID}, &resp); err != nil {
+		if strings.Contains(err.Error(), "can't find method Daemon.StopSettledSession") {
+			return errors.New("the session supervisor does not support coordinated stops. Use Settings > System > Restart Session Supervisor, then try again")
+		}
 		return err
 	}
 	if resp.Error == agent.ErrSessionStarting.Error() {

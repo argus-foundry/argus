@@ -531,15 +531,19 @@ func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unlock()
+	unlockSession, ok := s.lockSessionMutationHTTP(w, id)
+	if !ok {
+		return
+	}
+	defer unlockSession()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeErr(w, http.StatusNotFound, "task not found", nil)
 		return
 	}
-
 	if err := s.stopTaskSession(task, false); err != nil {
 		if errors.Is(err, agent.ErrSessionStarting) {
-			writeCodedErrCause(w, http.StatusConflict, "agent is starting or restarting", "agent_restarting", nil)
+			writeSessionMutationConflict(w)
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, "", err)
@@ -549,35 +553,24 @@ func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
-// stopTaskSession moves the row to in review after a stop. Voice requires the
-// runner to acknowledge the stop because a missing handle can be a launch.
-func (s *Server) stopTaskSession(task *model.Task, rejectPendingRestart bool) error {
-	if rejectPendingRestart {
-		stopper, ok := s.runner.(agent.SettledSessionStopper)
-		if !ok {
-			return errors.New("settled session stop is unavailable")
-		}
-		if err := stopper.StopSettled(task.ID); err != nil {
-			return err
-		}
-	} else if err := s.runner.Stop(task.ID); err != nil {
-		if !errors.Is(err, agent.ErrSessionNotFound) {
+// stopTaskSession holds the caller's session lock through the status write.
+// The session owner also checks for reserved launches and queued restarts.
+func (s *Server) stopTaskSession(task *model.Task, requireLive bool) error {
+	stopper, ok := s.runner.(agent.SettledSessionStopper)
+	if !ok {
+		return errors.New("settled session stop is unavailable")
+	}
+	if err := stopper.StopSettled(task.ID); err != nil {
+		if requireLive || !errors.Is(err, agent.ErrSessionNotFound) {
 			return err
 		}
 		if task.Status == model.StatusPending {
 			uxlog.Log("[api] stop refused before session registration task=%s", task.ID)
 			return agent.ErrSessionStarting
 		}
-		// Preserve the legacy repair for an already missing session. It
-		// does not fence a launch because no session received a stop.
-		if err := s.db.SetStatus(task.ID, model.StatusInReview); err != nil {
-			uxlog.Log("[api] stop: status write failed task=%s err=%v", task.ID, err)
-		}
-		return nil
 	}
-	if task.IsResident() {
-		return nil // A manual stop leaves the resident's persisted status fixed.
-	}
+	// Even when REST confirms that the owner has no session, record the stop
+	// so a deferred native TUI rerender cannot bring it back.
 	if err := s.db.RecordSessionStop(task.ID); err != nil {
 		uxlog.Log("[api] stop: status write failed task=%s err=%v", task.ID, err)
 		return err
@@ -617,6 +610,11 @@ func (s *Server) handleRestartTask(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unlock()
 
+	unlockSession, ok := s.lockSessionMutationHTTP(w, id)
+	if !ok {
+		return
+	}
+	defer unlockSession()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
@@ -841,6 +839,11 @@ func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unlock()
 
+	unlockSession, ok := s.lockSessionMutationHTTP(w, id)
+	if !ok {
+		return
+	}
+	defer unlockSession()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
@@ -1722,6 +1725,13 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 		}
 	}
 	s.clearKickDefer(taskID)
+	unlockSession, acquired, err := s.db.TryLockSessionMutation(taskID)
+	if err != nil || !acquired {
+		uxlog.Log("[rerender] session operation lock unavailable task=%s err=%v", taskID, err)
+		s.invalidateColsCache(taskID)
+		return false, ""
+	}
+	defer unlockSession()
 	task, err := s.db.Get(taskID)
 	if err != nil || task == nil {
 		// Transient DB error — invalidate so the next same-cols /resize

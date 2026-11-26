@@ -105,7 +105,16 @@ type ResizeResp struct {
 
 // Resize sends a SIGWINCH-equivalent resize to the agent's PTY.
 func (c *Client) Resize(ctx context.Context, id string, rows, cols uint16) (*ResizeResp, error) {
-	req := map[string]uint16{"rows": rows, "cols": cols}
+	return c.resize(ctx, id, rows, cols, false, false)
+}
+
+func (c *Client) resize(ctx context.Context, id string, rows, cols uint16, scrolledUp, composerDirty bool) (*ResizeResp, error) {
+	req := struct {
+		Rows          uint16 `json:"rows"`
+		Cols          uint16 `json:"cols"`
+		ScrolledUp    bool   `json:"scrolled_up,omitempty"`
+		ComposerDirty bool   `json:"composer_dirty,omitempty"`
+	}{rows, cols, scrolledUp, composerDirty}
 	var resp ResizeResp
 	if err := c.doJSON(ctx, "POST", "/api/tasks/"+id+"/resize", req, &resp); err != nil {
 		return nil, err

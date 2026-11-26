@@ -159,6 +159,17 @@ const (
 // Callable by any authenticated token, same as handleListClaudeSessions.
 func (s *Server) handleSwitchClaudeSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	unlock, err := s.lockTaskMutation(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, "task operation canceled", nil)
+		return
+	}
+	defer unlock()
+	unlockSession, ok := s.lockSessionMutationHTTP(w, id)
+	if !ok {
+		return
+	}
+	defer unlockSession()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeErr(w, http.StatusNotFound, "task not found", nil)

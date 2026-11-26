@@ -61,7 +61,7 @@ func TestRerender_OldPIDProbeCannotAffectNewBind(t *testing.T) {
 		testutil.False(t, old.stopCalled.Load())
 		_, anchored := app.committedCols[task.ID]
 		testutil.False(t, anchored)
-		testutil.False(t, app.pendingRerenderRestart[task.ID])
+		testutil.False(t, app.hasPendingRerenderRestart(task.ID))
 		testutil.Equal(t, app.committedColsPID[task.ID], 202)
 	})
 }
@@ -77,10 +77,12 @@ func TestRerender_ExternalRestartDropsPreviousPIDAnchor(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
-			app := New(testDB(t), agent.NewRunner(nil), false)
+			d := testDB(t)
+			app := New(d, agent.NewRunner(nil), false)
 			_, stop := wireApp(t, app)
 			defer stop()
 			task := &model.Task{ID: "external-restart", SessionID: "saved", AgentPID: 101, Worktree: t.TempDir()}
+			testutil.NoError(t, d.Add(task))
 			seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 			old := &fakeKickSession{pid: 101, alive: true, initCols: 80}
 			var deferred atomic.Bool
@@ -92,8 +94,8 @@ func TestRerender_ExternalRestartDropsPreviousPIDAnchor(t *testing.T) {
 			next := &fakeKickSession{pid: 202, idle: true, alive: true, initCols: tc.init}
 			readUI(t, app.tapp, func() {
 				testutil.Equal(t, app.committedCols[task.ID], uint16(100))
-				app.lastAttachCols[task.ID] = 80           // another viewer cached the old process
-				app.pendingRerenderRestart[task.ID] = true // lost old-process exit notification
+				app.lastAttachCols[task.ID] = 80        // another viewer cached the old process
+				app.pendingRerenderRestart[task.ID] = 0 // lost old-process exit notification
 				app.maybeKickRerenderAtWidth(task, next, 80, nil)
 			})
 			waitRerender(t, func() bool {
@@ -134,10 +136,12 @@ func TestRerender_PendingReasons(t *testing.T) {
 	for _, reason := range []string{"busy", "prompt", "transcript", "stop failure"} {
 		t.Run(reason, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
-			app := New(testDB(t), agent.NewRunner(nil), false)
+			d := testDB(t)
+			app := New(d, agent.NewRunner(nil), false)
 			_, stop := wireApp(t, app)
 			defer stop()
 			task := &model.Task{ID: "pending-reason", SessionID: "saved", Worktree: t.TempDir()}
+			testutil.NoError(t, d.Add(task))
 			if reason != "transcript" {
 				seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 			}
@@ -163,10 +167,12 @@ func TestRerender_PendingReasons(t *testing.T) {
 
 func TestRerender_ActiveAndStaleClear(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	app := New(testDB(t), agent.NewRunner(nil), false)
+	d := testDB(t)
+	app := New(d, agent.NewRunner(nil), false)
 	_, stop := wireApp(t, app)
 	defer stop()
 	task := &model.Task{ID: "active-state", SessionID: "saved", Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
 	seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 	sess := &fakeKickSession{idle: true, alive: true, initCols: 80}
 	readUI(t, app.tapp, func() { app.agentPane.SetTaskID(task.ID); app.maybeKickRerenderAtWidth(task, sess, 100, nil) })
@@ -175,7 +181,7 @@ func TestRerender_ActiveAndStaleClear(t *testing.T) {
 		testutil.Equal(t, app.agentPane.RerenderStatus(), "Re-rendering…")
 		app.reapStaleRerenderRestart(task.ID, &fakeKickSession{alive: false})
 		testutil.Equal(t, app.agentPane.RerenderStatus(), "")
-		testutil.False(t, app.pendingRerenderRestart[task.ID])
+		testutil.False(t, app.hasPendingRerenderRestart(task.ID))
 	})
 }
 
@@ -204,10 +210,12 @@ func TestRerender_FailedStartPreservesAnchor(t *testing.T) {
 
 func TestRerender_IntermediateSkipPreservesAnchor(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	app := New(testDB(t), agent.NewRunner(nil), false)
+	d := testDB(t)
+	app := New(d, agent.NewRunner(nil), false)
 	_, stop := wireApp(t, app)
 	defer stop()
 	task := &model.Task{ID: "skip-anchor", Name: "anchor", SessionID: "sid-anchor", Worktree: t.TempDir(), AgentPID: 101}
+	testutil.NoError(t, d.Add(task))
 	seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 	sess := &fakeKickSession{pid: 202, alive: true, initCols: 80}
 	var deferred atomic.Bool
@@ -247,7 +255,7 @@ func TestRerender_ExitClearsHiddenPaneStatus(t *testing.T) {
 	testutil.NoError(t, d.Add(task))
 	app.heraPage.AgentPane().SetTaskID(task.ID)
 	app.setRerendering(task.ID, true)
-	app.pendingRerenderRestart[task.ID] = true
+	app.pendingRerenderRestart[task.ID] = 0
 	app.handleSessionExitUI(task.ID, true, false)
 	testutil.False(t, app.heraPage.AgentPane().Rerendering())
 }
@@ -273,7 +281,7 @@ func TestRerender_InFlightKickInvokesOnDeferred(t *testing.T) {
 	task := &model.Task{ID: "inflight", Name: "inflight", SessionID: "sid-inflight", AgentPID: 101}
 	sess := &fakeKickSession{pid: 101, alive: true, initCols: 88}
 	app.committedColsPID[task.ID] = 101
-	app.pendingRerenderRestart[task.ID] = true
+	app.pendingRerenderRestart[task.ID] = 0
 	called := 0
 	app.maybeKickRerenderAtWidth(task, sess, 178, func() { called++ })
 	testutil.Equal(t, called, 1)

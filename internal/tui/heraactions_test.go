@@ -262,7 +262,7 @@ func TestHeraActions_BounceNoOpWhenSessionNotLive(t *testing.T) {
 
 // TestHeraActions_ForceRecycleCleansUpPendingFlagOnError pins the
 // recycle-pane-artifact-fix wiring in heraDoForceRecycle: it mirrors
-// maybeKickRerender by staging a.pendingRerenderRestart[taskID] before handing
+// maybeKickRerender by staging a.hasPendingRerenderRestart(taskID) before handing
 // off to recycle_coord, so handleSessionExitUI's immediate-resume branch can
 // treat a recycle-triggered exit the same way a rerender kick's exit is
 // treated. When recycle_coord fails before ever touching the session (no live
@@ -286,7 +286,7 @@ func TestHeraActions_ForceRecycleCleansUpPendingFlagOnError(t *testing.T) {
 	app.heraDoForceRecycle(rv)
 
 	testutil.Contains(t, app.statusbar.Error(), "Force recycle failed")
-	testutil.Equal(t, app.pendingRerenderRestart["tc"], false) // rolled back, not leaked
+	testutil.Equal(t, app.hasPendingRerenderRestart("tc"), false) // rolled back, not leaked
 }
 
 // TestHeraActions_ClearArchiveScopesToSubCoordinator pins BUG-003: pressing `C`
@@ -1523,7 +1523,7 @@ func TestHandleSessionExitUI_RerenderRestartsWhenViewedViaHeraPane(t *testing.T)
 	var boundToHera bool
 	readUI(t, app.tapp, func() {
 		boundToHera = app.heraPage.IsBoundToTask("tc")
-		app.pendingRerenderRestart["tc"] = true
+		app.pendingRerenderRestart["tc"] = 0
 		app.handleSessionExitUI("tc", false /* non-clean: kick-induced stop */, false)
 	})
 	if !boundToHera {
@@ -1601,7 +1601,7 @@ func TestHandleSessionExitUI_RerenderRefusesClosedOutWorker(t *testing.T) {
 			var boundToHera bool
 			readUI(t, app.tapp, func() {
 				boundToHera = app.heraPage.IsBoundToTask("tw")
-				app.pendingRerenderRestart["tw"] = true
+				app.pendingRerenderRestart["tw"] = 0
 				app.handleSessionExitUI("tw", false /* non-clean: kick-induced stop */, false)
 			})
 			if !boundToHera {
@@ -1645,7 +1645,7 @@ func TestHandleSessionExitUI_RerenderStillRestartsNonClosedOutWorker(t *testing.
 	var boundToHera bool
 	readUI(t, app.tapp, func() {
 		boundToHera = app.heraPage.IsBoundToTask("tw")
-		app.pendingRerenderRestart["tw"] = true
+		app.pendingRerenderRestart["tw"] = 0
 		app.handleSessionExitUI("tw", false /* non-clean: kick-induced stop */, false)
 	})
 	if !boundToHera {

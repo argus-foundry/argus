@@ -115,6 +115,23 @@ func TestResizeKeepPlace_RetryAfterClear(t *testing.T) {
 	testutil.False(t, held) // a kick clears the deferral clock
 }
 
+func TestResizeKickRetriesAfterSessionMutation(t *testing.T) {
+	srv, task, runner, _ := keepPlaceServer(t, nil)
+	release, acquired, err := srv.db.TryLockSessionMutation(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, acquired)
+	t.Cleanup(release)
+
+	kicked, _ := srv.evalKickRerender(task.ID, 24, 120, kickClientState{})
+	testutil.False(t, kicked)
+	testutil.Equal(t, runner.kicks, 0)
+
+	release()
+	kicked, _ = srv.evalKickRerender(task.ID, 24, 120, kickClientState{})
+	testutil.True(t, kicked)
+	testutil.Equal(t, runner.kicks, 1)
+}
+
 // The client flag is the only signal under the 10-minute per-width cap; the
 // scroll gate and a screen-confirmed draft are not.
 func TestResizeKeepPlace_FlagCap(t *testing.T) {

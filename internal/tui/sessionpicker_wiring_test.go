@@ -163,7 +163,7 @@ func TestSwitchSession_LiveSessionQueuesRestart(t *testing.T) {
 	got, err := d.Get(task.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, got.SessionID, "cccccccc-cccc-4ccc-8ccc-cccccccccccc")
-	testutil.Equal(t, app.pendingRerenderRestart[task.ID], true)
+	testutil.Equal(t, app.hasPendingRerenderRestart(task.ID), true)
 }
 
 func TestSwitchSession_NoopWhenSame(t *testing.T) {
@@ -182,7 +182,7 @@ func TestSwitchSession_NoopWhenSame(t *testing.T) {
 	got, err := d.Get(task.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, got.SessionID, "same-session")
-	testutil.Equal(t, app.pendingRerenderRestart[task.ID], false)
+	testutil.Equal(t, app.hasPendingRerenderRestart(task.ID), false)
 }
 
 func TestOpenSessionPicker_NonClaudeIsNoop(t *testing.T) {

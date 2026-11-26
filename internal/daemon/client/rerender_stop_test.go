@@ -142,3 +142,14 @@ func TestOldRerenderStop(t *testing.T) {
 	defer fd.mu.Unlock()
 	testutil.DeepEqual(t, fd.stopScopes, []agent.StopScope{agent.StopAgentOnly})
 }
+
+func TestOldSettledStop(t *testing.T) {
+	fd := newFakeDaemon(t)
+	c := fakeClient(t, fd)
+	err := c.StopSettled("a")
+	testutil.Error(t, err)
+	testutil.Contains(t, err.Error(), "Restart Session Supervisor")
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	testutil.Equal(t, len(fd.stopScopes), 0)
+}

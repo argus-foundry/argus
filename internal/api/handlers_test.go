@@ -1417,6 +1417,9 @@ func TestHandleStopTask(t *testing.T) {
 		got, err := d.Get(task.ID)
 		testutil.NoError(t, err)
 		testutil.Equal(t, got.Status, model.StatusInReview)
+		generation, err := d.SessionStopGeneration(task.ID)
+		testutil.NoError(t, err)
+		testutil.Equal(t, generation, int64(1))
 	})
 }
 

@@ -157,6 +157,12 @@ func (p *Provider) Stop(taskID string) error {
 	return p.c.StopTask(context.Background(), taskID)
 }
 
+// SwitchClaudeSession asks the server to persist and start the selected transcript.
+func (p *Provider) SwitchClaudeSession(taskID, sessionID string) error {
+	req := map[string]string{"session_id": sessionID}
+	return p.c.doJSON(context.Background(), "POST", "/api/tasks/"+taskID+"/claude-session", req, nil)
+}
+
 // StopScoped ignores scope: the REST stop endpoint has no scope parameter,
 // so a remote-TUI stop is always a full stop (named gap,
 // stop-finished-task-sessions).

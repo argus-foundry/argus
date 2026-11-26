@@ -2,6 +2,7 @@ package apiclient
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -253,6 +254,47 @@ func TestSession_Resize_UpdatesCachedSize(t *testing.T) {
 	cols, rows := s.PTYSize()
 	testutil.Equal(t, cols, 120)
 	testutil.Equal(t, rows, 40)
+}
+
+func TestSession_ResizeForRerenderUsesServerDecision(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		testutil.Equal(t, r.Method, http.MethodPost)
+		testutil.Equal(t, r.URL.Path, "/api/tasks/t1/resize")
+		var req struct {
+			Rows          int  `json:"rows"`
+			Cols          int  `json:"cols"`
+			ScrolledUp    bool `json:"scrolled_up"`
+			ComposerDirty bool `json:"composer_dirty"`
+		}
+		testutil.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		testutil.Equal(t, req.Rows, 40)
+		testutil.Equal(t, req.Cols, 120)
+		testutil.True(t, req.ScrolledUp)
+		testutil.True(t, req.ComposerDirty)
+		testutil.NoError(t, json.NewEncoder(w).Encode(map[string]any{"rows": 40, "cols": 120, "rerendered": true}))
+	}))
+	defer srv.Close()
+	p := NewProvider(New(srv.URL, "tok", WithHTTPClient(srv.Client())))
+	defer p.Close()
+	s := newSession("t1", p)
+	kicked, err := s.ResizeForRerender(40, 120, true, true)
+	testutil.NoError(t, err)
+	testutil.True(t, kicked)
+}
+
+func TestProvider_SwitchClaudeSessionUsesServerOperation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		testutil.Equal(t, r.Method, http.MethodPost)
+		testutil.Equal(t, r.URL.Path, "/api/tasks/t1/claude-session")
+		var req map[string]string
+		testutil.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		testutil.Equal(t, req["session_id"], "chosen")
+		testutil.NoError(t, json.NewEncoder(w).Encode(map[string]string{"status": "switched"}))
+	}))
+	defer srv.Close()
+	p := NewProvider(New(srv.URL, "tok", WithHTTPClient(srv.Client())))
+	defer p.Close()
+	testutil.NoError(t, p.SwitchClaudeSession("t1", "chosen"))
 }
 
 func TestSession_RingBufferReceivesStream(t *testing.T) {

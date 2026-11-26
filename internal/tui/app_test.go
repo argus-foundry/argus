@@ -880,7 +880,7 @@ func TestMaybeKickRerender_TUIDefersWhenBlockedOnPrompt(t *testing.T) {
 		readUI(t, app.tapp, func() {
 			_, cached := app.lastAttachCols[taskID]
 			cacheCleared = !cached
-			noPending = !app.pendingRerenderRestart[taskID]
+			noPending = !app.hasPendingRerenderRestart(taskID)
 		})
 		if cacheCleared && noPending {
 			settled = true
@@ -913,6 +913,7 @@ func TestMaybeKickRerenderAtWidth_KicksOnGenuineDrift(t *testing.T) {
 	defer stop()
 
 	task := &model.Task{ID: taskID, Name: "kick-me", Status: model.StatusInProgress, SessionID: "sid-resume", Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
 	seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 	sess := &fakeKickSession{idle: true, alive: true, initCols: 20}
 
@@ -934,7 +935,7 @@ func TestMaybeKickRerenderAtWidth_KicksOnGenuineDrift(t *testing.T) {
 	// processes survive (stop-finished-task-sessions).
 	testutil.Equal(t, agent.StopScope(sess.stopScope.Load()), agent.StopRerender)
 	readUI(t, app.tapp, func() {
-		if !app.pendingRerenderRestart[taskID] {
+		if !app.hasPendingRerenderRestart(taskID) {
 			t.Error("pendingRerenderRestart not set after a successful kick")
 		}
 	})
@@ -1000,6 +1001,7 @@ func TestMaybeKickRerenderAtWidth_LaterNarrowRebindStillKicksAfterDeferredWideBi
 	defer stop()
 
 	task := &model.Task{ID: taskID, Name: "drift", Status: model.StatusInProgress, SessionID: "sid-resume", Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
 	seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 	sess := &fakeKickSession{idle: false, alive: true, initCols: 80} // busy: bind-142 defers
 
@@ -4651,13 +4653,13 @@ func TestHandleSessionExitUI_RerenderGateEntersOnNonCleanExit(t *testing.T) {
 	testutil.NoError(t, d.Add(task))
 
 	// Rerender restart was queued, but the user is NOT viewing this task's pane.
-	app.pendingRerenderRestart["t1"] = true
+	app.pendingRerenderRestart["t1"] = 0
 	app.mode = modeTaskList // not viewing → gate clears flag, falls through
 
 	app.handleSessionExitUI("t1", false /* cleanExit → non-clean (crash or stop) */, false)
 
 	// The rerender flag was consumed and the task settled InReview.
-	if app.pendingRerenderRestart["t1"] {
+	if app.hasPendingRerenderRestart("t1") {
 		t.Error("pendingRerenderRestart flag should have been consumed by the gate")
 	}
 	got, _ := d.Get("t1")
@@ -5875,6 +5877,7 @@ func TestMaybeKickRerenderAtWidth_DeferredNarrowBindKeepsTheWideAnchor(t *testin
 	defer stop()
 
 	task := &model.Task{ID: taskID, Name: "clobber", Status: model.StatusInProgress, SessionID: "sid-resume", Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
 	seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 	sess := &fakeKickSession{idle: false, alive: true, initCols: 80} // busy throughout both binds
 
@@ -6091,7 +6094,7 @@ func TestMaybeKickRerender_AutoSetting(t *testing.T) {
 			}
 			time.Sleep(150 * time.Millisecond) // give a (wrongly) spawned decision goroutine time to act
 			testutil.False(t, sess.stopCalled.Load())
-			readUI(t, app.tapp, func() { testutil.False(t, app.pendingRerenderRestart[task.ID]) })
+			readUI(t, app.tapp, func() { testutil.False(t, app.hasPendingRerenderRestart(task.ID)) })
 		})
 	}
 }

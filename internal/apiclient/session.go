@@ -113,15 +113,21 @@ func (s *Session) LastUserInput() time.Time {
 
 // Resize POSTs to /api/tasks/{id}/resize.
 func (s *Session) Resize(rows, cols uint16) error {
-	resp, err := s.p.c.Resize(context.Background(), s.taskID, rows, cols)
+	_, err := s.ResizeForRerender(rows, cols, false, false)
+	return err
+}
+
+// ResizeForRerender asks the session owner to resize and evaluate a rerender.
+func (s *Session) ResizeForRerender(rows, cols uint16, scrolledUp, composerDirty bool) (bool, error) {
+	resp, err := s.p.c.resize(context.Background(), s.taskID, rows, cols, scrolledUp, composerDirty)
 	if err != nil {
-		return err
+		return false, err
 	}
 	s.mu.Lock()
 	s.cols = resp.Cols
 	s.rows = resp.Rows
 	s.mu.Unlock()
-	return nil
+	return resp.Rerendered, nil
 }
 
 // RecentOutput returns the full ring buffer contents.
