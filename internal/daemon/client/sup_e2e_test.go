@@ -374,9 +374,12 @@ func TestSupStop(t *testing.T) {
 
 func TestSupDrain(t *testing.T) {
 	d, sc, database := supE2E(t)
-	cli := filepath.Join(t.TempDir(), "fake-cli")
-	testutil.NoError(t, os.WriteFile(cli, []byte("#!/bin/sh\ntrap '' TERM\nprintf 'ready\\n'\nwhile [ ! -f finish ]; do sleep 0.02; done\n"), 0700))
-	task := startE2E(t, d, sc, database, "drain", cli)
+	// The trap has to run in the session leader. BuildCmd wraps the backend
+	// command in `sh -c`, and StopTree signals that process group: a trap
+	// inside a child script does not keep the leader alive, so the slot
+	// frees before the overlapping start is refused.
+	const hold = "trap '' TERM; printf 'ready\\n'; while [ ! -f finish ]; do sleep 0.02; done"
+	task := startE2E(t, d, sc, database, "drain", hold)
 	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(task.Worktree, "finish"), nil, 0600) })
 	sock := filepath.Join(t.TempDir(), "d.sock")
 	serveTestServer(t, d, sock)
