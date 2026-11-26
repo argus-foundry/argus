@@ -59,6 +59,24 @@ type SettledSessionStopper interface {
 	StopSettled(taskID string) error
 }
 
+// AttachableSession checks whether an existing PTY is safe to reuse. A pending
+// launch, stop, or replacement returns ErrSessionStarting. View-only lookups
+// continue using Get so a draining session's output remains available.
+func AttachableSession(provider SessionProvider, taskID string) (SessionHandle, error) {
+	switch owner := provider.(type) {
+	case *Runner:
+		return owner.attachableSession(taskID)
+	case interface {
+		AttachableSession(string) (SessionHandle, error)
+	}:
+		return owner.AttachableSession(taskID)
+	}
+	if provider.HasPendingRestart(taskID) {
+		return nil, ErrSessionStarting
+	}
+	return provider.Get(taskID), nil
+}
+
 // SessionRunner is the full in-daemon session-management surface: SessionProvider
 // plus the kick-rerender / reattach / needs-input extras that the daemon's API
 // server and resize/resume paths drive. Both *Runner (in-process) and the
@@ -73,8 +91,8 @@ type SettledSessionStopper interface {
 type SessionRunner interface {
 	SessionProvider
 
-	// StartOrReattach returns the live session for task.ID if one already
-	// exists (reattached=true), otherwise starts a new one (reattached=false).
+	// StartOrReattach returns an attachable session for task.ID if one exists
+	// (reattached=true), otherwise starts a new one (reattached=false).
 	StartOrReattach(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (SessionHandle, bool, error)
 
 	// KickRerender stops a live session and queues a same-task restart at the

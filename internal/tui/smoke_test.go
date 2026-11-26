@@ -684,46 +684,29 @@ func TestSmoke_ReconciliationUsesNameSafeStatusWrite(t *testing.T) {
 	testutil.Equal(t, got.Name, "haiku-name")
 }
 
-// TestSmoke_SessionExitFlipUsesNameSafeStatusWrite covers the fourth rerouted
-// write path: handleSessionExitUI's InProgress→Complete/InReview flip. It now
-// persists via db.SetStatus (name-safe) instead of full-row db.Update, and the
-// `t.Status == InProgress` guard makes a second exit notification a no-op — the
-// guard that also prevents a double status/completed event when the daemon
-// already flipped the row before the TUI's notification arrives.
+// TestSmoke_SessionExitFlipUsesNameSafeStatusWrite pins standalone exit
+// persistence: the partial status write preserves the task name, and a
+// second notification does not repeat the transition or restamp EndedAt.
 func TestSmoke_SessionExitFlipUsesNameSafeStatusWrite(t *testing.T) {
 	d := testDB(t)
 	task := &model.Task{Name: "haiku-name", Status: model.StatusInProgress, Project: "p"}
-	if err := d.Add(task); err != nil {
-		t.Fatal(err)
-	}
-	// Daemon mode (daemonConnected=true) so this pins the daemon-mode flip path
-	// (HandleSessionExit → handleSessionExitUI → name-safe db.SetStatus). Called
-	// directly (no event loop) so the unrelated tick/refresh reconciler — which,
-	// post-fix, lands a sessionless InProgress row in InReview — can't race the
-	// flip and make the InProgress guard skip it. The reconciler→InReview path is
-	// covered by TestSmoke_ReconciliationUsesNameSafeStatusWrite; here we isolate
-	// the exit-flip write itself.
-	app := New(d, agent.NewRunner(nil), true)
-	// New()'s initial refreshTasks() reconciles this sessionless InProgress row to
-	// InReview in daemon mode (correct — no live session). Reset to InProgress so
-	// this test exercises the EXIT-FLIP write itself, not the reconciler (the
-	// reconciler→InReview path is covered by TestSmoke_ReconciliationUsesNameSafeStatusWrite).
-	testutil.NoError(t, d.SetStatus(task.ID, model.StatusInProgress))
+	testutil.NoError(t, d.Add(task))
+	app := New(d, agent.NewRunner(nil), false)
+	_, stop := wireApp(t, app)
+	t.Cleanup(stop)
 
-	// Clean self-exit (cleanExit=true) → Complete, name preserved by the partial write.
-	app.handleSessionExitUI(task.ID, true /* cleanExit */, false)
-	got, _ := d.Get(task.ID)
+	app.NotifySessionExit(task.ID, nil, false, nil)
+	got, err := d.Get(task.ID)
+	testutil.NoError(t, err)
 	testutil.Equal(t, got.Status, model.StatusComplete)
 	testutil.Equal(t, got.Name, "haiku-name")
 	firstEnded := got.EndedAt
 
-	// Second notification: row is no longer InProgress, so the guard skips the
-	// flip entirely — status and ended_at must be untouched (no re-stamp, no
-	// duplicate event).
-	app.handleSessionExitUI(task.ID, true /* cleanExit */, false)
-	got, _ = d.Get(task.ID)
+	app.NotifySessionExit(task.ID, nil, false, nil)
+	got, err = d.Get(task.ID)
+	testutil.NoError(t, err)
 	testutil.Equal(t, got.Status, model.StatusComplete)
-	testutil.Equal(t, got.EndedAt.Equal(firstEnded), true)
+	testutil.True(t, got.EndedAt.Equal(firstEnded))
 }
 
 func TestSmoke_RestartDaemonPrompt_OpensAndSkips(t *testing.T) {

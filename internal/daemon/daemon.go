@@ -138,10 +138,8 @@ type ExitInfo struct {
 // fast-fail launch surfaced as an error, or an unconfirmed stream loss) is a
 // recoverable exit and lands the task in InReview so the user can resume.
 //
-// Both status-flip sites — the daemon's transitionTaskOnExit (authoritative for
-// headless/PWA) and the TUI's handleSessionExitUI (an idempotent retry that can
-// win the race) — MUST derive their decision from this one predicate so they
-// can never disagree. The rule is intentionally timing-independent: a missing
+// The daemon and standalone TUI use this predicate for the sessions they own.
+// The rule is timing-independent: a missing
 // binary / crash arrives as a non-empty Err, so we never need a wall-clock
 // heuristic to tell "did real work happen" in the common case.
 func (e ExitInfo) CleanExit() bool {
@@ -479,9 +477,8 @@ func (d *Daemon) handleSessionExitOwned(taskID string, ei ExitInfo, owner agent.
 	// Flip the DB row out of InProgress. Without this, a daemon-only setup
 	// (web-app users with no TUI attached) leaves the row stuck in_progress
 	// forever — the API then reports idle:true and the PWA pops a Resume modal
-	// for a task whose agent has already exited. The TUI's HandleSessionExit also
-	// runs this transition; both sites are guarded by the StatusInProgress check,
-	// so whichever fires first wins and the other becomes a no-op.
+	// for a task whose agent has already exited. Connected clients use the
+	// notification to update their view after this transition.
 	//
 	// SKIP when a kick-restart is in flight (KickRerender stopped the session and
 	// queued a same-task Start). Transitioning here would race the restart and
@@ -529,15 +526,7 @@ func (d *Daemon) Runner() agent.SessionRunner {
 // path. The recapture decision is delegated to agent.NeedsSessionRecapture:
 // codex/pi capture once (while SessionID is empty), Claude refreshes on every
 // exit (a /clear mints a new UUID under ~/.claude/projects), unknown backends
-// never recapture. Concurrent TUI-side capture is harmless: both paths run
-// CaptureSessionID, a pure read of the same backend state, so last-writer-wins
-// produces the same value in the common case.
-//
-// Edge case: if the user starts a brand-new session for the same task in
-// the few-ms gap between onFinish and the TUI's QueueUpdateDraw, the two
-// captures could observe different "newest" rows. The resulting SessionID
-// still points at a valid session for the same task, so we intentionally
-// accept this benign drift rather than serialize the two paths.
+// never recapture. Connected clients leave this write to the daemon.
 //
 // No-op for unknown backends (dispatcher returns ("", nil)), for unchanged IDs
 // (the common no-/clear Claude exit), and for tasks already deleted before the
@@ -588,8 +577,7 @@ func (d *Daemon) captureSessionIDPostExit(taskID string) {
 // the task in Complete; every other exit (explicit stop, crash, missing-binary
 // launch failure, unconfirmed stream loss) lands in InReview so the user can
 // resume rather than having a still-unfinished task silently marked done.
-// No-op if the row has already moved on (e.g., the TUI's HandleSessionExit
-// won the race, or the user manually changed status mid-exit).
+// No-op if the row has already moved on (e.g., the user changed status mid-exit).
 func (d *Daemon) transitionTaskOnExit(taskID string, cleanExit bool) {
 	// Hera worker finish policy (BUG-050, locked decision #4) — the EXIT-HOOK
 	// BACKSTOP. The PRIMARY trigger is hera_status("done") in the MCP arm

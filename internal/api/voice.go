@@ -169,6 +169,9 @@ func (a apiVoice) Stop(ctx context.Context, taskID string) error {
 		if errors.Is(err, agent.ErrSessionNotFound) {
 			return &voice.OpError{Speech: "I couldn't find a live session to stop.", Code: "no_session"}
 		}
+		if errors.Is(err, agent.ErrSessionCoordinationUnsupported) {
+			return voiceSupervisorRestartRequired()
+		}
 		slog.Error("[voice] stop failed", "task", taskID, "err", err)
 		uxlog.Log("[voice] stop failed task=%s err=%v", taskID, err)
 		return &voice.OpError{Speech: "I couldn't stop " + voice.SpeakName(t.Name) + ".", Code: "stop_failed"}
@@ -197,12 +200,13 @@ func (a apiVoice) Resume(ctx context.Context, taskID string, force bool) error {
 	if task.Archived {
 		return &voice.OpError{Speech: spoken + " is archived.", Code: "archived"}
 	}
-	if sess := a.s.runner.Get(task.ID); sess != nil && !sess.IsIdle() {
-		return &voice.OpError{Speech: spoken + " is already running.", Code: "task_running"}
+	sess, err := agent.AttachableSession(a.s.runner, task.ID)
+	if err != nil {
+		uxlog.Log("[voice] resume refused non-attachable session task=%s err=%v", taskID, err)
+		return voiceResumeError(spoken, err)
 	}
-	if a.s.runner.HasPendingRestart(task.ID) {
-		uxlog.Log("[voice] resume refused pending restart task=%s", taskID)
-		return &voice.OpError{Speech: spoken + " is restarting.", Code: "agent_restarting"}
+	if sess != nil && !sess.IsIdle() {
+		return &voice.OpError{Speech: spoken + " is already running.", Code: "task_running"}
 	}
 	gate := a.s.evaluateCloseout(task, force, "voice")
 	if !gate.proceed {
@@ -221,11 +225,29 @@ func (a apiVoice) Resume(ctx context.Context, taskID string, force bool) error {
 		if ambiguous {
 			return voiceLaunchAmbiguous(spoken)
 		}
-		return &voice.OpError{Speech: "I couldn't resume " + spoken + ".", Code: "start_failed"}
+		return voiceResumeError(spoken, err)
 	}
 	slog.Info("[voice] resumed", "task", taskID)
 	uxlog.Log("[voice] resumed task=%s", taskID)
 	return nil
+}
+
+func voiceResumeError(spoken string, err error) *voice.OpError {
+	switch {
+	case errors.Is(err, agent.ErrSessionStarting):
+		return &voice.OpError{Speech: spoken + " has a session operation in progress.", Code: "agent_restarting"}
+	case errors.Is(err, agent.ErrSessionCoordinationUnsupported):
+		return voiceSupervisorRestartRequired()
+	default:
+		return &voice.OpError{Speech: "I couldn't resume " + spoken + ".", Code: "start_failed"}
+	}
+}
+
+func voiceSupervisorRestartRequired() *voice.OpError {
+	return &voice.OpError{
+		Speech: "Please restart the session supervisor from System in Settings, then try again.",
+		Code:   "supervisor_restart_required",
+	}
 }
 
 func (a apiVoice) lockSessionMutation(taskID string) (func(), error) {

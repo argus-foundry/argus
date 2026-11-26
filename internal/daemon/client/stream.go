@@ -162,6 +162,7 @@ func (rs *RemoteSession) streamOnce(sockPath string) (processExited, daemonDown 
 
 	uxlog.Log("stream: connected task=%s", rs.taskID)
 	if rs.streamAttempt > 0 {
+		rs.refreshInfo()
 		uxlog.Log("stream: reconnected task=%s after %d retries", rs.taskID, rs.streamAttempt)
 	}
 

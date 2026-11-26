@@ -1831,6 +1831,9 @@ func TestHandleStreamOutput(t *testing.T) {
 
 		testutil.Equal(t, resp.StatusCode, http.StatusOK)
 		testutil.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
+		testutil.Equal(t, resp.Header.Get("X-Argus-Session-Pid"), fmt.Sprint(sess.PID()))
+		testutil.Equal(t, resp.Header.Get("X-Argus-Session-Initial-Cols"), "80")
+		testutil.Equal(t, resp.Header.Get("X-Argus-Session-Initial-Rows"), "24")
 
 		// Sequence: wait briefly for SSE to subscribe and replay the ring,
 		// then trigger a clipboard set so the subscriber callback fires.

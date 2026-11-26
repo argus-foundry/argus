@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -67,7 +68,7 @@ func newSession(taskID string, p *Provider) *Session {
 	}
 }
 
-// PID returns the cached agent PID. Populated by refreshTask().
+// PID identifies the process attached to the stream, once connected.
 func (s *Session) PID() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,21 +114,23 @@ func (s *Session) LastUserInput() time.Time {
 
 // Resize POSTs to /api/tasks/{id}/resize.
 func (s *Session) Resize(rows, cols uint16) error {
-	_, err := s.ResizeForRerender(rows, cols, false, false)
+	_, err := s.ResizeForRerender(rows, cols, RerenderResizeOptions{})
 	return err
 }
 
 // ResizeForRerender asks the session owner to resize and evaluate a rerender.
-func (s *Session) ResizeForRerender(rows, cols uint16, scrolledUp, composerDirty bool) (bool, error) {
-	resp, err := s.p.c.resize(context.Background(), s.taskID, rows, cols, scrolledUp, composerDirty)
+func (s *Session) ResizeForRerender(rows, cols uint16, options RerenderResizeOptions) (*ResizeResp, error) {
+	resp, err := s.p.c.ResizeForRerender(context.Background(), s.taskID, rows, cols, options)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	s.mu.Lock()
-	s.cols = resp.Cols
-	s.rows = resp.Rows
-	s.mu.Unlock()
-	return resp.Rerendered, nil
+	if resp.Deferred != "stale_session" {
+		s.mu.Lock()
+		s.cols = resp.Cols
+		s.rows = resp.Rows
+		s.mu.Unlock()
+	}
+	return resp, nil
 }
 
 // RecentOutput returns the full ring buffer contents.
@@ -209,9 +212,7 @@ func (s *Session) PTYSize() (cols, rows int) {
 	return sz.Cols, sz.Rows
 }
 
-// InitialPTYSize returns the dimensions captured the first time the stream
-// observed a size. The TUI uses this to detect "started narrow" sessions
-// whose scrollback won't re-flow on SIGWINCH. Cached on first sync.
+// InitialPTYSize returns the initial size of the process attached to the stream.
 func (s *Session) InitialPTYSize() (cols, rows int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -404,6 +405,20 @@ func (s *Session) streamOnce() (bool, error) {
 		return false, err
 	}
 	defer resp.Body.Close()
+	pid, _ := strconv.Atoi(resp.Header.Get("X-Argus-Session-Pid"))
+	if pid > 0 {
+		cols, _ := strconv.Atoi(resp.Header.Get("X-Argus-Session-Initial-Cols"))
+		rows, _ := strconv.Atoi(resp.Header.Get("X-Argus-Session-Initial-Rows"))
+		s.mu.Lock()
+		if s.pid != 0 && s.pid != pid {
+			// After a stream drop this URL may resolve to a new PTY. The
+			// old cursor and history width belong to the previous process.
+			s.mu.Unlock()
+			return true, nil
+		}
+		s.pid, s.initCols, s.initRows = pid, cols, rows
+		s.mu.Unlock()
+	}
 
 	reader := bufio.NewReader(resp.Body)
 	var event string

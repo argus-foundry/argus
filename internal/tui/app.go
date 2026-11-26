@@ -2260,9 +2260,7 @@ func (a *App) reconnectLiveDaemon() bool {
 		return false
 	}
 	uxlog.Log("[tui] daemon alive on fresh connection; reconnected without restart")
-	fresh.OnSessionExit(func(taskID string, info daemon.ExitInfo) {
-		a.HandleSessionExit(taskID, info)
-	})
+	fresh.OnSessionExitOwned(a.HandleSessionExitOwned)
 	a.tapp.QueueUpdateDraw(func() {
 		a.mu.Lock()
 		old := a.daemonClient
@@ -2313,9 +2311,7 @@ func (a *App) restartDaemon() {
 	uxlog.Log("[tui] daemon restarted, reconnected")
 
 	// Wire up session exit callback on the new client.
-	newClient.OnSessionExit(func(taskID string, info daemon.ExitInfo) {
-		a.HandleSessionExit(taskID, info)
-	})
+	newClient.OnSessionExitOwned(a.HandleSessionExitOwned)
 
 	a.tapp.QueueUpdateDraw(func() {
 		a.mu.Lock()
@@ -2410,11 +2406,15 @@ func (a *App) NotifySessionExit(taskID string, err error, stopped bool, lastOutp
 	})
 }
 
-// HandleSessionExit is called from the daemon client's OnSessionExit callback.
-// It flips task status (via handleSessionExitUI) and refreshes the UI — EXCEPT
-// when info.StreamLost is set, in which case the process may still be alive, so
-// it logs and returns WITHOUT touching status (the row stays as-is).
+// HandleSessionExit updates the UI for a daemon exit when the client has no
+// outgoing session handle. The daemon owns the persisted exit state.
 func (a *App) HandleSessionExit(taskID string, info daemon.ExitInfo) {
+	a.HandleSessionExitOwned(taskID, info, nil)
+}
+
+// HandleSessionExitOwned updates the UI for an observed exit, preserving a
+// replacement already attached to the pane.
+func (a *App) HandleSessionExitOwned(taskID string, info daemon.ExitInfo, owner agent.SessionHandle) {
 	if info.StreamLost {
 		uxlog.Log("[tui] stream lost: task=%s — status unchanged, process may still be alive", taskID)
 		return
@@ -2422,11 +2422,12 @@ func (a *App) HandleSessionExit(taskID string, info daemon.ExitInfo) {
 	uxlog.Log("[tui] session exit (daemon): task=%s err=%s stopped=%v pending=%v lastOutput=%d bytes",
 		taskID, info.Err, info.Stopped, info.PendingRestart, len(info.LastOutput))
 	a.tapp.QueueUpdateDraw(func() {
-		// PendingRestart was stamped by the daemon's onFinish under the same
-		// snapshot it used to decide whether to skip transitionTaskOnExit, so
-		// the TUI never has to RPC from the main goroutine. CleanExit() is the
-		// shared predicate the daemon used for its own flip — reuse it so the
-		// two sites can never reach different terminal statuses.
+		if a.agentState.TaskID == taskID {
+			if bound := a.agentPane.Session(); bound != nil && bound != owner && bound.Alive() {
+				uxlog.Log("[tui] ignored retired session exit task=%s", taskID)
+				return
+			}
+		}
 		a.handleSessionExitUI(taskID, info.CleanExit(), info.PendingRestart)
 	})
 }
@@ -2510,22 +2511,19 @@ func (a *App) consumeHeraReclaimPending(taskID string) bool {
 func (a *App) handleSessionExitUI(taskID string, cleanExit, pendingRestart bool) {
 	a.invalidateOwed() // a session ended: re-evaluate every pane's owed notice once
 	defer a.setRerendering(taskID, false)
-	// Two callers, two flip-site stories:
-	//   - Daemon mode (HandleSessionExit): the daemon's onFinish callback
-	//     already ran transitionTaskOnExit before closing the stream that
-	//     triggered us, so t.Status may already have moved on. The flip
-	//     below is a defensive idempotent retry.
-	//   - In-process mode (NotifySessionExit): the in-process onFinish
-	//     calls only NotifySessionExit (no transitionTaskOnExit — that's
-	//     a *Daemon method), so the flip below is the *only* flip site.
-	// Codex session-ID capture is hoisted out of the StatusInProgress check
-	// because in daemon mode the check fails after the daemon's flip and
-	// would otherwise silently drop the capture.
+	// The daemon owns exit persistence when connected. Standalone mode
+	// relies on this handler to settle the row and capture the transcript.
+	standalone := !a.daemonConnected
+	restartGeneration, restartQueued := a.pendingRerenderRestart[taskID]
 	var captureTask *model.Task
-	t, err := a.db.Get(taskID)
-	if err != nil || t == nil {
-		uxlog.Log("[tui] handleSessionExitUI: task %s lookup failed: %v", taskID, err)
-		return
+	var t *model.Task
+	if standalone || restartQueued {
+		var err error
+		t, err = a.db.Get(taskID)
+		if err != nil || t == nil {
+			uxlog.Log("[tui] handleSessionExitUI: task %s lookup failed: %v", taskID, err)
+			return
+		}
 	}
 	// Snapshot whether taskID was ALREADY awaiting hera close-out BEFORE
 	// anything below mutates it (add-fix-resize-kick-closeout). The
@@ -2540,7 +2538,6 @@ func (a *App) handleSessionExitUI(taskID string, cleanExit, pendingRestart bool)
 	// the common exit path.
 	var kickClosedOut bool
 	var kickClosedOutErr error
-	restartGeneration, restartQueued := a.pendingRerenderRestart[taskID]
 	if d, native := a.db.(*db.DB); native && restartQueued {
 		generation, err := d.SessionStopGeneration(taskID)
 		if err != nil || generation != restartGeneration {
@@ -2566,7 +2563,7 @@ func (a *App) handleSessionExitUI(taskID string, cleanExit, pendingRestart bool)
 	if !cleanExit && restartQueued {
 		kickClosedOut, kickClosedOutErr = a.heraKickRestartClosedOut(taskID)
 	}
-	if t.Worktree != "" {
+	if standalone && t.Worktree != "" {
 		// Snapshot the task for the capture goroutine, which resolves the
 		// backend and decides whether to recapture (agent.NeedsSessionRecapture)
 		// off the main goroutine. We snapshot regardless of SessionID because
@@ -2574,28 +2571,18 @@ func (a *App) handleSessionExitUI(taskID string, cleanExit, pendingRestart bool)
 		// though its SessionID is always non-empty.
 		captureTask = t
 	}
-	_, remote := a.db.(remoteTaskCreator)
-	if t.Status == model.StatusInProgress && !remote {
-		// Skip the transition when the daemon has a kick-restart queued —
-		// otherwise the TUI's exit notification (which arrives independently
-		// of the API-initiated kick) would flip the row to InReview while the
-		// runner's exit goroutine is mid-restart, leaving the resumed session
-		// running with the wrong status. The daemon's onFinish guards on the
-		// same predicate; this mirrors it from the TUI side. Local-flag kicks
-		// (a.pendingRerenderRestart) are handled below and promote the task
-		// when the next session starts.
+	if !standalone && !pendingRestart {
+		a.clearHeraReclaimPending(taskID)
+	}
+	if standalone && t.Status == model.StatusInProgress {
+		// Runner-owned restarts preserve the row until the new session starts.
+		// Local-flag kicks are handled below and promote the task on restart.
 		if !pendingRestart {
 			// Hera worker finish policy mirror (BUG-050). Kept in lockstep with
 			// the daemon's transitionTaskOnExit and the hera_status("done") MCP
 			// arm via the shared db.RollHeraWorkerToReview helper, so all flip
-			// sites can never disagree (the PR #707 invariant): a task holding a
-			// live worker-kind hera binding never self-completes — the
-			// coordinator/human closes it out. In daemon mode the daemon flips
-			// first (its onFinish runs before the stream close that triggers us),
-			// so this is a no-op; it is load-bearing in daemon-less in-process
-			// mode, where this is the ONLY flip site. Local-only: a.db is *db.DB
-			// locally and satisfies heraFinishStore; in --remote mode it does not,
-			// so we fall through to the plain rule (remote daemon is authoritative).
+			// stay in sync (the PR #707 invariant): a live worker-kind binding
+			// stays in review until its coordinator or a human closes it out.
 			// fix-nuke-completion-race: consume the reclaim marker (if any)
 			// exactly once, here, regardless of which branch below ultimately
 			// decides — a task's in_progress window that the marker was
@@ -2736,7 +2723,7 @@ func (a *App) handleSessionExitUI(taskID string, cleanExit, pendingRestart bool)
 			a.agentPane.ResetVT()
 			a.statusbar.ClearInfo()
 			if a.startSessionFillAtGeneration(t, agent.RefreshFillMissing, &restartGeneration) {
-				a.refreshTasksAsync()
+				a.refreshTasksAfterExit()
 				return
 			}
 		} else {
@@ -2769,7 +2756,7 @@ func (a *App) handleSessionExitUI(taskID string, cleanExit, pendingRestart bool)
 
 	// Refresh task list — fetch running/idle IDs in a goroutine to avoid
 	// blocking the tview main goroutine with an RPC call.
-	a.refreshTasksAsync()
+	a.refreshTasksAfterExit()
 }
 
 // syncIdleUnvisited pushes the current idleUnvisited set to the task list.
@@ -3697,6 +3684,16 @@ func (a *App) refreshTasks() {
 // updates the task list on the tview main goroutine via QueueUpdateDraw.
 // Safe to call from any goroutine including the tview main goroutine.
 func (a *App) refreshTasksAsync() {
+	a.refreshTasksAsyncWithReconciliation(true)
+}
+
+func (a *App) refreshTasksAfterExit() {
+	// A delayed notification cannot reconcile daemon state from its own
+	// liveness snapshot. The periodic backstop can still recover lost exits.
+	a.refreshTasksAsyncWithReconciliation(false)
+}
+
+func (a *App) refreshTasksAsyncWithReconciliation(reconcile bool) {
 	startGen := a.startGen.Load()
 	go func() {
 		runningIDs, idleIDs := a.runner.RunningAndIdle()
@@ -3718,7 +3715,7 @@ func (a *App) refreshTasksAsync() {
 				uxlog.Log("[tui] refreshTasksAsync: startGen changed, skipping reconciliation with stale runningIDs")
 				runningIDs = nil
 			}
-			a.refreshTasksWithIDs(runningIDs, idleIDs, false)
+			a.refreshTasksWithIDsAndReconciliation(runningIDs, idleIDs, false, reconcile)
 		})
 	}()
 }
@@ -3812,6 +3809,10 @@ func (a *App) invalidateTasksChangeGate() {
 // from the periodic onTick path (see shouldRefetchTasks's own doc comment for
 // why every other caller must pass false instead).
 func (a *App) refreshTasksWithIDs(runningIDs, idleIDs []string, allowCachedTasks bool) {
+	a.refreshTasksWithIDsAndReconciliation(runningIDs, idleIDs, allowCachedTasks, true)
+}
+
+func (a *App) refreshTasksWithIDsAndReconciliation(runningIDs, idleIDs []string, allowCachedTasks, reconcile bool) {
 	if local, ok := a.db.(*db.DB); ok && !local.Config().Bridge.Enabled {
 		a.bridgeStates = nil
 	}
@@ -3862,7 +3863,7 @@ func (a *App) refreshTasksWithIDs(runningIDs, idleIDs []string, allowCachedTasks
 	// Only reconcile when connected to a daemon — the daemon is the source of
 	// truth for running sessions. In-process mode has its own onFinish callback.
 	// Skip if runningIDs is nil (transient RPC failure) or during a restart.
-	if a.daemonConnected && runningIDs != nil && !a.daemonRestarting {
+	if reconcile && a.daemonConnected && runningIDs != nil && !a.daemonRestarting {
 		runningSet := make(map[string]bool, len(runningIDs))
 		for _, id := range runningIDs {
 			runningSet[id] = true
@@ -6534,6 +6535,22 @@ func (a *App) kickRerenderCore(task *model.Task, sess agent.SessionHandle, panel
 		return
 	}
 	pid := sess.PID()
+	owner, remoteOwner := sess.(interface {
+		ResizeForRerender(rows, cols uint16, options apiclient.RerenderResizeOptions) (*apiclient.ResizeResp, error)
+	})
+	if remoteOwner && pid <= 0 {
+		// An SSE connection publishes the PTY's identity before its output.
+		// A decision based on an unidentified process cannot follow it.
+		if forced {
+			a.forcedDefer(taskID, panelCols, onDeferred == nil, "deferred-connecting", "Waiting for the terminal to connect", true)
+		}
+		if onDeferred != nil {
+			onDeferred()
+		} else if _, waiting := a.kickWait[taskID]; !waiting {
+			a.kickWait[taskID] = time.Time{}
+		}
+		return
+	}
 	previousPID, observed := a.committedColsPID[taskID]
 	if !observed || previousPID != pid {
 		uxlog.Log("[rerender] bind process changed task=%s old_pid=%d pid=%d discarded_anchor=%d", taskID, previousPID, pid, a.committedCols[taskID])
@@ -6628,6 +6645,7 @@ func (a *App) kickRerenderCore(task *model.Task, sess agent.SessionHandle, panel
 			committed := int(a.committedCols[taskID])
 			scrolledNow, draftNow := a.keepPlaceState(taskID, sess, panelCols, scrolled, probe)
 			decision := agent.ShouldKickRerenderKeepPlace(true, initCols, committed, int(panelCols), idle, false, needsInput, scrolledNow, draftNow)
+			forcedAt := a.kickForced[taskID]
 			if decision != agent.RerenderDeferScrolled && decision != agent.RerenderDeferDraft {
 				a.dropKickWait(taskID)
 			}
@@ -6713,29 +6731,20 @@ func (a *App) kickRerenderCore(task *model.Task, sess agent.SessionHandle, panel
 					}
 					return
 				}
-				if owner, ok := sess.(interface {
-					ResizeForRerender(rows, cols uint16, scrolledUp, composerDirty bool) (bool, error)
-				}); ok {
+				if remoteOwner {
 					rows, _ := a.spawnPTYSize(taskID)
+					options := apiclient.RerenderResizeOptions{
+						ExpectedPID: pid, CommittedCols: a.committedCols[taskID], RerenderNow: forced,
+						ScrolledUp: scrolledNow, ComposerDirty: draftNow,
+					}
 					go func() {
-						kicked, err := owner.ResizeForRerender(rows, panelCols, scrolledNow, draftNow)
+						resp, err := owner.ResizeForRerender(rows, panelCols, options)
 						a.tapp.QueueUpdateDraw(func() {
-							uxlog.Log("[tui] rerender: owner reply task=%s kicked=%t err=%v", taskID, kicked, err)
-							if kicked {
-								delete(a.kickForced, taskID)
-								if forced {
-									a.hotkeyOutcome(taskID, panelCols, "kicked", "Re-rendering at full width…")
-								}
+							uxlog.Log("[tui] rerender: owner reply task=%s pid=%d resp=%+v err=%v", taskID, pid, resp, err)
+							if a.committedColsPID[taskID] != pid {
 								return
 							}
-							a.setRerenderPending(taskID)
-							a.invalidateAttachCache(taskID)
-							if forced && err != nil {
-								a.hotkeyOutcome(taskID, panelCols, "error", "Re-render failed: "+err.Error())
-							}
-							if onDeferred != nil {
-								onDeferred()
-							}
+							a.handleRemoteRerenderResult(taskID, panelCols, pid, forced, forcedAt, onDeferred, resp, err)
 						})
 					}()
 					return
@@ -6782,6 +6791,64 @@ func (a *App) kickRerenderCore(task *model.Task, sess agent.SessionHandle, panel
 			}
 		})
 	}()
+}
+
+func (a *App) handleRemoteRerenderResult(taskID string, cols uint16, pid int, forced bool, forcedAt time.Time, onDeferred func(), resp *apiclient.ResizeResp, err error) {
+	reason := "unavailable"
+	if err == nil {
+		if resp.Rerendered {
+			delete(a.kickForced, taskID)
+			if forced {
+				a.hotkeyOutcome(taskID, cols, "kicked", "Re-rendering at full width…")
+			}
+			return
+		}
+		reason = resp.Deferred
+	}
+	var notice string
+	switch reason {
+	case "busy":
+		notice = "Agent is busy — re-render pending"
+	case "prompt":
+		notice = "Agent is waiting on a question — re-render pending"
+	case "draft":
+		notice = "Unsent text in the composer — re-render waits until it clears"
+	case "scrolled":
+		notice = "Scrolled up — re-render waits until you're back at the bottom"
+	case "restarting", "unavailable":
+		notice = "Waiting for the session owner — re-render pending"
+	case "transcript":
+		notice = "Waiting for a resumable transcript — re-render pending"
+	default:
+		a.setRerendering(taskID, false)
+		if forced {
+			outcome, notice := "noop", "The session no longer needs a re-render"
+			switch reason {
+			case "stale_session":
+				outcome, notice = reason, "The session changed before re-rendering"
+			case "owner_unsupported":
+				outcome, notice = reason, "Restart Session Supervisor to use coordinated re-rendering"
+			case "unsupported":
+				outcome, notice = reason, "This session cannot be re-rendered"
+			case "graduation":
+				outcome, notice = reason, db.ErrGraduationPending.Error()
+			}
+			a.hotkeyOutcome(taskID, cols, outcome, notice)
+		}
+		return
+	}
+	a.setRerenderPending(taskID)
+	a.invalidateAttachCache(taskID)
+	a.recordUnreconciledCommittedCols(taskID, cols, pid)
+	if forced {
+		if !forcedAt.IsZero() {
+			a.kickForced[taskID] = forcedAt
+		}
+		a.forcedDefer(taskID, cols, onDeferred == nil, "deferred-"+reason, notice, reason != "scrolled")
+	}
+	if onDeferred != nil {
+		onDeferred()
+	}
 }
 
 // recordUnreconciledCommittedCols records panelCols as the width taskID's
@@ -6902,18 +6969,14 @@ func (a *App) lockDeferredSessionRestart(taskID string, live bool) (int64, func(
 		return 0, nil, err
 	}
 	if live && generation != 0 {
-		current, err := d.Get(taskID)
+		session, err := agent.AttachableSession(a.runner, taskID)
 		if err != nil {
 			unlock()
 			return 0, nil, err
 		}
-		if current == nil {
+		if session == nil {
 			unlock()
-			return 0, nil, db.ErrTaskNotFound
-		}
-		if current.Status == model.StatusInReview {
-			unlock()
-			return 0, nil, errors.New("session is stopping")
+			return 0, nil, agent.ErrSessionNotFound
 		}
 	}
 	return generation, unlock, nil
@@ -7686,7 +7749,17 @@ func (a *App) startSessionFillAtGeneration(task *model.Task, mode agent.SessionR
 			uxlog.Log("[tui] deferred restart canceled by confirmed stop task=%s", task.ID)
 			return false
 		}
-		if sess := a.runner.Get(task.ID); sess != nil && sess.Alive() {
+		sess, err := agent.AttachableSession(a.runner, task.ID)
+		if err != nil {
+			if errors.Is(err, agent.ErrSessionStarting) {
+				uxlog.Log("[tui] start deferred until session owner settles task=%s", task.ID)
+				a.statusbar.SetInfo("Another session operation is in progress")
+			} else {
+				a.sessionStartFailed(task.ID, err)
+			}
+			return false
+		}
+		if sess != nil && sess.Alive() {
 			if (a.mode == modeAgent || a.tasksRailViewing) && a.agentState.TaskID == task.ID {
 				a.reattachAgentPane(task.ID)
 			}
@@ -7769,6 +7842,9 @@ func (a *App) startSessionFillAtGeneration(task *model.Task, mode agent.SessionR
 			return true
 		}
 		a.sessionStartFailed(task.ID, err)
+		if errors.Is(err, agent.ErrSessionStarting) {
+			return false
+		}
 		if remote {
 			// REST owns launch persistence, including recovery after errors.
 			return true

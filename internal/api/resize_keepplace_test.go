@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/apiclient"
 	"github.com/argus-foundry/argus/internal/bridge"
+	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
@@ -43,6 +45,21 @@ type keepKickRunner struct {
 }
 
 func (r *keepKickRunner) Get(string) agent.SessionHandle { return r.sess }
+
+func (r *keepKickRunner) KickWidthRerenderForPID(task *model.Task, cfg config.Config, rows, cols uint16, expectedPID int) error {
+	if expectedPID != r.sess.PID() {
+		return agent.ErrSessionNotFound
+	}
+	return r.KickWidthRerender(task, cfg, rows, cols)
+}
+
+type replacementResizeRunner struct {
+	*keepKickRunner
+}
+
+func (r *replacementResizeRunner) KickWidthRerenderForPID(*model.Task, config.Config, uint16, uint16, int) error {
+	return agent.ErrSessionNotFound
+}
 
 // composerTail paints a Claude-style composer: prompt marker is "❯" + NBSP.
 func composerTail(body string) []byte {
@@ -130,6 +147,81 @@ func TestResizeKickRetriesAfterSessionMutation(t *testing.T) {
 	kicked, _ = srv.evalKickRerender(task.ID, 24, 120, kickClientState{})
 	testutil.True(t, kicked)
 	testutil.Equal(t, runner.kicks, 1)
+}
+
+func TestRemoteRerenderThroughResize(t *testing.T) {
+	t.Run("explicit request bypasses same width cache", func(t *testing.T) {
+		srv, task, runner, _ := keepPlaceServer(t, nil)
+		httpServer := httptest.NewServer(srv.routes())
+		defer httpServer.Close()
+		c := apiclient.New(httpServer.URL, "test-token", apiclient.WithHTTPClient(httpServer.Client()))
+
+		initial, err := c.Resize(t.Context(), task.ID, 24, 120)
+		testutil.NoError(t, err)
+		testutil.True(t, initial.Rerendered)
+		ordinaryRepeat, err := c.Resize(t.Context(), task.ID, 24, 120)
+		testutil.NoError(t, err)
+		testutil.False(t, ordinaryRepeat.Rerendered)
+		explicitRepeat, err := c.ResizeForRerender(t.Context(), task.ID, 24, 120, apiclient.RerenderResizeOptions{
+			ExpectedPID: runner.sess.PID(), RerenderNow: true,
+		})
+		testutil.NoError(t, err)
+		testutil.True(t, explicitRepeat.Rerendered)
+	})
+
+	t.Run("committed history drifts from the initial width", func(t *testing.T) {
+		srv, task, runner, _ := keepPlaceServer(t, nil)
+		httpServer := httptest.NewServer(srv.routes())
+		defer httpServer.Close()
+		c := apiclient.New(httpServer.URL, "test-token", apiclient.WithHTTPClient(httpServer.Client()))
+		ordinary, err := c.Resize(t.Context(), task.ID, 24, 80)
+		testutil.NoError(t, err)
+		testutil.False(t, ordinary.Rerendered)
+
+		stale, err := c.ResizeForRerender(t.Context(), task.ID, 24, 80, apiclient.RerenderResizeOptions{
+			ExpectedPID: runner.sess.PID() + 1, CommittedCols: 120,
+		})
+		testutil.NoError(t, err)
+		testutil.False(t, stale.Rerendered)
+		testutil.Equal(t, stale.Deferred, "stale_session")
+
+		current, err := c.ResizeForRerender(t.Context(), task.ID, 24, 80, apiclient.RerenderResizeOptions{
+			ExpectedPID: runner.sess.PID(), CommittedCols: 120,
+		})
+		testutil.NoError(t, err)
+		testutil.True(t, current.Rerendered)
+	})
+
+	t.Run("explicit request keeps draft and rejects incomplete identity", func(t *testing.T) {
+		srv, task, runner, _ := keepPlaceServer(t, composerTail("save this draft"))
+		httpServer := httptest.NewServer(srv.routes())
+		defer httpServer.Close()
+		c := apiclient.New(httpServer.URL, "test-token", apiclient.WithHTTPClient(httpServer.Client()))
+		invalid, err := c.ResizeForRerender(t.Context(), task.ID, 24, 120, apiclient.RerenderResizeOptions{RerenderNow: true})
+		testutil.Error(t, err)
+		testutil.Nil(t, invalid)
+
+		held, err := c.ResizeForRerender(t.Context(), task.ID, 24, 120, apiclient.RerenderResizeOptions{
+			ExpectedPID: runner.sess.PID(), RerenderNow: true,
+		})
+		testutil.NoError(t, err)
+		testutil.False(t, held.Rerendered)
+		testutil.Equal(t, held.Deferred, "draft")
+	})
+
+	t.Run("owner replaced process while width was being evaluated", func(t *testing.T) {
+		srv, task, runner, _ := keepPlaceServer(t, nil)
+		srv.runner = &replacementResizeRunner{keepKickRunner: runner}
+		httpServer := httptest.NewServer(srv.routes())
+		defer httpServer.Close()
+		c := apiclient.New(httpServer.URL, "test-token", apiclient.WithHTTPClient(httpServer.Client()))
+		resp, err := c.ResizeForRerender(t.Context(), task.ID, 24, 120, apiclient.RerenderResizeOptions{
+			ExpectedPID: runner.sess.PID(), RerenderNow: true,
+		})
+		testutil.NoError(t, err)
+		testutil.False(t, resp.Rerendered)
+		testutil.Equal(t, resp.Deferred, "stale_session")
+	})
 }
 
 // The client flag is the only signal under the 10-minute per-width cap; the

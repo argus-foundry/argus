@@ -171,12 +171,31 @@ func (c *sessionCore) StartSession(req *StartReq, resp *StartResp) error {
 		// implicit timing property, not a contract).
 		resp.Ambiguous = errors.Is(err, agent.ErrStartAmbiguous)
 		resp.ResumeUnavailable = errors.Is(err, agent.ErrResumeUnavailable)
+		resp.SessionStarting = errors.Is(err, agent.ErrSessionStarting)
 		return nil
 	}
 	resp.PID = sess.PID()
 	resp.SessionID = task.SessionID
 	slog.Info("rpc.StartSession ok", "task", req.TaskID, "pid", resp.PID)
 	return nil
+}
+
+// AttachableSession consults the session owner instead of cached stream
+// liveness. Legacy readers can keep observing a PTY while it retires.
+func (c *sessionCore) AttachableSession(req *TaskIDReq, resp *AttachableSessionResp) error {
+	sess, err := agent.AttachableSession(c.runner, req.TaskID)
+	if errors.Is(err, agent.ErrSessionStarting) {
+		resp.Pending = true
+		return nil
+	}
+	if errors.Is(err, agent.ErrSessionCoordinationUnsupported) {
+		resp.Unsupported = true
+		return nil
+	}
+	if sess != nil {
+		resp.PID = sess.PID()
+	}
+	return err
 }
 
 // StopSession stops a running session.
@@ -405,14 +424,24 @@ func (c *sessionCore) Resize(req *ResizeReq, resp *StatusResp) error {
 // actually invoked in ON mode (the daemon's API client targets supervisor.sock),
 // but keeping it uniform on the core means a future direct caller works too.
 func (c *sessionCore) KickRerender(req *KickReq, resp *StatusResp) error {
-	return c.kickRerender(req, resp, false)
+	return c.kickRerender(req, resp, false, 0)
 }
 
 func (c *sessionCore) KickWidthRerender(req *KickReq, resp *StatusResp) error {
-	return c.kickRerender(req, resp, true)
+	return c.kickRerender(req, resp, true, 0)
 }
 
-func (c *sessionCore) kickRerender(req *KickReq, resp *StatusResp, widthRepair bool) error {
+// KickWidthRerenderForPID provides a separate capability so an older owner
+// cannot ignore the PID and kick a replacement through its existing RPC.
+func (c *sessionCore) KickWidthRerenderForPID(req *KickReq, resp *StatusResp) error {
+	if req.ExpectedPID <= 0 {
+		resp.Error = agent.ErrSessionNotFound.Error()
+		return nil
+	}
+	return c.kickRerender(req, resp, true, req.ExpectedPID)
+}
+
+func (c *sessionCore) kickRerender(req *KickReq, resp *StatusResp, widthRepair bool, expectedPID int) error {
 	slog.Info("rpc.KickRerender", "task", req.TaskID, "cols", req.Cols, "rows", req.Rows, "width_repair", widthRepair)
 	task := &model.Task{
 		ID:              req.TaskID,
@@ -432,7 +461,11 @@ func (c *sessionCore) kickRerender(req *KickReq, resp *StatusResp, widthRepair b
 	cfg := c.cfgFn()
 	cfg.MCPPort = req.MCPPort
 	kick := c.runner.KickRerender
-	if widthRepair {
+	if expectedPID > 0 {
+		kick = func(task *model.Task, cfg config.Config, rows, cols uint16) error {
+			return agent.KickWidthRerenderForPID(c.runner, task, cfg, rows, cols, expectedPID)
+		}
+	} else if widthRepair {
 		kick = func(task *model.Task, cfg config.Config, rows, cols uint16) error {
 			return agent.KickWidthRerender(c.runner, task, cfg, rows, cols)
 		}
@@ -444,6 +477,9 @@ func (c *sessionCore) kickRerender(req *KickReq, resp *StatusResp, widthRepair b
 	if err := kick(task, cfg, req.Rows, req.Cols); err != nil {
 		slog.Error("rpc.KickRerender failed", "task", req.TaskID, "err", err, "width_repair", widthRepair)
 		resp.Error = err.Error()
+		if expectedPID > 0 && errors.Is(err, agent.ErrResumeUnavailable) {
+			resp.Error = agent.ErrResumeUnavailable.Error()
+		}
 		return nil
 	}
 	resp.OK = true

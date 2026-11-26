@@ -28,6 +28,18 @@ func runnerTestConfig() config.Config {
 	}
 }
 
+func TestStartRespectsQueuedReplacement(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	run := NewRunner(nil)
+	t.Cleanup(run.StopAll)
+	task := &model.Task{ID: "reserved-replacement", Worktree: t.TempDir()}
+	run.SetPendingRestartForTest(task.ID, true)
+	sess, err := run.Start(task, runnerTestConfig(), 24, 80, false)
+	testutil.ErrorIs(t, err, ErrSessionStarting)
+	testutil.Nil(t, sess)
+	testutil.True(t, run.HasPendingRestart(task.ID))
+}
+
 func TestStopSettledFencesRecycleBeforeSignaling(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	run := NewRunner(nil)
@@ -571,9 +583,11 @@ func TestRunner_PendingRestartIDs(t *testing.T) {
 		Projects: make(map[string]config.Project),
 	}
 	task := &model.Task{ID: "b", Name: "test", Worktree: t.TempDir()}
+	r.SetPendingRestartForTest("b", false)
 	if _, err := r.Start(task, cfg, 24, 80, false); err != nil {
 		t.Fatal(err)
 	}
+	r.SetPendingRestartForTest("b", true)
 	// "b" now has both a pending entry and a live session → filtered out.
 	testutil.Equal(t, len(r.PendingRestartIDs()), 0)
 
@@ -840,19 +854,20 @@ func TestRunner_KickRerender_NoLoopOnImmediateCrash(t *testing.T) {
 	// Inject a pendingRestart entry directly with consumed=true to simulate
 	// the state "the previous restart goroutine already claimed this entry
 	// and is now running the resumed session". The resumed session is the
-	// second Start below; its exit goroutine must read consumed=true and
+	// owner start below; its exit goroutine must read consumed=true and
 	// skip another restart. Flipping consumed AFTER Start would race with
 	// the exit goroutine — on slow runners the goroutine reads consumed=
 	// false first, calls r.Start(pending.task=nil, ...), and panics with a
 	// nil deref. Setting it up-front removes the race.
+	restart := &pendingRestart{consumed: true}
 	r.mu.Lock()
-	r.pendingRestart[task.ID] = &pendingRestart{consumed: true}
+	r.pendingRestart[task.ID] = restart
 	r.mu.Unlock()
 
-	// Drive a second Start to simulate the resumed session, then let it die.
+	// Drive the owner's start to simulate the resumed session, then let it die.
 	// The resumed session's exit goroutine should read consumed=true and
 	// skip the loop.
-	if _, err := r.Start(task, cfg, 24, 80, true); err != nil {
+	if _, err := r.start(task, cfg, 24, 80, true, restart); err != nil {
 		t.Fatal(err)
 	}
 

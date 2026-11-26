@@ -95,11 +95,46 @@ func TestRerenderNow_ConfirmedStopPreventsKickOfDrainingSession(t *testing.T) {
 	r := newNowRig(t, "hk-stopping", 20)
 	d := r.app.db.(*db.DB)
 	testutil.NoError(t, d.RecordSessionStop(r.task.ID))
+	readUI(t, r.app.tapp, func() {
+		r.app.runner = stoppingRerenderRunner{getRunner{Runner: agent.NewRunner(nil), sess: r.sess}}
+	})
 	r.press(t, 100, nil, nil, "error")
 	testutil.False(t, r.sess.stopCalled.Load())
 	readUI(t, r.app.tapp, func() {
 		testutil.False(t, r.app.hasPendingRerenderRestart(r.task.ID))
 	})
+}
+
+type stoppingRerenderRunner struct {
+	getRunner
+}
+
+func (stoppingRerenderRunner) AttachableSession(string) (agent.SessionHandle, error) {
+	return nil, agent.ErrSessionStarting
+}
+
+func TestRerenderNow_DrainingResidentDoesNotRestart(t *testing.T) {
+	r := newNowRig(t, "hk-resident", 20)
+	d := r.app.db.(*db.DB)
+	resident, _, err := d.EnsureResidentTask(r.task.Worktree)
+	testutil.NoError(t, err)
+	_, err = d.SetSessionIDIfEmpty(resident.ID, r.task.SessionID)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.RecordSessionStop(resident.ID))
+	r.task = resident
+	readUI(t, r.app.tapp, func() {
+		r.app.runner = stoppingRerenderRunner{getRunner{Runner: agent.NewRunner(nil), sess: r.sess}}
+	})
+
+	r.press(t, 100, nil, nil, "error")
+
+	testutil.False(t, r.sess.stopCalled.Load())
+	readUI(t, r.app.tapp, func() {
+		testutil.False(t, r.app.hasPendingRerenderRestart(resident.ID))
+	})
+	stored, err := d.Get(resident.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, stored.Status, model.StatusInProgress)
 }
 
 func TestRerenderNow_OldExitDoesNotClobberManualResume(t *testing.T) {

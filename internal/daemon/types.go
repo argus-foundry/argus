@@ -152,7 +152,8 @@ type BootInfoResp struct {
 // their existing ID when an older server omits it. Supervisor surface v19
 // identifies the launch recovery behavior that makes this field necessary.
 // v14 carries StartReq.ResumeOnly: automatic recovery must never launch fresh.
-const ProtocolVersion = 14
+// v15 adds AttachableSession, typed start conflicts, and PID-scoped width repair.
+const ProtocolVersion = 15
 
 // SupervisorProtocolMatch reports whether a supervisor's handshake version
 // equals the daemon's. A mismatch is NOT fatal and NEVER triggers an auto-
@@ -259,11 +260,19 @@ type StartResp struct {
 	// other additive jsonrpc field (see unify-writeinput-origin).
 	Ambiguous         bool
 	ResumeUnavailable bool
+	SessionStarting   bool
 }
 
 // TaskIDReq is an RPC request that identifies a single task.
 type TaskIDReq struct {
 	TaskID string
+}
+
+// AttachableSessionResp carries the session owner's resume admission decision.
+type AttachableSessionResp struct {
+	PID         int
+	Pending     bool
+	Unsupported bool
 }
 
 // StopReq is Daemon.StopSession's request. Scope's zero value is
@@ -340,6 +349,7 @@ type KickReq struct {
 	Branch          string
 	Rows            uint16
 	Cols            uint16
+	ExpectedPID     int // required by KickWidthRerenderForPID only
 }
 
 // RecycleReq is the RPC request to recycle a coordinator's session

@@ -84,6 +84,68 @@ func TestRESTStopRefusesReservedSession(t *testing.T) {
 	testutil.Contains(t, w.Body.String(), "agent_restarting")
 }
 
+func TestResumeRefusesDrainingStoppedSession(t *testing.T) {
+	s, d := testServer(t)
+	run := agent.NewRunner(nil)
+	s.runner = run
+	t.Cleanup(run.StopAll)
+	cli := filepath.Join(t.TempDir(), "fake-cli")
+	testutil.NoError(t, os.WriteFile(cli, []byte("#!/bin/sh\ntrap '' TERM\nprintf 'ready\\n'\nwhile [ ! -f finish ]; do sleep 0.02; done\n"), 0700))
+	testutil.NoError(t, d.SetBackend("draining", config.Backend{Command: cli}))
+	task := &model.Task{Name: "Draining", Backend: "draining", Worktree: t.TempDir(), Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	initial, err := run.Start(task, d.Config(), 24, 80, false)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(task.Worktree, "finish"), nil, 0600) })
+	deadline := time.Now().Add(6 * time.Second)
+	for !initial.IsIdle() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	testutil.True(t, initial.IsIdle())
+
+	stop := httptest.NewRecorder()
+	s.routes().ServeHTTP(stop, authedReq(http.MethodPost, "/api/tasks/"+task.ID+"/stop", ""))
+	testutil.Equal(t, stop.Code, http.StatusOK)
+	testutil.True(t, initial.Alive())
+	resume := httptest.NewRecorder()
+	s.routes().ServeHTTP(resume, authedReq(http.MethodPost, "/api/tasks/"+task.ID+"/resume", ""))
+	testutil.Equal(t, resume.Code, http.StatusConflict)
+	testutil.Contains(t, resume.Body.String(), "agent_restarting")
+	voiceErr := s.VoiceOperator().Resume(context.Background(), task.ID, false)
+	var opErr *voice.OpError
+	if !errors.As(voiceErr, &opErr) {
+		t.Fatalf("expected typed voice conflict, got %v", voiceErr)
+	}
+	testutil.Equal(t, opErr.Code, "agent_restarting")
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Status, model.StatusInReview)
+}
+
+type legacyVoiceStopRunner struct{ *agent.Runner }
+
+func (legacyVoiceStopRunner) StopSettled(string) error {
+	return agent.ErrSessionCoordinationUnsupported
+}
+
+func TestVoiceStopExplainsLegacySupervisor(t *testing.T) {
+	s, d := testServer(t)
+	s.runner = legacyVoiceStopRunner{agent.NewRunner(nil)}
+	task := &model.Task{Name: "Review", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+
+	err := s.VoiceOperator().Stop(context.Background(), task.ID)
+	var opErr *voice.OpError
+	if !errors.As(err, &opErr) {
+		t.Fatalf("expected typed voice refusal, got %v", err)
+	}
+	testutil.Equal(t, opErr.Code, "supervisor_restart_required")
+	testutil.Contains(t, opErr.Speech, "restart the session supervisor")
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Status, model.StatusInProgress)
+}
+
 func TestRESTStopFencesResidentRestartWithoutChangingStatus(t *testing.T) {
 	s, d := testServer(t)
 	resident, _, err := d.EnsureResidentTask(t.TempDir())

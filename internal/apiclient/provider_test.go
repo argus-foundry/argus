@@ -3,9 +3,11 @@ package apiclient
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -265,21 +267,29 @@ func TestSession_ResizeForRerenderUsesServerDecision(t *testing.T) {
 			Cols          int  `json:"cols"`
 			ScrolledUp    bool `json:"scrolled_up"`
 			ComposerDirty bool `json:"composer_dirty"`
+			ExpectedPID   int  `json:"expected_pid"`
+			CommittedCols int  `json:"committed_cols"`
+			RerenderNow   bool `json:"rerender_now"`
 		}
 		testutil.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		testutil.Equal(t, req.Rows, 40)
 		testutil.Equal(t, req.Cols, 120)
 		testutil.True(t, req.ScrolledUp)
 		testutil.True(t, req.ComposerDirty)
+		testutil.Equal(t, req.ExpectedPID, 123)
+		testutil.Equal(t, req.CommittedCols, 160)
+		testutil.True(t, req.RerenderNow)
 		testutil.NoError(t, json.NewEncoder(w).Encode(map[string]any{"rows": 40, "cols": 120, "rerendered": true}))
 	}))
 	defer srv.Close()
 	p := NewProvider(New(srv.URL, "tok", WithHTTPClient(srv.Client())))
 	defer p.Close()
 	s := newSession("t1", p)
-	kicked, err := s.ResizeForRerender(40, 120, true, true)
+	resp, err := s.ResizeForRerender(40, 120, RerenderResizeOptions{
+		ExpectedPID: 123, CommittedCols: 160, RerenderNow: true, ScrolledUp: true, ComposerDirty: true,
+	})
 	testutil.NoError(t, err)
-	testutil.True(t, kicked)
+	testutil.True(t, resp.Rerendered)
 }
 
 func TestProvider_SwitchClaudeSessionUsesServerOperation(t *testing.T) {
@@ -295,6 +305,39 @@ func TestProvider_SwitchClaudeSessionUsesServerOperation(t *testing.T) {
 	p := NewProvider(New(srv.URL, "tok", WithHTTPClient(srv.Client())))
 	defer p.Close()
 	testutil.NoError(t, p.SwitchClaudeSession("t1", "chosen"))
+}
+
+func TestSession_StreamKeepsHistoryBoundToItsPID(t *testing.T) {
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pid := "123"
+		if calls.Add(1) > 1 {
+			pid = "456"
+		}
+		w.Header().Set("X-Argus-Session-Pid", pid)
+		w.Header().Set("X-Argus-Session-Initial-Cols", "84")
+		w.Header().Set("X-Argus-Session-Initial-Rows", "25")
+		_, _ = w.Write([]byte("data: b2xk\n\n"))
+	}))
+	defer srv.Close()
+	p := NewProvider(New(srv.URL, "tok", WithHTTPClient(srv.Client())))
+	defer p.Close()
+	s := newSession("t1", p)
+	defer s.close()
+	ended, err := s.streamOnce()
+	testutil.ErrorIs(t, err, io.EOF)
+	testutil.False(t, ended)
+	testutil.Equal(t, s.PID(), 123)
+	cols, rows := s.InitialPTYSize()
+	testutil.Equal(t, cols, 84)
+	testutil.Equal(t, rows, 25)
+	testutil.Equal(t, string(s.RecentOutput()), "old")
+
+	ended, err = s.streamOnce()
+	testutil.NoError(t, err)
+	testutil.True(t, ended)
+	testutil.Equal(t, s.PID(), 123)
+	testutil.Equal(t, string(s.RecentOutput()), "old")
 }
 
 func TestSession_RingBufferReceivesStream(t *testing.T) {

@@ -386,6 +386,9 @@ func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		if resp.ResumeUnavailable {
 			return nil, fmt.Errorf("%w: %s", agent.ErrResumeUnavailable, resp.Error)
 		}
+		if resp.SessionStarting {
+			return nil, agent.ErrSessionStarting
+		}
 		// resp.Ambiguous means the daemon's OWN Start call was itself an
 		// ambiguous RPC timeout (e.g. its second hop to the supervisor in P4
 		// supervisor mode) rather than a definitive failure. Re-wrap here so
@@ -458,12 +461,15 @@ func (c *Client) StopSettled(taskID string) error {
 	var resp daemon.StatusResp
 	if err := c.call("Daemon.StopSettledSession", &daemon.TaskIDReq{TaskID: taskID}, &resp); err != nil {
 		if strings.Contains(err.Error(), "can't find method Daemon.StopSettledSession") {
-			return errors.New("the session supervisor does not support coordinated stops. Use Settings > System > Restart Session Supervisor, then try again")
+			return agent.ErrSessionCoordinationUnsupported
 		}
 		return err
 	}
 	if resp.Error == agent.ErrSessionStarting.Error() {
 		return agent.ErrSessionStarting
+	}
+	if resp.Error == agent.ErrSessionCoordinationUnsupported.Error() {
+		return agent.ErrSessionCoordinationUnsupported
 	}
 	return stopReplyError(resp)
 }
@@ -649,15 +655,43 @@ func (c *Client) HasPendingRestart(taskID string) bool {
 	return resp.Pending
 }
 
-// StartOrReattach returns the live session for task.ID if the daemon reports one
-// alive (reattached=true), otherwise starts a fresh one (reattached=false). This
-// satisfies agent.SessionRunner so the daemon's API resume path works when the
-// daemon's runner is a supervisor-client. Composed from Get + Start rather than a
-// dedicated RPC — the daemon-side StartSession already rejects a duplicate, and
-// Get's liveness probe is the same check the in-process runner does internally.
+// AttachableSession asks the owner whether an existing session is ready to reuse.
+// An older peer cannot certify that a live session is safe to reattach.
+func (c *Client) AttachableSession(taskID string) (agent.SessionHandle, error) {
+	var resp daemon.AttachableSessionResp
+	if err := c.call("Daemon.AttachableSession", &daemon.TaskIDReq{TaskID: taskID}, &resp); err != nil {
+		if !strings.Contains(err.Error(), "can't find method Daemon.AttachableSession") {
+			return nil, err
+		}
+		info, err := c.ProbeSession(taskID)
+		if err != nil {
+			return nil, err
+		}
+		if info.Alive {
+			return nil, agent.ErrSessionCoordinationUnsupported
+		}
+		return nil, nil
+	}
+	if resp.Unsupported {
+		return nil, agent.ErrSessionCoordinationUnsupported
+	}
+	if resp.Pending {
+		return nil, agent.ErrSessionStarting
+	}
+	if resp.PID == 0 {
+		return nil, nil
+	}
+	if sess := c.Get(taskID); sess != nil && sess.Alive() && sess.PID() == resp.PID {
+		return sess, nil
+	}
+	uxlog.Log("client.AttachableSession: owner PID does not match local stream task=%s owner_pid=%d", taskID, resp.PID)
+	return nil, agent.ErrSessionStarting
+}
+
+// StartOrReattach attaches to a settled session or requests a fresh start.
 func (c *Client) StartOrReattach(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, bool, error) {
-	if existing := c.Get(task.ID); existing != nil {
-		return existing, true, nil
+	if existing, err := c.AttachableSession(task.ID); err != nil || existing != nil {
+		return existing, existing != nil, err
 	}
 	sess, err := c.Start(task, cfg, rows, cols, resume)
 	if err != nil {
@@ -678,24 +712,36 @@ func (c *Client) KickRerender(task *model.Task, cfg config.Config, rows, cols ui
 	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
 		return err
 	}
-	return c.kickRerender(task, rows, cols, false, "Daemon.KickRerender")
+	return c.kickRerender(task, rows, cols, false, "Daemon.KickRerender", 0)
 }
 
 func (c *Client) Revive(task *model.Task, cfg config.Config, rows, cols uint16) error {
 	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
 		return err
 	}
-	return c.kickRerender(task, rows, cols, true, "Daemon.KickRerender")
+	return c.kickRerender(task, rows, cols, true, "Daemon.KickRerender", 0)
 }
 
 func (c *Client) KickWidthRerender(task *model.Task, cfg config.Config, rows, cols uint16) error {
 	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
 		return err
 	}
-	return c.kickRerender(task, rows, cols, false, "Daemon.KickWidthRerender")
+	return c.kickRerender(task, rows, cols, false, "Daemon.KickWidthRerender", 0)
 }
 
-func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, method string) error {
+// KickWidthRerenderForPID has no unscoped fallback. An older peer cannot
+// guarantee that it is signaling the PTY verified by the caller.
+func (c *Client) KickWidthRerenderForPID(task *model.Task, cfg config.Config, rows, cols uint16, expectedPID int) error {
+	if expectedPID <= 0 {
+		return agent.ErrSessionNotFound
+	}
+	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
+		return err
+	}
+	return c.kickRerender(task, rows, cols, false, "Daemon.KickWidthRerenderForPID", expectedPID)
+}
+
+func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, method string, expectedPID int) error {
 	if err := c.checkAccountSupported(task); err != nil {
 		return err
 	}
@@ -721,14 +767,25 @@ func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, 
 		Branch:          task.Branch,
 		Rows:            rows,
 		Cols:            cols,
+		ExpectedPID:     expectedPID,
 	}, &resp); err != nil {
 		if method == "Daemon.KickWidthRerender" && strings.Contains(err.Error(), "can't find method Daemon.KickWidthRerender") {
 			slog.Info("[rerender] peer lacks bounded kick; using ordinary kick", "task", task.ID)
-			return c.kickRerender(task, rows, cols, false, "Daemon.KickRerender")
+			return c.kickRerender(task, rows, cols, false, "Daemon.KickRerender", 0)
+		}
+		if expectedPID > 0 && strings.Contains(err.Error(), "can't find method Daemon.KickWidthRerenderForPID") {
+			return agent.ErrSessionCoordinationUnsupported
 		}
 		return err
 	}
 	if resp.Error != "" {
+		if expectedPID > 0 {
+			for _, sentinel := range []error{agent.ErrSessionNotFound, agent.ErrSessionStarting, agent.ErrResumeUnavailable, agent.ErrSessionCoordinationUnsupported} {
+				if resp.Error == sentinel.Error() {
+					return sentinel
+				}
+			}
+		}
 		return fmt.Errorf("%s", resp.Error)
 	}
 	if resp.SessionID != "" {

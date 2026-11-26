@@ -668,6 +668,14 @@ func (s *Server) handleRestartTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeLaunchErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, agent.ErrSessionStarting) {
+		writeCodedErrCause(w, http.StatusConflict, "the agent is starting, stopping, or restarting", "agent_restarting", nil)
+		return
+	}
+	if errors.Is(err, agent.ErrSessionCoordinationUnsupported) {
+		writeCodedErrCause(w, http.StatusConflict, "", "supervisor_restart_required", err)
+		return
+	}
 	if errors.Is(err, agent.ErrStartAmbiguous) {
 		writeCodedErrCause(w, http.StatusServiceUnavailable, "session start outcome is unknown; check task runtime before retrying", "start_ambiguous", nil)
 		return
@@ -850,13 +858,14 @@ func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sess := s.runner.Get(task.ID); sess != nil && !sess.IsIdle() {
-		writeCodedErrCause(w, http.StatusConflict, "task already running", "task_running", nil)
+	sess, err := agent.AttachableSession(s.runner, task.ID)
+	if err != nil {
+		uxlog.Log("[api] resume: session not attachable task=%s err=%v", id, err)
+		writeLaunchErr(w, err)
 		return
 	}
-	if s.runner.HasPendingRestart(task.ID) {
-		uxlog.Log("[api] resume: refused pending restart task=%s", id)
-		writeCodedErrCause(w, http.StatusConflict, "agent is restarting", "agent_restarting", nil)
+	if sess != nil && !sess.IsIdle() {
+		writeCodedErrCause(w, http.StatusConflict, "task already running", "task_running", nil)
 		return
 	}
 
@@ -1563,6 +1572,11 @@ type resizeReq struct {
 	// submit over bytes the client sent). Absent means false.
 	ScrolledUp    bool `json:"scrolled_up,omitempty"`
 	ComposerDirty bool `json:"composer_dirty,omitempty"`
+	// A remote TUI can request an evaluation for a specific PTY. Its history
+	// width and cache bypass are meaningful only for that process.
+	ExpectedPID   int    `json:"expected_pid,omitempty"`
+	CommittedCols uint16 `json:"committed_cols,omitempty"`
+	RerenderNow   bool   `json:"rerender_now,omitempty"`
 }
 
 // kickClientState carries the keep-place signals a client reported with a
@@ -1570,6 +1584,16 @@ type resizeReq struct {
 type kickClientState struct {
 	ScrolledUp    bool
 	ComposerDirty bool
+	ExpectedPID   int
+	CommittedCols uint16
+	RerenderNow   bool
+}
+
+func (cs kickClientState) deferReason(reason string) string {
+	if cs.ExpectedPID > 0 {
+		return reason
+	}
+	return ""
 }
 
 // kickDeferClock records when kicks at one width were first deferred.
@@ -1600,6 +1624,15 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "cols/rows out of range", nil)
 		return
 	}
+	if req.ExpectedPID < 0 || req.ExpectedPID > 1<<31-1 || req.CommittedCols > 1000 ||
+		(req.ExpectedPID == 0 && (req.CommittedCols != 0 || req.RerenderNow)) {
+		writeErr(w, http.StatusBadRequest, "rerender requires a positive expected_pid and committed_cols in range", nil)
+		return
+	}
+	if req.ExpectedPID != 0 && sess.PID() != req.ExpectedPID {
+		writeJSON(w, http.StatusOK, resizeResponse{Deferred: "stale_session"})
+		return
+	}
 	if err := sess.Resize(req.Rows, req.Cols); err != nil {
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
@@ -1612,14 +1645,18 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
 	// The kick stops the session; the runner's exit goroutine restarts it
 	// at the new dimensions via --session-id so the agent re-emits the
 	// entire conversation. Best-effort: never let this fail the resize.
-	rerendered, deferred := s.evalKickRerender(id, req.Rows, req.Cols, kickClientState{ScrolledUp: req.ScrolledUp, ComposerDirty: req.ComposerDirty})
+	rerendered, deferred := s.evalKickRerender(id, req.Rows, req.Cols, kickClientState{
+		ScrolledUp: req.ScrolledUp, ComposerDirty: req.ComposerDirty,
+		ExpectedPID: req.ExpectedPID, CommittedCols: req.CommittedCols, RerenderNow: req.RerenderNow,
+	})
+	writeJSON(w, http.StatusOK, resizeResponse{Cols: int(req.Cols), Rows: int(req.Rows), Rerendered: rerendered, Deferred: deferred})
+}
 
-	writeJSON(w, http.StatusOK, struct {
-		Cols       int    `json:"cols"`
-		Rows       int    `json:"rows"`
-		Rerendered bool   `json:"rerendered"`
-		Deferred   string `json:"deferred"`
-	}{Cols: int(req.Cols), Rows: int(req.Rows), Rerendered: rerendered, Deferred: deferred})
+type resizeResponse struct {
+	Cols       int    `json:"cols"`
+	Rows       int    `json:"rows"`
+	Rerendered bool   `json:"rerendered"`
+	Deferred   string `json:"deferred"`
 }
 
 // isRedundantResize caches the latest cols for taskID and reports
@@ -1668,18 +1705,19 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 // so the client knows it owes a same-size retry; it is empty otherwise.
 func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClientState) (kicked bool, deferred string) {
 	sess := s.runner.Get(taskID)
-	if sess == nil || !sess.Alive() {
-		return false, ""
-	}
 	if s.runner.HasPendingRestart(taskID) {
-		return false, ""
+		return false, cs.deferReason("restarting")
+	}
+	if sess == nil || !sess.Alive() || (cs.ExpectedPID != 0 && sess.PID() != cs.ExpectedPID) {
+		return false, cs.deferReason("stale_session")
 	}
 	// Skip when cols matches the most recent resize for this task. xterm.js
 	// fires /resize on every terminal mount — without this gate, reopening
 	// the web agent view kills any in-flight Claude UI (e.g. AskUserQuestion
 	// overlays) that doesn't survive the --session-id restart. Genuine
 	// resizes fall through because cols differs from the cached value.
-	if s.isRedundantResize(taskID, cols) {
+	committedDrift := cs.CommittedCols > 0 && agent.MarginExceedsRerenderThreshold(int(cs.CommittedCols), int(cols))
+	if s.isRedundantResize(taskID, cols) && !cs.RerenderNow && !committedDrift {
 		return false, ""
 	}
 	// Margin gate before the DB read — eliminates a SQLite hit on every
@@ -1687,8 +1725,24 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 	// gate above is cheaper still (mutex-protected map op) and short-
 	// circuits before this gate even reads InitialPTYSize.
 	initCols, _ := sess.InitialPTYSize()
-	if !agent.MarginExceedsRerenderThreshold(initCols, int(cols)) {
+	if !agent.MarginExceedsRerenderThreshold(initCols, int(cols)) && !committedDrift {
 		return false, ""
+	}
+	unlockSession, acquired, err := s.db.TryLockSessionMutation(taskID)
+	if err != nil || !acquired {
+		uxlog.Log("[rerender] session operation lock unavailable task=%s err=%v", taskID, err)
+		s.invalidateColsCache(taskID)
+		return false, cs.deferReason("restarting")
+	}
+	defer unlockSession()
+	if cs.ExpectedPID > 0 {
+		// Repeat the process check under the lock after the cheap gates.
+		var reason string
+		sess, reason = s.rerenderTarget(taskID, cs.ExpectedPID)
+		if reason != "" {
+			s.invalidateColsCache(taskID)
+			return false, reason
+		}
 	}
 	// A pending graduate's restart belongs to the daemon graduation watcher
 	// (stray-job stop first, one restart). A width kick here would race it, so
@@ -1697,7 +1751,7 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 	if pending, perr := s.db.GraduationPendingErr(taskID); perr != nil || pending {
 		uxlog.Log("[resident] kick skipped: graduation pending task=%s (err=%v)", taskID, perr)
 		s.invalidateColsCache(taskID)
-		return false, ""
+		return false, cs.deferReason("graduation")
 	}
 	// Now the expensive lookups. Re-check IsIdle here so the idle gate
 	// reflects state at-the-moment-of-stop, not earlier.
@@ -1705,7 +1759,7 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 		// Agent is mid-tool-call — invalidate so the next same-cols
 		// /resize re-evaluates when the agent goes idle.
 		s.invalidateColsCache(taskID)
-		return false, ""
+		return false, cs.deferReason("busy")
 	}
 	if agent.BlockedOnPrompt(sess) {
 		// Agent is idle because it's blocked on a user prompt (AskUserQuestion
@@ -1713,56 +1767,65 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 		// and silently dismiss the prompt the user is about to answer.
 		// Invalidate so a later resize re-evaluates once the agent moves on.
 		s.invalidateColsCache(taskID)
-		return false, ""
+		return false, cs.deferReason("prompt")
 	}
 	// Keep-place gates (kick-timing-keep-place): same order as the TUI's
 	// decision — an unsent draft outranks scroll position. With the setting off
 	// every client signal is ignored and no screen is read.
-	if s.db.Config().UI.RerenderKeepPlace {
+	cfg := s.db.Config()
+	if cfg.UI.RerenderKeepPlace {
 		if hold, reason := s.keepPlaceHold(taskID, sess, cols, cs); hold {
 			s.invalidateColsCache(taskID)
 			return false, reason
 		}
 	}
 	s.clearKickDefer(taskID)
-	unlockSession, acquired, err := s.db.TryLockSessionMutation(taskID)
-	if err != nil || !acquired {
-		uxlog.Log("[rerender] session operation lock unavailable task=%s err=%v", taskID, err)
-		s.invalidateColsCache(taskID)
-		return false, ""
-	}
-	defer unlockSession()
 	task, err := s.db.Get(taskID)
 	if err != nil || task == nil {
 		// Transient DB error — invalidate so the next same-cols /resize
 		// retries instead of permanently short-circuiting on a stale
 		// cached value.
 		s.invalidateColsCache(taskID)
-		return false, ""
+		return false, cs.deferReason("unavailable")
 	}
 	if task.SessionID == "" {
 		// Codex and other backends without --session-id can never be
 		// kicked — leave the cache populated so same-cols /resize
 		// permanently short-circuits (correct; no retry semantic).
-		return false, ""
+		return false, cs.deferReason("unsupported")
 	}
-	cfg := s.db.Config()
 	if available, err := agent.ResumableSessionAvailable(task, cfg); err != nil || !available {
 		uxlog.Log("[rerender] deferred task=%s session=%s: transcript unavailable err=%v", task.ID, task.SessionID, err)
 		//nolint:gosec // G706: slog encodes these as structured attributes, escaping control characters.
 		slog.Warn("[rerender] deferred: transcript unavailable", "task", task.ID, "session", task.SessionID, "error", err)
 		s.invalidateColsCache(taskID)
-		return false, ""
+		return false, cs.deferReason("transcript")
 	}
-	if err := agent.KickWidthRerender(s.runner, task, cfg, rows, cols); err != nil {
+	var kickErr error
+	if cs.ExpectedPID > 0 {
+		kickErr = agent.KickWidthRerenderForPID(s.runner, task, cfg, rows, cols, cs.ExpectedPID)
+	} else {
+		kickErr = agent.KickWidthRerender(s.runner, task, cfg, rows, cols)
+	}
+	if kickErr != nil {
 		// Don't fail the resize on a kick failure — runner.KickRerender's
 		// own slog line records the task; just note the failure here.
-		log.Printf("api: KickRerender failed: %v", err)
+		log.Printf("api: KickRerender failed: %v", kickErr)
 		// Kick attempt failed — invalidate so the next same-cols /resize
 		// retries (a transient daemon error shouldn't permanently break
 		// the gate).
 		s.invalidateColsCache(taskID)
-		return false, ""
+		switch {
+		case errors.Is(kickErr, agent.ErrSessionNotFound):
+			return false, cs.deferReason("stale_session")
+		case errors.Is(kickErr, agent.ErrSessionStarting):
+			return false, cs.deferReason("restarting")
+		case errors.Is(kickErr, agent.ErrResumeUnavailable):
+			return false, cs.deferReason("transcript")
+		case errors.Is(kickErr, agent.ErrSessionCoordinationUnsupported):
+			return false, cs.deferReason("owner_unsupported")
+		}
+		return false, cs.deferReason("unavailable")
 	}
 	// runner.KickRerender already logs via slog with task=, cols=, rows=.
 	if err := s.db.SetStatus(taskID, model.StatusInProgress); err != nil {
@@ -1771,6 +1834,25 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 		slog.Warn("[rerender] restart status write failed", "task", taskID, "err", err)
 	}
 	return true, ""
+}
+
+// rerenderTarget checks the PTY owner instead of a cached proxy handle. A
+// draining stream can outlive the process that originally supplied its PID.
+func (s *Server) rerenderTarget(taskID string, expectedPID int) (agent.SessionHandle, string) {
+	sess, err := agent.AttachableSession(s.runner, taskID)
+	switch {
+	case errors.Is(err, agent.ErrSessionStarting):
+		return nil, "restarting"
+	case errors.Is(err, agent.ErrSessionCoordinationUnsupported):
+		return nil, "owner_unsupported"
+	case err != nil:
+		uxlog.Log("[rerender] session owner check failed task=%s err=%v", taskID, err)
+		return nil, "unavailable"
+	case sess == nil || sess.PID() != expectedPID:
+		return nil, "stale_session"
+	default:
+		return sess, ""
+	}
 }
 
 // --- Stream Output (SSE) ---
@@ -1810,6 +1892,11 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// The remote TUI associates its history width with this exact PTY.
+	cols, rows := sess.InitialPTYSize()
+	w.Header().Set("X-Argus-Session-Pid", strconv.Itoa(sess.PID()))
+	w.Header().Set("X-Argus-Session-Initial-Cols", strconv.Itoa(cols))
+	w.Header().Set("X-Argus-Session-Initial-Rows", strconv.Itoa(rows))
 	flusher.Flush()
 
 	// Use a channelWriter so AddWriterFrom's synchronous ring buffer replay

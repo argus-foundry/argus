@@ -98,23 +98,37 @@ func (c *Client) GetSize(ctx context.Context, id string) (*PTYSize, error) {
 
 // ResizeResp mirrors the resize handler's response envelope.
 type ResizeResp struct {
-	Cols       int  `json:"cols"`
-	Rows       int  `json:"rows"`
-	Rerendered bool `json:"rerendered"`
+	Cols       int    `json:"cols"`
+	Rows       int    `json:"rows"`
+	Rerendered bool   `json:"rerendered"`
+	Deferred   string `json:"deferred"`
 }
 
 // Resize sends a SIGWINCH-equivalent resize to the agent's PTY.
 func (c *Client) Resize(ctx context.Context, id string, rows, cols uint16) (*ResizeResp, error) {
-	return c.resize(ctx, id, rows, cols, false, false)
+	return c.resize(ctx, id, rows, cols, RerenderResizeOptions{})
 }
 
-func (c *Client) resize(ctx context.Context, id string, rows, cols uint16, scrolledUp, composerDirty bool) (*ResizeResp, error) {
+// RerenderResizeOptions describe the remote pane's current process and history.
+type RerenderResizeOptions struct {
+	ExpectedPID   int    `json:"expected_pid,omitempty"`
+	CommittedCols uint16 `json:"committed_cols,omitempty"`
+	RerenderNow   bool   `json:"rerender_now,omitempty"`
+	ScrolledUp    bool   `json:"scrolled_up,omitempty"`
+	ComposerDirty bool   `json:"composer_dirty,omitempty"`
+}
+
+// ResizeForRerender asks the session owner to evaluate the remote pane's width.
+func (c *Client) ResizeForRerender(ctx context.Context, id string, rows, cols uint16, options RerenderResizeOptions) (*ResizeResp, error) {
+	return c.resize(ctx, id, rows, cols, options)
+}
+
+func (c *Client) resize(ctx context.Context, id string, rows, cols uint16, options RerenderResizeOptions) (*ResizeResp, error) {
 	req := struct {
-		Rows          uint16 `json:"rows"`
-		Cols          uint16 `json:"cols"`
-		ScrolledUp    bool   `json:"scrolled_up,omitempty"`
-		ComposerDirty bool   `json:"composer_dirty,omitempty"`
-	}{rows, cols, scrolledUp, composerDirty}
+		Rows uint16 `json:"rows"`
+		Cols uint16 `json:"cols"`
+		RerenderResizeOptions
+	}{rows, cols, options}
 	var resp ResizeResp
 	if err := c.doJSON(ctx, "POST", "/api/tasks/"+id+"/resize", req, &resp); err != nil {
 		return nil, err

@@ -372,6 +372,70 @@ func TestSupStop(t *testing.T) {
 	waitStatus(t, database, task.ID, model.StatusInReview)
 }
 
+func TestSupDrain(t *testing.T) {
+	d, sc, database := supE2E(t)
+	cli := filepath.Join(t.TempDir(), "fake-cli")
+	testutil.NoError(t, os.WriteFile(cli, []byte("#!/bin/sh\ntrap '' TERM\nprintf 'ready\\n'\nwhile [ ! -f finish ]; do sleep 0.02; done\n"), 0700))
+	task := startE2E(t, d, sc, database, "drain", cli)
+	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(task.Worktree, "finish"), nil, 0600) })
+	sock := filepath.Join(t.TempDir(), "d.sock")
+	serveTestServer(t, d, sock)
+	waitFile(t, sock)
+	client, err := Connect(sock)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+
+	initial, reattached, err := client.StartOrReattach(task, database.Config(), 24, 80, false)
+	testutil.NoError(t, err)
+	testutil.True(t, reattached)
+	deadline := time.Now().Add(4 * time.Second)
+	for !strings.Contains(string(initial.RecentOutput()), "ready") && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	testutil.Contains(t, string(initial.RecentOutput()), "ready")
+	stream := initial.(*RemoteSession)
+	ownerPID := stream.PID()
+	stream.mu.Lock()
+	stream.pid = ownerPID + 1
+	stream.mu.Unlock()
+	session, err := client.AttachableSession(task.ID)
+	testutil.ErrorIs(t, err, agent.ErrSessionStarting)
+	testutil.Nil(t, session)
+	testutil.Equal(t, stream.PID(), ownerPID+1)
+	stream.mu.Lock()
+	stream.pid = ownerPID
+	stream.mu.Unlock()
+
+	testutil.NoError(t, client.StopSettled(task.ID))
+	info, err := sc.ProbeSession(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, info.Alive)
+
+	session, reattached, err = client.StartOrReattach(task, database.Config(), 24, 80, false)
+	testutil.ErrorIs(t, err, agent.ErrSessionStarting)
+	testutil.False(t, reattached)
+	testutil.Nil(t, session)
+	_, err = client.Start(task, database.Config(), 24, 80, false)
+	testutil.ErrorIs(t, err, agent.ErrSessionStarting)
+
+	testutil.NoError(t, os.WriteFile(filepath.Join(task.Worktree, "finish"), nil, 0600))
+	deadline = time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		session, err := client.AttachableSession(task.ID)
+		if err == nil && session == nil && !stream.Alive() {
+			testutil.NoError(t, database.SetBackend(task.Backend, config.Backend{Command: "sleep 30"}))
+			replacement, reattached, err := client.StartOrReattach(task, database.Config(), 24, 80, false)
+			testutil.NoError(t, err)
+			testutil.False(t, reattached)
+			testutil.True(t, replacement.PID() > 0 && replacement.PID() != ownerPID)
+			testutil.NoError(t, client.StopSettled(task.ID))
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("supervisor did not release the task slot after process retirement")
+}
+
 // TestSupTee proves the double-proxy: bytes flow supervisor → daemon-client ring
 // → daemon.handleStream → a TUI stream conn. We start a session through the
 // supervisor, run the daemon's own listener, connect a SECOND client to the

@@ -4506,60 +4506,86 @@ func TestApp_HandleSessionExit_StreamLost(t *testing.T) {
 	testutil.Equal(t, got.Status, model.StatusInProgress)
 }
 
-// TestApp_HandleSessionExit_NonCleanGoesToInReview pins the daemon-client entry
-// point for a non-clean exit (non-empty Err, not stopped — e.g. a crash / exit
-// 127): CleanExit() is false → the row must land InReview, not Complete.
-func TestApp_HandleSessionExit_NonCleanGoesToInReview(t *testing.T) {
+func TestApp_HandleSessionExit_LeavesDaemonStatusAlone(t *testing.T) {
 	d := testDB(t)
 	runner := agent.NewRunner(nil)
-	app := New(d, runner, false)
-	task := &model.Task{ID: "t1", Project: "p", Name: "n", Status: model.StatusInProgress, CreatedAt: time.Now()}
+	app := New(d, runner, true)
+	task := &model.Task{ID: "t1", Project: "p", Name: "n", Status: model.StatusInProgress}
 	testutil.NoError(t, d.Add(task))
-	app.refreshTasks()
 
 	_, stop := wireApp(t, app)
 	t.Cleanup(stop)
 
-	done := make(chan struct{})
-	go func() {
-		app.HandleSessionExit("t1", daemon.ExitInfo{Err: "exit status 127"})
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(uiTimeout):
-		t.Fatal("HandleSessionExit blocked")
+	app.HandleSessionExit(task.ID, daemon.ExitInfo{Err: "exit status 127"})
+	waitForCond(t, app.tapp, "exit refresh to load task", func() bool {
+		return app.taskStatusString(task.ID) != ""
+	})
+	got, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Status, model.StatusInProgress)
+}
+
+func TestApp_HandleSessionExit_PreservesResumedSession(t *testing.T) {
+	for _, ownerKnown := range []bool{true, false} {
+		name := "remote"
+		if ownerKnown {
+			name = "native"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			outgoing := &fakeKickSession{pid: 31}
+			replacement := &fakeKickSession{pid: 32, alive: true}
+			runner := getRunner{Runner: agent.NewRunner(nil), sess: replacement}
+			app := New(d, runner, true)
+			task := &model.Task{ID: "t1", Name: "Review", Status: model.StatusInProgress, AgentPID: outgoing.pid, SessionID: "outgoing"}
+			testutil.NoError(t, d.Add(task))
+			testutil.NoError(t, d.RecordSessionStop(task.ID))
+			testutil.NoError(t, d.RecordResumedSession(task.ID, replacement.pid, task.SessionID, "replacement"))
+			_, stop := wireApp(t, app)
+			t.Cleanup(stop)
+			readUI(t, app.tapp, func() {
+				app.mode = modeAgent
+				app.agentState.Reset(task.ID, task.Name)
+				app.agentPane.SetSession(replacement)
+			})
+
+			info := daemon.ExitInfo{Stopped: true}
+			if ownerKnown {
+				app.HandleSessionExitOwned(task.ID, info, outgoing)
+			} else {
+				app.HandleSessionExit(task.ID, info)
+			}
+			readUI(t, app.tapp, func() {
+				testutil.True(t, app.agentPane.Session() == replacement)
+			})
+			got, err := d.Get(task.ID)
+			testutil.NoError(t, err)
+			testutil.Equal(t, got.Status, model.StatusInProgress)
+			testutil.Equal(t, got.SessionID, "replacement")
+		})
 	}
-	syncUI(t, app.tapp)
-	got, _ := d.Get("t1")
-	testutil.Equal(t, got.Status, model.StatusInReview)
 }
 
 func TestApp_HandleSessionExit_DispatchesToUI(t *testing.T) {
 	d := testDB(t)
 	runner := agent.NewRunner(nil)
-	app := New(d, runner, false)
-	task := &model.Task{ID: "t1", Project: "p", Name: "n", Status: model.StatusInProgress, CreatedAt: time.Now()}
-	d.Add(task)
-	app.refreshTasks()
+	app := New(d, runner, true)
+	task := &model.Task{ID: "t1", Name: "Review", Status: model.StatusInReview}
+	testutil.NoError(t, d.Add(task))
 
 	_, stop := wireApp(t, app)
 	t.Cleanup(stop)
+	outgoing := &fakeKickSession{pid: 31}
+	readUI(t, app.tapp, func() {
+		app.mode = modeAgent
+		app.agentState.Reset(task.ID, task.Name)
+		app.agentPane.SetSession(outgoing)
+	})
 
-	done := make(chan struct{})
-	go func() {
-		// Clean daemon-reported exit (not stopped, no err) → CleanExit() → Complete.
-		app.HandleSessionExit("t1", daemon.ExitInfo{Stopped: false, LastOutput: []byte("done")})
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(uiTimeout):
-		t.Fatal("HandleSessionExit blocked")
-	}
-	syncUI(t, app.tapp)
-	got, _ := d.Get("t1")
-	testutil.Equal(t, got.Status, model.StatusComplete)
+	app.HandleSessionExitOwned(task.ID, daemon.ExitInfo{Stopped: true}, outgoing)
+	readUI(t, app.tapp, func() {
+		testutil.Nil(t, app.agentPane.Session())
+	})
 }
 
 func TestApp_HandleSessionExitUI_TaskNotFound(t *testing.T) {

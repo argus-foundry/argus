@@ -92,6 +92,10 @@ func NewRunner(onFinish func(taskID string, err error, stopped bool, lastOutput 
 // If resume is true, the agent reconnects to an existing conversation via --resume.
 // Returns an error if a session already exists for this task.
 func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (SessionHandle, error) {
+	return r.start(task, cfg, rows, cols, resume, nil)
+}
+
+func (r *Runner) start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool, restart *pendingRestart) (SessionHandle, error) {
 	if _, err := residentWorkerPreflight(task, cfg, r.residentWorker); err != nil {
 		return nil, err
 	}
@@ -103,8 +107,16 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		r.mu.Unlock()
 		return nil, context.Canceled
 	}
-	if _, exists := r.sessions[task.ID]; exists {
+	if r.pendingRestart[task.ID] != restart {
 		r.mu.Unlock()
+		return nil, ErrSessionStarting
+	}
+	if session, exists := r.sessions[task.ID]; exists {
+		unavailable := session == nil || r.stopped[task.ID] || !session.Alive()
+		r.mu.Unlock()
+		if unavailable {
+			return nil, ErrSessionStarting
+		}
 		return nil, fmt.Errorf("session already exists for task %s", task.ID)
 	}
 	// Place a nil sentinel so concurrent callers see the reservation.
@@ -249,7 +261,7 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 
 		if shouldRestart {
 			slog.Info("runner: restarting after kick", "task", task.ID, "cols", pending.cols, "rows", pending.rows, "resume", pending.resume)
-			_, rerr := r.Start(pending.task, pending.cfg, pending.rows, pending.cols, pending.resume)
+			_, rerr := r.start(pending.task, pending.cfg, pending.rows, pending.cols, pending.resume, pending)
 			// Clear the pending entry now that Start has returned; whether
 			// it succeeded (new session in the map) or failed, the gap is
 			// over and consumers should fall back to direct session lookup.
@@ -284,11 +296,24 @@ func (r *Runner) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 // own. Without this, calling Start directly on a desynced task returns
 // "session already exists for task X".
 func (r *Runner) StartOrReattach(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (SessionHandle, bool, error) {
-	if sess := r.Get(task.ID); sess != nil {
-		return sess, true, nil
+	if sess, err := r.attachableSession(task.ID); err != nil || sess != nil {
+		return sess, sess != nil, err
 	}
 	h, err := r.Start(task, cfg, rows, cols, resume)
 	return h, false, err
+}
+
+func (r *Runner) attachableSession(taskID string) (SessionHandle, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sess, reserved := r.sessions[taskID]
+	if r.pendingRestart[taskID] != nil || (reserved && (sess == nil || r.stopped[taskID] || !sess.Alive())) {
+		return nil, ErrSessionStarting
+	}
+	if sess == nil {
+		return nil, nil
+	}
+	return sess, nil
 }
 
 // Get returns the session for a task, or nil if not found.
@@ -371,7 +396,7 @@ func (r *Runner) getSession(taskID string) *Session {
 // Returns ErrSessionNotFound if no live session, or an error if a kick is
 // already pending. Stop failures propagate as-is.
 func (r *Runner) KickRerender(task *model.Task, cfg config.Config, rows, cols uint16) error {
-	return r.kickRerender(task, cfg, rows, cols, false, StopAgentOnly)
+	return r.kickRerender(task, cfg, rows, cols, false, StopAgentOnly, 0)
 }
 
 // KickRevive is an explicit operator recovery, allowed to restart an unsaved
@@ -386,16 +411,34 @@ func KickRevive(r SessionRunner, task *model.Task, cfg config.Config, rows, cols
 }
 
 func (r *Runner) Revive(task *model.Task, cfg config.Config, rows, cols uint16) error {
-	return r.kickRerender(task, cfg, rows, cols, true, StopAgentOnly)
+	return r.kickRerender(task, cfg, rows, cols, true, StopAgentOnly, 0)
 }
 
 // KickWidthRerender is only for guarded width repair; session switches and
 // revive keep KickRerender's non-escalating shutdown contract.
 func (r *Runner) KickWidthRerender(task *model.Task, cfg config.Config, rows, cols uint16) error {
-	return r.kickRerender(task, cfg, rows, cols, false, StopRerender)
+	return r.kickRerender(task, cfg, rows, cols, false, StopRerender, 0)
 }
 
-func (r *Runner) kickRerender(task *model.Task, cfg config.Config, rows, cols uint16, revive bool, scope StopScope) error {
+// KickWidthRerenderForPID requests width repair for a specific process. The
+// session owner checks its PID when it claims the PTY for restart.
+func KickWidthRerenderForPID(r SessionRunner, task *model.Task, cfg config.Config, rows, cols uint16, expectedPID int) error {
+	if owner, ok := r.(interface {
+		KickWidthRerenderForPID(*model.Task, config.Config, uint16, uint16, int) error
+	}); ok && expectedPID > 0 {
+		return owner.KickWidthRerenderForPID(task, cfg, rows, cols, expectedPID)
+	}
+	return ErrSessionCoordinationUnsupported
+}
+
+func (r *Runner) KickWidthRerenderForPID(task *model.Task, cfg config.Config, rows, cols uint16, expectedPID int) error {
+	if expectedPID <= 0 {
+		return ErrSessionNotFound
+	}
+	return r.kickRerender(task, cfg, rows, cols, false, StopRerender, expectedPID)
+}
+
+func (r *Runner) kickRerender(task *model.Task, cfg config.Config, rows, cols uint16, revive bool, scope StopScope, expectedPID int) error {
 	if task == nil {
 		return fmt.Errorf("nil task")
 	}
@@ -416,16 +459,22 @@ func (r *Runner) kickRerender(task *model.Task, cfg config.Config, rows, cols ui
 	}
 	r.mu.Lock()
 	sess := r.sessions[task.ID]
-	if sess == nil {
+	if sess == nil || (expectedPID > 0 && sess.PID() != expectedPID) {
 		r.mu.Unlock()
 		return ErrSessionNotFound
 	}
 	if _, exists := r.pendingRestart[task.ID]; exists {
 		r.mu.Unlock()
+		if expectedPID > 0 {
+			return ErrSessionStarting
+		}
 		return fmt.Errorf("kick already pending for task %s", task.ID)
 	}
 	if r.stopped[task.ID] || !sess.Alive() {
 		r.mu.Unlock()
+		if expectedPID > 0 {
+			return ErrSessionStarting
+		}
 		return ErrSessionNotFound
 	}
 	oldID := task.SessionID
