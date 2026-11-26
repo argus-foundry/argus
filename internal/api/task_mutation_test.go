@@ -89,9 +89,12 @@ func TestResumeRefusesDrainingStoppedSession(t *testing.T) {
 	run := agent.NewRunner(nil)
 	s.runner = run
 	t.Cleanup(run.StopAll)
-	cli := filepath.Join(t.TempDir(), "fake-cli")
-	testutil.NoError(t, os.WriteFile(cli, []byte("#!/bin/sh\ntrap '' TERM\nprintf 'ready\\n'\nwhile [ ! -f finish ]; do sleep 0.02; done\n"), 0700))
-	testutil.NoError(t, d.SetBackend("draining", config.Backend{Command: cli}))
+	// The trap has to run in the session leader. BuildCmd wraps the backend
+	// command in `sh -c`, and a tree stop signals that process group: a trap
+	// inside a child script does not keep the leader alive, so resume can
+	// win the slot before the stop is still in force.
+	const hold = "trap '' TERM; printf 'ready\\n'; while [ ! -f finish ]; do sleep 0.02; done"
+	testutil.NoError(t, d.SetBackend("draining", config.Backend{Command: hold}))
 	task := &model.Task{Name: "Draining", Backend: "draining", Worktree: t.TempDir(), Status: model.StatusInProgress}
 	testutil.NoError(t, d.Add(task))
 	initial, err := run.Start(task, d.Config(), 24, 80, false)
