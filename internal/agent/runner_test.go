@@ -814,8 +814,13 @@ func TestRunner_KickRerender_AutoRestartsAtNewDimensions(t *testing.T) {
 	if err := r.KickRerender(task, cfg, 30, 180); err != nil {
 		t.Fatalf("KickRerender: %v", err)
 	}
+	// Stop returns as soon as the signal is sent. A fast exit can publish
+	// the successor and clear the pending restart before this line runs.
 	if !r.HasPendingRestart("kick-restart") {
-		t.Error("expected HasPendingRestart=true immediately after kick")
+		landed := r.Get("kick-restart")
+		if landed == nil || landed == sess1 {
+			t.Error("expected a pending restart or its successor immediately after kick")
+		}
 	}
 
 	// Wait for the old session to die and the restart to land.
