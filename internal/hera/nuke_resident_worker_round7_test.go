@@ -521,6 +521,90 @@ func TestResidentStackReclaimPreservesRemappedRepository(t *testing.T) {
 	}
 }
 
+func TestDeferredResidentReclaimPreservesLinkedStackBaseAfterProjectRemap(t *testing.T) {
+	const branch = "argus/worker"
+	task := &model.Task{ID: "worker", Name: "Worker", Project: "p", Branch: branch}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	repo := initGitRepo(t, t.TempDir())
+	other := initGitRepo(t, t.TempDir())
+	remote := t.TempDir()
+	gitRun(t, remote, "init", "--bare")
+	gitRun(t, repo, "remote", "add", "origin", remote)
+	gitRun(t, repo, "branch", branch)
+	gitRun(t, repo, "push", "origin", branch)
+	childCheckout := filepath.Join(t.TempDir(), "child")
+	gitRun(t, repo, "worktree", "add", "-b", "child", childCheckout, branch)
+	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: repo}))
+	testutil.NoError(t, d.Add(&model.Task{ID: "child", Name: "Child", Project: task.Project, Worktree: childCheckout, Branch: "child", BaseBranch: branch}))
+	starting := true
+	owner := nukeReclaimOwner{Runner: agent.NewRunner(nil), pending: &starting}
+	_, err := NukeResidentWorker(d, owner, view)
+	testutil.NoError(t, err)
+	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: other}))
+
+	sum, err := ReconcileHeraReclaims(d, &fakeSessionChecker{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, sum.Pruned, 1)
+	gitRun(t, repo, "show-ref", "--verify", "refs/heads/"+branch)
+	gitRun(t, remote, "show-ref", "--verify", "refs/heads/"+branch)
+}
+
+func TestDeferredResidentReclaimPreservesRefAfterOriginChanges(t *testing.T) {
+	const branch = "argus/worker"
+	task := &model.Task{ID: "worker", Name: "Worker", Project: "p", Branch: branch}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	repo := initGitRepo(t, t.TempDir())
+	original, other := t.TempDir(), t.TempDir()
+	gitRun(t, original, "init", "--bare")
+	gitRun(t, other, "init", "--bare")
+	gitRun(t, repo, "remote", "add", "origin", original)
+	gitRun(t, repo, "branch", branch)
+	gitRun(t, repo, "push", "origin", branch)
+	gitRun(t, repo, "push", other, branch)
+	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: repo}))
+	starting := true
+	owner := nukeReclaimOwner{Runner: agent.NewRunner(nil), pending: &starting}
+	_, err := NukeResidentWorker(d, owner, view)
+	testutil.NoError(t, err)
+	gitRun(t, repo, "remote", "set-url", "origin", other)
+
+	sum, err := ReconcileHeraReclaims(d, &fakeSessionChecker{})
+	testutil.NoError(t, err)
+	testutil.Equal(t, sum.Pruned, 1)
+	gitRun(t, original, "show-ref", "--verify", "refs/heads/"+branch)
+	gitRun(t, other, "show-ref", "--verify", "refs/heads/"+branch)
+}
+
+func TestResidentReclaimRefusesRepositoryReplacedAtCapturedPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	original, other := initGitRepo(t, t.TempDir()), initGitRepo(t, t.TempDir())
+	repository, err := agent.CaptureTaskGitRepository(context.Background(), original)
+	testutil.NoError(t, err)
+	lease := &db.HeraReclaimLease{RepoDir: original, RepoID: repository.CommonDir, RepoStamp: repository.Stamp, Branch: "argus/worker", Tip: "1234567"}
+	testutil.NoError(t, os.Rename(original, filepath.Join(t.TempDir(), "moved-repository")))
+	testutil.NoError(t, os.Rename(other, original))
+	replacement, err := agent.CaptureTaskGitRepository(context.Background(), original)
+	testutil.NoError(t, err)
+	testutil.Equal(t, replacement.CommonDir, repository.CommonDir)
+
+	d, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	called := false
+	err = residentRemoteBranchDeleteOwned(context.Background(), d, ResidentDeleteOptions{
+		RemoteBranchDelete: func(context.Context, string, string, string) error {
+			called = true
+			return nil
+		},
+	}, "worker", lease)
+	testutil.Error(t, err)
+	testutil.False(t, called)
+
+	got := StackTasksInRepository(context.Background(), config.Config{}, repository,
+		[]*model.Task{{ID: "child", BaseBranch: "argus/worker", Worktree: replacement.Directory}})
+	testutil.Equal(t, len(got), 0)
+}
+
 // A session that exits on Stop but has not settled by the end of the wait is
 // refused ("had not settled"), the recheck never runs, and the worker is left
 // resumable. Covers both the wait measured from the Stop call's START (not

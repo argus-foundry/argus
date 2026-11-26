@@ -9,11 +9,13 @@ import (
 // HeraReclaimLease records the origin ref that resident cleanup may delete.
 // An empty tip means only local resources may be reclaimed.
 type HeraReclaimLease struct {
-	RepoDir   string `json:"repo_dir"`
-	RepoID    string `json:"repo_id,omitempty"`
-	Branch    string `json:"branch"`
-	Tip       string `json:"tip"`
-	LocalDone bool   `json:"local_done,omitempty"`
+	RepoDir     string `json:"repo_dir"`
+	RepoID      string `json:"repo_id,omitempty"`
+	RepoStamp   string `json:"repo_stamp,omitempty"`
+	OriginStamp string `json:"origin_stamp,omitempty"`
+	Branch      string `json:"branch"`
+	Tip         string `json:"tip"`
+	LocalDone   bool   `json:"local_done,omitempty"`
 }
 
 func encodeHeraReclaimLease(lease *HeraReclaimLease) (string, error) {

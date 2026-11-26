@@ -19,7 +19,7 @@ import (
 )
 
 func TestResidentDeleteGitWorktree(t *testing.T) {
-	for _, tc := range []string{"merged", "empty", "unmerged", "dirty only", "force"} {
+	for _, tc := range []string{"merged", "empty", "unmerged", "dirty only", "remapped project", "force"} {
 		t.Run(tc, func(t *testing.T) {
 			s, d, res, o := residentHeraFixture(t)
 			repo := t.TempDir()
@@ -53,6 +53,13 @@ func TestResidentDeleteGitWorktree(t *testing.T) {
 			if tc == "merged" {
 				run(repo, "merge", "--ff-only", branch)
 			}
+			if tc == "remapped project" {
+				other := t.TempDir()
+				run(other, "init", "-b", "master")
+				run(other, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
+				run(other, "branch", branch)
+				testutil.NoError(t, d.SetProject("p", config.Project{Path: other, Branch: "master"}))
+			}
 			if tc == "dirty only" {
 				// Zero commits ahead but an uncommitted file is not empty work.
 				testutil.NoError(t, os.WriteFile(filepath.Join(wt, "scratch"), []byte("work"), 0600))
@@ -71,12 +78,13 @@ func TestResidentDeleteGitWorktree(t *testing.T) {
 				}
 			}
 			text, isErr := postTool(t, s, "/mcp?caller="+res.ID, "hera_delete_worker", fmt.Sprintf(`{"role":"work","force":%t}`, tc == "force"))
-			refused := tc == "unmerged" || tc == "dirty only"
+			refused := tc == "unmerged" || tc == "dirty only" || tc == "remapped project"
 			testutil.Equal(t, isErr, refused)
 			_, statErr := os.Stat(wt)
 			if refused {
 				testutil.Contains(t, text, "not safe")
 				testutil.NoError(t, statErr)
+				run(repo, "show-ref", "--verify", "refs/heads/"+branch)
 				_, err = d.Get(task.ID)
 				testutil.NoError(t, err)
 			} else {

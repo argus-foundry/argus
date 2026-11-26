@@ -78,12 +78,17 @@ func RemoveWorktreeAndLocalBranchLocked(worktreePath, branch, repoDir string) (r
 // WorktreeRemoteBranchLease captures the remote-tracking or local tip before
 // resident deletion can defer worktree removal to a later owner.
 func WorktreeRemoteBranchLease(worktreePath, branch, repoDir string) (remoteRepoDir, remoteBranch, leaseTip string) {
+	return WorktreeRemoteBranchLeaseContext(context.Background(), worktreePath, branch, repoDir)
+}
+
+// WorktreeRemoteBranchLeaseContext captures the ref within the caller's budget.
+func WorktreeRemoteBranchLeaseContext(ctx context.Context, worktreePath, branch, repoDir string) (remoteRepoDir, remoteBranch, leaseTip string) {
 	if branch == "" || (worktreePath == "" && repoDir == "") {
 		return "", "", ""
 	}
 	dir := repoDir
 	if dir == "" {
-		dir = ResidentCleanupRepository(context.Background(), worktreePath, "")
+		dir = ResidentCleanupRepository(ctx, worktreePath, "")
 		if dir == "" {
 			return "", "", ""
 		}
@@ -94,9 +99,9 @@ func WorktreeRemoteBranchLease(worktreePath, branch, repoDir string) (remoteRepo
 		actualBranch = "argus/" + filepath.Base(worktreePath)
 		uxlog.Log("[worktree] stored branch %q is not argus/*, trying inferred branch %q", branch, actualBranch)
 	}
-	leaseTip = revParseCommit(dir, "refs/remotes/origin/"+actualBranch)
+	leaseTip = revParseCommit(ctx, dir, "refs/remotes/origin/"+actualBranch)
 	if leaseTip == "" {
-		leaseTip = revParseCommit(dir, "refs/heads/"+actualBranch)
+		leaseTip = revParseCommit(ctx, dir, "refs/heads/"+actualBranch)
 	}
 	return dir, actualBranch, leaseTip
 }
@@ -196,19 +201,33 @@ func VerifyResidentLocalRemoval(ctx context.Context, worktree, branch, repoDir s
 	return nil
 }
 
-// DeleteStackedBranchContext bounds Git work done while task admission is held.
-func DeleteStackedBranchContext(ctx context.Context, repoDir, branch string) {
+// TaskGitBranchTip resolves a local branch ref without fetching.
+func TaskGitBranchTip(ctx context.Context, repoDir, branch string) string {
+	return revParseCommit(ctx, repoDir, "refs/heads/"+branch)
+}
+
+// DeleteStackedBranchContext removes a stack link whose classified tip is
+// unchanged. Leave origin alone unless the same commit was tracked there.
+func DeleteStackedBranchContext(ctx context.Context, repoDir, branch, expectedTip string, hasOrigin bool) bool {
+	if expectedTip == "" || TaskGitBranchTip(ctx, repoDir, branch) != expectedTip {
+		return false
+	}
+	remoteMatches := hasOrigin && revParseCommit(ctx, repoDir, "refs/remotes/origin/"+branch) == expectedTip
 	if out, _, err := RunTaskGit(ctx, repoDir, "branch", "-D", "--", branch); err != nil {
 		uxlog.Log("[worktree] stacked local delete failed repo=%q branch=%q err=%v output=%q", repoDir, branch, err, out)
+		return false
 	}
-	if out, _, err := RunTaskGit(ctx, repoDir, "push", "origin", ":refs/heads/"+branch); err != nil {
-		uxlog.Log("[worktree] stacked origin delete failed repo=%q branch=%q err=%v output=%q", repoDir, branch, err, out)
+	if remoteMatches {
+		if err := DeleteRemoteBranchContext(ctx, repoDir, branch, expectedTip); err != nil {
+			uxlog.Log("[worktree] stacked origin delete failed repo=%q branch=%q err=%v", repoDir, branch, err)
+		}
 	}
+	return true
 }
 
 // revParseCommit resolves ref to a commit id in dir, "" when it does not.
-func revParseCommit(dir, ref string) string {
-	out, _, err := RunTaskGit(context.Background(), dir, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
+func revParseCommit(ctx context.Context, dir, ref string) string {
+	out, _, err := RunTaskGit(ctx, dir, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
 	if err != nil {
 		return ""
 	}

@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -281,6 +284,27 @@ func TestNukeResidentWorkerChecked_HostBusyChangesNothing(t *testing.T) {
 			testutil.NoError(t, bErr)
 		})
 	}
+}
+
+func TestResidentLeaseCaptureRespectsMutationDeadline(t *testing.T) {
+	task := &model.Task{ID: "worker", Name: "Worker", Project: "p", Branch: "argus/worker"}
+	d, _, view := residentWorkerNukeFixture(t, task)
+	repo := initGitRepo(t, t.TempDir())
+	testutil.NoError(t, d.SetProject(task.Project, config.Project{Path: repo}))
+	bin := t.TempDir()
+	testutil.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nexec sleep 10\n"), 0700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var events []string
+	runner := &recordingNukeRunner{live: map[string]bool{task.ID: true}, events: &events}
+
+	_, err := NukeResidentWorkerChecked(d, runner, view, ResidentDeleteOptions{
+		Recheck:  func(*model.Task) error { return nil },
+		MutateBy: time.Now().Add(200 * time.Millisecond),
+	})
+	testutil.ErrorIs(t, err, ErrHostBusy)
+	testutil.Equal(t, len(events), 0)
+	_, err = d.HeraLiveBindingByTask(task.ID)
+	testutil.NoError(t, err)
 }
 
 // GiveUpBy caps the exit wait below Max so the recheck and local nuke still

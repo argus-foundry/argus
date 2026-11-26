@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -174,6 +175,39 @@ func TestCascadeStackConfirmationUsesClassifiedRepository(t *testing.T) {
 		verify.Dir = repo
 		testutil.NoError(t, verify.Run())
 	}
+}
+
+func TestCascadeStackDiscoveryRefusesRemappedDefault(t *testing.T) {
+	d := testDB(t)
+	original, replacement := stackFixtureRepo(t), stackFixtureRepo(t)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = original
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	run("branch", "root")
+	run("branch", "child")
+	run("checkout", "-b", "integration")
+	run("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "unmerged tip")
+	run("branch", "tip")
+	checkouts := t.TempDir()
+	for _, task := range []model.Task{
+		{ID: "root", Name: "Root", Project: "p", Branch: "root"},
+		{ID: "child", Name: "Child", Project: "p", Branch: "child", BaseBranch: "root"},
+		{ID: "tip", Name: "Tip", Project: "p", Branch: "tip", BaseBranch: "child"},
+	} {
+		task.Worktree = filepath.Join(checkouts, task.ID)
+		run("worktree", "add", "--detach", task.Worktree, task.Branch)
+		testutil.NoError(t, d.Add(&task))
+	}
+	testutil.NoError(t, d.SetProject("p", config.Project{Path: replacement, Branch: "integration"}))
+	app := New(d, agent.NewRunner(nil), false)
+	got := app.classifyStackedBranchesForCascade(context.Background(), []string{"root"}, map[string]bool{"root": true})
+	testutil.Equal(t, len(got), 0)
 }
 
 func TestCascadeStackDoesNotReuseVerdictsAcrossDefaultRefs(t *testing.T) {

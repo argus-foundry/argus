@@ -187,46 +187,43 @@ func reconcileHeraReclaim(ctx context.Context, d *db.DB, runner SessionChecker, 
 	}
 }
 
-func reclaimStackRepository(ctx context.Context, cfg config.Config, task *model.Task, lease *db.HeraReclaimLease) string {
-	configured := agent.TaskGitWorkingDirectory(agent.ResolveDir(task, cfg))
+func reclaimStackRepository(ctx context.Context, cfg config.Config, task *model.Task, lease *db.HeraReclaimLease) agent.TaskGitRepository {
+	configured := agent.ResolveDir(task, cfg)
 	if lease == nil {
-		return configured
+		repo, _ := agent.CaptureTaskGitRepository(ctx, agent.ResidentCleanupRepository(ctx, task.Worktree, configured))
+		return repo
 	}
 	captured := agent.TaskGitWorkingDirectory(lease.RepoDir)
-	if configured == "" || captured == "" || verifyReclaimRepository(ctx, captured, lease.RepoID) != nil {
-		return ""
+	if configured == "" || captured == "" || verifyReclaimRepository(ctx, captured, lease.RepoID, lease.RepoStamp) != nil {
+		return agent.TaskGitRepository{}
 	}
 	configuredID, err := agent.TaskGitRepositoryID(ctx, configured)
 	if err != nil {
-		return ""
+		return agent.TaskGitRepository{}
 	}
-	capturedID, err := agent.TaskGitRepositoryID(ctx, captured)
-	if err != nil || !agent.SamePath(capturedID, configuredID) {
-		return ""
+	repo := agent.TaskGitRepository{Directory: captured, CommonDir: lease.RepoID, Stamp: lease.RepoStamp, Origin: lease.OriginStamp}
+	if repo.CommonDir == "" {
+		repo, err = agent.CaptureTaskGitRepository(ctx, captured)
 	}
-	return captured
+	if err != nil || !agent.SamePath(repo.CommonDir, configuredID) {
+		return agent.TaskGitRepository{}
+	}
+	return repo
 }
 
 // StackTasksInRepository keeps identically named branches in another Git
 // repository out of the evidence and admission checks for this stack.
-func StackTasksInRepository(ctx context.Context, cfg config.Config, repoDir string, tasks []*model.Task) map[string]*model.Task {
-	root, err := agent.TaskGitRepositoryID(ctx, repoDir)
-	if err != nil || root == "" {
+func StackTasksInRepository(ctx context.Context, cfg config.Config, repo agent.TaskGitRepository, tasks []*model.Task) map[string]*model.Task {
+	if repo.CommonDir == "" || verifyReclaimRepository(ctx, repo.Directory, repo.CommonDir, repo.Stamp) != nil {
 		return nil
 	}
-	identities := map[string]string{repoDir: root}
 	byBase := make(map[string]*model.Task)
 	for _, task := range tasks {
 		if task.BaseBranch == "" {
 			continue
 		}
-		repo := agent.ResolveDir(task, cfg)
-		identity, cached := identities[repo]
-		if !cached {
-			identity, _ = agent.TaskGitRepositoryID(ctx, repo)
-			identities[repo] = identity
-		}
-		if identity != "" && agent.SamePath(identity, root) {
+		identity, err := agent.TaskGitRepositoryIDForTask(ctx, task, cfg)
+		if err == nil && identity != "" && agent.SamePath(identity, repo.CommonDir) {
 			byBase[task.BaseBranch] = task
 		}
 	}
@@ -263,7 +260,7 @@ func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config
 		return false, db.ErrHeraReclaimInProgress
 	}
 	defer unlock()
-	if err := verifyReclaimRepository(ctx, repoDir, lease.RepoID); err != nil {
+	if err := verifyReclaimRepository(ctx, repoDir, lease.RepoID, lease.RepoStamp); err != nil {
 		return false, err
 	}
 	worktree, branch, err = residentReclaimTargets(ctx, d, cfg, task.ID, repoDir, worktree, branch)
@@ -281,7 +278,7 @@ func settleResidentLocalReclaim(ctx context.Context, d *db.DB, cfg config.Config
 	return removed, d.SetResidentReclaimLease(task.ID, lease)
 }
 
-func verifyReclaimRepository(ctx context.Context, repoDir, repoID string) error {
+func verifyReclaimRepository(ctx context.Context, repoDir, repoID, repoStamp string) error {
 	if repoID == "" {
 		return nil
 	}
@@ -291,6 +288,15 @@ func verifyReclaimRepository(ctx context.Context, repoDir, repoID string) error 
 	}
 	if current != repoID {
 		return errors.New("captured reclaim repository changed")
+	}
+	if repoStamp != "" {
+		stamp, err := agent.TaskGitRepositoryStamp(current)
+		if err != nil {
+			return err
+		}
+		if stamp != repoStamp {
+			return errors.New("captured Git directory was replaced")
+		}
 	}
 	return nil
 }
@@ -313,7 +319,7 @@ func residentReclaimTargets(ctx context.Context, d *db.DB, cfg config.Config, ta
 			if err != nil {
 				return "", "", err
 			}
-			otherID, err := agent.TaskGitRepositoryID(ctx, agent.ResolveDir(other, cfg))
+			otherID, err := agent.TaskGitRepositoryIDForTask(ctx, other, cfg)
 			if err != nil {
 				return "", "", err
 			}
@@ -367,18 +373,18 @@ func walkStackForward(x *model.Task, byBaseBranch map[string]*model.Task) (chain
 // here is logged and skipped, never surfaced to the caller, and a resolution
 // failure (no project, no repo, tip not confirmed safe) simply results in
 // zero deletions for this candidate.
-func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, repoDir string, byBaseBranch map[string]*model.Task, x *model.Task, tipVerdicts map[string]mergesafety.Verdict, leasedRoot bool) int {
+func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, repo agent.TaskGitRepository, byBaseBranch map[string]*model.Task, x *model.Task, tipVerdicts map[string]mergesafety.Verdict, leasedRoot bool) int {
 	chain, tip, ok := walkStackForward(x, byBaseBranch)
 	if !ok || len(chain) == 0 {
 		return 0
 	}
 
-	if repoDir == "" {
+	if repo.CommonDir == "" || verifyReclaimRepository(ctx, repo.Directory, repo.CommonDir, repo.Stamp) != nil {
 		return 0
 	}
-	repoSlug, defaultRef, defaultShort := projectMergeSafetyContext(ctx, cfg, x, repoDir)
-	repoID, err := agent.TaskGitRepositoryID(ctx, repoDir)
-	if err != nil || repoID == "" {
+	repoDir := repo.Directory
+	repoSlug, defaultRef, defaultShort, err := StackMergeSafetyContext(ctx, cfg, x, repo)
+	if err != nil {
 		return 0
 	}
 
@@ -417,6 +423,7 @@ func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, 
 			continue
 		}
 
+		expectedTip := agent.TaskGitBranchTip(ctx, repoDir, y.Branch)
 		v, err := mergesafety.ClassifyStackInferred(ctx, mergesafety.StackParams{
 			Task:         y,
 			ByBaseBranch: byBaseBranch,
@@ -432,7 +439,7 @@ func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, 
 		if !v.Safe {
 			continue
 		}
-		if !branchExistsOnOrigin(ctx, repoDir, y.Branch) || !deleteStackedTaskBranch(ctx, d, y.ID, repoDir, repoID, y.Branch, y.ID == x.ID) {
+		if !branchExistsOnOrigin(ctx, repoDir, y.Branch) || !deleteStackedTaskBranch(ctx, d, y.ID, repo, y.Branch, expectedTip, y.ID == x.ID) {
 			continue
 		}
 
@@ -444,12 +451,12 @@ func reconcileStackedBranches(ctx context.Context, d *db.DB, cfg config.Config, 
 
 // DeleteStackedTaskBranch revalidates a confirmed stack entry against task
 // creation and reclaim before deleting its branch.
-func DeleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, repoID, branch string) bool {
-	return deleteStackedTaskBranch(ctx, d, taskID, repoDir, repoID, branch, false)
+func DeleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID string, repo agent.TaskGitRepository, branch, expectedTip string) bool {
+	return deleteStackedTaskBranch(ctx, d, taskID, repo, branch, expectedTip, false)
 }
 
-func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, repoID, branch string, admissionHeld bool) bool {
-	repoDir = agent.TaskGitWorkingDirectory(repoDir)
+func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID string, repo agent.TaskGitRepository, branch, expectedTip string, admissionHeld bool) bool {
+	repoDir := agent.TaskGitWorkingDirectory(repo.Directory)
 	if !admissionHeld {
 		unlock, err := d.TryLockTaskOutsideReclaim(taskID)
 		if err != nil {
@@ -469,13 +476,12 @@ func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, rep
 		uxlog.Log("[hera] stacked branch assignment changed task=%s err=%v", taskID, err)
 		return false
 	}
-	root, err := agent.TaskGitRepositoryID(ctx, repoDir)
-	if err != nil || root == "" || root != repoID {
+	if repo.CommonDir == "" || verifyReclaimRepository(ctx, repoDir, repo.CommonDir, repo.Stamp) != nil {
 		return false
 	}
 	cfg := d.Config()
-	currentRepo, err := agent.TaskGitRepositoryID(ctx, agent.ResolveDir(current, cfg))
-	if err != nil || !agent.SamePath(root, currentRepo) {
+	currentRepo, err := agent.TaskGitRepositoryIDForTask(ctx, current, cfg)
+	if err != nil || !agent.SamePath(repo.CommonDir, currentRepo) {
 		return false
 	}
 	tasks, err := d.TasksChecked()
@@ -486,32 +492,32 @@ func deleteStackedTaskBranch(ctx context.Context, d *db.DB, taskID, repoDir, rep
 		if other.ID == taskID || other.Branch != branch {
 			continue
 		}
-		otherRepo, err := agent.TaskGitRepositoryID(ctx, agent.ResolveDir(other, cfg))
-		if err != nil || otherRepo == "" || agent.SamePath(root, otherRepo) {
+		otherRepo, err := agent.TaskGitRepositoryIDForTask(ctx, other, cfg)
+		if err != nil || otherRepo == "" || agent.SamePath(repo.CommonDir, otherRepo) {
 			uxlog.Log("[hera] stacked branch belongs to another task task=%s other=%s", taskID, other.ID)
 			return false
 		}
 	}
-	agent.DeleteStackedBranchContext(ctx, repoDir, branch)
-	return true
+	if agent.TaskGitOriginStamp(ctx, repoDir) != repo.Origin {
+		uxlog.Log("[hera] stacked branch origin changed task=%s branch=%q", taskID, branch)
+		return false
+	}
+	return agent.DeleteStackedBranchContext(ctx, repoDir, branch, expectedTip, repo.Origin != "")
 }
 
-// projectMergeSafetyContext resolves the shared, project-level
-// mergesafety.Params/StackParams fields for task t's project — the same
-// resolution steps internal/api/cleanup_candidates.go's cleanupCandidateFor
-// performs, reused here rather than reimplemented. A task whose project no
-// longer exists in config (or has an empty path) returns an empty repoDir;
-// callers treat that as unresolvable, per Classify's own "no repo
-// resolvable" fail-closed handling.
-func projectMergeSafetyContext(ctx context.Context, cfg config.Config, t *model.Task, repoDir string) (repoSlug, defaultRef, defaultShort string) {
-	if slug, ok := gitutil.ResolveDefaultRepo(ctx, repoDir); ok {
-		repoSlug = slug
+// StackMergeSafetyContext accepts project defaults only from the repository
+// holding the stack. A remapped project may use another default branch.
+func StackMergeSafetyContext(ctx context.Context, cfg config.Config, task *model.Task, repo agent.TaskGitRepository) (slug, ref, short string, err error) {
+	project := cfg.Projects[task.Project]
+	if verifyReclaimRepository(ctx, project.Path, repo.CommonDir, repo.Stamp) != nil {
+		return "", "", "", errors.New("configured project differs from the checkout repository")
 	}
-	proj := cfg.Projects[t.Project]
-	if short, ref, err := gitutil.ResolveDefaultBranch(repoDir, proj.Branch); err == nil {
-		defaultShort, defaultRef = short, ref
+	if agent.TaskGitOriginStamp(ctx, repo.Directory) != repo.Origin {
+		return "", "", "", errors.New("origin changed after repository capture")
 	}
-	return repoSlug, defaultRef, defaultShort
+	slug, _ = gitutil.ResolveDefaultRepo(ctx, repo.Directory)
+	short, ref, err = gitutil.ResolveDefaultBranch(repo.Directory, project.Branch)
+	return slug, ref, short, err
 }
 
 // branchExistsOnOrigin reports whether branch still has a remote-tracking

@@ -1109,7 +1109,7 @@ func (a *App) heraDeleteStackedBranches(extra []stackedBranchCandidate) {
 		return
 	}
 	for _, c := range extra {
-		if herasvc.DeleteStackedTaskBranch(context.Background(), database, c.TaskID, c.RepoDir, c.RepoID, c.Branch) {
+		if herasvc.DeleteStackedTaskBranch(context.Background(), database, c.TaskID, c.Repository, c.Branch, c.Tip) {
 			uxlog.Log("[hera-view] cascade: stacked branch cleanup ran branch=%q task=%s", c.Branch, c.TaskID)
 		}
 	}

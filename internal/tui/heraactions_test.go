@@ -479,9 +479,9 @@ func TestHeraStackedDeletePreservesReclaimOwnedBranch(t *testing.T) {
 	role := seedHeraRoleOnTask(t, d, orch, "worker", db.HeraKindWorker, task.ID, "")
 	testutil.NoError(t, d.NukeHeraRoleAndEndBinding(role.ID))
 
-	repoID, err := agent.TaskGitRepositoryID(context.Background(), repo)
+	repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
 	testutil.NoError(t, err)
-	app.heraDeleteStackedBranches([]stackedBranchCandidate{{TaskID: task.ID, Branch: branch, RepoDir: repo, RepoID: repoID}})
+	app.heraDeleteStackedBranches([]stackedBranchCandidate{{TaskID: task.ID, Branch: branch, Repository: repository, Tip: agent.TaskGitBranchTip(context.Background(), repo, branch)}})
 	verify := exec.Command("git", "show-ref", "--verify", "refs/heads/"+branch)
 	verify.Dir = repo
 	testutil.NoError(t, verify.Run())

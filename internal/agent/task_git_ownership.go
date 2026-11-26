@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/uxlog"
@@ -75,6 +76,79 @@ func TaskGitRepositoryID(ctx context.Context, repo string) (string, error) {
 		return "", fmt.Errorf("resolve Git common directory: %w", err)
 	}
 	return filepath.Abs(common)
+}
+
+// TaskGitRepositoryIDForTask checks the live checkout before project
+// configuration, which can change without moving the checkout.
+func TaskGitRepositoryIDForTask(ctx context.Context, task *model.Task, cfg config.Config) (string, error) {
+	if task.Worktree != "" {
+		if _, err := os.Lstat(task.Worktree); err == nil {
+			if _, err := os.Lstat(filepath.Join(task.Worktree, ".git")); err != nil {
+				return "", err
+			}
+			return TaskGitRepositoryID(ctx, task.Worktree)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	}
+	return TaskGitRepositoryID(ctx, ResolveDir(task, cfg))
+}
+
+// TaskGitRepositoryStamp distinguishes replacement repositories at an existing
+// common-directory pathname. The resolved path itself is checked separately.
+func TaskGitRepositoryStamp(commonDir string) (string, error) {
+	if commonDir == "" {
+		return "", nil
+	}
+	info, err := os.Stat(commonDir)
+	if err != nil {
+		return "", err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", errors.New("unable to identify the Git common directory")
+	}
+	return fmt.Sprintf("%d:%d", stat.Dev, stat.Ino), nil
+}
+
+// TaskGitRepository identifies the repository a cleanup decision was made against.
+type TaskGitRepository struct {
+	Directory string
+	CommonDir string
+	Stamp     string
+	Origin    string
+}
+
+// CaptureTaskGitRepository captures the execution directory and common Git identity.
+func CaptureTaskGitRepository(ctx context.Context, directory string) (TaskGitRepository, error) {
+	directory = TaskGitWorkingDirectory(directory)
+	if directory == "" {
+		return TaskGitRepository{}, errors.New("missing Git repository directory")
+	}
+	common, err := TaskGitRepositoryID(ctx, directory)
+	if err != nil {
+		return TaskGitRepository{}, err
+	}
+	stamp, err := TaskGitRepositoryStamp(common)
+	if err != nil {
+		return TaskGitRepository{}, err
+	}
+	return TaskGitRepository{Directory: directory, CommonDir: common, Stamp: stamp, Origin: TaskGitOriginStamp(ctx, directory)}, nil
+}
+
+// TaskGitOriginStamp fingerprints the fetch and push destinations without
+// persisting or logging URLs that may carry credentials.
+func TaskGitOriginStamp(ctx context.Context, repoDir string) string {
+	if repoDir == "" {
+		return ""
+	}
+	fetch, _, fetchErr := RunTaskGit(ctx, repoDir, "remote", "get-url", "--all", "origin")
+	push, _, pushErr := RunTaskGit(ctx, repoDir, "remote", "get-url", "--push", "--all", "origin")
+	if fetchErr != nil || pushErr != nil || fetch == "" || push == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(fetch + "\x00" + push))
+	return hex.EncodeToString(hash[:])
 }
 
 // LockTaskGitOwnership fences creation and cleanup across TUI and daemon

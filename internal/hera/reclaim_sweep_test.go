@@ -321,13 +321,15 @@ func TestStackedReclaimPreservesLeasedResidentBranchAfterPrune(t *testing.T) {
 	testutil.NoError(t, d.NukeResidentWorkerBinding(view.RoleID, binding.ID, &db.HeraReclaimLease{RepoDir: repo, Branch: worker.Branch, Tip: "old"}))
 	byBase := map[string]*model.Task{root.Branch: worker, worker.Branch: tip}
 	safeTips := map[string]mergesafety.Verdict{tip.Branch: {Safe: true}}
+	repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
+	testutil.NoError(t, err)
 	for _, prune := range []bool{false, true} {
 		if prune {
 			pruned, _, err := d.PruneHeraReclaimedTask(worker.ID)
 			testutil.NoError(t, err)
 			testutil.Equal(t, len(pruned), 1)
 		}
-		deleted := reconcileStackedBranches(context.Background(), d, d.Config(), repo, byBase, root, safeTips, false)
+		deleted := reconcileStackedBranches(context.Background(), d, d.Config(), repository, byBase, root, safeTips, false)
 		testutil.Equal(t, deleted, 0)
 		testutil.True(t, gitBranchExists(repo, worker.Branch))
 	}
@@ -338,12 +340,16 @@ func TestStackTasksUseSharedGitRepositoryIdentity(t *testing.T) {
 	otherRepo := initGitRepo(t, t.TempDir())
 	linked := filepath.Join(t.TempDir(), "linked")
 	gitRun(t, repo, "worktree", "add", "--detach", linked)
+	otherLinked := filepath.Join(t.TempDir(), "other-linked")
+	gitRun(t, otherRepo, "worktree", "add", "--detach", otherLinked)
 	cfg := config.Config{Projects: map[string]config.Project{
 		"local": {Path: repo}, "linked": {Path: linked}, "other": {Path: otherRepo},
 	}}
-	same := &model.Task{ID: "same", Project: "linked", Branch: "child", BaseBranch: "base"}
-	other := &model.Task{ID: "other", Project: "other", Branch: "child", BaseBranch: "base"}
-	got := StackTasksInRepository(context.Background(), cfg, repo, []*model.Task{same, other})
+	same := &model.Task{ID: "same", Project: "other", Worktree: linked, Branch: "child", BaseBranch: "base"}
+	other := &model.Task{ID: "other", Project: "local", Worktree: otherLinked, Branch: "child", BaseBranch: "base"}
+	repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
+	testutil.NoError(t, err)
+	got := StackTasksInRepository(context.Background(), cfg, repository, []*model.Task{same, other})
 	testutil.Equal(t, len(got), 1)
 	testutil.Equal(t, got["base"], same)
 }
@@ -366,9 +372,56 @@ func TestStackedDeletePreservesSuccessorAfterOldTaskDisappears(t *testing.T) {
 	testutil.NoError(t, d.Delete(old.ID))
 	testutil.NoError(t, d.Add(&model.Task{ID: "new", Name: "New worker", Project: "p", Branch: branch}))
 
-	repoID, err := agent.TaskGitRepositoryID(context.Background(), repo)
+	repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
 	testutil.NoError(t, err)
-	testutil.False(t, DeleteStackedTaskBranch(context.Background(), d, old.ID, repo, repoID, branch))
+	testutil.False(t, DeleteStackedTaskBranch(context.Background(), d, old.ID, repository, branch, agent.TaskGitBranchTip(context.Background(), repo, branch)))
 	gitRun(t, repo, "show-ref", "--verify", "refs/heads/"+branch)
 	gitRun(t, remote, "show-ref", "--verify", "refs/heads/"+branch)
+}
+
+func TestStackedDeleteUsesCapturedOrigin(t *testing.T) {
+	for _, name := range []string{"original origin", "changed origin", "changed remote tip", "changed local tip", "linked successor"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			repo := initGitRepo(t, t.TempDir())
+			first, second := t.TempDir(), t.TempDir()
+			gitRun(t, first, "init", "--bare")
+			gitRun(t, second, "init", "--bare")
+			gitRun(t, repo, "remote", "add", "origin", first)
+			const branch = "argus/child"
+			gitRun(t, repo, "branch", branch)
+			gitRun(t, repo, "push", "origin", branch)
+			gitRun(t, repo, "push", second, branch)
+			repository, err := agent.CaptureTaskGitRepository(context.Background(), repo)
+			testutil.NoError(t, err)
+			tip := agent.TaskGitBranchTip(context.Background(), repo, branch)
+			switch name {
+			case "changed origin":
+				gitRun(t, repo, "remote", "set-url", "origin", second)
+			case "changed remote tip":
+				addGitCommit(t, repo, "new.txt", "new")
+				gitRun(t, repo, "push", first, "HEAD:refs/heads/"+branch)
+			case "changed local tip":
+				addGitCommit(t, repo, "new.txt", "new")
+				gitRun(t, repo, "branch", "-f", branch, "HEAD")
+			}
+			d, err := db.OpenInMemory()
+			testutil.NoError(t, err)
+			t.Cleanup(func() { _ = d.Close() })
+			testutil.NoError(t, d.SetProject("p", config.Project{Path: repo}))
+			testutil.NoError(t, d.Add(&model.Task{ID: "child", Name: "Child", Project: "p", Branch: branch}))
+
+			if name == "linked successor" {
+				linked := filepath.Join(t.TempDir(), "successor")
+				gitRun(t, repo, "worktree", "add", "--detach", linked)
+				testutil.NoError(t, d.SetProject("other", config.Project{Path: initGitRepo(t, t.TempDir())}))
+				testutil.NoError(t, d.Add(&model.Task{ID: "successor", Name: "Successor", Project: "other", Worktree: linked, Branch: branch}))
+			}
+			localDeleted := name == "original origin" || name == "changed remote tip"
+			testutil.Equal(t, DeleteStackedTaskBranch(context.Background(), d, "child", repository, branch, tip), localDeleted)
+			testutil.Equal(t, gitBranchExists(repo, branch), !localDeleted)
+			testutil.Equal(t, gitBranchExists(first, branch), name != "original origin")
+			testutil.True(t, gitBranchExists(second, branch))
+		})
+	}
 }

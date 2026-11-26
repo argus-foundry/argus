@@ -205,6 +205,7 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 	}
 	summary := residentSummarize(ctx, cfg, task, pr)
 	var recheck func(*model.Task) error
+	var classifiedRepository agent.TaskGitRepository
 	if !p.Force {
 		// An expired budget makes the summary's fields unknown; that is not
 		// dirt, and saying so would mislead.
@@ -223,6 +224,14 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 				return residentHostBusy(id, role.Name, task.ID, "the worktree state check ran out of the call's time budget")
 			}
 			return residentToolError(id, fmt.Sprintf("not safe: %v; finish it on the worker's branch, or pass force=true", err))
+		}
+		if actual := agent.ResidentCleanupRepository(ctx, task.Worktree, ""); actual != "" {
+			expected, err := agent.CaptureTaskGitRepository(ctx, agent.ResolveDir(task, cfg))
+			identity, identityErr := agent.TaskGitRepositoryID(ctx, actual)
+			if err != nil || identityErr != nil || !agent.SamePath(identity, expected.CommonDir) {
+				return residentToolError(id, "not safe: the worker checkout and configured project resolve to different repositories")
+			}
+			classifiedRepository = expected
 		}
 		classify := s.residentClassify
 		if classify == nil {
@@ -267,9 +276,11 @@ func (s *Server) toolHeraDeleteWorker(id interface{}, args json.RawMessage, call
 		}
 	}
 	followUp, err := hera.NukeResidentWorkerChecked(d, runner, &heramodel.RoleView{RoleID: role.ID, TaskID: task.ID, Live: true}, hera.ResidentDeleteOptions{
-		Recheck:  recheck,
-		Wait:     residentStopWait,
-		MutateBy: mutateBy,
+		Recheck:              recheck,
+		Wait:                 residentStopWait,
+		MutateBy:             mutateBy,
+		Deadline:             deadline,
+		ClassifiedRepository: classifiedRepository,
 		// The exit wait must leave the re-check and the local nuke their time.
 		GiveUpBy:           deadline.Add(-(residentRecheckBudget + residentLocalNukeReserve)),
 		Clock:              residentClock,
