@@ -46,6 +46,7 @@ import (
 	// factory with internal/todo so cfg.Todo.Backend = "things3" resolves.
 	_ "github.com/argus-foundry/argus/internal/todo/things3"
 	"github.com/argus-foundry/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/voice"
 )
 
 // prPollInterval is the cadence at which the daemon refreshes cached PR review
@@ -190,6 +191,7 @@ type Daemon struct {
 	mcpServer          *mcp.Server       // set when KB is enabled, shut down in cleanup
 	kbIndexer          *kb.Indexer       // set when KB is enabled, stopped in cleanup
 	apiServer          *api.Server       // set when API is enabled, shut down in cleanup
+	voiceHook          *voice.Webhook    // optional loopback notify-back; stopped in cleanup
 	runtimeSource      api.RuntimeSource // wired by main before Serve; backs /api/runtime
 	restoreBridgeUsage func()
 	scheduler          *scheduler.Scheduler // recurring scheduled-task firer; always started
@@ -1728,6 +1730,21 @@ func (d *Daemon) Serve(sockPath string) error {
 		}
 	}
 
+	// Voice notify-back. Empty webhook_url is a no-op until config.toml sets a
+	// loopback URL; the hook reads config on each event, so a reload applies
+	// without a restart. It does not depend on the MCP or REST servers.
+	d.voiceHook = voice.NewWebhook(
+		func() string { return d.cfgFn().Voice.WebhookURL },
+		func(id string) string {
+			t, err := d.db.Get(id)
+			if err != nil || t == nil {
+				return ""
+			}
+			return t.Name
+		},
+	)
+	d.voiceHook.Start()
+
 	// Start MCP HTTP server and KB indexer (only when KB is enabled in settings).
 	// One claude.ai artifact publisher, shared by the MCP artifact_publish
 	// tool and POST /api/artifacts/publish (add-argus-artifact-publish).
@@ -1854,6 +1871,7 @@ func (d *Daemon) Serve(sockPath string) error {
 			if d.mcpServer != nil {
 				d.mcpServer.SetAPIGetter(apiSrv.ReadOnlyGet)
 				d.mcpServer.SetAccountMover(apiSrv.MoveTaskAccount)
+				d.mcpServer.SetVoice(voice.NewRouter(apiSrv.VoiceOperator()))
 			}
 			// Wire the events.Sink to the API server's event bus so emission
 			// sites (db, orch, runner, this file) feed /api/events/stream.
@@ -1989,6 +2007,9 @@ func (d *Daemon) Shutdown() {
 // the cleanup goroutine and leaving zombie agent processes + stale files.
 func (d *Daemon) cleanup() {
 	slog.Info("daemon shutting down")
+	if d.voiceHook != nil {
+		d.voiceHook.Stop()
+	}
 
 	// Shut down the API HTTP server if running.
 	if d.apiServer != nil {

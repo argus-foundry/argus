@@ -54,35 +54,23 @@ type taskCounts struct {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	running, idle := s.runner.RunningAndIdle()
-	idle = bridge.Override(idle, s.BridgeStates(), bridge.Quiescent)
-
-	tasks, err := s.db.Tasks()
+	snap, err := s.voiceSnapshot(time.Now())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "failed to load tasks", err)
 		return
 	}
-	var tc taskCounts
-	for _, t := range tasks {
-		if t.Archived {
-			continue
-		}
-		switch t.Status {
-		case model.StatusPending:
-			tc.Pending++
-		case model.StatusInProgress:
-			tc.InProgress++
-		case model.StatusInReview:
-			tc.InReview++
-		case model.StatusComplete:
-			tc.Complete++
-		}
-	}
-
 	writeJSON(w, http.StatusOK, statusResponse{
-		OK:       true,
-		Sessions: sessionCounts{Running: len(running), Idle: len(idle)},
-		Tasks:    tc,
+		OK: true,
+		Sessions: sessionCounts{
+			Running: snap.SessionsRunning,
+			Idle:    snap.SessionsIdle,
+		},
+		Tasks: taskCounts{
+			Pending:    snap.Counts.Pending,
+			InProgress: snap.Counts.InProgress,
+			InReview:   snap.Counts.InReview,
+			Complete:   snap.Counts.Complete,
+		},
 	})
 }
 
@@ -543,15 +531,23 @@ func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.runner.Stop(id); err != nil && !errors.Is(err, agent.ErrSessionNotFound) {
+	if err := s.stopTaskSession(task); err != nil {
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
 
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+// stopTaskSession stops a live session, treating an already-stopped task as
+// success, and moves the row to in review. Shared by REST and voice.
+func (s *Server) stopTaskSession(task *model.Task) error {
+	if err := s.runner.Stop(task.ID); err != nil && !errors.Is(err, agent.ErrSessionNotFound) {
+		return err
+	}
 	task.SetStatus(model.StatusInReview)
 	s.db.Update(task) //nolint:errcheck
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+	return nil
 }
 
 // --- Restart Task ---
@@ -682,53 +678,101 @@ func parseForceRevive(w http.ResponseWriter, r *http.Request) (force, ok bool) {
 // caller deliberately forces the revival. On a forced revival it clears the
 // close-out state up front and returns a rollback that restores it if the
 // launch then fails. Callers hold the per-task lock.
-func (s *Server) closeoutGate(w http.ResponseWriter, task *model.Task, force bool, op string) (proceed bool, rollback func()) {
+type closeoutResult struct {
+	proceed  bool
+	code     string
+	cause    error
+	rollback func()
+}
+
+// evaluateCloseout is the close-out decision shared by REST resume/restart
+// and voice resume. rollback restores a forced clear when the launch fails.
+func (s *Server) evaluateCloseout(task *model.Task, force bool, op string) closeoutResult {
 	noop := func() {}
 	workerOrFreelance, err := s.db.TaskHoldsLiveHeraWorkerOrFreelanceBinding(task.ID)
 	if err != nil {
 		uxlog.Log("[api] %s: closeout check failed task=%s err=%v", op, task.ID, err)
-		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_check_failed", err)
-		return false, noop
+		return closeoutResult{code: "closeout_check_failed", cause: err, rollback: noop}
 	}
 	if !workerOrFreelance {
-		return true, noop
+		return closeoutResult{proceed: true, rollback: noop}
 	}
 	awaiting, err := s.db.HeraWorkerAwaitingCloseout(task.ID)
 	if err != nil {
 		uxlog.Log("[api] %s: closeout check failed task=%s err=%v", op, task.ID, err)
-		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_check_failed", err)
-		return false, noop
+		return closeoutResult{code: "closeout_check_failed", cause: err, rollback: noop}
 	}
 	if !awaiting {
-		return true, noop
+		return closeoutResult{proceed: true, rollback: noop}
 	}
 	if !force {
 		uxlog.Log("[api] %s: refused closed-out task=%s", op, task.ID)
+		return closeoutResult{code: "hera_closeout", rollback: noop}
+	}
+	snap, err := s.db.SnapshotAndClearHeraCloseout(task.ID)
+	if err != nil {
+		uxlog.Log("[api] %s: force-revive clear failed task=%s err=%v", op, task.ID, err)
+		return closeoutResult{code: "closeout_clear_failed", cause: err, rollback: noop}
+	}
+	uxlog.Log("[api] %s: force-reviving closed-out task=%s", op, task.ID)
+	return closeoutResult{proceed: true, rollback: func() {
+		if rerr := s.db.RestoreHeraCloseout(snap); rerr != nil {
+			uxlog.Log("[api] %s: restore closeout failed task=%s err=%v", op, task.ID, rerr)
+		}
+	}}
+}
+
+func (s *Server) closeoutGate(w http.ResponseWriter, task *model.Task, force bool, op string) (proceed bool, rollback func()) {
+	res := s.evaluateCloseout(task, force, op)
+	if res.proceed {
+		if res.rollback == nil {
+			return true, func() {}
+		}
+		return true, res.rollback
+	}
+	if res.code == "hera_closeout" {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":            "task awaits Hera close-out",
 			"code":             "hera_closeout",
 			"can_force_revive": true,
 		})
-		return false, noop
+		return false, func() {}
 	}
-	snap, err := s.db.SnapshotAndClearHeraCloseout(task.ID)
-	if err != nil {
-		uxlog.Log("[api] %s: force-revive clear failed task=%s err=%v", op, task.ID, err)
-		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_clear_failed", err)
-		return false, noop
-	}
-	uxlog.Log("[api] %s: force-reviving closed-out task=%s", op, task.ID)
-	return true, func() {
-		if rerr := s.db.RestoreHeraCloseout(snap); rerr != nil {
-			uxlog.Log("[api] %s: restore closeout failed task=%s err=%v", op, task.ID, rerr)
-		}
-	}
+	writeCodedErrCause(w, http.StatusInternalServerError, "", res.code, res.cause)
+	return false, func() {}
 }
 
 // restartTaskSession resumes a task's session (or reattaches a live one) and
 // marks it in progress. Shared by restart and the account move.
 func (s *Server) restartTaskSession(task *model.Task) (reattached bool, err error) {
 	return s.startTaskSession(task, true)
+}
+
+// startResumedSession reopens a task's session the way POST /resume does:
+// recapture the session id, reattach or start, and mark the row in progress.
+// op is the log prefix ("resume" for REST, "voice" for the voice router).
+func (s *Server) startResumedSession(task *model.Task, op string) (reattached bool, err error) {
+	cfg := s.db.Config()
+	prevStatus := task.Status
+	// Resume-time recapture: Claude re-derives the newest transcript; capture-once
+	// backends (codex/pi/opencode) recover a missing ID. Must precede resume.
+	agent.RefreshResumeSessionID(s.db, task)
+	resume := task.SessionID != ""
+	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
+	sess, reattached, err := s.runner.StartOrReattach(task, cfg, 24, 80, resume)
+	if err != nil {
+		uxlog.Log("[api] %s: start failed task=%s status=%s err=%v", op, task.ID, prevStatus, err)
+		return false, err
+	}
+	task.SetStatus(model.StatusInProgress)
+	task.AgentPID = sess.PID()
+	s.db.Update(task) //nolint:errcheck
+	if reattached {
+		uxlog.Log("[api] %s: healed task=%s pre_status=%s pid=%d", op, task.ID, prevStatus, task.AgentPID)
+	} else {
+		uxlog.Log("[api] %s: started task=%s pid=%d resume=%t", op, task.ID, task.AgentPID, resume)
+	}
+	return reattached, nil
 }
 
 // --- Resume Task ---
@@ -774,33 +818,13 @@ func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 	// "session already exists for task X". On reattach we re-sync the row
 	// to in_progress so the PWA can attach the terminal stream and other
 	// observers see consistent state.
-	cfg := s.db.Config()
-	prevStatus := task.Status
-
-	// Resume-time recapture: Claude re-derives the newest transcript; capture-once
-	// backends (codex/pi/opencode) recover a missing ID. Must precede resume.
-	agent.RefreshResumeSessionID(s.db, task)
-	resume := task.SessionID != ""
-	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
-
-	sess, reattached, err := s.runner.StartOrReattach(task, cfg, 24, 80, resume)
+	reattached, err := s.startResumedSession(task, "resume")
 	if err != nil {
 		if !errors.Is(err, agent.ErrStartAmbiguous) {
 			rollback()
 		}
-		uxlog.Log("[api] resume: start failed task=%s status=%s err=%v", id, prevStatus, err)
 		writeLaunchErr(w, err)
 		return
-	}
-
-	task.SetStatus(model.StatusInProgress)
-	task.AgentPID = sess.PID()
-	s.db.Update(task) //nolint:errcheck
-
-	if reattached {
-		uxlog.Log("[api] resume: healed task=%s pre_status=%s pid=%d", id, prevStatus, task.AgentPID)
-	} else {
-		uxlog.Log("[api] resume: started task=%s pid=%d resume=%t", id, task.AgentPID, resume)
 	}
 
 	resp := map[string]any{

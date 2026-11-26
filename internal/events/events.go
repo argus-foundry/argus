@@ -10,6 +10,7 @@ package events
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,8 +68,9 @@ func MarkResident(taskID string) {
 	}
 }
 
-// Emit constructs an Event and forwards it to the registered Sink. When no
-// Sink is registered the call is a silent no-op.
+// Emit constructs an Event and forwards it to the registered Sink, then to
+// any Subscribe listeners. When no Sink is registered and no listeners are
+// subscribed the call is a silent no-op.
 //
 // payload is JSON-marshaled at the call site. nil omits the field. A
 // marshal failure (e.g. a channel value) is swallowed — the event still
@@ -76,12 +78,18 @@ func MarkResident(taskID string) {
 // not want to know about a downstream encoding bug, and the alternative
 // (panicking or returning an error) would push that error onto every caller
 // for no actionable reason.
+//
+// Listeners run on the emitter's goroutine after the sink returns. They must
+// return quickly and must not panic into the emitter; a panic is recovered
+// and logged. The resident-id rewrite is applied before either consumer sees
+// the event.
 func Emit(typ, taskID string, payload any) {
+	snap := listenSnap.Load()
+	listening := snap != nil && len(snap.fns) > 0
 	p := current.Load()
-	if p == nil {
+	if p == nil && !listening {
 		return
 	}
-	sink := *p
 	if _, ok := residentIDs.Load(taskID); ok && !strings.HasPrefix(typ, model.EventTypeResidentPrefix) {
 		typ = model.EventTypeResidentPrefix + typ
 	}
@@ -95,5 +103,21 @@ func Emit(typ, taskID string, payload any) {
 			ev.Payload = b
 		}
 	}
-	sink.Emit(ev)
+	if p != nil {
+		(*p).Emit(ev)
+	}
+	if listening {
+		for _, fn := range snap.fns {
+			notifyListener(fn, ev)
+		}
+	}
+}
+
+func notifyListener(fn func(model.Event), ev model.Event) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("[events] listener panic", "type", ev.Type, "task", ev.TaskID, "panic", rec)
+		}
+	}()
+	fn(ev)
 }
