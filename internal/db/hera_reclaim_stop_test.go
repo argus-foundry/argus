@@ -57,7 +57,10 @@ func TestHeraReclaimStopRespectsCurrentTaskState(t *testing.T) {
 	armed, err := d.ArmHeraReclaimStop(task.ID, 41)
 	testutil.NoError(t, err)
 	testutil.True(t, armed)
-	testutil.NoError(t, d.SetArchived(task.ID, false))
+	testutil.ErrorIs(t, d.SetArchived(task.ID, false), ErrHeraReclaimInProgress)
+	// A prior daemon could have allowed restoring an armed task.
+	_, err = d.conn.Exec(`UPDATE tasks SET archived=0 WHERE id=?`, task.ID)
+	testutil.NoError(t, err)
 	matched, err = d.ConsumeHeraReclaimStop(task.ID, 41)
 	testutil.NoError(t, err)
 	testutil.False(t, matched)

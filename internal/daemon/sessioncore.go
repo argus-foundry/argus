@@ -91,14 +91,7 @@ type boundStream struct {
 // *agent.Session handles. *agent.Runner satisfies it; a supervisor-client does
 // not (it has no local sessions to iterate).
 type rawSessionLister interface {
-	SessionsAndPendingLaunches() (map[string]*agent.Session, []string)
-}
-
-func (c *sessionCore) sessionLaunchPending(taskID string) bool {
-	if r, ok := c.runner.(*agent.Runner); ok {
-		return r.HasPendingSessionLaunch(taskID)
-	}
-	return c.runner.HasPendingRestart(taskID)
+	SessionsAndPendingLaunches() (map[string]*agent.Session, map[string]int)
 }
 
 // sessionInfoLister is the supervisor-client's listing surface: it relays the
@@ -378,13 +371,21 @@ func (c *sessionCore) StopAll(_ *Empty, resp *StatusResp) error {
 // SessionStatus returns info about a single session.
 func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 	defer func() {
-		c.mu.Lock()
-		if latest := c.exitInfos[req.TaskID].info; resp.LastExitPID == 0 && !latest.StreamLost {
-			resp.LastExitPID = latest.PID
+		if resp.LastExitPID == 0 {
+			resp.LastExitPID = c.latestExitPID(req.TaskID)
 		}
-		c.mu.Unlock()
 	}()
-	sess := c.runner.Get(req.TaskID)
+	var sess agent.SessionHandle
+	if runner, ok := c.runner.(*agent.Runner); ok {
+		local, starting, predecessor := runner.ObserveSessionLaunch(req.TaskID)
+		if local == nil {
+			resp.TaskID, resp.Alive, resp.RestartFromPID = req.TaskID, starting, predecessor
+			return nil
+		}
+		sess = local
+	} else {
+		sess = c.runner.Get(req.TaskID)
+	}
 	if sess == nil {
 		resp.TaskID = req.TaskID
 		// Supervisor mode: a nil handle may only mean the probe to the
@@ -410,7 +411,7 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 		// clients retry the connection instead of giving up and tearing down
 		// their local UI state. The actual liveness will be reported once
 		// the new session is in place.
-		if c.sessionLaunchPending(req.TaskID) {
+		if c.runner.HasPendingRestart(req.TaskID) {
 			resp.Alive = true
 		}
 		return nil
@@ -448,6 +449,15 @@ func (c *sessionCore) SessionStatus(req *TaskIDReq, resp *SessionInfo) error {
 	resp.WorkDir = sess.WorkDir()
 	resp.TotalWritten = sess.TotalWritten()
 	return nil
+}
+
+func (c *sessionCore) latestExitPID(taskID string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if latest := c.exitInfos[taskID].info; !latest.StreamLost {
+		return latest.PID
+	}
+	return 0
 }
 
 // ListSessions returns info about all running sessions, plus synthetic
@@ -493,10 +503,12 @@ func (c *sessionCore) ListSessions(_ *Empty, resp *ListResp) error {
 	}
 	// Synthetic entries for the kick-restart gap. Mirrors SessionStatus's
 	// Alive=true synthetic when a single-task lookup hits the same window.
-	for _, id := range pending {
+	for id, predecessor := range pending {
 		resp.Sessions = append(resp.Sessions, SessionInfo{
-			TaskID: id,
-			Alive:  true,
+			TaskID:         id,
+			Alive:          true,
+			RestartFromPID: predecessor,
+			LastExitPID:    c.latestExitPID(id),
 		})
 	}
 	return nil

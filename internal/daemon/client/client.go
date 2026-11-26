@@ -148,9 +148,9 @@ const accountProtocolVersion = 8
 // the fresh pinned SessionID on RecycleReq.
 const recycleSessionIDProtocolVersion = 12
 
-// managedRestartProtocolVersion is the first protocol that identifies the
-// exact successor in the outgoing process's exit record.
-const managedRestartProtocolVersion = 17
+// managedRestartProtocolVersion identifies the outgoing and successor
+// processes for a managed restart, including when the daemon reattaches.
+const managedRestartProtocolVersion = 18
 
 // CheckManagedRestartSupported checks the owner before preparing a restart.
 func (c *Client) CheckManagedRestartSupported(taskID string) error {
@@ -453,13 +453,19 @@ func (c *Client) Get(taskID string) agent.SessionHandle {
 	if !info.Alive {
 		return nil
 	}
+	info.TaskID = taskID
+	return c.AttachObservedSession(info)
+}
 
+// AttachObservedSession starts a process relay directly from an authoritative
+// listing, including when that process settles before another probe could run.
+func (c *Client) AttachObservedSession(info daemon.SessionInfo) agent.SessionHandle {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if rs = c.sessions[taskID]; rs != nil {
+	if rs := c.sessions[info.TaskID]; rs != nil {
 		return rs
 	}
-	return c.newSessionLocked(taskID, info)
+	return c.newSessionLocked(info.TaskID, info)
 }
 
 // ProbeSession asks the server about one session and surfaces an RPC failure

@@ -340,15 +340,64 @@ func TestSession_StreamKeepsHistoryBoundToItsPID(t *testing.T) {
 	testutil.Equal(t, string(s.RecentOutput()), "old")
 
 	ended, err = s.streamOnce()
-	testutil.NoError(t, err)
-	testutil.True(t, ended)
+	testutil.ErrorIs(t, err, errStreamProcessChanged)
+	testutil.False(t, ended)
 	testutil.Equal(t, s.PID(), 123)
 	testutil.Equal(t, string(s.RecentOutput()), "old")
 
 	ended, err = s.streamOnce()
-	testutil.NoError(t, err)
-	testutil.True(t, ended)
+	testutil.ErrorIs(t, err, errStreamProcessChanged)
+	testutil.False(t, ended)
 	testutil.Equal(t, string(s.RecentOutput()), "old")
+}
+
+func TestSession_RebindsManagedReplacementWithoutExitCallback(t *testing.T) {
+	opened := make(chan struct{}, 1)
+	var streams atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tasks/t1/output":
+			w.Header().Set("X-Argus-Session-Pid", "456")
+			_, _ = io.WriteString(w, "w")
+		case "/api/tasks/t1/stream":
+			if streams.Add(1) == 1 {
+				w.Header().Set("X-Argus-Session-Pid", "123")
+				_, _ = io.WriteString(w, "data: b2xk\n\nevent: exit\ndata: {\"rerendering\":true}\n\n")
+				return
+			}
+			testutil.Equal(t, r.URL.Query().Get("since"), "")
+			testutil.Equal(t, r.URL.Query().Get("expected_pid"), "456")
+			w.Header().Set("X-Argus-Session-Pid", "456")
+			_, _ = io.WriteString(w, "data: bmV3\n\n")
+			w.(http.Flusher).Flush()
+			opened <- struct{}{}
+			<-r.Context().Done()
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	p := NewProvider(New(srv.URL, "tok", WithHTTPClient(srv.Client())))
+	defer p.Close()
+	var exits atomic.Int64
+	p.OnSessionExit(func(string, SessionExitInfo) { exits.Add(1) })
+	old := p.getOrCreateSession("t1")
+
+	select {
+	case <-opened:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement stream did not open")
+	}
+	select {
+	case <-old.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("retired pane source did not close")
+	}
+	next := p.Get("t1")
+	testutil.NotNil(t, next)
+	testutil.Equal(t, next.PID(), 456)
+	testutil.Equal(t, string(old.RecentOutput()), "old")
+	testutil.Equal(t, exits.Load(), int64(0))
 }
 
 func TestSession_RingBufferReceivesStream(t *testing.T) {

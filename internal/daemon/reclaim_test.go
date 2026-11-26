@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/argus-foundry/argus/internal/agent"
+	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/model"
 	"github.com/argus-foundry/argus/internal/testutil"
 )
@@ -14,6 +15,7 @@ type reclaimProbe struct {
 	retirement error
 	exit       ExitInfo
 	stopPID    *int
+	onStop     func()
 }
 
 func (o reclaimProbe) ProbeSession(string) (SessionInfo, error) { return o.info, nil }
@@ -21,6 +23,9 @@ func (o reclaimProbe) CheckReclaimSessionRetired(string) error  { return o.retir
 func (o reclaimProbe) ObservedSessionExit(string, int) ExitInfo { return o.exit }
 func (o reclaimProbe) StopTreeForPID(_ string, pid int) error {
 	*o.stopPID = pid
+	if o.onStop != nil {
+		o.onStop()
+	}
 	return nil
 }
 
@@ -34,13 +39,11 @@ func TestRecoverHeraReclaimExitValidatesOwner(t *testing.T) {
 		committed  bool
 		recovered  bool
 		retried    bool
-		unarchived bool
 		fenced     bool
 	}{
 		{name: "owner unsettled", retirement: agent.ErrSessionStarting, exit: ExitInfo{PID: pid, Stopped: true}},
 		{name: "interrupted stop", info: SessionInfo{Alive: true, PID: pid}, retirement: agent.ErrSessionStarting, retried: true},
 		{name: "different live owner", info: SessionInfo{Alive: true, PID: pid + 1}, retirement: agent.ErrSessionStarting},
-		{name: "task restored while stopped intent pending", info: SessionInfo{Alive: true, PID: pid}, retirement: agent.ErrSessionStarting, unarchived: true},
 		{name: "binding operation in progress", info: SessionInfo{Alive: true, PID: pid}, retirement: agent.ErrSessionStarting, fenced: true},
 		{name: "replacement became live", info: SessionInfo{Alive: true, PID: pid + 1}, exit: ExitInfo{PID: pid, Stopped: true}},
 		{name: "replacement already retired", info: SessionInfo{LastExitPID: pid + 1}, exit: ExitInfo{PID: pid, Stopped: true}},
@@ -61,9 +64,6 @@ func TestRecoverHeraReclaimExitValidatesOwner(t *testing.T) {
 			if tc.committed {
 				testutil.NoError(t, database.SetStatus(task.ID, model.StatusComplete))
 			}
-			if tc.unarchived {
-				testutil.NoError(t, database.SetArchived(task.ID, false))
-			}
 			if tc.fenced {
 				unlock, acquired, err := database.TryLockHeraReclaim(task.ID)
 				testutil.NoError(t, err)
@@ -71,7 +71,13 @@ func TestRecoverHeraReclaimExitValidatesOwner(t *testing.T) {
 				defer unlock()
 			}
 			var stopPID int
-			d.UseSupervisorRunner(reclaimProbe{fakeSupClient: &fakeSupClient{}, info: tc.info, retirement: tc.retirement, exit: tc.exit, stopPID: &stopPID})
+			d.UseSupervisorRunner(reclaimProbe{
+				fakeSupClient: &fakeSupClient{}, info: tc.info, retirement: tc.retirement, exit: tc.exit, stopPID: &stopPID,
+				onStop: func() {
+					testutil.ErrorIs(t, database.SetArchived(task.ID, false), db.ErrHeraReclaimInProgress)
+					testutil.ErrorIs(t, database.SetPinned(task.ID, true), db.ErrHeraReclaimInProgress)
+				},
+			})
 
 			recovered := d.recoverHeraReclaimExits()
 			if tc.retried {

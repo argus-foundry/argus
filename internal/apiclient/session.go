@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,8 @@ var _ agent.SessionHandle = (*Session)(nil)
 // scrollback in-process, full history available via /api/tasks/{id}/output
 // from the on-disk session log on the server.
 const defaultRingBufSize = 256 * 1024
+
+var errStreamProcessChanged = errors.New("terminal stream process changed")
 
 // Session implements agent.SessionHandle over the REST API. A long-lived
 // SSE goroutine reads /api/tasks/{id}/stream into a local ring buffer; the
@@ -358,6 +361,10 @@ func (s *Session) runStream() {
 	const maxRetries = 2
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		exited, err := s.streamOnce()
+		if errors.Is(err, errStreamProcessChanged) {
+			s.followReplacement()
+			return
+		}
 		if exited {
 			s.close()
 			// On a server-confirmed exit, err==nil. We set Stopped=true so the
@@ -369,13 +376,13 @@ func (s *Session) runStream() {
 			// wrongly Complete. The remote daemon's own transitionTaskOnExit holds
 			// the authoritative status, surfaced to this TUI via /api/tasks.
 			// (Pinned by the OnSessionExit test in methods_test.go.)
-			s.p.removeSession(s.taskID, SessionExitInfo{Err: errString(err), Stopped: err == nil})
+			s.p.removeSession(s, SessionExitInfo{Err: errString(err), Stopped: err == nil})
 			return
 		}
 		select {
 		case <-s.streamCtx.Done():
 			s.close()
-			s.p.removeSession(s.taskID, SessionExitInfo{StreamLost: true})
+			s.p.removeSession(s, SessionExitInfo{StreamLost: true})
 			return
 		case <-s.p.closed:
 			s.close()
@@ -385,7 +392,37 @@ func (s *Session) runStream() {
 	}
 	uxlog.Log("[apiclient] stream task=%s exhausted retries, treating as stream lost", s.taskID)
 	s.close()
-	s.p.removeSession(s.taskID, SessionExitInfo{StreamLost: true})
+	s.p.removeSession(s, SessionExitInfo{StreamLost: true})
+}
+
+func (s *Session) followReplacement() {
+	ctx, cancel := context.WithTimeout(s.streamCtx, 6*time.Minute)
+	defer cancel()
+	previous := s.PID()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		snapshot, err := s.p.c.GetOutput(ctx, s.taskID, 1, false)
+		if err == nil && snapshot.PID > 0 && snapshot.PID != previous {
+			s.p.replaceStream(s, snapshot.PID)
+			return
+		}
+		// A stale snapshot can mean an actual exit or a launch gap. The
+		// daemon remains authoritative for deciding which one occurred.
+		task, taskErr := s.p.c.GetTask(ctx, s.taskID)
+		if IsNotFound(taskErr) || (taskErr == nil && task.Status != "in_progress" && !task.Live) {
+			s.close()
+			s.p.removeSession(s, SessionExitInfo{Stopped: true})
+			return
+		}
+		select {
+		case <-ctx.Done():
+			s.close()
+			s.p.removeSession(s, SessionExitInfo{StreamLost: true})
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // streamOnce opens one SSE connection and reads until EOF or context cancel.
@@ -400,8 +437,7 @@ func (s *Session) streamOnce() (bool, error) {
 		if errors.As(err, &apiErr) {
 			switch apiErr.Status {
 			case http.StatusConflict:
-				// This reader cannot reuse its cursor for the replacement.
-				return true, nil
+				return false, errStreamProcessChanged
 			case http.StatusNotFound:
 				return true, err
 			}
@@ -419,7 +455,7 @@ func (s *Session) streamOnce() (bool, error) {
 			// After a stream drop this URL may resolve to a new PTY. The
 			// old cursor and history width belong to the previous process.
 			s.mu.Unlock()
-			return true, nil
+			return false, errStreamProcessChanged
 		}
 		s.pid, s.initCols, s.initRows = pid, cols, rows
 		s.mu.Unlock()
@@ -455,6 +491,12 @@ func (s *Session) streamOnce() (bool, error) {
 		data := strings.TrimSpace(line[len("data:"):])
 		switch event {
 		case "exit":
+			var exit struct {
+				Rerendering bool `json:"rerendering"`
+			}
+			if json.Unmarshal([]byte(data), &exit) == nil && exit.Rerendering {
+				return false, errStreamProcessChanged
+			}
 			return true, nil
 		case "clipboard":
 			// Ignored — handled separately by the apiclient consumer if any.

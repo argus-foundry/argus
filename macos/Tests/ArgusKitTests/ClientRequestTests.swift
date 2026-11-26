@@ -232,6 +232,27 @@ struct ClientRequestTests {
         #expect(MockURLProtocol.lock.withLock { MockURLProtocol.requestLog.count } == 3)
     }
 
+    @Test("canceling a stale snapshot stops its retry")
+    func outputCancelsStaleSessionRetry() async {
+        let (requests, signal) = AsyncStream<Void>.makeStream()
+        MockURLProtocol.handler = { req in
+            defer { signal.yield(()) }
+            let response = HTTPURLResponse(url: req.url!, statusCode: 409, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, Data(#"{"code":"stale_session"}"#.utf8))
+        }
+        let client = makeClient()
+        let loading = _Concurrency.Task { try await client.output(taskID: "t1") }
+        var seen = requests.makeAsyncIterator()
+        await seen.next()
+        loading.cancel()
+        if case .success = await loading.result {
+            Issue.record("Canceled terminal snapshot completed successfully")
+        }
+        #expect(MockURLProtocol.lock.withLock { MockURLProtocol.requestLog.count } == 1)
+        signal.finish()
+    }
+
     // MARK: - Raw task pin round-trip (add-mac-keybinding-parity Stage 1 red:
     // `ArgusClient.setPinned` does not exist yet)
     //

@@ -230,8 +230,8 @@ func discardStaleLiveTasksFile(dataDir string) {
 //     session); re-attached agents were never interrupted and get nothing. In the
 //     pure re-attach case (the supervisor kept everything), this is a no-op.
 func (d *Daemon) reattachSupervised() {
-	live := d.supClient.Running()
-	if live == nil {
+	liveSet, reattached := d.attachStartupSessions()
+	if liveSet == nil {
 		// nil ⇒ the ListSessions RPC to the supervisor failed; we cannot tell live
 		// from orphan. Do NOT flip — wrongly InReview-ing still-alive agents is a
 		// false termination. (An authoritative empty set is non-nil, so a genuine
@@ -240,18 +240,6 @@ func (d *Daemon) reattachSupervised() {
 		return
 	}
 
-	liveSet := make(map[string]bool, len(live))
-	for _, id := range live {
-		liveSet[id] = true
-	}
-
-	// Re-attach each live session: rebuild the local ring + arm the exit relay.
-	reattached := 0
-	for id := range liveSet {
-		if sess := d.supClient.Get(id); sess != nil {
-			reattached++
-		}
-	}
 	slog.Info("reattach: re-attached live supervisor sessions", "reattached", reattached, "live", len(liveSet))
 
 	// Restore any re-attached worker stranded in in_review by a prior roll or
@@ -262,7 +250,7 @@ func (d *Daemon) reattachSupervised() {
 	// the true orphans (handled below) deliberately flip the other way.
 	revived := 0
 	for id := range liveSet {
-		if ok, err := d.db.ReconcileHeraWorkerToInProgress(id); err != nil {
+		if ok, err := d.reviveObservedWorker(id); err != nil {
 			slog.Warn("reattach: revive-to-in_progress failed", "task", id, "err", err)
 		} else if ok {
 			revived++
@@ -333,6 +321,56 @@ func (d *Daemon) reattachSupervised() {
 	if sent := sendBounceSignals(d.db, orphans); sent > 0 {
 		slog.Info("reattach: signalled orphans", "sent", sent)
 	}
+}
+
+func (d *Daemon) attachStartupSessions() (map[string]bool, int) {
+	live := make(map[string]bool)
+	reattached := 0
+	if observer, ok := d.supClient.(interface {
+		ListSessionInfoChecked() ([]SessionInfo, error)
+		AttachObservedSession(SessionInfo) agent.SessionHandle
+	}); ok {
+		infos, err := observer.ListSessionInfoChecked()
+		if err != nil {
+			return nil, 0
+		}
+		for _, info := range infos {
+			if !info.Alive && info.PID <= 0 {
+				continue
+			}
+			live[info.TaskID] = true
+			if observer.AttachObservedSession(info) != nil {
+				reattached++
+			}
+		}
+		return live, reattached
+	}
+	ids := d.supClient.Running()
+	if ids == nil {
+		return nil, 0
+	}
+	for _, id := range ids {
+		live[id] = true
+		if d.supClient.Get(id) != nil {
+			reattached++
+		}
+	}
+	return live, reattached
+}
+
+func (d *Daemon) reviveObservedWorker(id string) (bool, error) {
+	unlock, acquired, err := d.db.TryLockSessionMutation(id)
+	if err != nil || !acquired {
+		return false, err
+	}
+	defer unlock()
+	if owner, ok := d.supClient.(sessionProber); ok {
+		info, err := owner.ProbeSession(id)
+		if err != nil || !info.Alive || info.PID <= 0 || info.LastExitPID == info.PID {
+			return false, err
+		}
+	}
+	return d.db.ReconcileHeraWorkerToInProgress(id)
 }
 
 // sendBounceSignals posts an ARGUS_BOUNCED note into each given task's inbox,

@@ -31,6 +31,7 @@ type pendingRestart struct {
 	cols        uint16
 	resume      bool
 	outgoingPID int
+	finalizing  bool
 }
 
 // Runner manages multiple agent sessions keyed by task ID.
@@ -273,10 +274,9 @@ func (r *Runner) start(task *model.Task, cfg config.Config, rows, cols uint16, r
 			_, rerr := r.start(pending.task, pending.cfg, pending.rows, pending.cols, pending.resume, pending)
 			if rerr != nil {
 				r.mu.Lock()
-				delete(r.pendingRestart, task.ID)
-				// The failed restart still owes its outgoing owner's exit
-				// notification. Keep the slot reserved through that callback.
-				r.sessions[task.ID] = nil
+				// Keep admission closed while publishing the failure, while
+				// reporting that the owner no longer has a pending launch.
+				pending.finalizing = true
 				r.mu.Unlock()
 				// Restart failed. The daemon's onFinish skipped the DB
 				// transition expecting a successful resume; without recovery
@@ -288,7 +288,7 @@ func (r *Runner) start(task *model.Task, cfg config.Config, rows, cols uint16, r
 					r.onFinish(task.ID, rerr, true, lastOutput)
 				}
 				r.mu.Lock()
-				delete(r.sessions, task.ID)
+				delete(r.pendingRestart, task.ID)
 				r.mu.Unlock()
 			}
 		}
@@ -582,17 +582,20 @@ func (r *Runner) Recycle(task *model.Task, cfg config.Config, rows, cols uint16)
 func (r *Runner) HasPendingRestart(taskID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, ok := r.pendingRestart[taskID]
-	return ok
+	restart := r.pendingRestart[taskID]
+	return restart != nil && !restart.finalizing
 }
 
-// HasPendingSessionLaunch includes ordinary start reservations and managed
-// restart gaps. An unavailable launch is distinct from a retired process.
-func (r *Runner) HasPendingSessionLaunch(taskID string) bool {
+// ObserveSessionLaunch snapshots the owner slot and its launch state together.
+// A failed restart still fences admission while reporting a retired process.
+func (r *Runner) ObserveSessionLaunch(taskID string) (sess *Session, starting bool, predecessor int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	sess, reserved := r.sessions[taskID]
-	return (reserved && sess == nil) || r.pendingRestart[taskID] != nil
+	if restart := r.pendingRestart[taskID]; sess == nil && restart != nil {
+		return nil, !restart.finalizing, restart.outgoingPID
+	}
+	return sess, reserved && sess == nil, 0
 }
 
 // SetSessionForTest injects a live *Session into the runner's map without
@@ -792,16 +795,18 @@ func (r *Runner) Sessions() map[string]*Session {
 
 // SessionsAndPendingLaunches snapshots handles and launch reservations at
 // once so a successor publishing mid-listing cannot disappear from both.
-func (r *Runner) SessionsAndPendingLaunches() (map[string]*Session, []string) {
+func (r *Runner) SessionsAndPendingLaunches() (map[string]*Session, map[string]int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	sessions, pending := r.sessionsLocked(), r.pendingRestartIDsLocked()
-	for _, id := range pending {
+	sessions := r.sessionsLocked()
+	pending := make(map[string]int)
+	for _, id := range r.pendingRestartIDsLocked() {
 		delete(sessions, id)
+		pending[id] = r.pendingRestart[id].outgoingPID
 	}
 	for id, sess := range r.sessions {
 		if sess == nil && r.pendingRestart[id] == nil {
-			pending = append(pending, id)
+			pending[id] = 0
 		}
 	}
 	return sessions, pending

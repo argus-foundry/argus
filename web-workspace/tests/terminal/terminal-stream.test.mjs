@@ -114,3 +114,43 @@ test('suspended cached output releases its source and resumes without replay dup
     assert.deepEqual(written,replace?[]:[[12,13,14]]);assert.deepEqual(replaced,replace?[[10,11,12,13,14]]:[]);abort.abort();
   });
 });
+
+test('cached output is replaced when the snapshot PID changes', async t => {
+  const requests = [];
+  const original = globalThis.EventSource;
+  globalThis.EventSource = class {
+    constructor(url) { requests.push(url); }
+    addEventListener() {}
+    close() {}
+  };
+  const controller = new AbortController();
+  t.after(() => { controller.abort(); globalThis.EventSource = original; });
+  const task = { id: 'replacement', status: 'in_progress', live: true };
+  const size = { cols: 80, rows: 24 };
+  const adjustments = [];
+  let pid = 31, history = 'old';
+  const api = {
+    json: async path => path.endsWith('/size') ? size : task,
+    request: async () => new Response(history, { headers: {
+      'X-Argus-Session-Pid': String(pid),
+      'X-Output-Total': String(history.length),
+      'X-Source': 'live',
+    } }),
+    streamUrl: path => path,
+  };
+  const stream = new TerminalStream(api, task, controller.signal, {
+    state() {}, currentSize: () => size,
+    write: async bytes => adjustments.push(['write', new TextDecoder().decode(bytes)]),
+    replace: async bytes => adjustments.push(['replace', new TextDecoder().decode(bytes)]),
+  });
+  await stream.start();
+  stream.suspend();
+  pid = 32;
+  history = 'successor';
+  await stream.resume();
+  assert.deepEqual(adjustments, [['write', 'old'], ['replace', 'successor']]);
+  assert.deepEqual(requests, [
+    '/api/tasks/replacement/stream?since=3&expected_pid=31',
+    '/api/tasks/replacement/stream?since=9&expected_pid=32',
+  ]);
+});

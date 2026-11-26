@@ -1046,7 +1046,7 @@ func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived boo
 	}
 	task.SetArchived(archived)
 	if err := s.db.Update(task); err != nil {
-		if errors.Is(err, db.ErrGraduationPending) || errors.Is(err, db.ErrHeraRoleLive) {
+		if errors.Is(err, db.ErrGraduationPending) || errors.Is(err, db.ErrHeraRoleLive) || errors.Is(err, db.ErrHeraReclaimInProgress) {
 			writeErr(w, http.StatusConflict, "", err)
 			return
 		}
@@ -1099,6 +1099,10 @@ func (s *Server) handlePinTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.db.SetPinned(id, *req.Pinned); err != nil {
+		if errors.Is(err, db.ErrHeraReclaimInProgress) {
+			writeErr(w, http.StatusConflict, "", err)
+			return
+		}
 		if errors.Is(err, db.ErrTaskNotFound) {
 			writeErr(w, http.StatusNotFound, "task not found", nil)
 			return

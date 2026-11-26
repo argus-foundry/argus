@@ -182,6 +182,13 @@ func (d *DB) insertTaskLocked(t *model.Task) error {
 }
 
 func (d *DB) Update(t *model.Task) error {
+	if !t.Archived {
+		unlock, err := d.lockHeraTaskRestore(t.ID)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
 	d.resultMu.Lock()
 	defer d.resultMu.Unlock()
 	old, err := d.updateLocked(t)
@@ -459,6 +466,13 @@ func (d *DB) SetArchived(id string, archived bool) error {
 }
 
 func (d *DB) setArchived(id string, archived bool) error {
+	if !archived {
+		unlock, err := d.lockHeraTaskRestore(id)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
 	// Both statements (tasks UPDATE + on-archive task_messages DELETE) run in
 	// one SQLite transaction so a crash between them can't leave an archived
 	// row with a queued inbox forever counting against the unread cap.
@@ -555,6 +569,13 @@ func emitSectionChange(id string, oldArchived, oldPinned, newArchived, newPinned
 // Emits only the shared task.updated invalidation (changed_fields pinned
 // and/or archived), and only when a flag actually moved.
 func (d *DB) SetPinned(id string, pinned bool) error {
+	if pinned {
+		unlock, err := d.lockHeraTaskRestore(id)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
 	oldArchived, oldPinned, err := d.setPinnedLocked(id, pinned)
 	if err != nil {
 		return err

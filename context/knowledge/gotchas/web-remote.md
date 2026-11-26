@@ -358,3 +358,5 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 
 - **Decide closed-draft recovery must exclude only definitive closed/unavailable drafts from the queue; frozen uncertain payloads remain immutable and retryable.** Keep written notes and annotation quotes in collapsed recovery even when a bare already_resolved choice/Done can be treated as accepted; that outcome does not prove new written feedback was saved.
 - **Board trigger_pending alone changes attention/order, not authored response revision.** Emit the update and mark unread, but keep updated_at stable so queued Done receipts remain valid; body/command/trigger text/blocking edits still advance it.
+
+- **Theia must compare the snapshot PID before appending cached scrollback.** The remote TUI retains a retired pane handle during replacement and swaps it to a fresh ring after verifying the new PID.

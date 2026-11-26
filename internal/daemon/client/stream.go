@@ -71,6 +71,20 @@ func (rs *RemoteSession) connectStream(sockPath string) {
 
 		rs.streamAttempt = attempt
 		if waitingForLaunch {
+			if launch.RestartFromPID > 0 {
+				exit := rs.client.exitInfoForPID(rs.taskID, launch.RestartFromPID)
+				if exit.StreamLost || exit.PID != launch.RestartFromPID {
+					continue
+				}
+				if !exit.PendingRestart {
+					rs.client.finishSession(rs, exit)
+					return
+				}
+				restart = exit
+				waitingForLaunch = false
+			}
+		}
+		if waitingForLaunch {
 			info, err := rs.client.ProbeSession(rs.taskID)
 			if err != nil {
 				continue

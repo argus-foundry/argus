@@ -158,7 +158,8 @@ type BootInfoResp struct {
 // ResizeForPID and StopRerenderForPID use separate RPC methods so stale
 // supervisors cannot silently ignore the target of a width repair.
 // v17 adds StopTreeForPID and names the exact managed successor in ExitInfo.
-const ProtocolVersion = 17
+// v18 carries the managed predecessor in the owner launch observation.
+const ProtocolVersion = 18
 
 // SupervisorProtocolMatch reports whether a supervisor's handshake version
 // equals the daemon's. A mismatch is NOT fatal and NEVER triggers an auto-
@@ -305,6 +306,7 @@ type SessionInfo struct {
 	Idle             bool
 	PID              int
 	LastExitPID      int
+	RestartFromPID   int `json:",omitempty"` // predecessor of the observed managed launch
 	Cols             int
 	Rows             int
 	InitialCols      int // PTY width at session start; immutable

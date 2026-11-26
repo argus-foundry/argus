@@ -490,3 +490,5 @@ M6a scaffolds the native Hera view: a `HeraPage` (rail | coordinator pane | agen
 - **Decide navigation uses the persisted rail hierarchy and the shared kanban traversal order, without fold chrome.** Counts never determine membership or placement; empty/unbound coordinators remain selectable, while hidden ancestors or bridge roles deny the whole branch. The TUI launch role is only preselection in the common page.
 
 - **Hera reclaim takes the task’s session lock before its binding admission lock.** Keep binding admission closed through the PID-scoped stop or worktree removal. A durable stop intent can be retried only while the same process is live and the archived task still has no bindings.
+
+- **Restore and pin share the reclaim fence.** A task already selected for archived nuke cleanup remains owned by cleanup until its worktree is reclaimed. Standalone cleanup holds binding admission through stop and removal.

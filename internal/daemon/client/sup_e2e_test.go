@@ -500,18 +500,49 @@ func TestSupKickFail(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	testutil.Contains(t, string(sess.RecentOutput()), "ready")
-	restore := agent.SetPrelaunchForTest(func(context.Context, *model.Task, config.Config) error {
-		return errors.New("test restart failure")
+	entered, finish := make(chan struct{}), make(chan struct{})
+	restore := agent.SetPrelaunchForTest(func(ctx context.Context, _ *model.Task, _ config.Config) error {
+		close(entered)
+		select {
+		case <-finish:
+			return errors.New("test restart failure")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	})
 	t.Cleanup(restore)
 
 	testutil.NoError(t, sc.KickWidthRerenderForPID(task, database.Config(), 30, 105, oldPID))
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("restart did not begin")
+	}
+	observed, err := sc.ProbeSession(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, observed.RestartFromPID, oldPID)
+	close(finish)
 	waitStatus(t, database, task.ID, model.StatusInReview)
 	ended := sc.sessionExitInfo(sess.(*RemoteSession))
 	testutil.Equal(t, ended.PID, oldPID)
 	testutil.False(t, ended.PendingRestart)
 	testutil.False(t, ended.StreamLost)
 	testutil.Contains(t, ended.Err, "test restart failure")
+
+	fresh, err := Connect(sc.sockPath)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = fresh.Close() })
+	relayed := make(chan daemon.ExitInfo, 1)
+	fresh.OnSessionExit(func(_ string, info daemon.ExitInfo) { relayed <- info })
+	fresh.AttachObservedSession(observed)
+	select {
+	case exit := <-relayed:
+		testutil.Equal(t, exit.PID, oldPID)
+		testutil.False(t, exit.StreamLost)
+		testutil.False(t, exit.PendingRestart)
+	case <-time.After(5 * time.Second):
+		t.Fatal("startup relay dropped a completed restart failure")
+	}
 }
 
 func TestSupKickFast(t *testing.T) {
@@ -663,6 +694,10 @@ func TestSupKickSlow(t *testing.T) {
 	freshSession := fresh.Get(task.ID)
 	testutil.NotNil(t, freshSession)
 	testutil.Equal(t, freshSession.PID(), 0)
+	snapshots, err := fresh.ListSessionInfoChecked()
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(snapshots), 1)
+	testutil.Equal(t, snapshots[0].RestartFromPID, pid)
 	freshExit := make(chan daemon.ExitInfo, 1)
 	fresh.OnSessionExit(func(_ string, info daemon.ExitInfo) {
 		if !info.PendingRestart {
@@ -687,6 +722,23 @@ func TestSupKickSlow(t *testing.T) {
 		testutil.False(t, relayed.StreamLost)
 	case <-time.After(5 * time.Second):
 		t.Fatal("fresh supervisor client did not relay the successor exit")
+	}
+	late, err := Connect(sc.sockPath)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = late.Close() })
+	lateExit := make(chan daemon.ExitInfo, 1)
+	late.OnSessionExit(func(_ string, info daemon.ExitInfo) {
+		if !info.PendingRestart {
+			lateExit <- info
+		}
+	})
+	late.AttachObservedSession(snapshots[0])
+	select {
+	case relayed := <-lateExit:
+		testutil.Equal(t, relayed.PID, exit.PID)
+		testutil.False(t, relayed.StreamLost)
+	case <-time.After(5 * time.Second):
+		t.Fatal("startup relay did not settle a successor retired since listing")
 	}
 }
 

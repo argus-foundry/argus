@@ -16,13 +16,21 @@ import (
 // LockSessionMutation waits for the task's current lifecycle operation to
 // finish. Use it from background work that can be canceled.
 func (d *DB) LockSessionMutation(ctx context.Context, taskID string) (func(), error) {
+	return waitTaskOperation(ctx, taskID, d.TryLockSessionMutation)
+}
+
+func (d *DB) LockHeraReclaim(ctx context.Context, taskID string) (func(), error) {
+	return waitTaskOperation(ctx, taskID, d.TryLockHeraReclaim)
+}
+
+func waitTaskOperation(ctx context.Context, taskID string, try func(string) (func(), bool, error)) (func(), error) {
 	retry := time.NewTicker(10 * time.Millisecond)
 	defer retry.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		unlock, acquired, err := d.TryLockSessionMutation(taskID)
+		unlock, acquired, err := try(taskID)
 		if err != nil || acquired {
 			return unlock, err
 		}

@@ -380,7 +380,9 @@ const (
 	// v25: session listings preserve pending restarts during prelaunch, and
 	// PID-scoped tree stops avoid worktree-wide detached process cleanup.
 	// v26: session listings and status retain ordinary launch reservations.
-	SupervisorStreamSurface = 26
+	// v27: owner snapshots identify managed predecessors and report failed
+	// launches as retired while admission stays closed through finalization.
+	SupervisorStreamSurface = 27
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -639,7 +641,7 @@ var SupervisorStreamPaths = []string{
 // message prints the computed digest to paste back here.
 const (
 	SpawnSurfaceDigest  = "d5dc8e881ff9ce381a59e01eb592ab9b44cf02d1d1b44fe96001a8e2aed737e3"
-	StreamSurfaceDigest = "18c89a44c06e3298e0729b9ec80d30b37d0196bda5e21791fd09e569f09599a8"
+	StreamSurfaceDigest = "bd3b88fb8a09aa72af48449e32bee36719e46d9ed97133f58efef03d7d5bb5c3"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,
