@@ -1127,6 +1127,7 @@ func (a *App) buildUI() {
 		a.heraPage.OnBoardComplete = func(item *db.HeraBoardItem, outcome string) {
 			go a.completeHeraBoardItem(d, item, outcome)
 		}
+		a.heraPage.OnBoardDefer = func(item *db.HeraBoardItem, deferred bool) { go a.deferHeraBoardItem(item, deferred) }
 		a.heraPage.OnBoardCopy = a.copyBoardCommand
 		a.heraPage.OnApprovalDecision = func(item *db.HeraBoardItem, approve bool) { a.confirmResidentApproval(d, item, approve) }
 		// Persist + restore the rail's fold/selection state across restarts

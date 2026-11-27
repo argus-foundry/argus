@@ -188,7 +188,7 @@ func (s *Server) openDecisions(role int64) ([]*db.HeraBoardItem, error) {
 	}
 	out := make([]*db.HeraBoardItem, 0)
 	for _, i := range items {
-		if i.Kind == "decision" {
+		if i.Kind == "decision" && i.DeferredAt == nil {
 			out = append(out, i)
 		}
 	}

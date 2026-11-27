@@ -30,7 +30,7 @@ Write it so it makes sense weeks from now without this conversation:
   - **When**: the trigger condition, or "no trigger, at Aaron's convenience".
   - **Why**: one sentence on why it matters or what breaks if it's skipped.
   - **Refs**: any PR, branch, task, file path or command it depends on. Leave this out if there are none.
-- **kind**: `todo` for future team work; `action` with `blocking: false` for a deferred step only Aaron can run; `action` with `blocking: true` when work is stuck until he acts now; `decision` for a choice; `fyi` for information only.
+- **kind**: `todo` for future team work; `action` with `blocking: false` for a later step only Aaron can run; `action` with `blocking: true` when work is stuck until he acts now; `decision` for a choice; `fyi` for information only.
 - **trigger / trigger_pending**: use typed trigger text for action/todo conditions; a trigger defaults to pending on post. Set `trigger_pending: false` only after verifying the condition. Pending items and all board todos remain visible without ringing Aaron's attention.
 - **command**: for an action, carry the exact copyable command or human UI step, if known; it is displayed as data and never executed by the board. Never invent a command.
 

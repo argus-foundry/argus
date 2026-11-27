@@ -37,7 +37,7 @@ func nextBoardRevision(previous time.Time) time.Time {
 // AttentionUnread is the shared human attention predicate. Team work remains
 // visible on its board but never rings Aaron's mailbox.
 func (i *HeraBoardItem) AttentionUnread() bool {
-	return !i.Resolved && !i.Read && !i.TriggerPending && i.Kind != "todo"
+	return i.DeferredAt == nil && !i.Resolved && !i.Read && !i.TriggerPending && i.Kind != "todo"
 }
 
 func boardMetadata(kind string, before *HeraBoardItem, p HeraBoardMetadataPatch) (boardWorkMetadata, error) {

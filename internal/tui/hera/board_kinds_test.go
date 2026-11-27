@@ -53,14 +53,14 @@ func TestBoardRenderKindsAndMetadata(t *testing.T) {
 	_, rows := drawBoardRows(t, b, 80, 24)
 	text := strings.Join(rows, "\n")
 	testutil.Contains(t, text, "[action BLOCKING] #3")
-	testutil.Contains(t, text, "[action deferred] #4")
+	testutil.Contains(t, text, "[action later] #4")
 	testutil.Contains(t, text, "[todo] #2")
 	testutil.Contains(t, text, "Step:")
 	// Command is literal: repeated spaces and ** survive.
 	testutil.Contains(t, text, "make  migrate **now**")
 	b.expandedID = 4
 	_, rows = drawBoardRows(t, b, 80, 24)
-	testutil.Contains(t, strings.Join(rows, "\n"), "Trigger (deferred): after 1.42 ships")
+	testutil.Contains(t, strings.Join(rows, "\n"), "Trigger (later): after 1.42 ships")
 }
 
 func TestBoardClearCopyKeys(t *testing.T) {

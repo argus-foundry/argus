@@ -37,6 +37,7 @@ type HeraBoardItem struct {
 	CreatedAt        time.Time           `json:"created_at"`
 	UpdatedAt        time.Time           `json:"updated_at"`
 	Read             bool                `json:"read"`
+	DeferredAt       *time.Time          `json:"deferred_at"`
 	Resolved         bool                `json:"resolved"`
 	ResolvedBy       string              `json:"resolved_by"`
 	ResolutionNote   string              `json:"resolution_note"`
@@ -47,7 +48,7 @@ type HeraBoardItem struct {
 	ApprovalState string `json:"approval_state,omitempty"`
 }
 
-const boardColumns = `id, role_id, kind, subject, body, created_at, updated_at, is_read, resolved, resolved_by, resolution_note, structured, resolution_choice, COALESCE((SELECT a.state FROM resident_approvals a WHERE a.board_id=hera_board_items.id),''), blocking, trigger, trigger_pending, command`
+const boardColumns = `id, role_id, kind, subject, body, created_at, updated_at, is_read, resolved, resolved_by, resolution_note, structured, resolution_choice, COALESCE((SELECT a.state FROM resident_approvals a WHERE a.board_id=hera_board_items.id),''), blocking, trigger, trigger_pending, command, deferred_at`
 
 func validBoardContent(kind, subject, body string) bool {
 	return (kind == "decision" || kind == "fyi" || kind == "action" || kind == "todo") && strings.TrimSpace(subject) != "" && len(subject) <= 240 && !strings.ContainsFunc(subject, unicode.IsControl) && len(body) <= 64*1024
@@ -56,7 +57,8 @@ func validBoardContent(kind, subject, body string) bool {
 func scanBoard(s rowScanner) (*HeraBoardItem, error) {
 	var i HeraBoardItem
 	var created, updated, structured string
-	err := s.Scan(&i.ID, &i.RoleID, &i.Kind, &i.Subject, &i.Body, &created, &updated, &i.Read, &i.Resolved, &i.ResolvedBy, &i.ResolutionNote, &structured, &i.ResolutionChoice, &i.ApprovalState, &i.Blocking, &i.Trigger, &i.TriggerPending, &i.Command)
+	var deferred sql.NullString
+	err := s.Scan(&i.ID, &i.RoleID, &i.Kind, &i.Subject, &i.Body, &created, &updated, &i.Read, &i.Resolved, &i.ResolvedBy, &i.ResolutionNote, &structured, &i.ResolutionChoice, &i.ApprovalState, &i.Blocking, &i.Trigger, &i.TriggerPending, &i.Command, &deferred)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrHeraBoardNotFound
 	}
@@ -67,6 +69,10 @@ func scanBoard(s rowScanner) (*HeraBoardItem, error) {
 		if err := json.Unmarshal([]byte(structured), &i.Structured); err != nil {
 			return nil, err
 		}
+	}
+	if deferred.Valid {
+		t := parseTime(deferred.String)
+		i.DeferredAt = &t
 	}
 	i.CreatedAt = parseTime(created)
 	i.UpdatedAt = parseTime(updated)
@@ -497,8 +503,8 @@ func (d *DB) HeraBoardUnread(roleID int64) (int, string, error) {
 	var count int
 	var subject string
 	err := d.conn.QueryRow(`SELECT COUNT(*), COALESCE((SELECT subject FROM hera_board_items
- WHERE role_id=? AND resolved=0 AND is_read=0 AND trigger_pending=0 AND kind!='todo' ORDER BY CASE WHEN kind='action' AND blocking=1 THEN 0 ELSE 1 END,updated_at DESC,id DESC LIMIT 1),'')
- FROM hera_board_items WHERE role_id=? AND resolved=0 AND is_read=0 AND trigger_pending=0 AND kind!='todo'`, roleID, roleID).Scan(&count, &subject)
+ WHERE role_id=? AND resolved=0 AND is_read=0 AND deferred_at IS NULL AND trigger_pending=0 AND kind!='todo' ORDER BY CASE WHEN kind='action' AND blocking=1 THEN 0 ELSE 1 END,updated_at DESC,id DESC LIMIT 1),'')
+ FROM hera_board_items WHERE role_id=? AND resolved=0 AND is_read=0 AND deferred_at IS NULL AND trigger_pending=0 AND kind!='todo'`, roleID, roleID).Scan(&count, &subject)
 	if err != nil && strings.Contains(err.Error(), "no such table: hera_board_items") {
 		uxlog.Log("[board] band summary skipped: board table absent")
 		return 0, "", nil

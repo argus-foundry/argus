@@ -20,6 +20,7 @@ import (
 )
 
 type boardView struct {
+	showDeferred bool
 	allItems     []*db.HeraBoardItem
 	tab          int
 	items        []*db.HeraBoardItem
@@ -167,6 +168,9 @@ func (p *HeraPage) boardTitle() string {
 			unread++
 		}
 	}
+	if n := p.board.deferredCount(); n > 0 {
+		return fmt.Sprintf(" Plan · Board (%d) · %d deferred ", unread, n)
+	}
 	return fmt.Sprintf(" Plan · Board (%d) ", unread)
 }
 
@@ -184,10 +188,10 @@ func boardHint(keys *keymap.Keymap, focused bool) string {
 	if !focused {
 		return "⌘→ open board · " + label(keymap.ActBoardToggle) + " plan"
 	}
-	return label(keymap.ActBoardTabPrev) + "/" + label(keymap.ActBoardTabNext) + " tabs · " + fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s clear · %s copy · %s decide · %s plan · ctrl+q back",
+	return label(keymap.ActBoardTabPrev) + "/" + label(keymap.ActBoardTabNext) + " tabs · " + fmt.Sprintf("%s/%s move · ⏎ expand · %s reply · %s clear · %s copy · %s defer · %s deferred · %s decide · %s plan · ctrl+q back",
 		label(keymap.ActBoardDown), label(keymap.ActBoardUp), label(keymap.ActBoardReply),
 		label(keymap.ActBoardDismiss), label(keymap.ActBoardCopy),
-		label(keymap.ActBoardDecide), label(keymap.ActBoardToggle))
+		label(keymap.ActBoardDefer), label(keymap.ActBoardShowDeferred), label(keymap.ActBoardDecide), label(keymap.ActBoardToggle))
 }
 
 type boardLine struct {
@@ -478,6 +482,19 @@ func (b *boardView) handleMouse(action tview.MouseAction, event *tcell.EventMous
 func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Primitive)) {
 	act, _ := p.keys().Resolve(keymap.CtxHeraBoard, event)
 	switch {
+	case act == keymap.ActBoardShowDeferred:
+		if p.board.allItems == nil {
+			p.board.allItems = p.board.items
+		}
+		var selected int64
+		if i := p.board.selected(); i != nil {
+			selected = i.ID
+		}
+		p.board.showDeferred = !p.board.showDeferred
+		p.board.filter(selected)
+		p.board.offset = 0
+		p.board.followCursor = true
+		uxlog.Log("[board] deferred visibility orch=%d show=%v count=%d", p.boardOrchID, p.board.showDeferred, p.board.deferredCount())
 	case act == keymap.ActBoardTabPrev:
 		p.changeBoardTab(p.board.tab - 1)
 	case act == keymap.ActBoardTabNext:
@@ -529,6 +546,10 @@ func (p *HeraPage) handleBoardKey(event *tcell.EventKey, setFocus func(tview.Pri
 				}
 			}
 			uxlog.Log("[board] expansion orch=%d item=%d expanded=%v", p.boardOrchID, i.ID, p.board.expandedID == i.ID)
+		case act == keymap.ActBoardDefer:
+			if !i.Resolved && p.OnBoardDefer != nil {
+				p.OnBoardDefer(i, i.DeferredAt == nil)
+			}
 		case act == keymap.ActBoardReply:
 			if i.ResidentApproval {
 				p.decideBoardApproval(i, true)
@@ -643,20 +664,24 @@ const (
 	boardToneQuiet    = "quiet"
 )
 
-// boardKindLabel names the item's kind, marking blocking actions and deferred
+// boardKindLabel names the item's kind, marking blocking actions and later
 // (trigger-pending) work so the state is readable without expanding the row.
 func boardKindLabel(i *db.HeraBoardItem) string {
 	switch {
+	case i.DeferredAt != nil:
+		return i.Kind + " deferred"
 	case i.Kind == "action" && i.Blocking:
 		return "action BLOCKING"
 	case (i.Kind == "action" || i.Kind == "todo") && i.TriggerPending:
-		return i.Kind + " deferred"
+		return i.Kind + " later"
 	}
 	return i.Kind
 }
 
 func boardTone(i *db.HeraBoardItem) string {
 	switch {
+	case i.DeferredAt != nil:
+		return boardToneQuiet
 	case i.Kind == "action" && i.Blocking:
 		return boardToneBlocking
 	case heramodel.BoardQuiet(i):
@@ -676,7 +701,7 @@ func boardMetaLines(i *db.HeraBoardItem, width int) []boardLine {
 	if t := strings.TrimSpace(i.Trigger); t != "" {
 		state := "ready"
 		if i.TriggerPending {
-			state = "deferred"
+			state = "later"
 		}
 		lines = append(lines, boardBodyLines(fmt.Sprintf("**Trigger (%s):** %s", state, t), width)...)
 	}

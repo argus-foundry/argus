@@ -150,3 +150,19 @@ func (a *App) copyBoardCommand(item *db.HeraBoardItem) {
 	uxlog.Log("[board] copy item=%d bytes=%d", item.ID, len(item.Command))
 	a.copyToClipboard(item.Command, "Copied step", nil)
 }
+
+// deferHeraBoardItem uses the same human REST mutation as web, off the UI thread.
+func (a *App) deferHeraBoardItem(item *db.HeraBoardItem, deferred bool) {
+	client, err := a.maintenanceClientFactory()
+	if err == nil {
+		payload := fmt.Sprintf(`{"deferred":%t,"expected_updated_at":%q}`, deferred, item.UpdatedAt.Format(time.RFC3339Nano))
+		err = client.do(context.Background(), "PUT", fmt.Sprintf("/api/hera/roles/%d/board/%d/defer", item.RoleID, item.ID), strings.NewReader(payload), nil)
+	}
+	uxlog.Log("[board] human defer role=%d item=%d deferred=%v err=%v", item.RoleID, item.ID, deferred, err)
+	a.tapp.QueueUpdateDraw(func() {
+		if err != nil {
+			a.statusbar.SetError("Board defer failed: " + err.Error())
+		}
+		a.heraPage.Refresh()
+	})
+}

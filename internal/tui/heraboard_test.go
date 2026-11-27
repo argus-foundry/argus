@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +36,23 @@ func TestSmoke_CoordinatorBoard(t *testing.T) {
 	sess := &recordingWriteSession{fakeKickSession: &fakeKickSession{alive: true}}
 	runner := &bounceTestRunner{Runner: agent.NewRunner(nil), sessions: map[string]agent.SessionHandle{task.ID: sess}}
 	app := New(d, runner, false)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		testutil.Equal(t, r.Method, "PUT")
+		testutil.Equal(t, r.URL.Path, fmt.Sprintf("/api/hera/roles/%d/board/%d/defer", role.ID, item.ID))
+		testutil.Equal(t, r.Header.Get("Authorization"), "Bearer fake")
+		var req struct {
+			Deferred bool      `json:"deferred"`
+			Expected time.Time `json:"expected_updated_at"`
+		}
+		testutil.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		_, _, e := d.SetHeraBoardItemDeferred(role.ID, item.ID, req.Deferred, req.Expected)
+		testutil.NoError(t, e)
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(server.Close)
+	app.maintenanceClientFactory = func() (*localMaintenanceClient, error) {
+		return &localMaintenanceClient{baseURL: server.URL, token: "fake", hc: server.Client()}, nil
+	}
 	sim, stop := wireApp(t, app)
 	defer stop()
 	sim.SetSize(240, 50)
@@ -53,8 +73,26 @@ func TestSmoke_CoordinatorBoard(t *testing.T) {
 		testutil.Equal(t, app.tapp.GetFocus() == app.heraPage, true)
 		w, h := sim.Size()
 		testutil.Contains(t, screenText(sim, w, h), "Choose rollout")
-		testutil.Contains(t, screenText(sim, w, h), "←/→ tabs · j/k move · ⏎ expand · r reply · x clear · c copy · o decide · p plan")
+		testutil.Contains(t, screenText(sim, w, h), "←/→ tabs · j/k move · ⏎ expand · r reply · x clear · c copy · d defer · D deferred")
 	})
+	sim.InjectKey(tcell.KeyRune, 'd', 0)
+	syncUI(t, app.tapp)
+	waitForCond(t, app.tapp, "board deferred and hidden", func() bool {
+		w, h := sim.Size()
+		text := screenText(sim, w, h)
+		return strings.Contains(text, "1 deferred") && !strings.Contains(text, "Choose rollout")
+	})
+	sim.InjectKey(tcell.KeyRune, 'D', 0)
+	syncUI(t, app.tapp)
+	readUI(t, app.tapp, func() { w, h := sim.Size(); testutil.Contains(t, screenText(sim, w, h), "Choose rollout") })
+	sim.InjectKey(tcell.KeyRune, 'd', 0)
+	syncUI(t, app.tapp)
+	waitForCond(t, app.tapp, "board restored", func() bool {
+		items, e := d.ListHeraBoardItems(role.ID, false)
+		return e == nil && len(items) == 1 && items[0].DeferredAt == nil && !items[0].Read
+	})
+	sim.InjectKey(tcell.KeyRune, 'D', 0)
+	syncUI(t, app.tapp)
 	var decideRole, decideFocus int64
 	readUI(t, app.tapp, func() {
 		app.heraPage.OnBoardDecide = func(role, focus int64) { decideRole = role; decideFocus = focus }
@@ -81,7 +119,7 @@ func TestSmoke_CoordinatorBoard(t *testing.T) {
 	syncUI(t, app.tapp)
 	readUI(t, app.tapp, func() {
 		w, h := sim.Size()
-		testutil.Contains(t, screenText(sim, w, h), "←/→ tabs · j/k move · ⏎ expand · a reply · x clear · c copy · o decide · p plan")
+		testutil.Contains(t, screenText(sim, w, h), "←/→ tabs · j/k move · ⏎ expand · a reply · x clear · c copy · d defer · D deferred")
 	})
 	sim.InjectKey(tcell.KeyEnter, 0, 0)
 	syncUI(t, app.tapp)

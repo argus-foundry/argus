@@ -72,7 +72,8 @@ func TestDecisionSessionRouteDenylist(t *testing.T) {
 			// decisionSessionRoute here would hide accidental scope broadening.
 			allowedRead := pattern[1] == "GET" && (path == "/api/hera/board/decision-navigation" || path == base+"decisions" || path == base+"decide-items")
 			allowedWrite := pattern[1] == "POST" && (path == base+"answers" || path == base+"fyi-actions")
-			if allowedRead || allowedWrite {
+			allowedDefer := pattern[1] == "PUT" && path == base+fmt.Sprint(c.ID)+"/defer"
+			if allowedRead || allowedWrite || allowedDefer {
 				return
 			}
 			r := httptest.NewRequest(pattern[1], path, strings.NewReader("{}"))

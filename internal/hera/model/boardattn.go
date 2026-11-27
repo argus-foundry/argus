@@ -10,7 +10,7 @@ import (
 // and board-only jump targets: every board todo (team work) and any action or
 // todo whose trigger has not been marked ready. Mirrors the store's rule.
 func BoardQuiet(i *db.HeraBoardItem) bool {
-	return i.Kind == "todo" || ((i.Kind == "action" || i.Kind == "todo") && i.TriggerPending)
+	return i.DeferredAt != nil || i.Kind == "todo" || ((i.Kind == "action" || i.Kind == "todo") && i.TriggerPending)
 }
 
 // BoardAttention reports whether an item contributes to the human-attention

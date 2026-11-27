@@ -28,12 +28,15 @@ func (s *Server) handleHeraBoard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "board unavailable", err)
 		return
 	}
-	unread := 0
+	unread, deferred := 0, 0
 	for _, i := range items {
-		if !i.Resolved && !i.Read {
+		if !i.Resolved && i.DeferredAt != nil {
+			deferred++
+		}
+		if i.AttentionUnread() {
 			unread++
 		}
 	}
 	uxlog.Log("[board] REST list role=%d count=%d unread=%d", id, len(items), unread)
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "unread_count": unread})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "unread_count": unread, "deferred_count": deferred})
 }

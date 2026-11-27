@@ -296,7 +296,9 @@ const (
 	// addressing typed annotations and recovering full decision/FYI receipts.
 	// 58: new sessions receive action/todo board guidance, explicit trigger
 	// readiness and Done/Dropped semantics in the materialized Hera skills.
-	SupervisorSpawnSurface = 58
+	// 59: injected Hera guidance reserves deferred_at for human deferral and
+	//     names non-blocking future steps later (add-board-deferral).
+	SupervisorSpawnSurface = 59
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -643,7 +645,7 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "d5dc8e881ff9ce381a59e01eb592ab9b44cf02d1d1b44fe96001a8e2aed737e3"
+	SpawnSurfaceDigest  = "16640f33793d219230d545105f6df4b36a117e450060dc0e002ac97d905be886"
 	StreamSurfaceDigest = "7d6fe4e16399abae70093546fd8880ada92218d3fe4a97123ffe68c2679699db"
 )
 

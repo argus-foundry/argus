@@ -140,7 +140,7 @@ test('text controls and vertical gestures keep native behavior; background horiz
 
 test('accepted comment stays open and is cleared when another FYI action fails',async({page})=>{
  await rail(page);
- await page.route('**/roles/2/board/decide-items',route=>route.fulfill({json:{items:[fyi,{...fyi,id:23}],coordinator:'coord',orchestrator:'Child'}}));
+ await page.route('**/roles/2/board/decide-items*',route=>route.fulfill({json:{items:[fyi,{...fyi,id:23}],coordinator:'coord',orchestrator:'Child'}}));
  await page.route('**/roles/2/board/fyi-actions',route=>{const {actions}=route.request().postDataJSON();return route.fulfill({json:{results:actions.map((a:any)=>({action_id:a.action_id,item_id:a.item_id,outcome:a.item_id===22?'commented':'invalid'}))}});});
  await page.goto(origin+'/decide#t=launch');await expect(page.locator('#decision-11')).toBeVisible();await page.locator('#main').focus();await page.keyboard.press('Control+ArrowDown');await page.keyboard.press('Control+ArrowRight');
  await page.locator('#note-22').fill('Accepted once');await page.locator('#decision-22').getByRole('button',{name:'Comment',exact:true}).click();
@@ -240,7 +240,7 @@ test('partial submit accepts unchanged items across coordinators and retries onl
  const boards=new Map([1,2].map(role=>[role,[{...fyi,id:role*100+1,role_id:role,subject:'Unchanged '+role},{...fyi,id:role*100+2,role_id:role,subject:'Changed '+role}]]));
  const sends:any[]=[];
  await page.route('**/decision-navigation',route=>route.fulfill({json:{roles:rows.slice(0,2).map(r=>({...r,decisions:0,fyis:2}))}}));
- await page.route('**/decide-items',route=>{const role=Number(route.request().url().match(/roles\/(\d+)/)![1]);return route.fulfill({json:{items:boards.get(role)}});});
+ await page.route('**/decide-items*',route=>{const role=Number(route.request().url().match(/roles\/(\d+)/)![1]);return route.fulfill({json:{items:boards.get(role)}});});
  await page.route('**/fyi-actions',route=>{
   const role=Number(route.request().url().match(/roles\/(\d+)/)![1]),{actions}=route.request().postDataJSON();sends.push({role,actions});
   return route.fulfill({json:{results:actions.map((a:any)=>{const item=boards.get(role)!.find(i=>i.id===a.item_id)!;return {action_id:a.action_id,item_id:a.item_id,outcome:a.expected_updated_at===item.updated_at?'commented':'conflict',item};})}});
@@ -274,7 +274,7 @@ test('partial submit accepts unchanged items across coordinators and retries onl
 
 test('closed feedback explains why it was not saved while open sibling is accepted',async({page})=>{
  await rail(page);
- await page.route('**/roles/2/board/decide-items',route=>route.fulfill({json:{items:[fyi,{...fyi,id:23}]}}));
+ await page.route('**/roles/2/board/decide-items*',route=>route.fulfill({json:{items:[fyi,{...fyi,id:23}]}}));
  await page.route('**/roles/2/board/fyi-actions',route=>{const {actions}=route.request().postDataJSON();return route.fulfill({json:{results:actions.map((a:any)=>({action_id:a.action_id,item_id:a.item_id,outcome:a.item_id===22?'invalid':'commented',...(a.item_id===22?{item:{...fyi,resolved:true}}:{})}))}});});
  await page.goto(origin+'/decide?role=2#t=launch');await expect(page.locator('#decision-11')).toBeVisible();await page.locator('#main').focus();await page.keyboard.press('Control+ArrowDown');await page.keyboard.press('Control+ArrowRight');
  for(const id of [22,23]){await page.locator('#note-'+id).fill('Keep feedback '+id);await page.locator('#decision-'+id).getByRole('button',{name:'Comment',exact:true}).click();}

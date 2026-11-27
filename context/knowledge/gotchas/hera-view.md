@@ -508,3 +508,5 @@ M6a scaffolds the native Hera view: a `HeraPage` (rail | coordinator pane | agen
 - **TUI stack confirmation carries the classified Git identity.** Repository aliases can share a stack. Equal branch names in different repositories cannot share cleanup evidence.
 
 - **Shared Git directories can have different merge targets.** Scope cached stack tip verdicts to the repository and configured default ref.
+
+- **Board kind counts must use the current deferred-visibility filter while attention always excludes deferred items.** `d` uses human REST with the displayed authored revision; `D` only changes the local filter, preserving full snapshots so hidden items can be restored. “Later” names trigger-pending work; “deferred” names the human flag.

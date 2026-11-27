@@ -22,7 +22,7 @@ func (b *boardView) sourceItems() []*db.HeraBoardItem {
 func (b *boardView) counts() [5]int {
 	var counts [5]int
 	for _, item := range b.sourceItems() {
-		if item.Resolved {
+		if item.Resolved || (!b.showDeferred && item.DeferredAt != nil) {
 			continue
 		}
 		for n, kind := range boardTabKinds[:4] {
@@ -41,6 +41,9 @@ func (b *boardView) filter(selected int64) {
 	b.cursor = 0
 	expanded := false
 	for _, item := range b.allItems {
+		if item.Resolved || (!b.showDeferred && item.DeferredAt != nil) {
+			continue
+		}
 		if b.tab != 4 && item.Kind != boardTabKinds[b.tab] {
 			continue
 		}
@@ -144,4 +147,14 @@ func (b *boardView) drawTabs(screen tcell.Screen, x, y, width int) {
 	for n := start; n < end && n-start < width; n++ {
 		screen.SetContent(x+n-start, y, cells[n].r, nil, cells[n].style)
 	}
+}
+
+func (b *boardView) deferredCount() int {
+	n := 0
+	for _, i := range b.sourceItems() {
+		if !i.Resolved && i.DeferredAt != nil {
+			n++
+		}
+	}
+	return n
 }

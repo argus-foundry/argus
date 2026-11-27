@@ -14,7 +14,7 @@ async function fixture(page){
  calls.push({path,method:options.method||'GET',body:options.body?JSON.parse(options.body):undefined});
  if(path.includes('/hera-messages'))return {messages:path.includes('before_id')?[{source:'hera',id:1,from_name:'(deleted role)',to_name:'em',tldr:'Ended binding',body:'older body'}]:[{source:'hera',id:2,from_name:'worker',to_name:'em',tldr:'Current',body:'new body',read_at:null}],next_before_id:path.includes('before_id')?null:2};
  if(path.endsWith('/board'))return {items:[item],unread_count:item.read?0:1};
- if(path.includes('/board/')){if(options.method!==(path.endsWith('read-state')?'PUT':'POST'))throw new Error('Wrong board method');if(window.holdWrites)await new Promise(resolve=>(window.heldWrites ||= []).push(resolve));if(window.writeError)throw Object.assign(new Error('failed'),{status:500});if(conflict){window.conflict=false;item={...item,subject:'Changed decision',updated_at:'2026-11-08T00:01:00Z',read:false};throw Object.assign(new Error('conflict'),{status:409});}if(path.endsWith('dismiss'))item={...item,resolved:true};else item={...item,read:JSON.parse(options.body).read};return {item,unread_count:item.read||item.resolved?0:1};}
+ if(path.includes('/board/')){if(options.method!==(path.endsWith('read-state')||path.endsWith('defer')?'PUT':'POST'))throw new Error('Wrong board method');if(window.holdWrites)await new Promise(resolve=>(window.heldWrites ||= []).push(resolve));if(window.writeError)throw Object.assign(new Error('failed'),{status:500});if(conflict){window.conflict=false;item={...item,subject:'Changed decision',updated_at:'2026-11-08T00:01:00Z',read:false};throw Object.assign(new Error('conflict'),{status:409});}if(path.endsWith('defer')){item={...item,deferred_at:JSON.parse(options.body).deferred?'2026-11-27T00:00:00Z':null};return {item,unread_count:item.deferred_at?0:1};}if(path.endsWith('dismiss'))item={...item,resolved:true};else item={...item,read:JSON.parse(options.body).read};return {item,unread_count:item.read||item.resolved?0:1};}
  return {files:[]};}};
  const composer=Object.assign(Object.create(TaskComposer.prototype),{task,drafts:new Map(),render(){}});
  const tools=window.tools=new TaskTools(api,{}, {reply:(task,item)=>composer.reply(task,item),changed:(id,count)=>{role.board_unread=count;window.count=count;}});
@@ -121,4 +121,12 @@ for(const outcome of ['success','failure','conflict'])test(`Inbox preserves acti
  await expect(focused).toBeFocused();
  if(outcome==='success'){await page.getByRole('button',{name:'Dismiss',exact:true}).focus();await page.keyboard.press('Enter');await expect(page.getByRole('button',{name:'Refresh Inbox'})).toBeFocused();await expect(page.getByRole('status')).toHaveText('No open Inbox items.');}
  expect(errors).toEqual([]);
+});
+
+test('Inbox defers, hides, reveals unread and restores without marking read',async({page})=>{
+ const errors=await fixture(page);await page.getByRole('button',{name:'Open Inbox for Coordinator'}).click();
+ await page.getByRole('button',{name:'Defer',exact:true}).click();await expect(page.locator('.inbox-item')).toHaveCount(0);
+ await page.getByRole('button',{name:'Show deferred (1)',exact:true}).click();await expect(page.getByRole('button',{name:'Deferred · Unread · Choose path'})).toBeVisible();
+ await page.getByRole('button',{name:'Restore',exact:true}).click();await expect(page.getByRole('button',{name:'Unread · Choose path',exact:true})).toBeVisible();
+ const writes=await page.evaluate(()=>calls.filter(c=>c.method!=='GET'));expect(writes.map(c=>[c.method,c.body.deferred])).toEqual([['PUT',true],['PUT',false]]);expect(errors).toEqual([]);
 });

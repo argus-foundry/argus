@@ -54,7 +54,7 @@ func BoardSummary(store any, role *db.HeraRole) string {
 	var b strings.Builder
 	b.WriteString("\nHuman board: put decisions and attention here; keep items current and resolve when settled.\n")
 	b.WriteString(boardAnnotationRecovery)
-	b.WriteString("Use decision for choices, fyi for information, action for Aaron-only steps (explicit blocking true now or false deferred), and board todo for future team work. Action/todo triggers are explicit text with trigger_pending; verify and update readiness yourself. Pending items and all board todos stay quiet. Action command is copyable data, never executed. Resolve action done; board todo done/dropped. Board todo is separate from Things 3 todo_* tools. Open actions/todos prevent normal sub-coordinator archive.\n")
+	b.WriteString("Use decision for choices, fyi for information, action for Aaron-only steps (explicit blocking true now or false for later), and board todo for future team work. Action/todo triggers are explicit text with trigger_pending; verify and update readiness yourself. Pending items and all board todos stay quiet. Action command is copyable data, never executed. Resolve action done; board todo done/dropped. Board todo is separate from Things 3 todo_* tools. Open actions/todos prevent normal sub-coordinator archive.\n")
 	for _, i := range items {
 		fmt.Fprintf(&b, "- #%d [%s] %s\n", i.ID, i.Kind, i.Subject)
 		if i.Kind == "action" || i.Kind == "todo" {

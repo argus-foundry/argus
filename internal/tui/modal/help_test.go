@@ -64,6 +64,8 @@ func TestHelpModal_Draw(t *testing.T) {
 	testutil.Contains(t, body, "clear (dismiss FYI · done action/todo · deny call)")
 	testutil.False(t, strings.Contains(body, "mark action / todo done"))
 	testutil.Contains(t, body, "copy action command / step")
+	testutil.Contains(t, body, "defer / restore selected item")
+	testutil.Contains(t, body, "show / hide deferred items")
 	testutil.Contains(t, body, "previous board kind tab")
 	testutil.Contains(t, body, "next board kind tab")
 	testutil.Contains(t, body, "Task List")
