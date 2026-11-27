@@ -21,6 +21,7 @@ func (s *Server) decisionNavigation() ([]heramodel.BoardCoordinator, error) {
 		return nil, err
 	}
 	for n := range rows {
+		rows[n].Deferred = counts[rows[n].RoleID].Deferred
 		rows[n].Decisions = counts[rows[n].RoleID].Decisions
 		rows[n].FYIs = counts[rows[n].RoleID].FYIs
 		rows[n].Actions = counts[rows[n].RoleID].Actions
@@ -96,6 +97,11 @@ func decisionSessionRoute(method, path string) bool {
 		return true
 	}
 	parts := strings.Split(path, "/")
+	if len(parts) == 8 && parts[1] == "api" && parts[2] == "hera" && parts[3] == "roles" && parts[5] == "board" && parts[7] == "defer" && method == http.MethodPut {
+		role, e := strconv.ParseInt(parts[4], 10, 64)
+		item, e2 := strconv.ParseInt(parts[6], 10, 64)
+		return e == nil && e2 == nil && role > 0 && item > 0 && fmt.Sprint(role) == parts[4] && fmt.Sprint(item) == parts[6]
+	}
 	if len(parts) != 7 || parts[1] != "api" || parts[2] != "hera" || parts[3] != "roles" || parts[5] != "board" {
 		return false
 	}
@@ -128,6 +134,18 @@ func (s *Server) handleDecideItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decisions, fyis, actions, todos := 0, 0, 0, 0
+	deferred := 0
+	visible := items[:0]
+	for _, item := range items {
+		if item.DeferredAt != nil {
+			deferred++
+			if r.URL.Query().Get("include_deferred") != "true" {
+				continue
+			}
+		}
+		visible = append(visible, item)
+	}
+	items = visible
 	for _, item := range items {
 		switch item.Kind {
 		case "decision":
@@ -142,5 +160,5 @@ func (s *Server) handleDecideItems(w http.ResponseWriter, r *http.Request) {
 	}
 	uxlog.Log("[decide] mixed read role=%d decisions=%d fyis=%d", role, decisions, fyis)
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, 200, map[string]any{"role_id": role, "orchestrator": orch.Name, "coordinator": coord.Name, "decisions": decisions, "fyis": fyis, "actions": actions, "todos": todos, "items": items})
+	writeJSON(w, 200, map[string]any{"role_id": role, "orchestrator": orch.Name, "coordinator": coord.Name, "decisions": decisions, "fyis": fyis, "actions": actions, "todos": todos, "deferred_count": deferred, "items": items})
 }

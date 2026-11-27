@@ -883,6 +883,7 @@ func (d *DB) createHeraTables() error {
 		"trigger TEXT NOT NULL DEFAULT ''",
 		"trigger_pending INTEGER NOT NULL DEFAULT 0",
 		"command TEXT NOT NULL DEFAULT ''",
+		"deferred_at TEXT",
 	} {
 		d.conn.Exec(`ALTER TABLE hera_board_items ADD COLUMN ` + def) //nolint:errcheck
 	}

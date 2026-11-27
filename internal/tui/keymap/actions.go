@@ -154,16 +154,18 @@ const (
 	ActHeraCleanup Action = "hera_rail.cleanup"
 	ActHeraInbox   Action = "hera_rail.inbox"
 	// ActHeraMoveAccount is ActTaskMoveAccount for the selected role's task.
-	ActHeraMoveAccount Action = "hera_rail.move_account"
-	ActBoardDecide     Action = "hera_board.decide"
-	ActBoardToggle     Action = "hera_board.toggle"
-	ActBoardReply      Action = "hera_board.reply"
-	ActBoardDismiss    Action = "hera_board.dismiss"
-	ActBoardDown       Action = "hera_board.down"
-	ActBoardUp         Action = "hera_board.up"
-	ActBoardCopy       Action = "hera_board.copy"
-	ActBoardTabPrev    Action = "hera_board.tab_prev"
-	ActBoardTabNext    Action = "hera_board.tab_next"
+	ActHeraMoveAccount   Action = "hera_rail.move_account"
+	ActBoardDecide       Action = "hera_board.decide"
+	ActBoardToggle       Action = "hera_board.toggle"
+	ActBoardReply        Action = "hera_board.reply"
+	ActBoardDismiss      Action = "hera_board.dismiss"
+	ActBoardDefer        Action = "hera_board.defer"
+	ActBoardShowDeferred Action = "hera_board.show_deferred"
+	ActBoardDown         Action = "hera_board.down"
+	ActBoardUp           Action = "hera_board.up"
+	ActBoardCopy         Action = "hera_board.copy"
+	ActBoardTabPrev      Action = "hera_board.tab_prev"
+	ActBoardTabNext      Action = "hera_board.tab_next"
 )
 
 // defaultSpecs is THE source of truth for argus's built-in bindings, mirroring
@@ -219,7 +221,7 @@ var defaultSpecs = map[Context]map[Action]string{
 		ActHeraAdopt: "J", ActHeraNewCoord: "n", ActHeraClear: "c",
 		ActHeraCleanup: "C", ActHeraInbox: "i", ActHeraMoveAccount: ">",
 	},
-	CtxHeraBoard: {ActBoardDecide: "o", ActBoardToggle: "p", ActBoardReply: "r", ActBoardDismiss: "x", ActBoardDown: "j", ActBoardUp: "k", ActBoardCopy: "c", ActBoardTabPrev: "left", ActBoardTabNext: "right"},
+	CtxHeraBoard: {ActBoardDecide: "o", ActBoardToggle: "p", ActBoardReply: "r", ActBoardDismiss: "x", ActBoardDefer: "d", ActBoardShowDeferred: "D", ActBoardDown: "j", ActBoardUp: "k", ActBoardCopy: "c", ActBoardTabPrev: "left", ActBoardTabNext: "right"},
 }
 
 // actionLabels are the human-readable descriptions used in the help overlay.
@@ -266,19 +268,21 @@ var actionLabels = map[Action]string{
 	ActHeraPin: "toggle pin", ActHeraStatAdv: "advance status", ActHeraStatRev: "revert status",
 	ActHeraKanbanAdv: "advance kanban status (top-level coord)", ActHeraKanbanRev: "revert kanban status (top-level coord)",
 	ActHeraAdopt: "adopt freelancer / reparent coordinator", ActHeraNewCoord: "new coordinator (new-task modal)",
-	ActHeraClear:       "clear coord's archive (nuke hidden agents)",
-	ActHeraCleanup:     "cleanup stuck-task backlog (all projects)",
-	ActHeraInbox:       "view role's message inbox (read-only)",
-	ActHeraMoveAccount: "move to another account (resumes there)",
-	ActBoardDecide:     "open Decide board in browser",
-	ActBoardToggle:     "toggle plan / human board",
-	ActBoardReply:      "compose reply / approve exact resident call",
-	ActBoardDismiss:    "clear (dismiss FYI · done action/todo · deny call)",
-	ActBoardDown:       "next board item",
-	ActBoardUp:         "previous board item",
-	ActBoardCopy:       "copy action command / step",
-	ActBoardTabPrev:    "previous board kind tab",
-	ActBoardTabNext:    "next board kind tab",
+	ActHeraClear:         "clear coord's archive (nuke hidden agents)",
+	ActHeraCleanup:       "cleanup stuck-task backlog (all projects)",
+	ActHeraInbox:         "view role's message inbox (read-only)",
+	ActHeraMoveAccount:   "move to another account (resumes there)",
+	ActBoardDecide:       "open Decide board in browser",
+	ActBoardToggle:       "toggle plan / human board",
+	ActBoardReply:        "compose reply / approve exact resident call",
+	ActBoardDefer:        "defer / restore selected item",
+	ActBoardShowDeferred: "show / hide deferred items",
+	ActBoardDismiss:      "clear (dismiss FYI · done action/todo · deny call)",
+	ActBoardDown:         "next board item",
+	ActBoardUp:           "previous board item",
+	ActBoardCopy:         "copy action command / step",
+	ActBoardTabPrev:      "previous board kind tab",
+	ActBoardTabNext:      "next board kind tab",
 }
 
 // HelpRow is one rendered help line: the key chord and its action label.
@@ -349,7 +353,7 @@ var contextOrder = map[Context][]Action{
 	CtxHeraRail: {ActHeraSpawn, ActHeraNewCoord, ActHeraRename, ActHeraArchive, ActHeraPin,
 		ActHeraStatAdv, ActHeraStatRev, ActHeraKanbanAdv, ActHeraKanbanRev, ActHeraAdopt, ActHeraClear,
 		ActHeraCleanup, ActHeraInbox, ActHeraMoveAccount, ActHeraDelete},
-	CtxHeraBoard: {ActBoardDecide, ActBoardToggle, ActBoardReply, ActBoardDismiss, ActBoardCopy, ActBoardTabPrev, ActBoardTabNext, ActBoardDown, ActBoardUp},
+	CtxHeraBoard: {ActBoardDecide, ActBoardToggle, ActBoardReply, ActBoardDismiss, ActBoardDefer, ActBoardShowDeferred, ActBoardCopy, ActBoardTabPrev, ActBoardTabNext, ActBoardDown, ActBoardUp},
 }
 
 // ResidentAccess classifies a Projects-rail action for the resident tab.

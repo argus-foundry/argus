@@ -61,6 +61,7 @@ type HeraBoardKindCounts struct {
 	Actions      int `json:"actions"`
 	Todos        int `json:"todos"`
 	ReadyActions int `json:"ready_actions"`
+	Deferred     int `json:"deferred"`
 }
 
 // HeraBoardOpenCounts reads all open kind counts in a single SQL snapshot.
@@ -68,7 +69,7 @@ type HeraBoardKindCounts struct {
 func (d *DB) HeraBoardOpenCounts() (map[int64]HeraBoardKindCounts, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, err := d.conn.Query(`SELECT role_id,SUM(kind='decision'),SUM(kind='fyi'),SUM(kind='action'),SUM(kind='todo'),SUM(kind='action' AND trigger_pending=0) FROM hera_board_items WHERE resolved=0 GROUP BY role_id`)
+	rows, err := d.conn.Query(`SELECT role_id,SUM(kind='decision' AND deferred_at IS NULL),SUM(kind='fyi' AND deferred_at IS NULL),SUM(kind='action' AND deferred_at IS NULL),SUM(kind='todo' AND deferred_at IS NULL),SUM(kind='action' AND trigger_pending=0 AND deferred_at IS NULL),SUM(deferred_at IS NOT NULL) FROM hera_board_items WHERE resolved=0 GROUP BY role_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +78,7 @@ func (d *DB) HeraBoardOpenCounts() (map[int64]HeraBoardKindCounts, error) {
 	for rows.Next() {
 		var id int64
 		var c HeraBoardKindCounts
-		if err := rows.Scan(&id, &c.Decisions, &c.FYIs, &c.Actions, &c.Todos, &c.ReadyActions); err != nil {
+		if err := rows.Scan(&id, &c.Decisions, &c.FYIs, &c.Actions, &c.Todos, &c.ReadyActions, &c.Deferred); err != nil {
 			return nil, err
 		}
 		counts[id] = c

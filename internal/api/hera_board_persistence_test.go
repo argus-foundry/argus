@@ -15,6 +15,7 @@ import (
 
 func TestBoardPersistenceFailures(t *testing.T) {
 	for _, tc := range []struct{ name, method, action, setup string }{
+		{"defer update", "PUT", "defer", `CREATE TRIGGER fail_update BEFORE UPDATE ON hera_board_items BEGIN SELECT RAISE(ABORT, 'update failed'); END`},
 		{"read update", "PUT", "read-state", `CREATE TRIGGER fail_update BEFORE UPDATE ON hera_board_items BEGIN SELECT RAISE(ABORT, 'update failed'); END`},
 		{"dismiss update", "POST", "dismiss", `CREATE TRIGGER fail_update BEFORE UPDATE ON hera_board_items BEGIN SELECT RAISE(ABORT, 'update failed'); END`},
 		{"dismiss notice", "POST", "dismiss", `CREATE TRIGGER fail_notice BEFORE INSERT ON hera_messages BEGIN SELECT RAISE(ABORT, 'notice failed'); END`},
@@ -40,7 +41,7 @@ func TestBoardPersistenceFailures(t *testing.T) {
 			sink := &boardSink{}
 			prev := events.SetSink(sink)
 			t.Cleanup(func() { events.SetSink(prev) })
-			body := fmt.Sprintf(`{"read":true,"expected_updated_at":%q,"note":"stop"}`, ts(item.UpdatedAt))
+			body := fmt.Sprintf(`{"deferred":true,"read":true,"expected_updated_at":%q,"note":"stop"}`, ts(item.UpdatedAt))
 			rr := doBoard(s, tc.method, fmt.Sprintf("/api/hera/roles/%d/board/%d/%s", c.ID, item.ID, tc.action), body)
 			testutil.Equal(t, rr.Code, 500)
 			var response map[string]any

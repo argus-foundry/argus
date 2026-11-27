@@ -220,7 +220,7 @@ body .page-layout{grid-template-columns:200px minmax(0,1fr) 290px;max-width:1540
 @media(max-width:1000px) and (min-width:851px){body .page-layout{grid-template-columns:175px minmax(0,1fr) 260px}.board-column>.wrap{padding-inline:12px}}
 @media(max-width:850px){body .page-layout{display:block}#rail,#annotation-panel{display:none!important}.phone-trigger{display:block;width:calc(100% - 24px);margin:10px 12px 0}.board-column>.wrap{padding-inline:12px}.annotation-trigger,#selection-toolbar .btn,.annotation-card .clear{min-height:40px}.annotation-composer textarea{font-size:16px}.annotation-composer .btn{min-height:40px}.annotation-panel-head h2{font-size:14px}.annotation-card p{font-size:14px}.annotation-card blockquote{font-size:12px}.range-highlight{padding:2px 0}}
 
-.tabs{flex-wrap:wrap}.tabs .btn{flex:1 1 6.5rem;min-width:0}.decision.blocking{border-left:4px solid var(--warn);padding-left:12px}.decision.deferred{opacity:.88}.pill.blocking{background:var(--warn);color:var(--bg);font-weight:600}.pill.deferred{border:1px solid var(--line);color:var(--muted)}.meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.command{display:grid;gap:6px}.command pre{margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:4px;background:var(--surface);font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}.command .btn{justify-self:start}
+.tabs{flex-wrap:wrap}.tabs .btn{flex:1 1 6.5rem;min-width:0}.decision.blocking{border-left:4px solid var(--warn);padding-left:12px}.decision.later{opacity:.88}.pill.blocking{background:var(--warn);color:var(--bg);font-weight:600}.pill.later{border:1px solid var(--line);color:var(--muted)}.meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.command{display:grid;gap:6px}.command pre{margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:4px;background:var(--surface);font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}.command .btn{justify-self:start}
 .submit-note{padding:28px 0;border-bottom:1px solid var(--line)}.submit-note h2{margin:0 0 8px}.submit-note.compact{padding:14px 0;display:grid;gap:4px}.tab-attention{color:var(--warn)}.unsent-recovery{font-size:13px;border-top:1px solid var(--line);padding:12px 0;color:var(--muted)}.unsent-recovery summary{cursor:pointer}.recovery-body{padding:12px 0}.recovery-body pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;color:var(--ink)}.review-actions,.recovery-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start}.review-actions .btn,.recovery-actions .btn{font-size:13px;padding:8px 10px;justify-self:start}.review-group h2{font-size:1rem;margin-top:24px}.receipt{text-align:left}.receipt .hint{margin:4px 0}.item-status{margin:12px 0}
 </style></head>
 <body>
@@ -345,6 +345,7 @@ globalThis.BoardDecisions = (() => {
   const $=id=>document.getElementById(id),L=globalThis.BoardDecisions;
   const storage={read(key){try{return JSON.parse(localStorage.getItem(key));}catch{return null;}},save(key,value){try{localStorage.setItem(key,JSON.stringify(value));}catch{if(!finished)$('summary').textContent='Draft storage unavailable. Copy responses before leaving.';}}};
   const sessionKey='board-decision-session',draftKey='board-responses';
+  let showDeferred=false;
   let session='',rows=[],records={},selected=0,tab='decision',screen='browse',pending=null,busy=false,expired=false,finished=false,generation=0,polling=false,acceptedSnapshot='';
   const acceptedCounts={answers:0,comments:0,dismissals:0,completions:0};
   let submitNotice=null;
@@ -354,7 +355,7 @@ globalThis.BoardDecisions = (() => {
   const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.onclick=fn;return b;};
   const fmt=(tag,cls,text)=>{const n=el(tag,cls);L.inline(n,String(text||''),document);return n;};
   const queued=()=>Object.values(records).filter(r=>r.draft.sent||!r.recovery&&(r.draft.choice||r.draft.action));
-  const attention=r=>!r.recovery&&!r.closed&&!r.unavailable&&r.attention;
+  const attention=r=>!r.item.deferred_at&&!r.recovery&&!r.closed&&!r.unavailable&&r.attention;
   function recover(r){
     if(r.draft.sent)return; // An uncertain payload must be reconciled before edits/discard.
     const d=r.draft,written=!!d.note.trim()||anns(r).length||d.stale?.note?.trim()||d.stale?.annotations?.length;
@@ -514,7 +515,7 @@ globalThis.BoardDecisions = (() => {
     $('queued-description').textContent=invalid?'Add required notes before submitting.':q.length?`${q.length} ${q.length===1?'action':'actions'} across ${boards} ${boards===1?'coordinator':'coordinators'}. Unselected items stay open.`:'Only selected actions are submitted. Everything else stays open.';
   }
   const total=row=>(row.decisions||0)+(row.fyis||0)+(row.actions||0)+(row.todos||0);
-  const countOf=(row,kind)=>row[{decision:'decisions',fyi:'fyis',action:'actions',todo:'todos'}[kind]]||0;
+  const countOf=(row,kind)=>showDeferred?Object.values(records).filter(r=>r.role===row.role_id&&!r.closed&&!r.unavailable&&r.item.kind===kind).length:row[{decision:'decisions',fyi:'fyis',action:'actions',todo:'todos'}[kind]]||0;
   const TAB_LABEL={decision:'Decisions',fyi:'FYIs',action:'Actions',todo:'Todos'},KIND_LABEL={decision:'Decision',fyi:'FYI',action:'Action',todo:'Todo'};
   function badge(kind,n){const b=el('span',`count-badge ${kind}${!n?' zero':''}`,String(n));b.setAttribute('aria-hidden','true');return b;}
   function drawNav(){
@@ -535,12 +536,12 @@ globalThis.BoardDecisions = (() => {
   }
   function visit(role){if(busy)return;clearNotice();selected=role;screen='browse';render();window.scrollTo(0,0);}
   function renderCard(main,r){
-    const i=r.item,d=r.draft,done=L.isCompletion(i.kind),card=el('section',`decision${i.blocking?' blocking':''}${i.trigger_pending?' deferred':''}`);card.id=`decision-${i.id}`;
-    const count=el('p','count',`${KIND_LABEL[i.kind]||'Decision'} #${i.id}`),state=el('span','state',attention(r)?'Needs another look':r.status||((d.choice||d.action)?'Queued':'Open'));
-    count.append(state);if(!done)count.append(button('Annotations '+anns(r).length,()=>openPanel(key(r.role,i.id)),'annotation-trigger'));card.append(count,fmt('h2','',i.subject));const body=el('div','situation');body.append(done?L.markup(i.body,document):selectable(r,'body',L.markup(i.body,document)));card.append(body);if(attention(r))card.append(el('p','hint item-status',r.status));
+    const i=r.item,d=r.draft,done=L.isCompletion(i.kind),card=el('section',`decision${i.blocking?' blocking':''}${i.trigger_pending?' later':''}`);card.id=`decision-${i.id}`;
+    const count=el('p','count',`${KIND_LABEL[i.kind]||'Decision'} #${i.id}`),state=el('span','state',attention(r)?'Needs another look':r.status||((d.choice||d.action)?'Queued':i.deferred_at&&!i.read?'Unread':'Open'));
+    count.append(state);if(i.deferred_at)count.append(el('span','pill','Deferred'));const defer=button(i.deferred_at?'Restore':'Defer',()=>deferItem(r));defer.disabled=busy||!!d.sent;count.append(defer);if(!done)count.append(button('Annotations '+anns(r).length,()=>openPanel(key(r.role,i.id)),'annotation-trigger'));card.append(count,fmt('h2','',i.subject));const body=el('div','situation');body.append(done?L.markup(i.body,document):selectable(r,'body',L.markup(i.body,document)));card.append(body);if(attention(r))card.append(el('p','hint item-status',r.status));
     if(done){
       const meta=el('div','meta');if(i.blocking)meta.append(el('span','pill blocking','Blocking'));
-      if(i.trigger_pending)meta.append(el('span','pill deferred','Deferred'),el('span','subtle',`Waiting for: ${i.trigger}`));else if(i.trigger)meta.append(el('span','pill deferred','Ready'),el('span','subtle',`Trigger: ${i.trigger}`));
+      if(i.trigger_pending)meta.append(el('span','pill later','Later'),el('span','subtle',`Waiting for: ${i.trigger}`));else if(i.trigger)meta.append(el('span','pill later','Ready'),el('span','subtle',`Trigger: ${i.trigger}`));
       if(meta.children.length)card.append(meta);
       if(i.command){
         const cmd=el('div','command'),pre=el('pre');pre.textContent=i.command;pre.tabIndex=0;pre.setAttribute('aria-label','Step to run (not executed by this page)');
@@ -613,7 +614,8 @@ globalThis.BoardDecisions = (() => {
         lede.append(el('h1','',row.orchestrator),el('p','subtle',`${row.coordinator} · Choose responses to queue. Everything else stays open.`));
         const tabs=el('div','tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Board items');
         for(const kind of L.TABS){const label=TAB_LABEL[kind],n=countOf(row,kind);const b=button('',()=>{clearNotice();tab=kind;render();});b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===kind));b.setAttribute('aria-label',`${label}, ${n} open`);b.append(el('span','',label),badge(kind,n));if(Object.values(records).some(r=>r.role===selected&&r.item.kind===kind&&attention(r))){b.dataset.attention='true';b.append(el('span','tab-attention',' ·'));b.setAttribute('aria-label',`${label}, ${n} open, needs another look`);}tabs.append(b);}main.append(tabs,el('p','tabs-help','⌘ / Ctrl ← Decisions · → FYIs · Actions and Todos via tabs or swipe'));
-        const byItem=new Map(Object.values(records).filter(r=>r.role===selected&&!r.closed&&!r.unavailable&&r.item.kind===tab).map(r=>[r.item,r])),visible=L.order([...byItem.keys()]).map(item=>byItem.get(item));
+        const parked=Object.values(records).filter(r=>r.role===selected&&!r.closed&&!r.unavailable&&r.item.deferred_at).length;const visibility=button(`${showDeferred?'Hide':'Show'} deferred (${parked})`,()=>{showDeferred=!showDeferred;render();});visibility.setAttribute('aria-pressed',String(showDeferred));main.append(visibility);
+        const byItem=new Map(Object.values(records).filter(r=>r.role===selected&&!r.closed&&!r.unavailable&&(showDeferred||!r.item.deferred_at)&&r.item.kind===tab).map(r=>[r.item,r])),visible=L.order([...byItem.keys()]).map(item=>byItem.get(item));
         if(submitNotice&&submitNotice.role===selected&&submitNotice.tab===tab){const note=el('section',`submit-note${visible.length?' compact':''}`);note.setAttribute('role','status');note.append(el(visible.length?'strong':'h2','',submitNotice.failed?(submitNotice.sent?'Responses sent to Argus':'Responses need another look'):'Answers sent to Argus'),el('p','subtle',submitNotice.failed?`${submitNotice.sent} sent · ${submitNotice.failed} needs another look`:'Your responses have been sent.'));main.append(note);}
         if(!visible.length&&!submitNotice){const empty=el('section','decision');empty.append(el('h2','',total(row)?`No open ${TAB_LABEL[tab].toLowerCase()}`:`Nothing open for ${row.orchestrator}`));main.append(empty);}
         if(tab==='decision'&&visible.some(r=>r.item.structured?.recommended&&!r.draft.choice)){const b=button('Take the recommendations',()=>{clearNotice();for(const r of visible)if(!r.draft.choice&&r.item.structured?.recommended&&!r.draft.sent){r.draft.choice=r.item.structured.recommended;r.attention=false;r.status='';}persist();render();});b.disabled=busy;main.append(b);}
@@ -640,9 +642,15 @@ globalThis.BoardDecisions = (() => {
     if(!rowFor(selected))selected=rows.find(total)?.role_id||rows[0]?.role_id||0;
     persist();pending=null;$('updates').hidden=true;render();
   }
+  async function deferItem(r){
+    if(busy||r.draft.sent)return;busy=true;render();
+    try{const response=await api(base(r.role)+'/'+r.item.id+'/defer','PUT',{deferred:!r.item.deferred_at,expected_updated_at:r.item.updated_at});r.item=response.item;if(r.item.deferred_at){r.draft.choice='';r.draft.action='';}persist();reconcile(await snapshot());}
+    catch(e){r.status=e.status===409?'Item changed. Review this version and try again.':'Could not update deferral. Refresh and try again.';r.attention=true;$('summary').textContent=r.status;}
+    finally{busy=false;render();}
+  }
   async function snapshot(){
     const nav=await api('/api/hera/board/decision-navigation');const unavailable=[];
-    const boards=await Promise.all(nav.roles.map(async row=>{try{return {...await api(base(row.role_id)+'/decide-items'),role:row.role_id};}catch(e){if(e.unavailable){unavailable.push(row.role_id);return {role:row.role_id,items:[]};}throw e;}}));
+    const boards=await Promise.all(nav.roles.map(async row=>{try{return {...await api(base(row.role_id)+'/decide-items?include_deferred=true'),role:row.role_id};}catch(e){if(e.unavailable){unavailable.push(row.role_id);return {role:row.role_id,items:[]};}throw e;}}));
     return {rows:nav.roles,boards,unavailable};
   }
   function sent(){

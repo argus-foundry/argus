@@ -492,14 +492,14 @@ func TestBoardHintRendering(t *testing.T) {
 		want           string
 	}{
 		{"unfocused empty", false, true, 100, 6, nil, "⌘→ open board · p plan"},
-		{"focused empty", true, true, 100, 6, nil, "j/k move · ⏎ expand · r reply · x clear · c copy · o decide · p plan · ctrl+q back"},
-		{"focused scrolling", true, false, 100, 6, nil, "j/k move · ⏎ expand · r reply · x clear · c copy · o decide · p plan · ctrl+q back"},
+		{"focused empty", true, true, 100, 6, nil, "j/k move · ⏎ expand · r reply · x clear · c copy · d defer · D deferred · o decide · p plan · ctrl+q back"},
+		{"focused scrolling", true, false, 100, 6, nil, "j/k move · ⏎ expand · r reply · x clear · c copy · d defer · D deferred · o decide · p plan · ctrl+q back"},
 		{"narrow", true, false, 12, 6, nil, "←/→ tabs ·"},
 		{"one column", true, false, 3, 6, nil, "←"},
 		{"wide key clipped", true, false, 3, 6, map[string]string{"down": "界"}, "←"},
-		{"literal bracket key", true, false, 100, 6, map[string]string{"reply": "["}, "j/k move · ⏎ expand · [ reply · x clear · c copy · o decide · p plan · ctrl+q back"},
+		{"literal bracket key", true, false, 100, 6, map[string]string{"reply": "["}, "j/k move · ⏎ expand · [ reply · x clear · c copy · d defer · D deferred · o decide · p plan · ctrl+q back"},
 		{"one interior row", false, false, 100, 3, nil, "⌘→ open board · p plan"},
-		{"rebound focused", true, false, 100, 6, map[string]string{"down": "n", "up": "u", "reply": "a", "dismiss": "z", "toggle": "b"}, "n/u move · ⏎ expand · a reply · z clear · c copy · o decide · b plan · ctrl+q back"},
+		{"rebound focused", true, false, 100, 6, map[string]string{"down": "n", "up": "u", "reply": "a", "dismiss": "z", "toggle": "b"}, "n/u move · ⏎ expand · a reply · z clear · c copy · d defer · D deferred · o decide · b plan · ctrl+q back"},
 		{"rebound unfocused", false, true, 100, 6, map[string]string{"toggle": "b"}, "⌘→ open board · b plan"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

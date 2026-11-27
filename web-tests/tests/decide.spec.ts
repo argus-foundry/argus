@@ -175,11 +175,11 @@ test('an expiring in-flight poll cannot touch controls removed by the sent confi
   await expect(page.locator('#decision-40')).toBeVisible();
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
-  await page.route('**/board/decide-items', async route => {
+  await page.route('**/board/decide-items*', async route => {
     await held;
     await route.fulfill({ status: 401, json: { error: 'expired' } });
   });
-  const polling = page.waitForRequest(`${origin}/api/hera/roles/7/board/decide-items`);
+  const polling = page.waitForRequest(`${origin}/api/hera/roles/7/board/decide-items?include_deferred=true`);
   await page.clock.fastForward(20000);
   await polling;
   await page.locator('#decision-40 input[value="review"]').check();
@@ -190,7 +190,7 @@ test('an expiring in-flight poll cannot touch controls removed by the sent confi
     const original = document.getElementById.bind(document);
     document.getElementById = id => { (globalThis as any).lateControlLookups.push(id); return original(id); };
   });
-  const expired = page.waitForResponse(response => response.url().endsWith('/decide-items') && response.status() === 401);
+  const expired = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/decide-items') && response.status() === 401);
   release();
   await expired;
   await page.waitForLoadState('networkidle');

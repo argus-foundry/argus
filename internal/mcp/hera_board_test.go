@@ -26,12 +26,19 @@ func TestHeraBoardTools(t *testing.T) {
 	testutil.NoError(t, err)
 	testutil.Equal(t, len(items), 1)
 	id := items[0].ID
+	_, _, err = d.SetHeraBoardItemDeferred(b.RoleID, id, true, items[0].UpdatedAt)
+	testutil.NoError(t, err)
 	testutil.NoError(t, d.ReadHeraBoardItem(b.RoleID, id))
 	update := call("hera_board_update", fmt.Sprintf(`{"cwd":"/wt/board","id":%d,"kind":"decision","subject":"Choose rollout","body":"Updated"}`, id))
 	testutil.Equal(t, update.IsError, false)
 	list := call("hera_board_list", `{"cwd":"/wt/board"}`)
 	testutil.Equal(t, list.IsError, false)
 	testutil.Contains(t, list.Content[0].Text, "Updated")
+	var listed []*db.HeraBoardItem
+	testutil.NoError(t, json.Unmarshal([]byte(list.Content[0].Text), &listed))
+	testutil.Equal(t, len(listed), 1)
+	testutil.Equal(t, listed[0].DeferredAt != nil, true)
+	testutil.Equal(t, listed[0].Read, false)
 	for _, tool := range []string{"hera_join", "hera_status"} {
 		t.Run(tool, func(t *testing.T) {
 			got := call(tool, `{"cwd":"/wt/board","status":"working"}`)
