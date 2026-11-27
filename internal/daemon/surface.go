@@ -645,7 +645,9 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "16640f33793d219230d545105f6df4b36a117e450060dc0e002ac97d905be886"
+	// The hera SKILL.md archive "when to call it" text (add-coord-reap-triggers)
+	// is guidance only and changes no session construction: digest-only.
+	SpawnSurfaceDigest  = "cdd25d73b3b690d28105b3a148716bbed503ac838821032275ded22db2854bd7"
 	StreamSurfaceDigest = "7d6fe4e16399abae70093546fd8880ada92218d3fe4a97123ffe68c2679699db"
 )
 

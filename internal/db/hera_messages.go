@@ -72,11 +72,41 @@ type HeraMessage struct {
 // SenderName labels reserved self-addressed board notices without inventing a
 // role. SendHeraMessage forbids ordinary self-send; only board resolution writes
 // this system form, atomically with the human's decision.
+//
+// A self-addressed body starting with HeraSystemNoticePrefix is a daemon
+// system notice (add-coord-reap-triggers) and is labeled "argus".
 func (m *HeraMessage) SenderName(roleName string) string {
 	if m.FromRoleID == m.ToRoleID {
+		if strings.HasPrefix(m.Body, HeraSystemNoticePrefix) {
+			return HeraSystemSenderName
+		}
 		return "Aaron (board)"
 	}
 	return roleName
+}
+
+// HeraSystemNoticePrefix starts every daemon system notice body; the hera
+// doorbell and SenderName key off it for self-addressed messages.
+const HeraSystemNoticePrefix = "[argus] "
+
+// HeraSystemSenderName labels a daemon system notice's sender.
+const HeraSystemSenderName = "argus"
+
+// ErrHeraSystemNoticePrefix fires when a system notice body lacks the
+// HeraSystemNoticePrefix.
+var ErrHeraSystemNoticePrefix = errors.New("hera system notice body must start with \"[argus] \"")
+
+// SendHeraSystemNotice persists a self-addressed daemon system notice to
+// roleID (add-coord-reap-triggers). It applies every SendHeraMessage check
+// except the self-send rejection, and requires the "[argus] " body prefix so
+// the doorbell and sender label recognize it.
+func (d *DB) SendHeraSystemNotice(roleID int64, body, tldr string) (*HeraMessage, error) {
+	if !strings.HasPrefix(body, HeraSystemNoticePrefix) {
+		return nil, ErrHeraSystemNoticePrefix
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return insertHeraMessageAllowSelf(d.conn, roleID, roleID, body, tldr, nil)
 }
 
 // SendHeraMessage validates and persists a new hera message. Caps applied:
@@ -106,10 +136,16 @@ type heraMsgQuerier interface {
 // caller holds d.mu, and for a *sql.Tx owns the transaction). It is the single
 // implementation behind SendHeraMessage and DeliverResidentNotice.
 func insertHeraMessage(q heraMsgQuerier, fromRoleID, toRoleID int64, body, tldr string, inReplyTo *int64) (*HeraMessage, error) {
-	// Cheap checks first, no DB needed.
 	if fromRoleID == toRoleID {
 		return nil, ErrHeraMessageSelfSend
 	}
+	return insertHeraMessageAllowSelf(q, fromRoleID, toRoleID, body, tldr, inReplyTo)
+}
+
+// insertHeraMessageAllowSelf is insertHeraMessage without the self-send
+// rejection; only SendHeraSystemNotice calls it directly.
+func insertHeraMessageAllowSelf(q heraMsgQuerier, fromRoleID, toRoleID int64, body, tldr string, inReplyTo *int64) (*HeraMessage, error) {
+	// Cheap checks first, no DB needed.
 	if len(body) > model.MaxMessageBodyBytes {
 		return nil, ErrHeraMessageBodyTooLarge
 	}

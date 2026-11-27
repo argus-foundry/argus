@@ -212,8 +212,15 @@ Live Claude bridges with `bridge.delivery` enabled deliver doorbells as plugin-f
   Unread mail TO the role no longer blocks: it is marked read and ONE digest (sender + first line each)
   lands in your inbox (full bodies via `hera_get_messages`). Stops an idle session (a busy one is
   refused); never deletes the worktree or branch. Omit `role_name` to sweep every role you coordinate;
-  `dry_run` only reports. Call it after `hera_accept` + the winding-down confirmation, as soon as a
-  worker's PR is open and green (handoff), and as a sweep before reporting the orchestration finished.
+  `dry_run` only reports. **When to call it** (refusals are normal; the sweep re-checks everything):
+  - **A worker reports done** and its PR is merged, or open with CI not failing: `hera_accept`, confirm
+    it is winding down, then `hera_archive(role_name=...)` in the same turn.
+  - **Every status check or wake** (`hera_status`, `hera_inbox`, handling a doorbell): sweep with
+    `hera_archive(dry_run=true)` and archive whatever passes.
+  - **Before going idle, and before reporting the orchestration finished:** sweep with `hera_archive`.
+  The daemon also watches for you: when roles become archivable it sends one batched `[argus] N roles
+  ready to archive: ...` notice (sender `argus`). Treat it as a wake and run the sweep; the daemon
+  never archives on its own.
   **Escape hatch:** `force=true` with a non-empty `reason` (single named role only, never a sweep)
   overrides the done/handoff/mail/dependent checks and records the reason durably (role history and the
   inbox viewer). Coordinators, pinned roles, resident roles, standing-team members and tasks bound to

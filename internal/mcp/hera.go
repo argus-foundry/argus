@@ -1652,6 +1652,13 @@ func (s *Server) applyRoleStatus(caller *callerRoleResult, sv db.HeraRoleStatusV
 		}
 	}
 
+	// add-coord-reap-triggers: a role reporting done may now be archivable;
+	// the watcher re-checks after its debounce (never inline: the verdict
+	// shells out to gh/git).
+	if sv == db.HeraStatusDone {
+		s.pokeHeraReap("hera_status done")
+	}
+
 	// D2 (make-hera-plan-living): a WORKER reporting status="failed" rolls its
 	// bound task to in_review WITHOUT stamping ready_to_close. Same soft-fail /
 	// idempotent invariants as the done roll above.
@@ -1889,6 +1896,7 @@ func (s *Server) toolHeraAccept(id interface{}, args json.RawMessage) *Response 
 	}
 
 	slog.Info("[hera] accept", "orch", caller.orch.Name, "role", target.Name, "flipped", flipped)
+	s.pokeHeraReap("hera_accept")
 	var b strings.Builder
 	if flipped {
 		fmt.Fprintf(&b, "%s's work has been accepted; its task is now complete.\n\n", target.Name)
