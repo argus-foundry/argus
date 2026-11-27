@@ -139,10 +139,16 @@ func (r railRow) selectable() bool {
 // codepoint Hera's rail used for iconCoord).
 const heraIconCoord = rune(0x0F0E7B) // 󰹻
 
-// Preserve selection attributes while giving only unread mail its orange hue.
+// Preserve selection attributes while coloring the envelope by its most urgent
+// open item: red blocking action, orange decision/ready action, blue FYI only.
 func (r *Rail) coordMarkerStyle(orchID int64, style tcell.Style) tcell.Style {
-	if r.coordMarker(orchID) != heraIconCoord {
+	switch r.coordBoardLevel(orchID) {
+	case heramodel.BoardLevelCritical:
+		return style.Foreground(theme.ColorError)
+	case heramodel.BoardLevelWarn:
 		return style.Foreground(theme.ColorInProgress)
+	case heramodel.BoardLevelInfo:
+		return style.Foreground(theme.ColorInReview)
 	}
 	return style
 }

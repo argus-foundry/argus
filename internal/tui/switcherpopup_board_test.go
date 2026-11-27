@@ -15,7 +15,7 @@ func TestSwitcherPopupBoardAttention(t *testing.T) {
 		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
 			feed := switcherFeed()
 			feed.CoordinatorBoard = enabled
-			feed.HeraModel.Active[0].Roles[0].BoardUnread = 1
+			feed.HeraModel.Active[0].Roles[0].BoardUnread, feed.HeraModel.Active[0].Roles[0].BoardJump = 1, 1
 			feed.HeraModel.Active[0].KanbanStatus = db.HeraKanbanBacklog
 			p := newPopup(t, feed, SwitcherSeed{CurrentTaskID: "a1"})
 			if enabled {
