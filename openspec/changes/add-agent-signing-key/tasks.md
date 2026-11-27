@@ -49,6 +49,6 @@ All tests use synthetic Ed25519 keys generated in-test and a stubbed secret reso
 
 **Depends on:** Stages 2, 4, 5
 
-- [ ] 6.1 `make pre-pr` green
+- [x] 6.1 `make pre-pr` green
 - [ ] 6.2 Live smoke test on Aaron's machine after he creates the key: deploy, set `agent-key`, `argus doctor` reports `OK`, a fresh sandboxed agent session commits with no prompt, `git log --show-signature` verifies, and GitHub shows Verified on the PR commits
 - [ ] 6.3 `openspec archive add-agent-signing-key --yes` and `openspec validate --all --strict`; commit the archive in the PR

@@ -83,7 +83,7 @@ func signBlob(signer ssh.Signer, blob []byte) (*ssh.Signature, error) {
 
 // appendString appends an SSH wire "string": uint32 length then the bytes.
 func appendString(b, s []byte) []byte {
-	b = binary.BigEndian.AppendUint32(b, uint32(len(s)))
+	b = binary.BigEndian.AppendUint32(b, uint32(len(s))) //nolint:gosec // G115: s is a key, namespace, hash name or digest — always far below 4 GiB.
 	return append(b, s...)
 }
 
