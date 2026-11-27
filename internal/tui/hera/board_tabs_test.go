@@ -315,18 +315,19 @@ func TestBoardTabsRefreshAndFilteredActions(t *testing.T) {
 	testutil.Contains(t, p.boardTitle(), "Board (2)") // other kinds still count attention
 }
 
-func TestBoardTabsAttentionJumpBroadensHiddenKind(t *testing.T) {
+func TestBoardTabsAttentionJumpIgnoresUnreadFYI(t *testing.T) {
 	p := NewHeraPage(memDB(t))
 	o := coordOf(1, "tabs", 10, "coord")
-	o.Roles[0].BoardUnread = 1
+	o.Roles[0].BoardUnread = 1 // unread FYI counts as attention but is not a jump target
 	o.Roles[0].BoardItems = []*db.HeraBoardItem{{ID: 1, Kind: "decision", Read: true}, {ID: 2, Kind: "fyi"}}
 	p.Rail().SetModel(heramodel.Model{Active: []heramodel.OrchView{o}})
 	testutil.True(t, p.SelectOrch(1))
 	p.updateBoard(&o)
 	testutil.Equal(t, p.board.tab, 0)
-	testutil.True(t, p.JumpToNextNeedsInput())
-	testutil.Equal(t, p.board.tab, 4)
-	testutil.Equal(t, p.board.selected().ID, int64(2))
+	// The jump hotkey targets only unread decisions, so an unread FYI alone
+	// neither jumps nor broadens the tab filter.
+	testutil.False(t, p.JumpToNextNeedsInput())
+	testutil.Equal(t, p.board.tab, 0)
 	// Ordinary refresh with an active filter must not repeatedly auto-show
 	// resident boards because another kind remains unread.
 	p.changeBoardTab(0)
