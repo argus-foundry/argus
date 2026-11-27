@@ -647,7 +647,7 @@ var SupervisorStreamPaths = []string{
 const (
 	// The hera SKILL.md archive "when to call it" text (add-coord-reap-triggers)
 	// is guidance only and changes no session construction: digest-only.
-	SpawnSurfaceDigest  = "16640f33793d219230d545105f6df4b36a117e450060dc0e002ac97d905be886"
+	SpawnSurfaceDigest  = "cdd25d73b3b690d28105b3a148716bbed503ac838821032275ded22db2854bd7"
 	StreamSurfaceDigest = "7d6fe4e16399abae70093546fd8880ada92218d3fe4a97123ffe68c2679699db"
 )
 

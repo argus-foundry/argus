@@ -909,5 +909,5 @@ func TestHeraCoordinatorOrientation_ArchiveChecklist(t *testing.T) {
 	dispatch, _, ok := strings.Cut(got, "\n\n")
 	testutil.Equal(t, ok, true)
 	testutil.Equal(t, strings.Contains(dispatch, "hera_archive"), false)
-	testutil.Equal(t, len(got) < 6800, true) // was 6548 before the checklist
+	testutil.Equal(t, len(got) < 7800, true) // 7510 on master before the checklist (net -9)
 }
