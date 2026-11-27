@@ -29,11 +29,41 @@ Argus SHALL support `git.agent_commit_signing` with values `inherit`, `unsigned`
 - **WHEN** the setting is `agent-key` and `agent_signing_key` is empty or not an `op://` reference
 - **THEN** validation rejects the configuration and names `git.agent_signing_key`
 
+### Requirement: Child-only Git configuration isolation
+
+The signing override MUST be injected only into the spawned agent process environment, preserving existing command-scope Git entries and applying after backend environment mappings. Argus MUST NOT modify global Git configuration, SSH configuration, keychain data, or shared repository configuration to apply the policy. Explicit Git command-line options SHALL retain Git's normal precedence. The policy SHALL be documented as process-scoped rather than branch-enforced.
+
+#### Scenario: Existing command-scope configuration
+
+- **WHEN** an `unsigned` or `agent-key` session inherits command-scope Git settings
+- **THEN** unrelated entries remain effective and the policy's entries are appended after them, so the configured signing policy deterministically governs default commit signing
+
+#### Scenario: Host isolation
+
+- **WHEN** an `unsigned` or `agent-key` agent session is launched
+- **THEN** a Git command launched outside that agent process tree continues to observe its prior signing configuration and all host configuration files remain unchanged
+
+#### Scenario: Explicit signing requested
+
+- **WHEN** a caller passes an explicit signing option to Git within an `unsigned` or `agent-key` session
+- **THEN** Git processes that option according to its normal precedence (an explicit `--no-gpg-sign` can still produce an unsigned commit; Argus itself never falls back to unsigned)
+
+
 ## ADDED Requirements
 
 ### Requirement: Daemon-held agent signing key
 
-When the policy is `agent-key`, the daemon SHALL resolve the private key from `<agent_signing_key>/private key` through the configured `[secrets.op]` service account and hold it in memory only. The private key MUST NOT be written to disk and MUST NOT be placed in any agent session's environment, arguments, or files. Agent sessions SHALL receive only the public key. Resolution SHALL be memoized on success only, so a failed resolution is retried on the next signing request. The daemon MUST verify that the public key derived from the private key matches `<agent_signing_key>/public key`.
+When the policy is `agent-key`, the daemon SHALL resolve the private key from `<agent_signing_key>/private key?ssh-format=openssh` (the default PKCS#8 value does not parse) through the configured `[secrets.op]` service account and hold it in memory only. The private key MUST NOT be written to disk and MUST NOT be placed in any agent session's environment, arguments, or files. Agent sessions SHALL receive only the public key. The daemon's key holder SHALL memoize resolution on success only, so a failed resolution is retried on the next signing request. Neither the daemon's key fields nor the launcher's public-key field SHALL be cached by the process-wide secret memo, so a key change or a changed reference is picked up without restarting the session-supervisor, and an old key is not retained. The daemon MUST verify that the public key derived from the private key matches `<agent_signing_key>/public key`.
+
+#### Scenario: Rotated key picked up by new sessions
+
+- **WHEN** the key behind the same reference is rotated in 1Password
+- **THEN** sessions launched afterwards receive the new public key without a supervisor restart, and the helper's mismatch error for older sessions or a not-yet-restarted daemon names the remedy (restart the daemon, then restart or recycle the session)
+
+#### Scenario: Public key unresolved at launch
+
+- **WHEN** a session launched while its public key could not be resolved attempts a commit
+- **THEN** the commit fails with a cause naming the unresolved agent signing public key and the remedy, without contacting the daemon
 
 #### Scenario: Private key never reaches a session
 
@@ -125,6 +155,11 @@ A signing failure MUST fail the commit. The helper SHALL retry connection failur
 
 - **WHEN** the policy is `agent-key` and both halves resolve and match
 - **THEN** doctor reports `OK` and its exit code is unaffected
+
+#### Scenario: config.toml rejected
+
+- **WHEN** config.toml selects `agent-key` but fails validation, so the overlay is discarded
+- **THEN** doctor reports `BROKEN: config.toml rejected: <validation error>` instead of `OFF`
 
 #### Scenario: REST API disabled
 
