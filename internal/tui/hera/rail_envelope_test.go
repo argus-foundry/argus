@@ -78,6 +78,7 @@ func TestBoardJumpIgnoresActions(t *testing.T) {
 	}{
 		{"blocking action alone", []*db.HeraBoardItem{{Kind: "action", Blocking: true}}, false},
 		{"ready action alone", []*db.HeraBoardItem{{Kind: "action"}}, false},
+		{"fyi alone", []*db.HeraBoardItem{{Kind: "fyi"}}, false},
 		{"decision", []*db.HeraBoardItem{{Kind: "decision"}}, true},
 		{"decision with blocking action", []*db.HeraBoardItem{{Kind: "decision"}, {Kind: "action", Blocking: true}}, true},
 	}

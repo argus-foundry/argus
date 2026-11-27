@@ -28,7 +28,7 @@ type RoleView struct {
 	BoardItems               []*db.HeraBoardItem
 	BoardUnread              int
 	BoardLevel               BoardLevel // most urgent open attention item; drives the rail envelope color
-	BoardJump                int        // unread decision/FYI items; ctrl+g jump targets need > 0
+	BoardJump                int        // unread decision items; ctrl+g jump targets need > 0
 	RoleID                   int64
 	OrchID                   int64
 	Name                     string

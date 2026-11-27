@@ -7,7 +7,7 @@ PR #1245 added board `action` and `todo` kinds, but the Hera rail's coordinator 
 - The coordinator envelope keeps its glyph and takes its color from the most urgent open attention item: red for a blocking action, orange for a decision or ready non-blocking action, blue for FYI-only.
 - Todos and trigger-pending actions are quiet: no envelope, no color.
 - The rule reuses the shared attention predicate (`BoardAttention` / `AttentionUnread`); no parallel rule.
-- The ctrl+g/cmd+g board jump is unchanged: it targets only coordinators with an unread decision or FYI, never one that has only actions.
+- The ctrl+g/cmd+g board jump is unchanged: it targets only coordinators with an unread decision, never one that has only FYIs or actions.
 
 ## Non-Goals
 

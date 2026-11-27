@@ -17,7 +17,7 @@ func TestBoardItemLevel(t *testing.T) {
 		{"blocking action", db.HeraBoardItem{Kind: "action", Blocking: true}, BoardLevelCritical, false},
 		{"ready action", db.HeraBoardItem{Kind: "action"}, BoardLevelWarn, false},
 		{"decision", db.HeraBoardItem{Kind: "decision"}, BoardLevelWarn, true},
-		{"fyi", db.HeraBoardItem{Kind: "fyi"}, BoardLevelInfo, true},
+		{"fyi", db.HeraBoardItem{Kind: "fyi"}, BoardLevelInfo, false},
 		{"todo", db.HeraBoardItem{Kind: "todo"}, BoardLevelNone, false},
 		{"pending blocking action", db.HeraBoardItem{Kind: "action", Blocking: true, TriggerPending: true}, BoardLevelNone, false},
 		{"read decision", db.HeraBoardItem{Kind: "decision", Read: true}, BoardLevelNone, false},

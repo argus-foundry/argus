@@ -44,10 +44,10 @@ func BoardItemLevel(i *db.HeraBoardItem) BoardLevel {
 }
 
 // BoardJumpable reports whether an item makes its coordinator a ctrl+g jump
-// target: an attention item that is a decision or FYI. Actions never do, even
+// target: an attention item that is a decision. FYIs and actions never do, even
 // blocking ones (the jump hotkey is deliberately unchanged by board kinds).
 func BoardJumpable(i *db.HeraBoardItem) bool {
-	return BoardAttention(i) && (i.Kind == "decision" || i.Kind == "fyi")
+	return BoardAttention(i) && i.Kind == "decision"
 }
 
 func boardBand(i *db.HeraBoardItem) int {
