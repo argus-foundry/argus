@@ -224,6 +224,14 @@ func (a *App) classifyStackedBranchesForCascade(ctx context.Context, notSafeIDs 
 		byID[t.ID] = t
 	}
 
+	// Index only the tasks a forward walk can reach, and only once per
+	// repository: building the index costs one git call per task given, and
+	// paying it for every task with a base_branch, once per not-safe
+	// candidate, held the confirm back for ~30s on a 150-task database.
+	links, linkedBases := stackLinkTasks(allTasks)
+	type repositoryKey struct{ commonDir, stamp string }
+	stacksByRepository := make(map[repositoryKey]map[string]*model.Task)
+
 	cfg := d.Config()
 	var out []stackedBranchCandidate
 	type repositoryBranch struct{ repository, branch string }
@@ -232,7 +240,9 @@ func (a *App) classifyStackedBranchesForCascade(ctx context.Context, notSafeIDs 
 	tipVerdictsByTarget := make(map[mergeTarget]map[string]mergesafety.Verdict)
 	for _, id := range notSafeIDs {
 		x := byID[id]
-		if x == nil {
+		if x == nil || x.Branch == "" || !linkedBases[x.Branch] {
+			// No task branched off x in any repository, so the walk below
+			// would find no descendant. Skip before any git work.
 			continue
 		}
 		directory := agent.ResidentCleanupRepository(ctx, x.Worktree, agent.ResolveDir(x, cfg))
@@ -245,7 +255,12 @@ func (a *App) classifyStackedBranchesForCascade(ctx context.Context, notSafeIDs 
 			continue
 		}
 		repoDir := repo.Directory
-		byBaseBranch := herasvc.StackTasksInRepository(ctx, cfg, repo, allTasks)
+		key := repositoryKey{repo.CommonDir, repo.Stamp}
+		byBaseBranch, built := stacksByRepository[key]
+		if !built {
+			byBaseBranch = a.stackTasksInRepositoryFn(ctx, cfg, repo, links)
+			stacksByRepository[key] = byBaseBranch
+		}
 		chain, _, ok := walkBranchStackForward(x, byBaseBranch)
 		if !ok || len(chain) == 0 {
 			continue
@@ -287,6 +302,30 @@ func (a *App) classifyStackedBranchesForCascade(ctx context.Context, notSafeIDs 
 		}
 	}
 	return out
+}
+
+// stackLinkTasks returns the tasks whose BaseBranch is another task's Branch,
+// plus the set of those base branches. A forward stack walk that starts at a
+// task in tasks only ever looks up byBaseBranch[cur.Branch] for tasks it has
+// already reached, so a task branched off anything else (origin/main, a
+// deleted task's branch) can never be reached and need not be indexed.
+// The daemon's reclaim sweep cannot use this filter: it walks from tasks
+// whose rows may already be gone.
+func stackLinkTasks(tasks []*model.Task) (links []*model.Task, bases map[string]bool) {
+	branches := make(map[string]bool, len(tasks))
+	for _, t := range tasks {
+		if t.Branch != "" {
+			branches[t.Branch] = true
+		}
+	}
+	bases = make(map[string]bool)
+	for _, t := range tasks {
+		if t.BaseBranch != "" && branches[t.BaseBranch] {
+			links = append(links, t)
+			bases[t.BaseBranch] = true
+		}
+	}
+	return links, bases
 }
 
 // --- single-role nuke: async classify-then-open-popup ----------------------
