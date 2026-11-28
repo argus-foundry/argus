@@ -54,35 +54,23 @@ type taskCounts struct {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	running, idle := s.runner.RunningAndIdle()
-	idle = bridge.Override(idle, s.BridgeStates(), bridge.Quiescent)
-
-	tasks, err := s.db.Tasks()
+	snap, err := s.voiceSnapshot(time.Now())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "failed to load tasks", err)
 		return
 	}
-	var tc taskCounts
-	for _, t := range tasks {
-		if t.Archived {
-			continue
-		}
-		switch t.Status {
-		case model.StatusPending:
-			tc.Pending++
-		case model.StatusInProgress:
-			tc.InProgress++
-		case model.StatusInReview:
-			tc.InReview++
-		case model.StatusComplete:
-			tc.Complete++
-		}
-	}
-
 	writeJSON(w, http.StatusOK, statusResponse{
-		OK:       true,
-		Sessions: sessionCounts{Running: len(running), Idle: len(idle)},
-		Tasks:    tc,
+		OK: true,
+		Sessions: sessionCounts{
+			Running: snap.SessionsRunning,
+			Idle:    snap.SessionsIdle,
+		},
+		Tasks: taskCounts{
+			Pending:    snap.Counts.Pending,
+			InProgress: snap.Counts.InProgress,
+			InReview:   snap.Counts.InReview,
+			Complete:   snap.Counts.Complete,
+		},
 	})
 }
 
@@ -537,21 +525,57 @@ func (s *Server) handleCreateTaskMultipart(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	unlock, lockErr := s.lockTaskMutation(r.Context(), id)
+	if lockErr != nil {
+		writeErr(w, http.StatusServiceUnavailable, "task operation canceled", nil)
+		return
+	}
+	defer unlock()
+	unlockSession, ok := s.lockSessionMutationHTTP(w, id)
+	if !ok {
+		return
+	}
+	defer unlockSession()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeErr(w, http.StatusNotFound, "task not found", nil)
 		return
 	}
-
-	if err := s.runner.Stop(id); err != nil && !errors.Is(err, agent.ErrSessionNotFound) {
+	if err := s.stopTaskSession(task, false); err != nil {
+		if errors.Is(err, agent.ErrSessionStarting) {
+			writeSessionMutationConflict(w)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
 
-	task.SetStatus(model.StatusInReview)
-	s.db.Update(task) //nolint:errcheck
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+// stopTaskSession holds the caller's session lock through the status write.
+// The session owner also checks for reserved launches and queued restarts.
+func (s *Server) stopTaskSession(task *model.Task, requireLive bool) error {
+	stopper, ok := s.runner.(agent.SettledSessionStopper)
+	if !ok {
+		return errors.New("settled session stop is unavailable")
+	}
+	if err := stopper.StopSettled(task.ID); err != nil {
+		if requireLive || !errors.Is(err, agent.ErrSessionNotFound) {
+			return err
+		}
+		if task.Status == model.StatusPending {
+			uxlog.Log("[api] stop refused before session registration task=%s", task.ID)
+			return agent.ErrSessionStarting
+		}
+	}
+	// Even when REST confirms that the owner has no session, record the stop
+	// so a deferred native TUI rerender cannot bring it back.
+	if err := s.db.RecordSessionStop(task.ID); err != nil {
+		uxlog.Log("[api] stop: status write failed task=%s err=%v", task.ID, err)
+		return err
+	}
+	return nil
 }
 
 // --- Restart Task ---
@@ -586,6 +610,11 @@ func (s *Server) handleRestartTask(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unlock()
 
+	unlockSession, ok := s.lockSessionMutationHTTP(w, id)
+	if !ok {
+		return
+	}
+	defer unlockSession()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
@@ -639,6 +668,14 @@ func (s *Server) handleRestartTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeLaunchErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, agent.ErrSessionStarting) {
+		writeCodedErrCause(w, http.StatusConflict, "the agent is starting, stopping, or restarting", "agent_restarting", nil)
+		return
+	}
+	if errors.Is(err, agent.ErrSessionCoordinationUnsupported) {
+		writeCodedErrCause(w, http.StatusConflict, "", "supervisor_restart_required", err)
+		return
+	}
 	if errors.Is(err, agent.ErrStartAmbiguous) {
 		writeCodedErrCause(w, http.StatusServiceUnavailable, "session start outcome is unknown; check task runtime before retrying", "start_ambiguous", nil)
 		return
@@ -682,53 +719,116 @@ func parseForceRevive(w http.ResponseWriter, r *http.Request) (force, ok bool) {
 // caller deliberately forces the revival. On a forced revival it clears the
 // close-out state up front and returns a rollback that restores it if the
 // launch then fails. Callers hold the per-task lock.
-func (s *Server) closeoutGate(w http.ResponseWriter, task *model.Task, force bool, op string) (proceed bool, rollback func()) {
+type closeoutResult struct {
+	proceed  bool
+	code     string
+	cause    error
+	rollback func()
+}
+
+// evaluateCloseout is the close-out decision shared by REST resume/restart
+// and voice resume. rollback restores a forced clear when the launch fails.
+func (s *Server) evaluateCloseout(task *model.Task, force bool, op string) closeoutResult {
 	noop := func() {}
 	workerOrFreelance, err := s.db.TaskHoldsLiveHeraWorkerOrFreelanceBinding(task.ID)
 	if err != nil {
 		uxlog.Log("[api] %s: closeout check failed task=%s err=%v", op, task.ID, err)
-		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_check_failed", err)
-		return false, noop
+		return closeoutResult{code: "closeout_check_failed", cause: err, rollback: noop}
 	}
 	if !workerOrFreelance {
-		return true, noop
+		return closeoutResult{proceed: true, rollback: noop}
 	}
 	awaiting, err := s.db.HeraWorkerAwaitingCloseout(task.ID)
 	if err != nil {
 		uxlog.Log("[api] %s: closeout check failed task=%s err=%v", op, task.ID, err)
-		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_check_failed", err)
-		return false, noop
+		return closeoutResult{code: "closeout_check_failed", cause: err, rollback: noop}
 	}
 	if !awaiting {
-		return true, noop
+		return closeoutResult{proceed: true, rollback: noop}
 	}
 	if !force {
 		uxlog.Log("[api] %s: refused closed-out task=%s", op, task.ID)
+		return closeoutResult{code: "hera_closeout", rollback: noop}
+	}
+	snap, err := s.db.SnapshotAndClearHeraCloseout(task.ID)
+	if err != nil {
+		uxlog.Log("[api] %s: force-revive clear failed task=%s err=%v", op, task.ID, err)
+		return closeoutResult{code: "closeout_clear_failed", cause: err, rollback: noop}
+	}
+	uxlog.Log("[api] %s: force-reviving closed-out task=%s", op, task.ID)
+	return closeoutResult{proceed: true, rollback: func() {
+		if rerr := s.db.RestoreHeraCloseout(snap); rerr != nil {
+			uxlog.Log("[api] %s: restore closeout failed task=%s err=%v", op, task.ID, rerr)
+		}
+	}}
+}
+
+func (s *Server) closeoutGate(w http.ResponseWriter, task *model.Task, force bool, op string) (proceed bool, rollback func()) {
+	res := s.evaluateCloseout(task, force, op)
+	if res.proceed {
+		if res.rollback == nil {
+			return true, func() {}
+		}
+		return true, res.rollback
+	}
+	if res.code == "hera_closeout" {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":            "task awaits Hera close-out",
 			"code":             "hera_closeout",
 			"can_force_revive": true,
 		})
-		return false, noop
+		return false, func() {}
 	}
-	snap, err := s.db.SnapshotAndClearHeraCloseout(task.ID)
-	if err != nil {
-		uxlog.Log("[api] %s: force-revive clear failed task=%s err=%v", op, task.ID, err)
-		writeCodedErrCause(w, http.StatusInternalServerError, "", "closeout_clear_failed", err)
-		return false, noop
-	}
-	uxlog.Log("[api] %s: force-reviving closed-out task=%s", op, task.ID)
-	return true, func() {
-		if rerr := s.db.RestoreHeraCloseout(snap); rerr != nil {
-			uxlog.Log("[api] %s: restore closeout failed task=%s err=%v", op, task.ID, rerr)
-		}
-	}
+	writeCodedErrCause(w, http.StatusInternalServerError, "", res.code, res.cause)
+	return false, func() {}
 }
 
 // restartTaskSession resumes a task's session (or reattaches a live one) and
 // marks it in progress. Shared by restart and the account move.
 func (s *Server) restartTaskSession(task *model.Task) (reattached bool, err error) {
 	return s.startTaskSession(task, true)
+}
+
+// startResumedSession reopens a task's session the way POST /resume does:
+// recapture the session id, reattach or start, and mark the row in progress.
+// op is the log prefix ("resume" for REST, "voice" for the voice router).
+func (s *Server) startResumedSession(task *model.Task, op string) (reattached bool, err error) {
+	cfg := s.db.Config()
+	prevStatus := task.Status
+	// Resume-time recapture: Claude re-derives the newest transcript; capture-once
+	// backends (codex/pi/opencode) recover a missing ID. Must precede resume.
+	agent.RefreshResumeSessionID(s.db, task)
+	priorSessionID := task.SessionID
+	resume := task.SessionID != ""
+	var freshSessionID string
+	if !resume {
+		freshSessionID = agent.FreshSessionID(task, cfg)
+		task.SessionID = freshSessionID
+	}
+	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
+	sess, reattached, err := s.runner.StartOrReattach(task, cfg, 24, 80, resume)
+	if err != nil {
+		if freshSessionID != "" && errors.Is(err, agent.ErrStartAmbiguous) {
+			if _, persistErr := s.db.RefreshSessionID(task.ID, priorSessionID, freshSessionID); persistErr != nil {
+				uxlog.Log("[api] %s: ambiguous launch session write failed task=%s err=%v", op, task.ID, persistErr)
+			}
+		}
+		uxlog.Log("[api] %s: start failed task=%s status=%s err=%v", op, task.ID, prevStatus, err)
+		return false, err
+	}
+	if reattached && freshSessionID != "" {
+		task.SessionID = priorSessionID
+	}
+	task.AgentPID = sess.PID()
+	if err := s.db.RecordResumedSession(task.ID, task.AgentPID, priorSessionID, task.SessionID); err != nil {
+		uxlog.Log("[api] %s: resume state write failed task=%s err=%v", op, task.ID, err)
+	}
+	if reattached {
+		uxlog.Log("[api] %s: healed task=%s pre_status=%s pid=%d", op, task.ID, prevStatus, task.AgentPID)
+	} else {
+		uxlog.Log("[api] %s: started task=%s pid=%d resume=%t", op, task.ID, task.AgentPID, resume)
+	}
+	return reattached, nil
 }
 
 // --- Resume Task ---
@@ -747,19 +847,25 @@ func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unlock()
 
+	unlockSession, ok := s.lockSessionMutationHTTP(w, id)
+	if !ok {
+		return
+	}
+	defer unlockSession()
 	task, err := s.db.Get(id)
 	if err != nil || task == nil {
 		writeCodedErrCause(w, http.StatusNotFound, "task not found", "task_not_found", nil)
 		return
 	}
 
-	if sess := s.runner.Get(task.ID); sess != nil && !sess.IsIdle() {
-		writeCodedErrCause(w, http.StatusConflict, "task already running", "task_running", nil)
+	sess, err := agent.AttachableSession(s.runner, task.ID)
+	if err != nil {
+		uxlog.Log("[api] resume: session not attachable task=%s err=%v", id, err)
+		writeLaunchErr(w, err)
 		return
 	}
-	if s.runner.HasPendingRestart(task.ID) {
-		uxlog.Log("[api] resume: refused pending restart task=%s", id)
-		writeCodedErrCause(w, http.StatusConflict, "agent is restarting", "agent_restarting", nil)
+	if sess != nil && !sess.IsIdle() {
+		writeCodedErrCause(w, http.StatusConflict, "task already running", "task_running", nil)
 		return
 	}
 
@@ -774,33 +880,13 @@ func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 	// "session already exists for task X". On reattach we re-sync the row
 	// to in_progress so the PWA can attach the terminal stream and other
 	// observers see consistent state.
-	cfg := s.db.Config()
-	prevStatus := task.Status
-
-	// Resume-time recapture: Claude re-derives the newest transcript; capture-once
-	// backends (codex/pi/opencode) recover a missing ID. Must precede resume.
-	agent.RefreshResumeSessionID(s.db, task)
-	resume := task.SessionID != ""
-	_ = agent.RestoreAcceptedCoordinatorHat(s.db, task.ID) // revived accepted sub-coordinator
-
-	sess, reattached, err := s.runner.StartOrReattach(task, cfg, 24, 80, resume)
+	reattached, err := s.startResumedSession(task, "resume")
 	if err != nil {
 		if !errors.Is(err, agent.ErrStartAmbiguous) {
 			rollback()
 		}
-		uxlog.Log("[api] resume: start failed task=%s status=%s err=%v", id, prevStatus, err)
 		writeLaunchErr(w, err)
 		return
-	}
-
-	task.SetStatus(model.StatusInProgress)
-	task.AgentPID = sess.PID()
-	s.db.Update(task) //nolint:errcheck
-
-	if reattached {
-		uxlog.Log("[api] resume: healed task=%s pre_status=%s pid=%d", id, prevStatus, task.AgentPID)
-	} else {
-		uxlog.Log("[api] resume: started task=%s pid=%d resume=%t", id, task.AgentPID, resume)
 	}
 
 	resp := map[string]any{
@@ -848,6 +934,10 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	// above. Only on success do we stop the session and remove its log and
 	// artifacts, so a refusal never leaves a stopped session / deleted log.
 	if err := s.db.Delete(id); err != nil {
+		if errors.Is(err, db.ErrHeraReclaimInProgress) {
+			writeCodedErrCause(w, http.StatusConflict, "", "reclaim_pending", err)
+			return
+		}
 		if errors.Is(err, db.ErrGraduationPending) {
 			uxlog.Log("[resident] api delete refused task=%s: graduation pending (raced the pre-check)", id)
 			writeErr(w, http.StatusConflict, "", err)
@@ -960,7 +1050,7 @@ func (s *Server) setArchive(w http.ResponseWriter, r *http.Request, archived boo
 	}
 	task.SetArchived(archived)
 	if err := s.db.Update(task); err != nil {
-		if errors.Is(err, db.ErrGraduationPending) || errors.Is(err, db.ErrHeraRoleLive) {
+		if errors.Is(err, db.ErrGraduationPending) || errors.Is(err, db.ErrHeraRoleLive) || errors.Is(err, db.ErrHeraReclaimInProgress) {
 			writeErr(w, http.StatusConflict, "", err)
 			return
 		}
@@ -1013,6 +1103,10 @@ func (s *Server) handlePinTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.db.SetPinned(id, *req.Pinned); err != nil {
+		if errors.Is(err, db.ErrHeraReclaimInProgress) {
+			writeErr(w, http.StatusConflict, "", err)
+			return
+		}
 		if errors.Is(err, db.ErrTaskNotFound) {
 			writeErr(w, http.StatusNotFound, "task not found", nil)
 			return
@@ -1247,101 +1341,97 @@ func (s *Server) handleGetOutput(w http.ResponseWriter, r *http.Request) {
 
 	clean := r.URL.Query().Get("clean") == "1"
 
-	// Always read from the on-disk session log when available, even for live
-	// sessions. The log file holds the complete history; the in-memory ring
-	// buffer only retains the last 256KB. For active in_progress tasks the
-	// SPA pairs this read with /stream?since=<X-Output-Total>, where the
-	// /stream endpoint replays only the (tiny) ring delta between this read
-	// and the live attach. Together they give the client full history with
-	// no gap and no duplicates.
-	logPath := agent.SessionLogPath(id)
-	// id comes from the URL path but is constrained: SessionLogPath does
-	// filepath.Join(~/.argus/sessions, id+".log"), and `id` originates as
-	// a server-generated nanosecond timestamp string (see model.Task.ID).
-	// A `..` segment in the URL would produce a path like ".._.log" inside
-	// the sessions dir, not an escape. Single-user local daemon, but the
-	// invariant should be held even if a future feature accepts user IDs.
-	f, err := os.Open(logPath) //nolint:gosec // logPath rooted at ~/.argus/sessions; id is server-generated
+	session, err := terminalSnapshotSession(s.runner, id)
 	if err != nil {
-		// Live session present but log unavailable (best-effort log creation
-		// failed at session start) — fall back to the ring buffer so the
-		// client sees the recent tail rather than a 404.
-		if sess := s.runner.Get(id); sess != nil {
-			// Atomic snapshot: data and ringTotal MUST come from the same
-			// lock acquisition. Reading them in two calls lets readLoop
-			// advance ringTotal past the bytes in data, leaving the client
-			// with a since-cursor that skips bytes never delivered.
-			data, ringTotal := sess.RecentOutputTailWithTotal(tailSize)
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.Header().Set("X-Source", "ring")
-			// data is the ring tail and ringTotal is the high-water mark; the
-			// client now has bytes [ringTotal-len(data) .. ringTotal]. Setting
-			// since=ringTotal on /stream attaches live with no replay (the
-			// caller-already-has-it region matches exactly). Any bytes the
-			// session writes between this header and the /stream open are
-			// covered by AddWriterFrom's same-lock replay.
-			w.Header().Set("X-Output-Total", strconv.FormatUint(ringTotal, 10))
-			if clean {
-				w.Write([]byte(sanitize.CleanPTYOutput(string(data)))) //nolint:errcheck,gosec // text/plain endpoint; bytes are PTY output for the local single-user daemon, not HTML
-			} else {
-				w.Write(data) //nolint:errcheck,gosec // text/plain endpoint; bytes are PTY output for the local single-user daemon, not HTML
-			}
-			return
-		}
+		writeCodedErrCause(w, http.StatusConflict, "session changed while reading output", "stale_session", nil)
+		return
+	}
+	pid := 0
+	if session != nil {
+		pid = session.PID()
+	}
+	data, total, source, err := terminalOutputSnapshot(id, session, tailSize)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		writeCodedErrCause(w, http.StatusConflict, "session changed while reading output", "stale_session", nil)
+		return
+	}
+	if errors.Is(err, os.ErrNotExist) {
 		writeErr(w, http.StatusNotFound, "no output available", nil)
 		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "", err)
+		return
+	}
+
+	// The next PTY can truncate the same task log. Only advertise a
+	// cursor after the process that owned the read is still current.
+	current, err := terminalSnapshotSession(s.runner, id)
+	currentPID := 0
+	if current != nil {
+		currentPID = current.PID()
+	}
+	if err != nil || currentPID != pid {
+		writeCodedErrCause(w, http.StatusConflict, "session changed while reading output", "stale_session", nil)
+		return
+	}
+	if clean {
+		data = []byte(sanitize.CleanPTYOutput(string(data)))
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Output-Total", strconv.FormatUint(total, 10))
+	w.Header().Set("X-Source", source)
+	if pid > 0 {
+		w.Header().Set("X-Argus-Session-Pid", strconv.Itoa(pid))
+	}
+	_, _ = w.Write(data) //nolint:gosec // Text/plain endpoint returns PTY output.
+}
+
+func terminalSnapshotSession(runner agent.SessionRunner, id string) (agent.SessionHandle, error) {
+	session, err := agent.AttachableSession(runner, id)
+	if errors.Is(err, agent.ErrSessionCoordinationUnsupported) {
+		// View-only reads remain available with older supervisors.
+		return runner.Get(id), nil
+	}
+	return session, err
+}
+
+func terminalOutputSnapshot(id string, session agent.SessionHandle, tailSize int) ([]byte, uint64, string, error) {
+	// SessionLogPath roots task IDs under the session log directory.
+	f, err := os.Open(agent.SessionLogPath(id)) //nolint:gosec // SessionLogPath sanitizes the ID.
+	if err != nil {
+		if session == nil {
+			return nil, 0, "", err
+		}
+		readOutput := session.RecentOutputTailWithTotal
+		if scoped, ok := session.(interface {
+			ProcessOutputTailWithTotal(int) ([]byte, uint64)
+		}); ok {
+			readOutput = scoped.ProcessOutputTailWithTotal
+		}
+		data, total := readOutput(tailSize)
+		return data, total, "ring", nil
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "", err)
-		return
+		return nil, 0, "", err
 	}
-	fileSize := info.Size()
-	startOff := fileSize - int64(tailSize)
-	if startOff < 0 {
-		startOff = 0
+	fileSize := max(info.Size(), 0)
+	length := min(fileSize, int64(tailSize))
+	data, err := io.ReadAll(io.NewSectionReader(f, fileSize-length, length))
+	if err != nil {
+		return nil, 0, "", err
 	}
-	// Always >= 0 by construction (startOff is clamped to [0, fileSize]).
-	// The same is asserted indirectly by io.CopyN below — it errors on a
-	// negative count, but we never produce one here.
-	bytesToRead := fileSize - startOff
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	// X-Output-Total advertises the byte position the client should pass back
-	// as ?since=<n> on the /stream endpoint to resume without overlap. We
-	// pin it to the file size we observed under Stat() and bound the body
-	// read to the same value (io.CopyN), so the count of bytes returned ==
-	// X-Output-Total - startOff exactly. Without the bound, a live session
-	// growing the file mid-read would leave the client's `since` short of
-	// the bytes they actually have.
-	w.Header().Set("X-Output-Total", strconv.FormatInt(fileSize, 10))
-	if sess := s.runner.Get(id); sess != nil {
-		w.Header().Set("X-Source", "live")
-	} else {
-		w.Header().Set("X-Source", "log")
+	if int64(len(data)) != length {
+		return nil, 0, "", io.ErrUnexpectedEOF
 	}
-
-	if _, err := f.Seek(startOff, io.SeekStart); err != nil {
-		writeErr(w, http.StatusInternalServerError, "", err)
-		return
+	source := "log"
+	if session != nil {
+		source = "live"
 	}
-	if clean {
-		raw, err := io.ReadAll(io.LimitReader(f, bytesToRead))
-		if err != nil {
-			// Headers (including X-Output-Total) are already sent; we
-			// can't downgrade to 500. Returning silently truncates the
-			// 200 response; the SPA's `since` will then point past the
-			// bytes actually delivered. Rare in practice — io.ReadAll
-			// from a local file fails only on OS errors — but worth
-			// flagging if anyone hits the truncation symptom.
-			return
-		}
-		w.Write([]byte(sanitize.CleanPTYOutput(string(raw)))) //nolint:errcheck
-	} else {
-		io.CopyN(w, f, bytesToRead) //nolint:errcheck
-	}
+	return data, uint64(fileSize), source, nil
 }
 
 // --- Get Links ---
@@ -1486,6 +1576,11 @@ type resizeReq struct {
 	// submit over bytes the client sent). Absent means false.
 	ScrolledUp    bool `json:"scrolled_up,omitempty"`
 	ComposerDirty bool `json:"composer_dirty,omitempty"`
+	// A remote TUI can request an evaluation for a specific PTY. Its history
+	// width and cache bypass are meaningful only for that process.
+	ExpectedPID   int    `json:"expected_pid,omitempty"`
+	CommittedCols uint16 `json:"committed_cols,omitempty"`
+	RerenderNow   bool   `json:"rerender_now,omitempty"`
 }
 
 // kickClientState carries the keep-place signals a client reported with a
@@ -1493,6 +1588,16 @@ type resizeReq struct {
 type kickClientState struct {
 	ScrolledUp    bool
 	ComposerDirty bool
+	ExpectedPID   int
+	CommittedCols uint16
+	RerenderNow   bool
+}
+
+func (cs kickClientState) deferReason(reason string) string {
+	if cs.ExpectedPID > 0 {
+		return reason
+	}
+	return ""
 }
 
 // kickDeferClock records when kicks at one width were first deferred.
@@ -1523,7 +1628,20 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "cols/rows out of range", nil)
 		return
 	}
-	if err := sess.Resize(req.Rows, req.Cols); err != nil {
+	if req.ExpectedPID < 0 || req.ExpectedPID > 1<<31-1 || req.CommittedCols > 1000 ||
+		(req.ExpectedPID == 0 && (req.CommittedCols != 0 || req.RerenderNow)) {
+		writeErr(w, http.StatusBadRequest, "rerender requires a positive expected_pid and committed_cols in range", nil)
+		return
+	}
+	if err := agent.ResizeSessionForPID(sess, req.Rows, req.Cols, req.ExpectedPID); err != nil {
+		if req.ExpectedPID != 0 && errors.Is(err, agent.ErrSessionNotFound) {
+			writeJSON(w, http.StatusOK, resizeResponse{Deferred: "stale_session"})
+			return
+		}
+		if req.ExpectedPID != 0 && errors.Is(err, agent.ErrSessionCoordinationUnsupported) {
+			writeJSON(w, http.StatusOK, resizeResponse{Deferred: "owner_unsupported"})
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "", err)
 		return
 	}
@@ -1535,14 +1653,18 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
 	// The kick stops the session; the runner's exit goroutine restarts it
 	// at the new dimensions via --session-id so the agent re-emits the
 	// entire conversation. Best-effort: never let this fail the resize.
-	rerendered, deferred := s.evalKickRerender(id, req.Rows, req.Cols, kickClientState{ScrolledUp: req.ScrolledUp, ComposerDirty: req.ComposerDirty})
+	rerendered, deferred := s.evalKickRerender(id, req.Rows, req.Cols, kickClientState{
+		ScrolledUp: req.ScrolledUp, ComposerDirty: req.ComposerDirty,
+		ExpectedPID: req.ExpectedPID, CommittedCols: req.CommittedCols, RerenderNow: req.RerenderNow,
+	})
+	writeJSON(w, http.StatusOK, resizeResponse{Cols: int(req.Cols), Rows: int(req.Rows), Rerendered: rerendered, Deferred: deferred})
+}
 
-	writeJSON(w, http.StatusOK, struct {
-		Cols       int    `json:"cols"`
-		Rows       int    `json:"rows"`
-		Rerendered bool   `json:"rerendered"`
-		Deferred   string `json:"deferred"`
-	}{Cols: int(req.Cols), Rows: int(req.Rows), Rerendered: rerendered, Deferred: deferred})
+type resizeResponse struct {
+	Cols       int    `json:"cols"`
+	Rows       int    `json:"rows"`
+	Rerendered bool   `json:"rerendered"`
+	Deferred   string `json:"deferred"`
 }
 
 // isRedundantResize caches the latest cols for taskID and reports
@@ -1591,18 +1713,19 @@ func (s *Server) maybeKickRerender(taskID string, rows, cols uint16) bool {
 // so the client knows it owes a same-size retry; it is empty otherwise.
 func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClientState) (kicked bool, deferred string) {
 	sess := s.runner.Get(taskID)
-	if sess == nil || !sess.Alive() {
-		return false, ""
-	}
 	if s.runner.HasPendingRestart(taskID) {
-		return false, ""
+		return false, cs.deferReason("restarting")
+	}
+	if sess == nil || !sess.Alive() || (cs.ExpectedPID != 0 && sess.PID() != cs.ExpectedPID) {
+		return false, cs.deferReason("stale_session")
 	}
 	// Skip when cols matches the most recent resize for this task. xterm.js
 	// fires /resize on every terminal mount — without this gate, reopening
 	// the web agent view kills any in-flight Claude UI (e.g. AskUserQuestion
 	// overlays) that doesn't survive the --session-id restart. Genuine
 	// resizes fall through because cols differs from the cached value.
-	if s.isRedundantResize(taskID, cols) {
+	committedDrift := cs.CommittedCols > 0 && agent.MarginExceedsRerenderThreshold(int(cs.CommittedCols), int(cols))
+	if s.isRedundantResize(taskID, cols) && !cs.RerenderNow && !committedDrift {
 		return false, ""
 	}
 	// Margin gate before the DB read — eliminates a SQLite hit on every
@@ -1610,8 +1733,24 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 	// gate above is cheaper still (mutex-protected map op) and short-
 	// circuits before this gate even reads InitialPTYSize.
 	initCols, _ := sess.InitialPTYSize()
-	if !agent.MarginExceedsRerenderThreshold(initCols, int(cols)) {
+	if !agent.MarginExceedsRerenderThreshold(initCols, int(cols)) && !committedDrift {
 		return false, ""
+	}
+	unlockSession, acquired, err := s.db.TryLockSessionLaunch(taskID)
+	if err != nil || !acquired {
+		uxlog.Log("[rerender] session operation lock unavailable task=%s err=%v", taskID, err)
+		s.invalidateColsCache(taskID)
+		return false, cs.deferReason("restarting")
+	}
+	defer unlockSession()
+	if cs.ExpectedPID > 0 {
+		// Repeat the process check under the lock after the cheap gates.
+		var reason string
+		sess, reason = s.rerenderTarget(taskID, cs.ExpectedPID)
+		if reason != "" {
+			s.invalidateColsCache(taskID)
+			return false, reason
+		}
 	}
 	// A pending graduate's restart belongs to the daemon graduation watcher
 	// (stray-job stop first, one restart). A width kick here would race it, so
@@ -1620,7 +1759,7 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 	if pending, perr := s.db.GraduationPendingErr(taskID); perr != nil || pending {
 		uxlog.Log("[resident] kick skipped: graduation pending task=%s (err=%v)", taskID, perr)
 		s.invalidateColsCache(taskID)
-		return false, ""
+		return false, cs.deferReason("graduation")
 	}
 	// Now the expensive lookups. Re-check IsIdle here so the idle gate
 	// reflects state at-the-moment-of-stop, not earlier.
@@ -1628,7 +1767,7 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 		// Agent is mid-tool-call — invalidate so the next same-cols
 		// /resize re-evaluates when the agent goes idle.
 		s.invalidateColsCache(taskID)
-		return false, ""
+		return false, cs.deferReason("busy")
 	}
 	if agent.BlockedOnPrompt(sess) {
 		// Agent is idle because it's blocked on a user prompt (AskUserQuestion
@@ -1636,12 +1775,13 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 		// and silently dismiss the prompt the user is about to answer.
 		// Invalidate so a later resize re-evaluates once the agent moves on.
 		s.invalidateColsCache(taskID)
-		return false, ""
+		return false, cs.deferReason("prompt")
 	}
 	// Keep-place gates (kick-timing-keep-place): same order as the TUI's
 	// decision — an unsent draft outranks scroll position. With the setting off
 	// every client signal is ignored and no screen is read.
-	if s.db.Config().UI.RerenderKeepPlace {
+	cfg := s.db.Config()
+	if cfg.UI.RerenderKeepPlace {
 		if hold, reason := s.keepPlaceHold(taskID, sess, cols, cs); hold {
 			s.invalidateColsCache(taskID)
 			return false, reason
@@ -1654,31 +1794,46 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 		// retries instead of permanently short-circuiting on a stale
 		// cached value.
 		s.invalidateColsCache(taskID)
-		return false, ""
+		return false, cs.deferReason("unavailable")
 	}
 	if task.SessionID == "" {
 		// Codex and other backends without --session-id can never be
 		// kicked — leave the cache populated so same-cols /resize
 		// permanently short-circuits (correct; no retry semantic).
-		return false, ""
+		return false, cs.deferReason("unsupported")
 	}
-	cfg := s.db.Config()
 	if available, err := agent.ResumableSessionAvailable(task, cfg); err != nil || !available {
 		uxlog.Log("[rerender] deferred task=%s session=%s: transcript unavailable err=%v", task.ID, task.SessionID, err)
 		//nolint:gosec // G706: slog encodes these as structured attributes, escaping control characters.
 		slog.Warn("[rerender] deferred: transcript unavailable", "task", task.ID, "session", task.SessionID, "error", err)
 		s.invalidateColsCache(taskID)
-		return false, ""
+		return false, cs.deferReason("transcript")
 	}
-	if err := agent.KickWidthRerender(s.runner, task, cfg, rows, cols); err != nil {
+	var kickErr error
+	if cs.ExpectedPID > 0 {
+		kickErr = agent.KickWidthRerenderForPID(s.runner, task, cfg, rows, cols, cs.ExpectedPID)
+	} else {
+		kickErr = agent.KickWidthRerender(s.runner, task, cfg, rows, cols)
+	}
+	if kickErr != nil {
 		// Don't fail the resize on a kick failure — runner.KickRerender's
 		// own slog line records the task; just note the failure here.
-		log.Printf("api: KickRerender failed: %v", err)
+		log.Printf("api: KickRerender failed: %v", kickErr)
 		// Kick attempt failed — invalidate so the next same-cols /resize
 		// retries (a transient daemon error shouldn't permanently break
 		// the gate).
 		s.invalidateColsCache(taskID)
-		return false, ""
+		switch {
+		case errors.Is(kickErr, agent.ErrSessionNotFound):
+			return false, cs.deferReason("stale_session")
+		case errors.Is(kickErr, agent.ErrSessionStarting):
+			return false, cs.deferReason("restarting")
+		case errors.Is(kickErr, agent.ErrResumeUnavailable):
+			return false, cs.deferReason("transcript")
+		case errors.Is(kickErr, agent.ErrSessionCoordinationUnsupported):
+			return false, cs.deferReason("owner_unsupported")
+		}
+		return false, cs.deferReason("unavailable")
 	}
 	// runner.KickRerender already logs via slog with task=, cols=, rows=.
 	if err := s.db.SetStatus(taskID, model.StatusInProgress); err != nil {
@@ -1689,12 +1844,51 @@ func (s *Server) evalKickRerender(taskID string, rows, cols uint16, cs kickClien
 	return true, ""
 }
 
+// rerenderTarget checks the PTY owner instead of a cached proxy handle. A
+// draining stream can outlive the process that originally supplied its PID.
+func (s *Server) rerenderTarget(taskID string, expectedPID int) (agent.SessionHandle, string) {
+	sess, err := agent.AttachableSession(s.runner, taskID)
+	switch {
+	case errors.Is(err, agent.ErrSessionStarting):
+		return nil, "restarting"
+	case errors.Is(err, agent.ErrSessionCoordinationUnsupported):
+		return nil, "owner_unsupported"
+	case err != nil:
+		uxlog.Log("[rerender] session owner check failed task=%s err=%v", taskID, err)
+		return nil, "unavailable"
+	case sess == nil || sess.PID() != expectedPID:
+		return nil, "stale_session"
+	default:
+		return sess, ""
+	}
+}
+
 // --- Stream Output (SSE) ---
 
 func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	sess := s.runner.Get(id)
+	var sess agent.SessionHandle
+	var pid int
+	if expected := r.URL.Query().Get("expected_pid"); expected != "" {
+		var err error
+		pid, err = strconv.Atoi(expected)
+		if err != nil || pid <= 0 || pid > 1<<31-1 {
+			writeErr(w, http.StatusBadRequest, "expected_pid must be a positive process ID", nil)
+			return
+		}
+		sess, err = terminalSnapshotSession(s.runner, id)
+		if err != nil || sess == nil || sess.PID() != pid {
+			writeCodedErrCause(w, http.StatusConflict, "session changed before stream attachment", "stale_session", nil)
+			return
+		}
+	} else {
+		if s.runner.HasPendingRestart(id) {
+			writeCodedErrCause(w, http.StatusConflict, "session has not published a process", "stale_session", nil)
+			return
+		}
+		sess = s.runner.Get(id)
+	}
 	if sess == nil {
 		writeErr(w, http.StatusNotFound, "no active session", nil)
 		return
@@ -1723,18 +1917,39 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if pid == 0 {
+		pid = sess.PID()
+	}
+	if pid <= 0 {
+		writeCodedErrCause(w, http.StatusConflict, "session has not published a process", "stale_session", nil)
+		return
+	}
+	cols, rows := sess.InitialPTYSize()
+	sessDone := sess.Done()
+	// Buffer the ring replay and bind the writer to the same process as the
+	// headers, including across a managed supervisor restart.
+	cw := &channelWriter{ch: make(chan []byte, 128)}
+	if scoped, ok := sess.(interface {
+		AddWriterFromPID(io.Writer, uint64, int) bool
+		ProcessDone(int) <-chan struct{}
+	}); ok && pid > 0 {
+		if !scoped.AddWriterFromPID(cw, since, pid) {
+			writeCodedErrCause(w, http.StatusConflict, "session changed while attaching", "stale_session", nil)
+			return
+		}
+		sessDone = scoped.ProcessDone(pid)
+	} else {
+		sess.AddWriterFrom(cw, since)
+	}
+	defer sess.RemoveWriter(cw)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Argus-Session-Pid", strconv.Itoa(pid))
+	w.Header().Set("X-Argus-Session-Initial-Cols", strconv.Itoa(cols))
+	w.Header().Set("X-Argus-Session-Initial-Rows", strconv.Itoa(rows))
 	flusher.Flush()
-
-	// Use a channelWriter so AddWriterFrom's synchronous ring buffer replay
-	// doesn't block readLoop. The channel is large enough to hold the full
-	// 256KB ring buffer replay (256KB / 4KB chunks = 64 items), and Write
-	// drops on full to keep the lock-held replay non-blocking.
-	cw := &channelWriter{ch: make(chan []byte, 128)}
-	sess.AddWriterFrom(cw, since)
-	defer sess.RemoveWriter(cw)
 
 	// Subscribe to agent-staged clipboard updates for this task. Any change
 	// (set or clear) queues a `clipboard` SSE event. The subscriber callback
@@ -1763,13 +1978,6 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 
 	keepalive := time.NewTicker(30 * time.Second)
 	defer keepalive.Stop()
-
-	// sess.Done() closes when the session's process exits. Without observing
-	// it explicitly, `event: exit` would never fire for the SPA — cw.ch is
-	// fed only by readLoop's Write calls, and is never closed when the session
-	// dies. The SPA's reconnect-on-rerender path keys off `event: exit`, so
-	// missing this signal makes the rerender recovery unobservable.
-	sessDone := sess.Done()
 
 	for {
 		select {
@@ -1809,7 +2017,7 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 			// SSE delivery. Daemon already evaluated HasPendingRestart
 			// for its own skip-transition decision; surface it here too.
 			exitPayload := `{"rerendering":false}`
-			if s.runner.HasPendingRestart(id) {
+			if terminalStreamHasSuccessor(s.runner, id, pid) {
 				exitPayload = `{"rerendering":true}`
 			}
 			fmt.Fprintf(w, "event: exit\ndata: %s\n\n", exitPayload) //nolint:errcheck
@@ -1819,6 +2027,18 @@ func (s *Server) handleStreamOutput(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func terminalStreamHasSuccessor(runner agent.SessionProvider, id string, pid int) bool {
+	if runner.HasPendingRestart(id) {
+		return true
+	}
+	current := runner.Get(id)
+	if current == nil || !current.Alive() {
+		return false
+	}
+	currentPID := current.PID()
+	return currentPID > 0 && currentPID != pid
 }
 
 // clipEvent bundles the text and presence flag for a clipboard SSE update so
@@ -1871,6 +2091,8 @@ type projectJSON struct {
 	// Profile is a pointer so a request can tell omitted (preserve) from ""
 	// (clear); responses always carry it.
 	Profile *string `json:"profile,omitempty"`
+	// NewName renames the project on PUT; empty or equal to the path name is a plain update.
+	NewName string `json:"new_name,omitempty"`
 }
 
 // projectSandboxOverride is a JSON-friendly view of config.ProjectSandboxConfig.
@@ -2044,6 +2266,31 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.beforeProjectSave != nil {
 		s.beforeProjectSave()
+	}
+	if newName := strings.TrimSpace(req.NewName); newName != "" && newName != name {
+		err := s.db.RenameProject(name, newName)
+		switch {
+		case errors.Is(err, db.ErrInvalidProjectName):
+			writeErr(w, http.StatusBadRequest, err.Error(), nil)
+			return
+		case errors.Is(err, db.ErrProjectConfigDefined):
+			writeErr(w, http.StatusConflict, "project is defined in config.toml", nil)
+			return
+		case errors.Is(err, db.ErrProjectNotFound):
+			writeErr(w, http.StatusNotFound, "project not found", nil)
+			return
+		case errors.Is(err, db.ErrProjectExists):
+			writeErr(w, http.StatusConflict, "project already exists", nil)
+			return
+		case err != nil:
+			uxlog.Log("[project] rename %q -> %q failed: %v", name, newName, err)
+			writeErr(w, http.StatusInternalServerError, "", err)
+			return
+		}
+		events.Emit(model.EventTypeConfigChanged, "", map[string]string{"resource": "projects", "name": name})
+		events.Emit(model.EventTypeConfigChanged, "", map[string]string{"resource": "projects", "name": newName})
+		uxlog.Log("[project] renamed %q -> %q", name, newName)
+		name = newName
 	}
 	stored, changed, err := s.db.SaveProject(name, projectFromJSON(req), db.ProjectSaveOptions{PreserveProfile: req.Profile == nil, RequireExisting: true})
 	if errors.Is(err, db.ErrProjectNotFound) {

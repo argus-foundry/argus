@@ -14,25 +14,31 @@ const RailCaret = '›'
 // Color constants for the 256-color palette theme.
 
 var (
-	ColorTitle      = tcell.Color87                    // cyan — titles, focused borders
-	ColorStatusBG   = tcell.Color235                   // dark gray — status bar background
-	ColorStatusFG   = tcell.Color245                   // medium gray — status bar text
-	ColorSelected   = tcell.Color212                   // pink — selected/cursor row
-	ColorNormal     = tcell.Color252                   // light gray — default text
-	ColorDimmed     = tcell.Color240                   // dim gray — secondary text
-	ColorPending    = tcell.Color245                   // gray — pending status
-	ColorInProgress = tcell.Color214                   // orange — in-progress status
-	ColorInReview   = tcell.Color81                    // blue — in-review status
-	ColorComplete   = tcell.Color78                    // green — complete status
-	ColorProject    = tcell.Color87                    // cyan — project names
-	ColorElapsed    = tcell.Color243                   // gray — elapsed times
-	ColorBorder     = tcell.Color238                   // dark gray — unfocused borders
-	ColorError      = tcell.Color203                   // red — errors
-	ColorKeyHint    = tcell.Color87                    // cyan — keybinding hints
-	ColorKeyLabel   = tcell.Color240                   // dim — keybinding labels
-	ColorHighlight  = tcell.Color236                   // slightly lighter dark gray — cursor/selection highlight
-	ColorFilter     = tcell.Color201                   // magenta — active filter query
-	ColorNeedsInput = tcell.NewRGBColor(250, 163, 120) // #faa378 light orange — agent blocked on user prompt
+	// Board badges match the Decide page's dark palette.
+	ColorBoardDecision = tcell.NewRGBColor(147, 165, 255)
+	ColorBoardFYI      = tcell.NewRGBColor(103, 232, 249)
+	ColorBoardAction   = tcell.NewRGBColor(240, 168, 104)
+	ColorBoardTodo     = tcell.NewRGBColor(154, 165, 184)
+	ColorBoardBadgeInk = tcell.NewRGBColor(16, 20, 27)
+	ColorTitle         = tcell.Color87                    // cyan — titles, focused borders
+	ColorStatusBG      = tcell.Color235                   // dark gray — status bar background
+	ColorStatusFG      = tcell.Color245                   // medium gray — status bar text
+	ColorSelected      = tcell.Color212                   // pink — selected/cursor row
+	ColorNormal        = tcell.Color252                   // light gray — default text
+	ColorDimmed        = tcell.Color240                   // dim gray — secondary text
+	ColorPending       = tcell.Color245                   // gray — pending status
+	ColorInProgress    = tcell.Color214                   // orange — in-progress status
+	ColorInReview      = tcell.Color81                    // blue — in-review status
+	ColorComplete      = tcell.Color78                    // green — complete status
+	ColorProject       = tcell.Color87                    // cyan — project names
+	ColorElapsed       = tcell.Color243                   // gray — elapsed times
+	ColorBorder        = tcell.Color238                   // dark gray — unfocused borders
+	ColorError         = tcell.Color203                   // red — errors
+	ColorKeyHint       = tcell.Color87                    // cyan — keybinding hints
+	ColorKeyLabel      = tcell.Color240                   // dim — keybinding labels
+	ColorHighlight     = tcell.Color236                   // slightly lighter dark gray — cursor/selection highlight
+	ColorFilter        = tcell.Color201                   // magenta — active filter query
+	ColorNeedsInput    = tcell.NewRGBColor(250, 163, 120) // #faa378 light orange — agent blocked on user prompt
 
 	// Worker/freelance context-pressure indicator colors (add-worker-context-
 	// indicator). A three-stage temperature ramp distinct from ColorNeedsInput

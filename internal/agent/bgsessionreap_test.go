@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/argus-foundry/argus/internal/claudeagents"
@@ -248,6 +249,41 @@ func TestRunner_Stop_TriggersReap(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("reap goroutine never ran")
 	}
+}
+
+func TestRunner_StopTreeForPIDSkipsWorktreeCleanup(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var claudeLists, browserScans int
+	stubBackgroundSessions(t,
+		func(context.Context, string, string) ([]claudeagents.Session, error) {
+			claudeLists++
+			return nil, nil
+		},
+		func(context.Context, string, string) error { return nil },
+	)
+	original := cleanupSessionBrowsers
+	cleanupSessionBrowsers = func(string) { browserScans++ }
+	t.Cleanup(func() { cleanupSessionBrowsers = original })
+
+	runner := NewRunner(nil)
+	cfg := runnerTestConfig()
+	cfg.Backends["test"] = config.Backend{Command: "cat"}
+	task := &model.Task{ID: "scoped-stop", Worktree: t.TempDir()}
+	sess, err := runner.Start(task, cfg, 24, 80, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Stop(); <-sess.Done() })
+
+	synctest.Test(t, func(t *testing.T) {
+		testutil.NoError(t, runner.StopTreeForPID(task.ID, sess.PID()))
+		synctest.Wait()
+		testutil.Equal(t, claudeLists, 0)
+		testutil.Equal(t, browserScans, 0)
+		// Advance the virtual clock so the full-tree stop's escalation can finish.
+		time.Sleep(time.Duration(stopKillAfter.Load()))
+		synctest.Wait()
+	})
 }
 
 func claudeResumeConfig(command string) config.Config {

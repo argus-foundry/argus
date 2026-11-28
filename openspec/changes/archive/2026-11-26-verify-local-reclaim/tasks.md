@@ -1,0 +1,3 @@
+- [x] Verify local worktree and branch removal before settlement.
+- [x] Cover a branch that Git refuses to delete.
+- [x] Verify and archive the change.

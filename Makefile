@@ -85,16 +85,24 @@ lint-pr:
 	@git fetch origin master >/dev/null 2>&1 || true
 	golangci-lint run --new-from-rev=origin/master ./...
 
-# -timeout 300s bounds a hung suite while the machine is AWAKE. It is a weak
+# Keep TEST_TIMEOUT in sync with the Test step in .github/workflows/ci.yml.
+# CI on 2026-11-19: api/tui exceeded 600s; db passed at 571s. A 20m
+# per-package guard leaves headroom for race+coverage on shared hosts.
+TEST_TIMEOUT ?= 20m
+
+# Skip race/checkptr instrumentation in the machine-translated SQLite C core
+# only. The Go driver (modernc.org/sqlite), database/sql and all argus code stay
+# instrumented. Keep in sync with the Test step in .github/workflows/ci.yml.
+RACE_FLAGS ?= -race -gcflags=modernc.org/sqlite/lib=-race=false -gcflags=modernc.org/libc/...=-race=false -gcflags=modernc.org/memory=-race=false
+
+# -timeout bounds a hung package while the machine is AWAKE. It is a weak
 # guard, not the real backstop: Go's test timeout uses the runtime-monotonic
 # clock, which macOS suspends during sleep, so an overnight-slept run never
 # accumulates the wall-clock minutes to trip it. The orphaned-test reaper
 # (script/reap-orphaned-tests.sh) is the sleep-proof backstop.
-# internal/tui takes ~188s with -race and coverage on a quiet host and ~201s
-# when loaded (2026-10-25), outgrowing the old 200s guard (~123s when chosen).
-# 300s leaves shared-host headroom; this is a hang guard, not a speed budget.
+# This is a hang guard, not a speed budget.
 test:
-	go test -race -count=1 -timeout 300s ./...
+	go test $(RACE_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./...
 
 workspace-test:
 	npm test --prefix web-workspace
@@ -104,7 +112,7 @@ test-watch:
 	gotestsum --watch ./...
 
 test-cover:
-	go test -race -count=1 -timeout 300s -coverprofile=coverage.out ./...
+	go test $(RACE_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) -coverprofile=coverage.out ./...
 	@echo "--- raw ---"
 	@go tool cover -func=coverage.out | tail -1
 	@echo "--- filtered (per coverage-ignore.txt) ---"
@@ -113,7 +121,7 @@ test-cover:
 # CI gate. Fails if filtered coverage drops below the current floor.
 # Ratchets up over time toward the 95% target.
 test-cover-gate:
-	go test -race -count=1 -timeout 300s -coverprofile=coverage.out ./...
+	go test $(RACE_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) -coverprofile=coverage.out ./...
 	go run ./scripts/coverfilter -in coverage.out -out coverage.filtered.out -min 88
 
 # Hermeticity guard: run the cases that used to false-fail inside an
@@ -129,7 +137,7 @@ test-contaminated:
 
 test-pkg:
 	@test -n "$(PKG)" || { echo "Usage: make test-pkg PKG=./internal/db/"; exit 1; }
-	go test -race -count=1 -timeout 300s -v $(PKG)
+	go test $(RACE_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) -v $(PKG)
 
 # Black-box smoke test the plugin substrate against the locally running
 # daemon. Mints nothing — see cmd/argus-plugin-smoke for the one-time setup

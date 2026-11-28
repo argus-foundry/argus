@@ -1,0 +1,5 @@
+- [x] Use actual live checkout identity for task ownership.
+- [x] Verify saved Git common-directory and origin identity before cleanup.
+- [x] Verify and archive the changes.
+- [x] Refuse merge evidence from a remapped project.
+- [x] Bound lease capture and lease the classified stack tip.

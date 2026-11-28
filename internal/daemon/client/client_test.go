@@ -335,11 +335,12 @@ func TestStreamLost_RemoveSession(t *testing.T) {
 
 	// Manually add a session to the map.
 	c.mu.Lock()
-	c.sessions["t-stream-lost"] = newRemoteSession("t-stream-lost", c)
+	rs := newRemoteSession("t-stream-lost", c)
+	c.sessions["t-stream-lost"] = rs
 	c.mu.Unlock()
 
 	// Call removeSessionStreamLost — should fire StreamLost=true.
-	c.removeSessionStreamLost("t-stream-lost")
+	c.removeSessionStreamLost(rs)
 
 	select {
 	case info := <-exitCh:
@@ -391,7 +392,7 @@ func TestDoneClose_StreamLost(t *testing.T) {
 
 	// removeSessionStreamLost should fire with StreamLost=true.
 	// This is what connectStream's <-rs.done case now calls.
-	c.removeSessionStreamLost("t-done-close")
+	c.removeSessionStreamLost(rs)
 
 	select {
 	case info := <-exitCh:
@@ -759,6 +760,20 @@ func TestC_StartErr(t *testing.T) {
 	task := &model.Task{ID: "t-start-err", Name: "x", Backend: "no-such", Worktree: t.TempDir()}
 	_, err = c.Start(task, config.Config{}, 24, 80, false)
 	testutil.Error(t, err)
+}
+
+func TestC_StopMissing(t *testing.T) {
+	_, sockPath, _ := testSetup(t)
+	c, err := Connect(sockPath)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	testutil.ErrorIs(t, c.Stop("missing"), agent.ErrSessionNotFound)
+}
+
+func TestC_StopSettled(t *testing.T) {
+	c, rs := startedClient(t, "settled", "sleep 60")
+	testutil.NoError(t, c.StopSettled(rs.taskID))
+	testutil.ErrorIs(t, c.StopSettled("missing"), agent.ErrSessionNotFound)
 }
 
 // TestC_StartRPCErr covers Start's RPC-failure branch. A closed transport is

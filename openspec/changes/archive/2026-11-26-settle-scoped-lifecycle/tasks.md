@@ -1,0 +1,4 @@
+- [x] Retain process identity during stream attachment and retry transient macOS snapshot conflicts.
+- [x] Preflight live backend moves before writing a handoff.
+- [x] Safely retry durable Hera reclaim stops interrupted before delivery.
+- [x] Exercise the recovery paths, update the base spec, and archive the change.

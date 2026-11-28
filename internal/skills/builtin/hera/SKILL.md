@@ -14,13 +14,17 @@ description: >-
 
 # Hera — native multi-agent coordination inside argus
 
-Coordinators: put human decisions and attention on your board with `hera_board_post`; rewrite superseded items with `hera_board_update`, and resolve them with `hera_board_resolve` when settled, including after Aaron replies and follow-up concludes. A worker message saying Aaron ran `/hera-remind-me` is a request to put the enclosed item on your board: post it, or merge it into an existing item that covers the same follow-up. Format every body for scanning: open with one short sentence naming the ask or outcome, then a blank line, then one fact or option per `- **Label:** detail` bullet (indent two spaces for `  - ` sub-bullets; `1. ` for ordered steps). For decisions with distinct options, post 2–4 structured `options` (`id`, `label`, `summary`, `upside`, `downside`), always with `recommended` and `reason`; keep `body` to the situation. Tell Aaron to press `o` on the board to answer a round. Omit `options` on updates to preserve them; `options: []` clears them. A “Something else” answer requires a note, which is the answer. After submission, one `Aaron (board)` summary lists the already-resolved answers plus still-open ids: act on the answers and follow up on the open items. Long summary notes point to the full `resolution_note` returned by `hera_board_list(include_resolved=true)`. Put each link or PR URL on its own bullet. Never write a wall of prose.
+Coordinators: put human decisions and attention on your board with `hera_board_post`; rewrite superseded items with `hera_board_update`, and resolve them with `hera_board_resolve` when settled, including after Aaron replies and follow-up concludes. A worker message saying Aaron ran `/hera-remind-me` is a request to put the enclosed item on your board: post it, or merge it into an existing item that covers the same follow-up. Format every body for scanning: open with one short sentence naming the ask or outcome, then a blank line, then one fact or option per `- **Label:** detail` bullet (indent two spaces for `  - ` sub-bullets; `1. ` for ordered steps). For decisions with distinct options, post 2–4 structured `options` (`id`, `label`, `summary`, `upside`, `downside`), always with `recommended` and `reason`; keep `body` to the situation. Tell Aaron to press `o` on the board to answer a round. Omit `options` on updates to preserve them; `options: []` clears them. A “Something else” answer requires a note, which is the answer. After submission, one `Aaron (board)` summary lists the already-resolved answers plus still-open ids: act on the answers and follow up on the open items. Long summary notes point to the full `resolution_note` returned by `hera_board_list(include_resolved=true)`. FYI feedback distinguishes comment-only (still open) from comment-and-dismiss (already resolved); a plain dismissal is silent. Truncated FYI comments point to a full durable receipt at authenticated `GET /api/hera/roles/{role_id}/board/fyi-actions/{action_id}` through the authenticated API proxy (master/device only, never the page session). Put each link or PR URL on its own bullet. Never write a wall of prose.
 
 Hera is argus's **native, in-tree** layer for running a *team* of agents. It is not a separate
 daemon or plugin — coordination runs in-process in the argus daemon, the rail/tree render directly
 in the TUI's second tab, and agents drive it entirely through the `mcp__argus__hera_*` MCP
 tools. State lives in the same `~/.argus/data.sql` (the `hera_*` tables). You never touch the
 plumbing; you call the tools.
+
+Use `decision` for a human choice, `fyi` for information only, `action` for a step only Aaron can perform, and board `todo` for future team work Aaron does nothing about now. On action posts explicitly set `blocking: true` when work is stuck until he acts, or `blocking: false` for a later step. Supply an exact copyable `command` (shell command or UI step) if known; the board never executes it. Action/todo `trigger` is optional plain text; on post it defaults to `trigger_pending: true`. Verify the condition and explicitly set `trigger_pending: false` when ready. Pending items and all board todos stay visible without human-attention badges or jumps. Blocking actions sort first. Human `deferred_at` hides any item and suppresses attention; updates preserve that flag and only Aaron can restore it. Omitted update metadata is preserved; changing kind clears incompatible fields. Actions resolve with `outcome: "done"`; board todos resolve with `"done"` or `"dropped"`, with optional `note` (omitting outcome defaults to done). Both create durable completion notices. Settle or explicitly transfer open actions/todos before normal sub-coordinator archive. Board `todo` is separate from Things 3 `internal/todo` and `todo_*` tools: do not sync with that backend. Historical reclassification, Things sync and native macOS board parity are follow-ups.
+
+Board feedback includes COMMENT and DELETION annotations with quoted text and comments: address every annotation. DELETION is a suggestion, never an applied board edit; comment-only decisions remain open. Retrieve full shortened feedback at authenticated `GET /api/hera/roles/{role_id}/board/fyi-actions/{action_id}` through the API proxy (master/device only, never a page session). This receipt route includes decision responses as well as FYIs and action/todo completion receipts. Keep settled follow-up reflected on the board.
 
 ## 1. When this applies (and when it does NOT)
 
@@ -195,7 +199,7 @@ Live Claude bridges with `bridge.delivery` enabled deliver doorbells as plugin-f
   roles so they leave the live views. Two normal paths, both fail-closed (anything unconfirmed is refused
   with a reason):
   - **merged (done-done):** task `complete`, role not blocked, no not-yet-done plan node depends on it,
-    a sub-coordinator has all child roles archived and no open `decision` board items (open `fyi` items
+    a sub-coordinator has all child roles archived and no open `decision`, `action` or `todo` board items (open `fyi` items
     are pushed to your board), nothing the role sent is still unread, and its git work is confirmed
     landed with a clean worktree.
   - **handed off (no merge needed):** the role's PR is open (draft ok) and its CI is not failing, the
@@ -208,8 +212,15 @@ Live Claude bridges with `bridge.delivery` enabled deliver doorbells as plugin-f
   Unread mail TO the role no longer blocks: it is marked read and ONE digest (sender + first line each)
   lands in your inbox (full bodies via `hera_get_messages`). Stops an idle session (a busy one is
   refused); never deletes the worktree or branch. Omit `role_name` to sweep every role you coordinate;
-  `dry_run` only reports. Call it after `hera_accept` + the winding-down confirmation, as soon as a
-  worker's PR is open and green (handoff), and as a sweep before reporting the orchestration finished.
+  `dry_run` only reports. **When to call it** (refusals are normal; the sweep re-checks everything):
+  - **A worker reports done** and its PR is merged, or open with CI not failing: `hera_accept`, confirm
+    it is winding down, then `hera_archive(role_name=...)` in the same turn.
+  - **Every status check or wake** (`hera_status`, `hera_inbox`, handling a doorbell): sweep with
+    `hera_archive(dry_run=true)` and archive whatever passes.
+  - **Before going idle, and before reporting the orchestration finished:** sweep with `hera_archive`.
+  The daemon also watches for you: when roles become archivable it sends one batched `[argus] N roles
+  ready to archive: ...` notice (sender `argus`). Treat it as a wake and run the sweep; the daemon
+  never archives on its own.
   **Escape hatch:** `force=true` with a non-empty `reason` (single named role only, never a sweep)
   overrides the done/handoff/mail/dependent checks and records the reason durably (role history and the
   inbox viewer). Coordinators, pinned roles, resident roles, standing-team members and tasks bound to

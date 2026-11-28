@@ -620,28 +620,25 @@ func TestProjectForm_Tab_LoadsBranchesEvenWithCallback(t *testing.T) {
 	testutil.Equal(t, loaded, true)
 }
 
-// --- ProjectForm: backtab from name in edit mode wraps to the last field ---
+// --- ProjectForm: backtab from path in edit mode reaches the editable name ---
 
 func TestProjectForm_BacktabEditModeFromPath(t *testing.T) {
 	pf := NewProjectForm()
 	pf.LoadProject("test", config.Project{Path: "/p"})
-	// Edit mode focused starts at path. Backtab → name (skipped) → profile (the
-	// last field; add-diligence-profiles).
 	pf.HandleKey(tcell.NewEventKey(tcell.KeyBacktab, 0, 0))
-	testutil.Equal(t, pf.focused, pfFieldProfile)
+	testutil.Equal(t, pf.focused, pfFieldName)
 }
 
-// --- ProjectForm: editing name field is read-only in edit mode ---
+// --- ProjectForm: name field is editable in edit mode ---
 
-func TestProjectForm_EditModeNameReadOnly(t *testing.T) {
+func TestProjectForm_EditModeNameEditable(t *testing.T) {
 	pf := NewProjectForm()
 	pf.LoadProject("locked", config.Project{Path: "/p"})
-	// Force focus on name.
 	pf.focused = pfFieldName
 	pf.HandleKey(tcell.NewEventKey(tcell.KeyBackspace2, 0, 0))
-	testutil.Equal(t, string(pf.fields[pfFieldName]), "locked")
+	testutil.Equal(t, string(pf.fields[pfFieldName]), "locke")
 	pf.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'X', 0))
-	testutil.Equal(t, string(pf.fields[pfFieldName]), "locked")
+	testutil.Equal(t, string(pf.fields[pfFieldName]), "lockeX")
 }
 
 // --- ScheduleForm: edit-mode without ID match in projects ---

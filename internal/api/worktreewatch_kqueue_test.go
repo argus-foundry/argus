@@ -141,7 +141,10 @@ func TestWtDescriptorCycles(t *testing.T) {
 	testutil.NoError(t, exec.Command("/usr/bin/true").Run())
 	before := wtFDCount(128)
 	t.Logf("mode=%s process budget=%d fds before=%d", mode, h.budget.limit, before)
-	for i := range 30 {
+	// before/after fd equality and budget.used==0 catch a leak of even one
+	// descriptor per cycle, so a few cycles prove it; more only cost time.
+	const cycles = 8
+	for i := range cycles {
 		id := fmt.Sprint("cycle", i)
 		e := h.register(id, repo, gitutil.Options{})
 		<-e.watchReady
@@ -161,7 +164,7 @@ func TestWtDescriptorCycles(t *testing.T) {
 		runtime.Gosched()
 		after = wtFDCount(128)
 	}
-	t.Logf("mode=%s 30 cycles fds before=%d after=%d budget.used=%d", mode, before, after, wtBudgetUsed(t, h.budget))
+	t.Logf("mode=%s %d cycles fds before=%d after=%d budget.used=%d", mode, cycles, before, after, wtBudgetUsed(t, h.budget))
 	testutil.Equal(t, after <= before, true)
 	testutil.Equal(t, wtBudgetUsed(t, h.budget), 0)
 }

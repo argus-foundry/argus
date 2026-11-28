@@ -1418,51 +1418,46 @@ On `/api/tasks/{id}/stream`, the `clipboard` event SHALL be `{"text":""}` for a 
 
 ### Requirement: Board decision launch link
 
-The REST API SHALL expose `POST /api/hera/roles/{role_id}/board/decision-link`, requiring a master or device token (a decision session SHALL NOT mint links), that returns `{"path":"/decide?role=<id>[&focus=<item_id>]","ticket":"<opaque>","expires_at":"<RFC3339>"}`. The optional JSON body `{"focus_item_id":N}` selects the focused card. The ticket SHALL be 256 bits of randomness, held only in daemon memory as a hash, bound to that role id, valid for 90 seconds, and usable once. The endpoint SHALL return 404 `board_item_not_found` for an unknown role and 400 `invalid_request` for a non-coordinator role. The ticket SHALL NOT be logged or persisted.
+POST /api/hera/roles/{role_id}/board/decision-link SHALL require a master or device token and return `{path:"/decide?role=<id>[&focus=<item_id>]",ticket,expires_at}`. An optional focus_item_id body SHALL select initial focus. The ticket SHALL be 256 random bits hashed only in daemon memory, valid 90 seconds and single-use. It SHALL mint the same rail-board session class as phone launch; the role ID SHALL specify preselection only. Unknown targets SHALL return 404 board_item_not_found; non-coordinators SHALL return 400 invalid_request; hidden/archived/nuked targets SHALL be refused without granting access. Empty boards SHALL be valid launch targets. Decision sessions SHALL not mint tickets. No ticket SHALL be logged or persisted.
 
-#### Scenario: Mint a link
+#### Scenario: TUI preselection
 
-- **WHEN** an authenticated client posts to the decision-link endpoint for a coordinator role
-- **THEN** it receives a relative path, a ticket and an expiry roughly 90 seconds ahead
+- **WHEN** a master/device client launches an empty visible coordinator role
+- **THEN** it receives a common-page ticket whose initial_role_id selects that coordinator while navigation may reach other visible coordinators
 
-#### Scenario: Non-coordinator role
+#### Scenario: Invalid target
 
-- **WHEN** the role is a worker or freelance role
-- **THEN** the response is 400 `invalid_request` and no ticket exists
-
-#### Scenario: Decision session cannot mint
-
-- **WHEN** a request authenticated by a decision session calls the decision-link endpoint
-- **THEN** the response is 403
+- **WHEN** the target is unknown, non-coordinator or not visible under rail rules
+- **THEN** launch is rejected with no ticket or unauthorized board access
 
 ### Requirement: Decision session exchange and auth class
 
-The REST API SHALL expose `POST /api/hera/board/decision-session` with body `{"ticket":"…"}`, served without bearer authentication because the ticket is the credential, returning `{"session":"<opaque>","role_id":N,"expires_at":"<RFC3339>"}`. An unknown, expired or already-used ticket SHALL return 401 and consume nothing. The session SHALL be 256 bits of randomness, held in daemon memory as a hash, bound to the ticket's role id, and valid for eight hours. A session presented as a bearer token SHALL authenticate the request as `X-Argus-Auth: decision:<role_id>` and SHALL be permitted only on `GET /api/hera/roles/{role_id}/board/decisions` and `POST /api/hera/roles/{role_id}/board/answers` with its own role id. Every other route, and those routes with a different role id, SHALL return 403. No existing handler that gates on `master`, `device` or `scope:*` SHALL admit a decision session. Daemon restart SHALL invalidate all tickets and sessions.
+POST /api/hera/board/decision-session SHALL accept one ticket body without bearer authentication because the ticket is the credential, returning `{session,initial_role_id,expires_at}`. An unknown/expired/used ticket SHALL return 401. Sessions SHALL have 256 random bits, be stored only as hashes in daemon memory and expire absolutely eight hours after exchange. Both TUI and phone launches SHALL use an explicit rail-board auth class permitting only GET /api/hera/board/decision-navigation and the per-role GET board/decisions, POST board/answers, GET board/decide-items and POST board/fyi-actions routes for currently rail-visible coordinators. The launch role SHALL be initial selection only. Middleware SHALL not trust client-supplied internal auth tags. Each request SHALL use canonical rail visibility checks excluding hidden, archived, nuked or non-coordinator targets, including parent visibility restrictions. All other routes, including broad roster/count discovery, launch minting, receipt-history reads and privileged handlers, SHALL return 403 for this session class. Master/device/scope gates SHALL not admit a rail-board session implicitly. Daemon restart SHALL invalidate tickets/sessions. An empty visible roster SHALL yield an empty page, not broader permissions.
 
-#### Scenario: Ticket is single-use
+#### Scenario: Ticket is single-use and short-lived
 
-- **WHEN** a ticket is exchanged once and then exchanged again
-- **THEN** the first returns a session and the second returns 401
-
-#### Scenario: Expired ticket
-
-- **WHEN** a ticket is exchanged more than 90 seconds after it was minted
+- **WHEN** a ticket is exchanged a second time or after 90 seconds
 - **THEN** the response is 401
 
-#### Scenario: Session is role-scoped
+#### Scenario: Shared TUI and phone scope
 
-- **WHEN** a session for role 12 requests the decisions or answers route for role 13, or any other API route
-- **THEN** the response is 403
+- **WHEN** a session launched on role 12 requests another currently rail-visible coordinator’s allowed board route
+- **THEN** the request is authorized; the same request for a hidden/archived/nuked role or worker returns 403
 
-#### Scenario: Session cannot reach privileged handlers
+#### Scenario: Visibility changes
 
-- **WHEN** a decision session calls an endpoint that accepts a scope token, such as MCP tool registration
-- **THEN** the response is 403 and nothing is registered
+- **WHEN** a coordinator is newly visible or becomes hidden during a session
+- **THEN** navigation refresh may include the new row and hidden-board requests fail immediately, regardless of stale client metadata
+
+#### Scenario: Privileged route rejected
+
+- **WHEN** a rail-board session requests link minting, aggregate counts, receipt history, general mutation or MCP tool registration
+- **THEN** it receives 403 with no side effects
 
 #### Scenario: Restart invalidates
 
-- **WHEN** the daemon restarts after a session was issued
-- **THEN** that session is rejected with 401
+- **WHEN** the daemon restarts
+- **THEN** prior sessions return 401 while durable receipts remain available after a new authorized launch
 
 ### Requirement: Board decisions read endpoint
 
@@ -1481,6 +1476,22 @@ The REST API SHALL expose `GET /api/hera/roles/{role_id}/board/decisions`, accep
 ### Requirement: Board answers endpoint
 
 The REST API SHALL expose `POST /api/hera/roles/{role_id}/board/answers`, accepting a master or device token for any coordinator role or a decision session for its own role, with body `{"answers":[{"item_id":N,"expected_updated_at":"<RFC3339>","choice":"<option id>|other","note":"<text>"}]}`. The body SHALL contain exactly one JSON value, at most 16 answers, notes of at most 4 KiB, a nonzero `expected_updated_at` per answer, and SHALL be consumed through EOF before any mutation. The endpoint SHALL return 200 with `{"results":[{"item_id":N,"outcome":"<outcome>","item":{…}}],"unread_count":N}` where each outcome is one of `resolved`, `conflict`, `already_resolved`, `not_found` or `invalid`, and `item` is the current item for `conflict` outcomes. A malformed body SHALL return 400 `invalid_request`. All `resolved` items and the single summary message described in `board-decision-page` SHALL commit in one transaction; non-`resolved` outcomes SHALL change nothing and SHALL NOT prevent other answers in the same request from resolving. A `hera.board_changed` event SHALL be emitted once per resolved item after commit.
+
+For currently rail-visible coordinators, rail-board sessions SHALL retain their existing authorization. The answer payload SHALL additionally accept action (answer/comment; omitted means answer), action_id and annotations. Every annotation SHALL carry a unique annotation_id, type (COMMENT or DELETION), source-field start/end paths and UTF-16 rendered-text offsets, selected-text hash and prefix/suffix context bounded to 64 Unicode code points per boundary, plus optional comment; the server SHALL derive and persist its quote from the expected revision. Annotation-bearing answers and all comments SHALL require a valid unique action ID under the existing FYI ID grammar. Comment SHALL require empty choice and at least a non-whitespace note or annotation; it SHALL return commented without resolving. Answers SHALL retain choice and required-note validation. COMMENT annotations SHALL require non-whitespace comment text at most 4096 UTF-8 bytes; DELETION SHALL allow an empty comment with the same maximum when supplied. At most 20 annotations of all types combined SHALL be accepted per item; quote text SHALL be capped at 512 UTF-8 bytes. Unknown/excluded or out-of-bounds ranges, mismatched hashes/context, duplicate annotation IDs or unsupported types/replacement fields SHALL be invalid. Overlapping and identical ranges with distinct IDs SHALL be valid; no source edit SHALL be applied. Oversized fields, duplicate action/item IDs, trailing JSON and invalid envelopes SHALL return 400 before mutation. The bounded decoder SHALL accommodate sixteen maximum-size annotated actions including JSON escaping. Receipt replay SHALL precede staleness/closed checks; payload mismatch SHALL be invalid. New annotations on closed decisions SHALL return invalid, never already_resolved as a feedback success. Unannotated ordinary answers retain existing behavior. All successful results (including commented) and their single summary SHALL follow the durable coordinator-board contract. Only newly resolved items SHALL emit board_changed events. Logs SHALL contain IDs/counts/outcomes, never annotations or quotes.
+#### Scenario: Mixed annotated outcomes
+
+- **WHEN** one annotated answer resolves, one decision comment succeeds and another conflicts
+- **THEN** the batch returns resolved, commented and conflict, commits one existing summary for successful actions and leaves the comment-only decision open
+
+#### Scenario: Invalid anchors and limits
+
+- **WHEN** an action names an excluded heading range, repeats an annotation ID, exceeds 20 annotations or has an oversized multibyte comment
+- **THEN** invalid ranges/IDs/types yield per-action invalid and envelope limit violations return 400 before mutation
+
+#### Scenario: Payload collision
+
+- **WHEN** a committed decision action ID is reused with changed annotations
+- **THEN** invalid is returned without changing the original receipt or duplicating feedback
 
 #### Scenario: Mixed outcomes
 
@@ -1515,3 +1526,167 @@ Board item JSON returned by `GET /api/hera/roles/{id}/board` and the new decisio
 
 - **WHEN** an item was posted before this change
 - **THEN** its JSON carries `structured: null` and `resolution_choice: ""`
+
+### Requirement: Authenticated aggregate decision launch
+
+`POST /api/hera/board/decision-link` SHALL require a master or device token, reject other authenticated token classes with 403 and unauthenticated requests with 401, and return `{"path":"/decide","ticket":"<opaque>","expires_at":"<RFC3339>"}`. It SHALL accept an empty body or one empty JSON object and reject malformed/trailing JSON with 400 before minting. The server SHALL mint the rail-board auth class, whose permitted coordinator membership is resolved through current canonical rail visibility rules, including empty and unbound visible coordinators and nested sub-coordinators. Clients SHALL NOT supply authorization scope. The initial role SHALL be the first non-empty coordinator in rail order, or the first visible row when all are empty, or null when no rows exist. The ticket SHALL have 256 bits of randomness, be held only as a hash in daemon memory, expire in 90 seconds and exchange once through the existing session endpoint. The path SHALL be same-origin relative and contain no credentials. The role-specific launch endpoint SHALL use the same session class with its requested coordinator as preselection.
+
+#### Scenario: Phone launch without the TUI
+
+- **WHEN** a device-authenticated PWA requests an aggregate launch
+- **THEN** it receives a ticket exchangeable for the rail-board session without any TUI action
+
+#### Scenario: No eligible coordinators
+
+- **WHEN** the eligible role set is empty
+- **THEN** launch succeeds with no initial selection and the page shows no visible coordinators without broadening API access
+
+#### Scenario: Scoped credential rejected
+
+- **WHEN** a plugin scope token or decision session tries to mint an aggregate ticket
+- **THEN** it receives 403 and no ticket exists
+
+### Requirement: Aggregate open board counts
+
+`GET /api/hera/board/decision-counts` SHALL require master/device authentication and return `{"decisions":N,"fyis":N,"total":N,"roles":[{"role_id":N,"orchestrator":"…","coordinator":"…","decisions":N,"fyis":N}]}` for the same canonical rail visibility/order policy as navigation, including visible empty and nested coordinators. Counts SHALL include open items regardless of read state, exclude resolved items and leave read state and timestamps unchanged. Totals and per-role counts SHALL come from one consistent read snapshot. Decision sessions SHALL NOT call this discovery endpoint.
+
+#### Scenario: Count both kinds
+
+- **WHEN** eligible boards contain two unread decisions, a read FYI and a resolved FYI
+- **THEN** counts are decisions 2, FYIs 1 and total 3 without mutating board state
+
+### Requirement: Mixed decision page item reads
+
+`GET /api/hera/roles/{role_id}/board/decide-items` SHALL accept master/device tokens for an eligible coordinator or a rail-board session for a currently rail-visible coordinator. It SHALL return `{"role_id":N,"orchestrator":"…","coordinator":"…","decisions":N,"fyis":N,"items":[…]}` from a consistent snapshot, with all open decisions and FYIs in ascending item-ID order. Each item SHALL include existing decision fields plus `kind`; FYIs SHALL have null structured data. The endpoint SHALL NOT mark items read or change timestamps. Existing `/board/decisions` SHALL retain its decision-only filter and response shape; a rail-board session SHALL access it only for currently rail-visible coordinators.
+
+#### Scenario: Mixed read
+
+- **WHEN** an eligible board has a decision, an FYI and a resolved item
+- **THEN** decide-items returns the two open items with kind and counts while decisions returns only the open decision
+
+#### Scenario: Wrong role
+
+- **WHEN** a session requests decide-items for a role not visible under canonical rail rules
+- **THEN** it receives 403 and no board data
+
+### Requirement: Retry-safe FYI actions endpoint
+
+`POST /api/hera/roles/{role_id}/board/fyi-actions` SHALL accept master/device tokens or a rail-board session for a currently rail-visible coordinator. The body SHALL be `{"actions":[{"action_id":"<opaque client ID>","item_id":N,"expected_updated_at":"<RFC3339>","action":"comment|dismiss|comment_and_dismiss","note":"…"}]}` with one to sixteen actions. Each action ID SHALL be 1–128 ASCII letters, digits, hyphens or underscores, unique within the request; item IDs SHALL also be unique within the request. Timestamps SHALL be nonzero, notes SHALL be at most 4 KiB UTF-8 and comment actions SHALL require non-whitespace notes; dismiss SHALL require an empty note. Invalid envelope, duplicate IDs/items, oversized notes or trailing JSON SHALL return 400 `invalid_request` before any mutation. An unsupported action or empty required comment SHALL yield a per-action invalid result. The whole body SHALL be consumed through EOF before mutation.
+
+The response SHALL be `{"results":[{"action_id":"…","item_id":N,"outcome":"commented|resolved|already_resolved|conflict|not_found|invalid","item":{…}}],"unread_count":N}`; conflict SHALL include current item content. Missing/wrong-role/non-FYI items SHALL return not_found without leaking content; resident approvals SHALL be invalid. Current revision mismatch SHALL return conflict. Already-resolved FYIs SHALL return already_resolved for dismiss/comment_and_dismiss without storing a new comment or notice; comment-only SHALL return invalid because feedback was not delivered. Successful receipt replay SHALL precede these item-state checks and return the original result. Successful outcomes SHALL obey the coordinator-board durable FYI contract; other outcomes SHALL not mutate or block unrelated successful actions. All successful receipts, resolutions and at most one FYI summary SHALL commit atomically per request. After commit, each newly resolved item SHALL emit one `hera.board_changed` event; comment-only SHALL not pretend the item changed revision. Decision answers SHALL retain their existing endpoint, payload and summary semantics.
+
+Actions SHALL additionally accept annotations using the same revision-bound range/type/ID validation, 20-per-item maximum, 4096 UTF-8 byte comment cap and 512-byte server-derived quote cap as decision responses. Comment/comment_and_dismiss SHALL require a non-whitespace note or at least one annotation; dismiss SHALL require both empty note and no annotations. Existing durable fingerprint/replay semantics SHALL include full annotations. New feedback-bearing actions targeting closed FYIs SHALL be invalid, including comment_and_dismiss with annotations; only replay may confirm earlier delivered feedback. Request decoding SHALL remain bounded while accommodating sixteen maximal annotated actions and JSON escaping. Decision answers now support annotation-bearing answers and comment actions as specified by Board answers endpoint.
+#### Scenario: FYI annotation without general note
+
+- **WHEN** a valid Comment action has annotations and empty note
+- **THEN** commented is returned with full annotations durably stored and no item resolution
+
+#### Scenario: Dismiss cannot swallow annotations
+
+- **WHEN** dismiss carries an annotation
+- **THEN** invalid is returned without dropping or delivering that feedback
+
+#### Scenario: Mixed action batch
+
+- **WHEN** one FYI receives a comment, another is dismissed and a third conflicts
+- **THEN** results are commented, resolved and conflict, with one comment notice, no dismissal notice and no change to the conflicted item
+
+#### Scenario: Replay after restart
+
+- **WHEN** a newly authorized session retries an identical committed action ID after daemon restart
+- **THEN** it receives the stored outcome and no duplicate comment, resolution event or notice
+
+#### Scenario: ID reused with changed payload
+
+- **WHEN** a committed action ID is reused with a different item, revision, action or note
+- **THEN** that action is invalid and the original receipt/comment remains unchanged
+
+#### Scenario: Closed FYI
+
+- **WHEN** an FYI is resolved elsewhere before a new comment-only action arrives
+- **THEN** the result is invalid and no comment/notice is recorded
+
+#### Scenario: Invalid envelope
+
+- **WHEN** a request contains seventeen actions, duplicate item IDs, an oversized note or trailing JSON
+- **THEN** it returns 400 before any receipt, item change or notice is committed
+
+### Requirement: Scoped decision navigation metadata
+
+GET /api/hera/board/decision-navigation SHALL accept master/device tokens or a rail-board session and return `{roles:[{role_id,parent_role_id,orchestrator,coordinator,decisions,fyis}]}` from a consistent snapshot. Rows SHALL be exactly the canonical Hera rail-visible coordinator projection in depth-first rail order, excluding hidden/archived/nuked branches and workers, including nested sub-coordinators and empty or unbound visible coordinators. parent_role_id SHALL reference the canonical visible coordinator parent or null. Counts SHALL include open items regardless of read state; reads SHALL not mutate item state. The endpoint SHALL share visibility/order policy with the TUI rather than inventing a name/ID sort. It SHALL expose no task/session bodies or broad roster details. Kanban section headings and collapse controls are omitted while their ordering is preserved.
+
+#### Scenario: Canonical tree and counts
+
+- **WHEN** the rail includes a parent, its sub-coordinator, an empty coordinator, plain workers and hidden/archived branches
+- **THEN** metadata contains only the visible coordinator rows in rail order with canonical parent IDs and accurate kind counts, including the empty row
+
+#### Scenario: Session cannot use broad roster
+
+- **WHEN** a rail-board session calls scoped navigation then the general Hera roster
+- **THEN** scoped navigation succeeds and the general roster is forbidden
+
+### Requirement: Project rename
+
+`PUT /api/projects/{name}` SHALL accept an optional `new_name`. When present and
+different from `{name}`, the daemon SHALL atomically rename the project and
+rewrite all stored references to it.
+
+#### Scenario: Rename succeeds
+- **WHEN** a DB-defined project `alpha` has tasks and a per-project account and `new_name` is `beta`
+- **THEN** the project, its tasks, schedules, hera roles and account mapping all reference `beta` and none reference `alpha`
+
+#### Scenario: Target name exists
+- **WHEN** `new_name` names another existing project
+- **THEN** the response is 409 and nothing changes
+
+#### Scenario: Defined in config.toml
+- **WHEN** the project is defined in `config.toml`
+- **THEN** the response is 409 and nothing changes
+
+### Requirement: Full board response receipt recovery
+
+The existing master/device-only GET /api/hera/roles/{role_id}/board/fyi-actions/{action_id} receipt read path SHALL be extended to return full durable decision response receipts as well as FYI receipts, with explicit item kind/action and full annotations. IDs SHALL be unique across response kinds within the owning role. Unknown/wrong-role receipts SHALL return 404; rail-board sessions and scope tokens SHALL remain forbidden (403). Coordinator recovery through the authenticated API proxy SHALL be documented with the role/action pointer emitted in summaries. No new transport SHALL be introduced.
+
+#### Scenario: Full feedback recovery
+
+- **WHEN** an authorized coordinator proxy requests a receipt named by a truncated annotation summary
+- **THEN** the existing receipt path returns the original kind/action, types, offsets/context, stored quoted previews and full comments
+
+#### Scenario: Receipt auth boundary
+
+- **WHEN** a rail-board session requests stored annotation receipt history
+- **THEN** 403 is returned even when that role is visible
+
+### Requirement: Range annotation validation and replay
+
+Both existing response endpoints SHALL derive selectable text using the canonical rendered-text projection described in board-decision-page, validate item-scoped ranges against the expected revision, exclude subject/headings/UI controls and reject cross-item ranges. Selected-text hash and offset/context SHALL distinguish identical text; quote previews SHALL truncate safely to 512 UTF-8 bytes while receipts retain the complete anchor. Types and anchors SHALL be part of the normalized durable fingerprint. Overlapping ranges SHALL remain independent records. Logs SHALL include IDs/types/counts/outcomes only, never quoted text, context, comments or hashes.
+
+#### Scenario: Allowed overlap
+
+- **WHEN** two saved annotations overlap or select the same text with distinct IDs
+- **THEN** both are valid within the total cap, persist independently and replay without duplication
+
+#### Scenario: Typed durable delivery
+
+- **WHEN** a decision or FYI receives a DELETION with no comment and a COMMENT with text
+- **THEN** one existing summary lists both types and quotes, all full comments/range anchors are in receipts and board text is unchanged
+
+#### Scenario: Bad range
+
+- **WHEN** a client submits an offset outside authored text or a hash/context not matching that revision
+- **THEN** that action is invalid with no feedback delivery or item mutation
+
+### Requirement: Closed board feedback result context
+
+After receipt replay and existing payload validation, a new feedback action rejected because its owning board item is already resolved SHALL retain outcome `invalid` and include the current resolved item in `item`. Matching receipt replay SHALL still return its original successful result. Changed-payload action ID reuse SHALL remain invalid without closed-item context. Other items in the same request SHALL be judged independently.
+
+#### Scenario: Closed comment beside fresh feedback
+
+- **WHEN** a valid comment targets an item closed since page load and another comment targets an unchanged open item
+- **THEN** the closed comment returns invalid with its resolved item and the open comment is committed and returns commented
+
+#### Scenario: Replay before closure
+
+- **WHEN** an accepted comment is replayed with its identical action ID and payload after the item closes
+- **THEN** its original commented receipt is returned without another notice
+

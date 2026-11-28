@@ -9,6 +9,7 @@ import (
 )
 
 func TestFetchFileDiffUnborn(t *testing.T) {
+	t.Parallel()
 	for _, staged := range []bool{false, true} {
 		name := "untracked"
 		if staged {
@@ -39,6 +40,7 @@ func TestFetchFileDiffUnborn(t *testing.T) {
 }
 
 func TestFetchFileDiffNonRepo(t *testing.T) {
+	t.Parallel()
 	for _, missing := range []bool{false, true} {
 		name := "existing directory"
 		if missing {
@@ -62,6 +64,7 @@ func TestFetchFileDiffNonRepo(t *testing.T) {
 }
 
 func TestFetchFileDiffNoIndexSafety(t *testing.T) {
+	t.Parallel()
 	t.Run("absolute operands are refused", func(t *testing.T) {
 		dir := initRepo(t, t.TempDir())
 		gitRun(t, dir, "checkout", "--detach")

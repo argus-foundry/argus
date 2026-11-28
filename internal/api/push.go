@@ -447,9 +447,12 @@ func computeNeedsInput(idleIDs, runningIDs, prev []string, prevFP map[string]uin
 // Exits when s.stopCh is closed (Server.Shutdown).
 //
 // Single-goroutine: state is only touched here so no mutex is needed.
+const idleWatchInterval = 5 * time.Second
+
 func (s *Server) idleWatcher() {
 	state := newIdleWatcherState()
-	tick := time.NewTicker(5 * time.Second)
+	defer state.screen.Close()
+	tick := time.NewTicker(idleWatchInterval)
 	defer tick.Stop()
 
 	for {
@@ -459,6 +462,41 @@ func (s *Server) idleWatcher() {
 		case <-tick.C:
 		}
 		s.idleWatcherTick(state)
+	}
+}
+
+// WatchVoiceNeedsInput produces needs-input events on daemons without a REST
+// server. The daemon runs only one detector and can enable the webhook live.
+func WatchVoiceNeedsInput(stop <-chan struct{}, enabled func() bool, database *db.DB, runner agent.SessionRunner) {
+	s := &Server{db: database, runner: runner}
+	screen := &agent.ScreenRenderer{}
+	defer screen.Close()
+	var state *idleWatcherState
+	tick := time.NewTicker(idleWatchInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case now := <-tick.C:
+			if !enabled() {
+				state = nil
+				continue
+			}
+			if state == nil {
+				state = newIdleWatcherState()
+				state.screen = screen
+			}
+			running, idle := runner.RunningAndIdle()
+			idleSet := make(map[string]bool, len(idle))
+			for _, id := range idle {
+				idleSet[id] = true
+			}
+			tailOf := s.needsInputTail
+			contentIdle, next := agent.ContentIdle(running, idleSet, tailOf, sessionScreenSize, state.screen, state.contentIdle, now, nil)
+			state.contentIdle = next
+			s.emitNeedsInputTick(state, running, append(idle, contentIdle...), tailOf)
+		}
 	}
 }
 
@@ -529,10 +567,18 @@ func shouldFireIdlePush(state *idleWatcherState, id string, isIdle bool, lastInp
 	return true
 }
 
-// idleWatcherTick runs one iteration of the idle-watch loop. Extracted from
-// idleWatcher so the DB + notify path is isolated from the ticker, and so
-// the firing decision (shouldFireIdlePush) can be unit-tested without a
-// real runner.
+// needsInputTail expands through repeating cursor redraws so a parked
+// prompt cannot be pushed out of the sampled tail (BUG-061).
+func (s *Server) needsInputTail(id string) []byte {
+	sess := s.runner.Get(id)
+	if sess == nil {
+		return nil
+	}
+	return agent.SubstantiveTail(sess.RecentOutputTail, needsInputScanBytes, agent.NeedsInputMaxExpandBytes)
+}
+
+// idleWatcherTick runs one iteration of the idle-watch loop independently of
+// the ticker so tests can step the DB and notification logic directly.
 func (s *Server) idleWatcherTick(state *idleWatcherState) {
 	running, idle := s.runner.RunningAndIdle()
 	seen := make(map[string]bool, len(running))
@@ -551,13 +597,7 @@ func (s *Server) idleWatcherTick(state *idleWatcherState) {
 	// never stops even at a genuinely parked prompt — SubstantiveTail expands the
 	// ring read backward (bounded by the ring's own defaultBufSize ceiling) until
 	// real content surfaces.
-	tailOf := func(id string) []byte {
-		sess := s.runner.Get(id)
-		if sess == nil {
-			return nil
-		}
-		return agent.SubstantiveTail(sess.RecentOutputTail, needsInputScanBytes, agent.NeedsInputMaxExpandBytes)
-	}
+	tailOf := s.needsInputTail
 
 	// Content-aware idle (BUG-036): a fullscreen (alt-screen) agent parked at its
 	// prompt repaints continuously, so it never reaches the raw-byte idle set and
@@ -700,6 +740,20 @@ func (s *Server) idleWatcherTick(state *idleWatcherState) {
 // state's needsInputNow map is replaced wholesale each tick, so exited
 // sessions (absent from running/idle) drop out and fire a clear event.
 func (s *Server) detectNeedsInputTick(state *idleWatcherState, running, idle []string, tailOf func(string) []byte) {
+	needs := s.emitNeedsInputTick(state, running, idle, tailOf)
+	s.notifyResidentWorkerPrompts(state, state.needsInputNow, tailOf)
+	// The resident is excluded from the generic task needs-input set that the
+	// Tasks list and rail read; its own waiting signal is exposed separately.
+	waiting := s.containsResident(needs)
+	if s.residentWaiting.Swap(waiting) != waiting {
+		uxlog.Log("[resident] waiting changed waiting=%t", waiting)
+		// uxlog is a no-op in the daemon; slog reaches daemon.log.
+		slog.Info("[resident] waiting changed", "waiting", waiting)
+	}
+	s.runner.SetNeedsInputIDs(s.withoutResident(needs))
+}
+
+func (s *Server) emitNeedsInputTick(state *idleWatcherState, running, idle []string, tailOf func(string) []byte) []string {
 	previousScraper := state.scraperNeeds
 	if previousScraper == nil {
 		previousScraper = state.needsInputNow
@@ -786,16 +840,7 @@ func (s *Server) detectNeedsInputTick(state *idleWatcherState, running, idle []s
 		}
 	}
 	state.needsInputNow = needsSet
-	s.notifyResidentWorkerPrompts(state, needsSet, tailOf)
-	// The resident is excluded from the generic task needs-input set that the
-	// Tasks list and rail read; its own waiting signal is exposed separately.
-	waiting := s.containsResident(needs)
-	if s.residentWaiting.Swap(waiting) != waiting {
-		uxlog.Log("[resident] waiting changed waiting=%t", waiting)
-		// uxlog is a no-op in the daemon; slog reaches daemon.log.
-		slog.Info("[resident] waiting changed", "waiting", waiting)
-	}
-	s.runner.SetNeedsInputIDs(s.withoutResident(needs))
+	return needs
 }
 
 // Pin before reading the tail, then verify after rendering: a concurrent

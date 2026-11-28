@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -22,15 +24,13 @@ import (
 // --- Stage 5 (fix-hera-nuke-cleanup): cascade-nuke Tier D discovery --------
 
 // seedStackedBranchStack seeds a 3-task base_branch stack (task1 <- task2 <-
-// task3), each on project "p" (Path = t.TempDir(), Branch = "master" so
-// gitutil.ResolveDefaultBranch short-circuits without a real git repo — see
-// its own doc comment: a non-empty `configured` branch skips every git
-// shellout). task1 is the earliest link (no BaseBranch of its own — branched
+// task3), each on a Git repository in project "p". task1 is the earliest
+// link (no BaseBranch of its own — branched
 // off "master" conceptually), task2 branched off task1's branch, task3
 // (the stack's tip) branched off task2's branch.
 func seedStackedBranchStack(t *testing.T, d *db.DB) {
 	t.Helper()
-	testutil.NoError(t, d.SetProject("p", config.Project{Path: t.TempDir(), Branch: "master"}))
+	testutil.NoError(t, d.SetProject("p", config.Project{Path: stackFixtureRepo(t), Branch: "master"}))
 	now := time.Now()
 	tasks := []*model.Task{
 		{ID: "task1", Name: "task1", Project: "p", Branch: "b1", Status: model.StatusInProgress, CreatedAt: now},
@@ -40,6 +40,18 @@ func seedStackedBranchStack(t *testing.T, d *db.DB) {
 	for _, task := range tasks {
 		testutil.NoError(t, d.Add(task))
 	}
+}
+
+func stackFixtureRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	init := exec.Command("git", "init", "-q", "-b", "master")
+	init.Dir = repo
+	testutil.NoError(t, init.Run())
+	commit := exec.Command("git", "-c", "user.email=test@test.invalid", "-c", "user.name=Test", "commit", "--allow-empty", "-qm", "fixture")
+	commit.Dir = repo
+	testutil.NoError(t, commit.Run())
+	return repo
 }
 
 // TestClassifyStackedBranchesForCascade_RescuesEarlierChainLink covers the
@@ -60,7 +72,7 @@ func TestClassifyStackedBranchesForCascade_RescuesEarlierChainLink(t *testing.T)
 		return mergesafety.Verdict{Safe: true, Tier: mergesafety.TierStackInferred, Reason: "stubbed"}, nil
 	}
 
-	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"task1"}, map[string]bool{"task1": true}, make(map[string]mergesafety.Verdict))
+	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"task1"}, map[string]bool{"task1": true})
 
 	got := map[string]string{}
 	for _, c := range extra {
@@ -85,7 +97,7 @@ func TestClassifyStackedBranchesForCascade_RescuesEarlierChainLink(t *testing.T)
 // cascade) — excluding task1 must not affect task2.
 func TestClassifyStackedBranchesForCascade_ExcludedBranchNeverReoffered(t *testing.T) {
 	d := testDB(t)
-	testutil.NoError(t, d.SetProject("p", config.Project{Path: t.TempDir(), Branch: "master"}))
+	testutil.NoError(t, d.SetProject("p", config.Project{Path: stackFixtureRepo(t), Branch: "master"}))
 	now := time.Now()
 	tasks := []*model.Task{
 		{ID: "root", Name: "root", Project: "p", Branch: "b0", Status: model.StatusInProgress, CreatedAt: now},
@@ -103,7 +115,7 @@ func TestClassifyStackedBranchesForCascade_ExcludedBranchNeverReoffered(t *testi
 
 	testutil.NoError(t, d.ExcludeCleanupBranch("task1", "b1"))
 
-	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"root"}, map[string]bool{"root": true}, make(map[string]mergesafety.Verdict))
+	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"root"}, map[string]bool{"root": true})
 
 	got := map[string]bool{}
 	for _, c := range extra {
@@ -127,8 +139,111 @@ func TestClassifyStackedBranchesForCascade_NoDescendantIsNoop(t *testing.T) {
 		return mergesafety.Verdict{}, nil
 	}
 
-	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"solo"}, nil, make(map[string]mergesafety.Verdict))
+	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"solo"}, nil)
 	testutil.Equal(t, len(extra), 0)
+}
+
+func TestCascadeStackConfirmationUsesClassifiedRepository(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := testDB(t)
+	seedStackedBranchStack(t, d)
+	original := d.Config().Projects["p"].Path
+	other := stackFixtureRepo(t)
+	testutil.NoError(t, exec.Command("git", "-C", original, "branch", "b2").Run())
+	testutil.NoError(t, exec.Command("git", "-C", other, "fetch", original, "b2").Run())
+	testutil.NoError(t, exec.Command("git", "-C", other, "branch", "b2", "FETCH_HEAD").Run())
+	testutil.NoError(t, d.SetProject("other", config.Project{Path: other, Branch: "master"}))
+	testutil.NoError(t, d.Add(&model.Task{ID: "other-child", Name: "Other child", Project: "other", Branch: "b2", BaseBranch: "b1"}))
+	testutil.NoError(t, d.Add(&model.Task{ID: "other-tip", Name: "Other tip", Project: "other", Branch: "b3", BaseBranch: "b2"}))
+	app := New(d, agent.NewRunner(nil), false)
+	app.classifyStackInferredFn = func(_ context.Context, params mergesafety.StackParams, _ map[string]mergesafety.Verdict) (mergesafety.Verdict, error) {
+		testutil.Equal(t, params.Task.Project, "p")
+		testutil.True(t, agent.SamePath(params.RepoDir, original))
+		return mergesafety.Verdict{Safe: true}, nil
+	}
+	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"task1"}, map[string]bool{"task1": true})
+	if len(extra) != 1 {
+		t.Fatalf("got %d stack candidates, want one from the original repository", len(extra))
+	}
+	testutil.Equal(t, extra[0].TaskID, "task2")
+	testutil.Equal(t, extra[0].Tip, agent.TaskGitBranchTip(context.Background(), original, "b2"))
+	if extra[0].Tip == "" {
+		t.Fatal("the offered branch needs a real classified tip")
+	}
+	testutil.NoError(t, d.SetProject("p", config.Project{Path: other, Branch: "master"}))
+	testutil.NoError(t, d.Delete("other-child"))
+	app.heraDeleteStackedBranches(extra)
+	for _, repo := range []string{original, other} {
+		verify := exec.Command("git", "show-ref", "--verify", "refs/heads/b2")
+		verify.Dir = repo
+		testutil.NoError(t, verify.Run())
+	}
+}
+
+func TestCascadeStackDiscoveryRefusesRemappedDefault(t *testing.T) {
+	d := testDB(t)
+	original, replacement := stackFixtureRepo(t), stackFixtureRepo(t)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = original
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	run("branch", "root")
+	run("branch", "child")
+	run("checkout", "-b", "integration")
+	run("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "unmerged tip")
+	run("branch", "tip")
+	checkouts := t.TempDir()
+	for _, task := range []model.Task{
+		{ID: "root", Name: "Root", Project: "p", Branch: "root"},
+		{ID: "child", Name: "Child", Project: "p", Branch: "child", BaseBranch: "root"},
+		{ID: "tip", Name: "Tip", Project: "p", Branch: "tip", BaseBranch: "child"},
+	} {
+		task.Worktree = filepath.Join(checkouts, task.ID)
+		run("worktree", "add", "--detach", task.Worktree, task.Branch)
+		testutil.NoError(t, d.Add(&task))
+	}
+	testutil.NoError(t, d.SetProject("p", config.Project{Path: replacement, Branch: "integration"}))
+	app := New(d, agent.NewRunner(nil), false)
+	got := app.classifyStackedBranchesForCascade(context.Background(), []string{"root"}, map[string]bool{"root": true})
+	testutil.Equal(t, len(got), 0)
+}
+
+func TestCascadeStackDoesNotReuseVerdictsAcrossDefaultRefs(t *testing.T) {
+	d := testDB(t)
+	repo := stackFixtureRepo(t)
+	testutil.NoError(t, d.SetProject("stable", config.Project{Path: repo, Branch: "master"}))
+	testutil.NoError(t, d.SetProject("preview", config.Project{Path: repo, Branch: "develop"}))
+	for _, project := range []string{"stable", "preview"} {
+		for _, task := range []model.Task{
+			{ID: project + "-root", Branch: project + "-base"},
+			{ID: project + "-child", Branch: project + "-branch", BaseBranch: project + "-base"},
+			{ID: project + "-tip", Branch: "common-tip", BaseBranch: project + "-branch"},
+		} {
+			task.Project, task.Name = project, task.ID
+			testutil.NoError(t, d.Add(&task))
+		}
+	}
+	app := New(d, agent.NewRunner(nil), false)
+	app.classifyStackInferredFn = func(_ context.Context, params mergesafety.StackParams, cache map[string]mergesafety.Verdict) (mergesafety.Verdict, error) {
+		if verdict, ok := cache["common-tip"]; ok {
+			return verdict, nil
+		}
+		verdict := mergesafety.Verdict{Safe: params.DefaultShort == "master"}
+		cache["common-tip"] = verdict
+		return verdict, nil
+	}
+	extra := app.classifyStackedBranchesForCascade(context.Background(), []string{"stable-root", "preview-root"}, map[string]bool{
+		"stable-root": true, "preview-root": true,
+	})
+	if len(extra) != 1 {
+		t.Fatalf("got %d stack candidates, want only the stable merge target", len(extra))
+	}
+	testutil.Equal(t, extra[0].TaskID, "stable-child")
 }
 
 // TestClassifyTasksConcurrently_CountsSafe covers the bounded-concurrency

@@ -3,6 +3,7 @@ package client
 import (
 	"testing"
 
+	"github.com/argus-foundry/argus/internal/agent"
 	"github.com/argus-foundry/argus/internal/config"
 	"github.com/argus-foundry/argus/internal/daemon"
 	"github.com/argus-foundry/argus/internal/model"
@@ -49,9 +50,7 @@ func TestCliHello(t *testing.T) {
 	testutil.Equal(t, resp.BinaryPath, "/fake/supervisor")
 }
 
-// TestCliSOR pins StartOrReattach's reattach branch: when the daemon reports a
-// live session, it returns the existing handle with reattached=true (no Start).
-func TestCliSOR(t *testing.T) {
+func TestOldCliSOR(t *testing.T) {
 	fd := newFakeDaemon(t)
 	fd.mu.Lock()
 	fd.alive = true
@@ -59,11 +58,16 @@ func TestCliSOR(t *testing.T) {
 	c := fakeClient(t, fd)
 
 	sess, reattached, err := c.StartOrReattach(&model.Task{ID: "sor"}, config.DefaultConfig(), 24, 80, true)
+	testutil.ErrorIs(t, err, agent.ErrSessionCoordinationUnsupported)
+	testutil.False(t, reattached)
+	testutil.Nil(t, sess)
+
+	fd.mu.Lock()
+	fd.alive = false
+	fd.mu.Unlock()
+	sess, err = c.AttachableSession("sor")
 	testutil.NoError(t, err)
-	testutil.True(t, reattached)
-	if sess == nil {
-		t.Fatal("expected a session handle on reattach")
-	}
+	testutil.Nil(t, sess)
 }
 
 // TestCliKickErr pins KickRerender surfacing the daemon-side resp.Error (here the

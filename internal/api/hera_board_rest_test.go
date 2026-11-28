@@ -51,7 +51,9 @@ func boardRESTFixture(t *testing.T) (*Server, *db.DB, *db.HeraRole, *db.HeraRole
 
 func doBoard(s *Server, method, path, body string) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
-	s.routes().ServeHTTP(rr, authedReq(method, path, body))
+	req := authedReq(method, path, body)
+	req.Header.Set("X-Argus-Auth", "master")
+	s.routes().ServeHTTP(rr, req)
 	return rr
 }
 

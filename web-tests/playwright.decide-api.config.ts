@@ -1,0 +1,3 @@
+import {defineConfig} from '@playwright/test';
+const port=Number(process.env.ARGUS_DECIDE_TEST_PORT||17749);
+export default defineConfig({testDir:'./tests',testMatch:'decide-annotations-api.spec.ts',workers:1,timeout:30000,reporter:'list',use:{baseURL:'http://127.0.0.1:'+port,trace:'retain-on-failure'},projects:['chromium','webkit'].flatMap(browserName=>[1200,390].map(width=>({name:browserName+'-'+width,use:{browserName:browserName as 'chromium'|'webkit',viewport:{width,height:844},isMobile:width===390,hasTouch:width===390}}))),webServer:{command:'go run ../cmd/argus-test-server -port '+port+' -token test-token',port,reuseExistingServer:false,timeout:120000,env:{ARGUS_TEST_DECIDE_FIXTURE:'1'}}});

@@ -99,21 +99,22 @@ func (s *decisionStore) lookup(plain string, consume bool) (int64, bool) {
 func (s *Server) decisionMiddleware(next http.Handler) http.Handler {
 	routes := s.routes()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/hera/") && strings.Contains(r.URL.Path, "/board") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		auth := r.Header.Get("Authorization")
 		if !strings.HasPrefix(auth, "Bearer ") {
 			next.ServeHTTP(w, r)
 			return
 		}
 		plain := strings.TrimPrefix(auth, "Bearer ")
-		if role, ok := s.decisions.lookup(plain, false); ok {
-			prefix := fmt.Sprintf("/api/hera/roles/%d/board/", role)
-			allowed := (r.Method == http.MethodGet && r.URL.Path == prefix+"decisions") || (r.Method == http.MethodPost && r.URL.Path == prefix+"answers")
-			if !allowed {
-				uxlog.Log("[decide] denied role=%d", role)
-				http.Error(w, `{"error":"decision session scope"}`, http.StatusForbidden)
+		if _, ok := s.decisions.lookup(plain, false); ok {
+			if !decisionSessionRoute(r.Method, r.URL.Path) {
+				uxlog.Log("[decide] denied route")
+				writeErr(w, http.StatusForbidden, "decision session scope", nil)
 				return
 			}
-			r.Header.Set("X-Argus-Auth", fmt.Sprintf("decision:%d", role))
+			r.Header.Set("X-Argus-Auth", "rail-board")
 			routes.ServeHTTP(w, r)
 			return
 		}
@@ -143,13 +144,15 @@ func (s *Server) decisionRole(w http.ResponseWriter, r *http.Request) (int64, bo
 		return 0, false
 	}
 	origin := authOrigin(r)
-	if origin != "master" && origin != "device" && origin != fmt.Sprintf("decision:%d", role) {
+	if origin != "master" && origin != "device" && origin != "rail-board" {
 		writeErr(w, 403, "decision access required", nil)
 		return 0, false
 	}
 	entry, err := s.db.HeraRole(role)
 	if err != nil {
-		if errors.Is(err, db.ErrHeraNotFound) {
+		if errors.Is(err, db.ErrHeraNotFound) && origin == "rail-board" {
+			writeCodedErr(w, 403, "board_not_visible", "Coordinator is hidden, archived or unavailable in the Hera rail")
+		} else if errors.Is(err, db.ErrHeraNotFound) {
 			writeCodedErr(w, 404, "board_item_not_found", "board coordinator not found")
 		} else {
 			uxlog.Log("[decide] role lookup failed role=%d", role)
@@ -158,7 +161,22 @@ func (s *Server) decisionRole(w http.ResponseWriter, r *http.Request) (int64, bo
 		return 0, false
 	}
 	if entry.Kind != db.HeraKindCoordinator {
+		if origin == "rail-board" {
+			writeCodedErr(w, 403, "board_not_visible", "Coordinator is unavailable in the Hera rail")
+			return 0, false
+		}
 		writeCodedErr(w, 400, "invalid_request", "decisions require a coordinator")
+		return 0, false
+	}
+	visible, err := s.decisionVisible(role)
+	if err != nil {
+		uxlog.Log("[decide] visibility failed role=%d", role)
+		writeErr(w, 500, "board unavailable", nil)
+		return 0, false
+	}
+	if !visible {
+		uxlog.Log("[decide] visibility refused role=%d", role)
+		writeCodedErr(w, 403, "board_not_visible", "Coordinator is hidden, archived or unavailable in the Hera rail")
 		return 0, false
 	}
 	return role, true
@@ -170,7 +188,7 @@ func (s *Server) openDecisions(role int64) ([]*db.HeraBoardItem, error) {
 	}
 	out := make([]*db.HeraBoardItem, 0)
 	for _, i := range items {
-		if i.Kind == "decision" {
+		if i.Kind == "decision" && i.DeferredAt == nil {
 			out = append(out, i)
 		}
 	}
@@ -192,13 +210,9 @@ func (s *Server) handleDecisionLink(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength != 0 && !decodeDecisionJSON(w, r, &p, 2048) {
 		return
 	}
-	items, err := s.openDecisions(role)
+	items, err := s.db.ListHeraBoardItems(role, false)
 	if err != nil {
 		writeErr(w, 500, "decisions unavailable", nil)
-		return
-	}
-	if len(items) == 0 {
-		writeJSON(w, 409, map[string]string{"code": "no_decisions", "error": "No open decisions"})
 		return
 	}
 	path := fmt.Sprintf("/decide?role=%d", role)
@@ -210,7 +224,7 @@ func (s *Server) handleDecisionLink(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !found {
-			writeErr(w, 400, "focus is not an open decision", nil)
+			writeErr(w, 400, "focus is not an open board item", nil)
 			return
 		}
 		path += fmt.Sprintf("&focus=%d", p.Focus)
@@ -244,7 +258,7 @@ func (s *Server) handleDecisionSession(w http.ResponseWriter, r *http.Request) {
 	}
 	uxlog.Log("[decide] exchanged role=%d", role)
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, 200, map[string]any{"session": session, "role_id": role, "expires_at": expires})
+	writeJSON(w, 200, map[string]any{"session": session, "initial_role_id": initialDecisionRole(role), "expires_at": expires})
 }
 func (s *Server) handleDecisions(w http.ResponseWriter, r *http.Request) {
 	role, ok := s.decisionRole(w, r)
@@ -274,17 +288,25 @@ func (s *Server) handleDecisionAnswers(w http.ResponseWriter, r *http.Request) {
 	var p struct {
 		Answers []db.HeraBoardAnswer `json:"answers"`
 	}
-	if !decodeDecisionJSON(w, r, &p, 16*(6*4096+1024)) {
+	if !decodeDecisionJSON(w, r, &p, boardResponseBodyMaxBytes) {
 		return
 	}
 	valid := len(p.Answers) > 0 && len(p.Answers) <= 16
+	seen := map[int64]bool{}
+	ids := map[string]bool{}
 	for _, a := range p.Answers {
-		if a.ItemID <= 0 || a.ExpectedUpdatedAt.IsZero() || len(a.Note) > 4096 {
+		durable := a.ActionID != "" || a.Action == "comment" || len(a.Annotations) > 0
+		if seen[a.ItemID] || a.ItemID <= 0 || a.ExpectedUpdatedAt.IsZero() || len(a.Note) > 4096 || !db.ValidBoardAnnotationEnvelope(a.Annotations) || (durable && (!fyiActionID.MatchString(a.ActionID) || ids[a.ActionID])) {
 			valid = false
+		}
+		seen[a.ItemID] = true
+		if durable {
+			ids[a.ActionID] = true
 		}
 	}
 	if !valid {
-		writeJSON(w, 400, map[string]string{"code": "invalid_request", "error": "answers require 1-16 items, revisions and notes up to 4 KiB"})
+		uxlog.Log("[decide] invalid answer envelope role=%d", role)
+		writeJSON(w, 400, map[string]string{"code": "invalid_request", "error": "answers require 1-16 unique items, revisions, notes up to 4 KiB, and at most 20 valid annotations; feedback requires a unique action_id"})
 		return
 	}
 	results, err := s.db.AnswerHeraBoardItems(role, p.Answers)

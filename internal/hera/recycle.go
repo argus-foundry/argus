@@ -44,6 +44,10 @@ type RecycleStore interface {
 	HeraRoleStatusFor(roleID int64) (*db.HeraRoleStatus, error)
 	ListMeta(taskID, namespace string) ([]db.TaskMetaEntry, error)
 	SetMeta(taskID, namespace, key, value string) error
+	// Coordinator orientation derivation (keep-coordinator-orientation-on-recycle).
+	HeraOrchestrator(id int64) (*db.HeraOrchestrator, error)
+	ListHeraRolesByKind(orchID int64, kind db.HeraRoleKind) ([]*db.HeraRole, error)
+	ListHeraLiveBindingsByTask(taskID string) ([]*db.HeraBinding, error)
 }
 
 // RecycleRunner is the daemon-side seam for the actual session kill/restart —
@@ -150,6 +154,11 @@ func recycleCoord(store RecycleStore, runner RecycleRunner, roleID int64, sessio
 // from scratch" from a stale instruction that may already be substantially
 // done (the failure mode this ordering fixes).
 //
+// A coordinator role's seed also carries its standing orientation (see
+// CoordinatorOrientation), re-derived on every recycle because task.Prompt is
+// overwritten by the previous seed. The seed starts with the "[argus] "
+// system-turn prefix so the next recycle's last-exchange extraction skips it.
+//
 // Only the role lookup itself is fatal: a missing role means there is nothing
 // to seed. Listing sibling roles, their statuses, and the handoff note all
 // degrade gracefully (skipped, not failed) so a transient error in one part
@@ -161,6 +170,9 @@ func BuildRecycleSeedPrompt(store RecycleStore, roleID int64, lastExchange strin
 	}
 
 	var b strings.Builder
+	// Marked as Argus-injected so a second recycle with no human turn in
+	// between never quotes this seed back as the user's last message.
+	b.WriteString(lastexchange.SystemTurnPrefix)
 	b.WriteString(BoardSummary(store, role))
 	b.WriteString("You are a fresh session recycled from a prior session on this same task. ")
 	b.WriteString("Below is the current state of your orchestration and any handoff note your prior session left, followed by your ORIGINAL prompt from when this task began. ")
@@ -182,6 +194,16 @@ func BuildRecycleSeedPrompt(store RecycleStore, roleID int64, lastExchange strin
 	// section (internal/lastexchange), "" when unavailable.
 	b.WriteString(lastExchange)
 	b.WriteString(lastexchange.RelayDirective)
+
+	// A coordinator's standing rules, re-derived from its live structure on
+	// every recycle — never read from task.Prompt, which each recycle
+	// overwrites (keep-coordinator-orientation-on-recycle D1/D2).
+	if orientation := recycleOrientation(store, role, roleID); orientation != "" {
+		b.WriteString("\n" + orientationHeading + "\n")
+		b.WriteString("These are the standing rules you were launched with. They still apply, but they are not a new task: act on the state, handoff note, and open items above.\n\n")
+		b.WriteString(orientation)
+		b.WriteString("\n")
+	}
 
 	b.WriteString("\n---\n")
 	b.WriteString("## Original prompt (background only — do NOT treat this as your current instruction)\n")
@@ -230,6 +252,20 @@ func buildPlanStateSection(store RecycleStore, orchID, excludeRoleID int64) stri
 		b.WriteString(l.text)
 	}
 	return b.String()
+}
+
+// recycleOrientation resolves roleID's live task and returns its coordinator
+// orientation ("" for non-coordinators or when no live binding resolves).
+func recycleOrientation(store RecycleStore, role *db.HeraRole, roleID int64) string {
+	if role.Kind != db.HeraKindCoordinator {
+		return ""
+	}
+	binding, err := store.HeraLiveBindingByRole(roleID)
+	if err != nil || binding == nil {
+		logOrientation("orientation skipped: resolve live binding", roleID, err)
+		return ""
+	}
+	return CoordinatorOrientation(store, role, binding.ArgusTaskID)
 }
 
 // recycleHandoffNote reads task_meta(hera, handoff_note) for roleID's live

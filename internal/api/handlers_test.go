@@ -1417,6 +1417,9 @@ func TestHandleStopTask(t *testing.T) {
 		got, err := d.Get(task.ID)
 		testutil.NoError(t, err)
 		testutil.Equal(t, got.Status, model.StatusInReview)
+		generation, err := d.SessionStopGeneration(task.ID)
+		testutil.NoError(t, err)
+		testutil.Equal(t, generation, int64(1))
 	})
 }
 
@@ -1828,6 +1831,9 @@ func TestHandleStreamOutput(t *testing.T) {
 
 		testutil.Equal(t, resp.StatusCode, http.StatusOK)
 		testutil.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
+		testutil.Equal(t, resp.Header.Get("X-Argus-Session-Pid"), fmt.Sprint(sess.PID()))
+		testutil.Equal(t, resp.Header.Get("X-Argus-Session-Initial-Cols"), "80")
+		testutil.Equal(t, resp.Header.Get("X-Argus-Session-Initial-Rows"), "24")
 
 		// Sequence: wait briefly for SSE to subscribe and replay the ring,
 		// then trigger a clipboard set so the subscriber callback fires.
@@ -1859,6 +1865,138 @@ func TestHandleStreamOutput(t *testing.T) {
 		testutil.True(t, sawData)
 		testutil.True(t, sawClipboard)
 	})
+}
+
+type managedSSEFixture struct {
+	transcriptKickSession
+	done                chan struct{}
+	pid                 int
+	output              string
+	attachedPID         int
+	attachedFrom        uint64
+	replaceAfterPIDRead int
+}
+
+func (s *managedSSEFixture) Done() <-chan struct{}  { return s.done }
+func (s *managedSSEFixture) RemoveWriter(io.Writer) {}
+func (s *managedSSEFixture) PID() int {
+	pid := s.pid
+	if s.replaceAfterPIDRead != 0 {
+		s.pid = s.replaceAfterPIDRead
+		s.replaceAfterPIDRead = 0
+	}
+	return pid
+}
+func (s *managedSSEFixture) RecentOutputTailWithTotal(int) ([]byte, uint64) {
+	return []byte(s.output), uint64(len(s.output))
+}
+func (s *managedSSEFixture) AddWriterFromPID(w io.Writer, offset uint64, pid int) bool {
+	if pid != s.PID() {
+		return false
+	}
+	s.attachedPID, s.attachedFrom = pid, offset
+	_, err := w.Write([]byte("last bytes"))
+	return err == nil
+}
+func (s *managedSSEFixture) ProcessDone(int) <-chan struct{} {
+	retired := make(chan struct{})
+	close(retired)
+	return retired
+}
+
+type managedSSERunner struct {
+	*agent.Runner
+	session *managedSSEFixture
+}
+
+func (r managedSSERunner) Get(string) agent.SessionHandle { return r.session }
+
+func TestHandleStreamOutputBindsRetiringProcess(t *testing.T) {
+	s, _ := testServer(t)
+	session := &managedSSEFixture{pid: 123, done: make(chan struct{})}
+	s.runner = managedSSERunner{Runner: agent.NewRunner(nil), session: session}
+	w := httptest.NewRecorder()
+	req := authedReq("GET", "/api/tasks/process/stream?since=4", "")
+	ctx, cancel := context.WithTimeout(req.Context(), time.Second)
+	defer cancel()
+
+	s.routes().ServeHTTP(w, req.WithContext(ctx))
+
+	testutil.Equal(t, w.Code, http.StatusOK)
+	testutil.Equal(t, w.Header().Get("X-Argus-Session-Pid"), "123")
+	testutil.Equal(t, session.attachedPID, 123)
+	testutil.Equal(t, session.attachedFrom, uint64(4))
+	testutil.Contains(t, w.Body.String(), "data: bGFzdCBieXRlcw==")
+	testutil.Contains(t, w.Body.String(), "event: exit")
+}
+
+func TestTerminalStreamRefusesPendingProcesslessRelay(t *testing.T) {
+	s, _ := testServer(t)
+	s.runner = managedSSERunner{Runner: agent.NewRunner(nil), session: &managedSSEFixture{}}
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, authedReq("GET", "/api/tasks/process/stream?since=13", ""))
+	testutil.Equal(t, w.Code, http.StatusConflict)
+	testutil.Contains(t, w.Body.String(), "stale_session")
+}
+
+type publishingTerminalRunner struct {
+	*agent.Runner
+	pending bool
+}
+
+func (r *publishingTerminalRunner) Get(string) agent.SessionHandle {
+	r.pending = false
+	return nil
+}
+
+func (r *publishingTerminalRunner) HasPendingRestart(string) bool { return r.pending }
+
+func TestTerminalStreamChecksPendingBeforeLookingUpSuccessor(t *testing.T) {
+	runner := &publishingTerminalRunner{Runner: agent.NewRunner(nil), pending: true}
+	testutil.True(t, terminalStreamHasSuccessor(runner, "process", 31))
+}
+
+func TestTerminalOutputCursorRejectsReplacement(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s, _ := testServer(t)
+	runner := &managedSSERunner{Runner: agent.NewRunner(nil), session: &managedSSEFixture{
+		pid: 31, output: "outgoing history",
+	}}
+	s.runner = runner
+	routes := s.routes()
+	const taskPath = "/api/tasks/process"
+
+	first := httptest.NewRecorder()
+	routes.ServeHTTP(first, authedReq("GET", taskPath+"/output", ""))
+	testutil.Equal(t, first.Code, http.StatusOK)
+	testutil.Equal(t, first.Header().Get("X-Argus-Session-Pid"), "31")
+	testutil.Equal(t, first.Body.String(), "outgoing history")
+
+	runner.session = &managedSSEFixture{pid: 32, output: "new process"}
+	stale := httptest.NewRecorder()
+	oldCursor := first.Header().Get("X-Output-Total")
+	routes.ServeHTTP(stale, authedReq("GET", taskPath+"/stream?expected_pid=31&since="+oldCursor, ""))
+	testutil.Equal(t, stale.Code, http.StatusConflict)
+	testutil.Contains(t, stale.Body.String(), "stale_session")
+	testutil.Equal(t, runner.session.attachedPID, 0)
+
+	fresh := httptest.NewRecorder()
+	routes.ServeHTTP(fresh, authedReq("GET", taskPath+"/output", ""))
+	testutil.Equal(t, fresh.Code, http.StatusOK)
+	testutil.Equal(t, fresh.Header().Get("X-Argus-Session-Pid"), "32")
+	testutil.Equal(t, fresh.Body.String(), "new process")
+}
+
+func TestTerminalStreamCursorRejectsReplacementDuringAttach(t *testing.T) {
+	s, _ := testServer(t)
+	session := &managedSSEFixture{pid: 31, replaceAfterPIDRead: 32}
+	s.runner = managedSSERunner{Runner: agent.NewRunner(nil), session: session}
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, authedReq("GET", "/api/tasks/process/stream?expected_pid=31&since=40", ""))
+	testutil.Equal(t, session.PID(), 32)
+	testutil.Equal(t, w.Code, http.StatusConflict)
+	testutil.Contains(t, w.Body.String(), "stale_session")
+	testutil.Equal(t, session.attachedPID, 0)
 }
 
 // --- handleListBackends ---
@@ -4198,6 +4336,20 @@ func TestHandleResumeTask_StartFails(t *testing.T) {
 	testutil.Equal(t, w.Code, http.StatusInternalServerError)
 }
 
+func TestHandleResumeTask_RefusesArmedHeraReclaim(t *testing.T) {
+	s, database := testServer(t)
+	task := &model.Task{ID: "reclaim", Name: "Reclaim", Status: model.StatusComplete, Archived: true}
+	testutil.NoError(t, database.Add(task))
+	armed, err := database.ArmHeraReclaimStop(task.ID, 123)
+	testutil.NoError(t, err)
+	testutil.True(t, armed)
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, authedReq("POST", "/api/tasks/reclaim/resume", ""))
+	testutil.Equal(t, w.Code, http.StatusConflict)
+	testutil.Contains(t, w.Body.String(), "reclaim_pending")
+	testutil.Nil(t, s.runner.Get(task.ID))
+}
+
 func TestHandleResumeTask_RefusesDuringRerenderRestart(t *testing.T) {
 	srv, d := testServer(t)
 	mux := srv.routes()
@@ -4684,5 +4836,41 @@ func TestHandleGitComparison(t *testing.T) {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, authedReq("GET", "/api/tasks/"+bad.ID+"/git/status", ""))
 		testutil.Equal(t, w.Code, http.StatusInternalServerError)
+	})
+}
+
+func TestHandleUpdateProject_Rename(t *testing.T) {
+	srv, d := testServer(t)
+	handler := authMiddleware(srv.token, d, nil, srv.routes())
+	testutil.NoError(t, d.SetProject("alpha", config.Project{Path: "/tmp/a"}))
+	testutil.NoError(t, d.SetProject("taken", config.Project{Path: "/tmp/t"}))
+
+	put := func(name, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, authedReq("PUT", "/api/projects/"+name, body))
+		return w
+	}
+
+	t.Run("exists", func(t *testing.T) {
+		testutil.Equal(t, put("alpha", `{"path":"/tmp/a","new_name":"taken"}`).Code, http.StatusConflict)
+	})
+	t.Run("not found", func(t *testing.T) {
+		testutil.Equal(t, put("ghost", `{"path":"/tmp/a","new_name":"x"}`).Code, http.StatusNotFound)
+	})
+	t.Run("invalid name", func(t *testing.T) {
+		testutil.Equal(t, put("alpha", `{"path":"/tmp/a","new_name":"a/b"}`).Code, http.StatusBadRequest)
+	})
+	t.Run("success renames and updates fields", func(t *testing.T) {
+		w := put("alpha", `{"path":"/tmp/a2","new_name":" beta "}`)
+		testutil.Equal(t, w.Code, http.StatusOK)
+		var got projectJSON
+		testutil.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		testutil.Equal(t, got.Name, "beta")
+		testutil.Equal(t, got.Path, "/tmp/a2")
+		projects, _ := d.Projects()
+		if _, ok := projects["alpha"]; ok {
+			t.Fatal("old name should be gone")
+		}
+		testutil.Equal(t, projects["beta"].Path, "/tmp/a2")
 	})
 }

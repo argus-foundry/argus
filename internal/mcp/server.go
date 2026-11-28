@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,6 +27,7 @@ import (
 	"github.com/argus-foundry/argus/internal/sandboxprop"
 	"github.com/argus-foundry/argus/internal/todo"
 	"github.com/argus-foundry/argus/internal/uxlog"
+	"github.com/argus-foundry/argus/internal/voice"
 )
 
 // KBQuerier is the interface the MCP server needs from the database.
@@ -260,9 +262,15 @@ type Server struct {
 	heraRevive         HeraReviver        // optional; set via SetHeraReviver (PULL-revive, add-hera-revive)
 	// heraGraduationPreflight is set via SetHeraGraduationPreflight.
 	heraGraduationPreflight func(*model.Task) error
-	profileCfg              ConfigStore  // optional; set via SetProfileResolver
-	apiGetMu                sync.RWMutex // guards apiGet (set after the listener is serving)
-	apiGet                  APIGetter    // optional; set via SetAPIGetter (argus_api_get)
+	// heraReapPoke asks the daemon's reap nudge watcher for a debounced sweep
+	// (add-coord-reap-triggers); nil = no watcher.
+	heraReapPoke func()
+	profileCfg   ConfigStore  // optional; set via SetProfileResolver
+	apiGetMu     sync.RWMutex // guards apiGet (set after the listener is serving)
+	apiGet       APIGetter    // optional; set via SetAPIGetter (argus_api_get)
+	voiceMu      sync.RWMutex // guards voice (set after the listener is serving)
+	voice        *voice.Router
+	voiceToken   string // guarded by voiceMu
 	// accountMover backs task_move_account; set via SetAccountMover.
 	accountMover accountMoverSlot
 	createMu     sync.Mutex
@@ -412,10 +420,14 @@ func (s *Server) ListenAndServe() (int, error) {
 // shutdownCancel is always set in New(), so no nil guard is needed.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.shutdownCancel()
-	if s.httpSrv == nil {
-		return nil
+	var drainErr error
+	if router := s.voiceRouter(); router != nil {
+		drainErr = router.Shutdown(ctx)
 	}
-	return s.httpSrv.Shutdown(ctx)
+	if s.httpSrv == nil {
+		return drainErr
+	}
+	return errors.Join(drainErr, s.httpSrv.Shutdown(ctx))
 }
 
 // sseKeepaliveInterval is how often the GET/SSE handler emits comment-only
@@ -522,6 +534,8 @@ func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.caller = s.verifiedCaller(r)
+	req.voiceAuth = r.Header.Get("Authorization")
+	req.voiceLocal = localVoiceRequest(r)
 
 	if !hasID {
 		// Notification: dispatch for any side effect; the returned
@@ -1175,6 +1189,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if s.apiGetEnabled() {
 		tools = append(tools, apiGetToolDefs...)
 	}
+	if s.voiceRouter() != nil {
+		tools = append(tools, voiceToolDefs...)
+	}
 	if s.accountMoveEnabled() {
 		tools = append(tools, accountMoveToolDefs...)
 	}
@@ -1354,6 +1371,8 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		return s.toolProfileResolve(req.ID, params.Arguments)
 	case "argus_api_get":
 		return s.toolAPIGet(req.ID, params.Arguments)
+	case "argus_brief", "argus_command", "argus_commands":
+		return s.toolVoice(req, params.Name, params.Arguments)
 	case "todo_create":
 		if !s.todoToolsActive() {
 			return errorResp(req.ID, -32601, "unknown tool: "+params.Name)
@@ -1462,7 +1481,8 @@ func builtinToolDefs() []Tool {
 	var out []Tool
 	for _, defs := range [][]Tool{toolDefs, taskToolDefs, taskRecycleToolDefs, todoToolDefs, clipboardToolDefs,
 		sandboxProposalToolDefs, scheduleToolDefs, messagingToolDefs, artifactToolDefs, artifactOpenToolDefs,
-		artifactPublishToolDefs, heraToolDefs, profileToolDefs, apiGetToolDefs, accountMoveToolDefs, residentTimerToolDefs} {
+		artifactPublishToolDefs, heraToolDefs, profileToolDefs, apiGetToolDefs, accountMoveToolDefs, residentTimerToolDefs,
+		voiceToolDefs} {
 		out = append(out, defs...)
 	}
 	return append(out, residentDeleteTool, residentGraduateTool)
@@ -3215,3 +3235,16 @@ func (s *Server) SetHeraArchiver(r hera.ArchiveRunner, g hera.GitCheck) {
 // SetHeraHandoff wires the handed-off archive check (add-hera-handoff-archive).
 // nil disables handed-off archives and the task_archive handoff path.
 func (s *Server) SetHeraHandoff(h hera.HandoffCheck) { s.heraHandoffCheck = h }
+
+// SetHeraReapPoke wires the reap nudge watcher's Poke (add-coord-reap-triggers).
+// hera_status(done) and hera_accept call it; nil disables the poke.
+func (s *Server) SetHeraReapPoke(poke func()) { s.heraReapPoke = poke }
+
+// pokeHeraReap is the nil-safe poke call site.
+func (s *Server) pokeHeraReap(why string) {
+	if s.heraReapPoke == nil {
+		return
+	}
+	slog.Info("[hera] reap-nudge: poke", "why", why)
+	s.heraReapPoke()
+}

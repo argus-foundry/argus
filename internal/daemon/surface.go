@@ -290,7 +290,15 @@ const (
 	// so a supervisor restart can still lose that session's ID.
 	// 55: new sessions receive structured board-decision guidance in the
 	// materialized Hera builtin skill (add-board-decision-page).
-	SupervisorSpawnSurface = 55
+	// 56: new sessions receive FYI comment/dismissal and durable receipt
+	// recovery guidance in the Hera builtin skill (add-decide-fyi-and-phone).
+	// 57: coordinator spawn/reclaim and the materialized Hera skill require
+	// addressing typed annotations and recovering full decision/FYI receipts.
+	// 58: new sessions receive action/todo board guidance, explicit trigger
+	// readiness and Done/Dropped semantics in the materialized Hera skills.
+	// 59: injected Hera guidance reserves deferred_at for human deferral and
+	//     names non-blocking future steps later (add-board-deferral).
+	SupervisorSpawnSurface = 59
 
 	// SupervisorStreamSurface names the observable behavior of the live-session
 	// stream core.
@@ -361,9 +369,27 @@ const (
 	// v19: resident PTY startup output best-effort logs fallback notices once
 	// to the supervisor log within 64 KiB/60s, preserving ANSI/UTF-8 boundaries.
 	// v20: full session stops also snapshot and clean detached task browsers.
-	// v21: full stops retain independently verified browser snapshots when
+	// v21: StopSettledSession arbitrates a voice stop against starting and
+	// restarting the target session under the runner lock. Retirement clears
+	// stop bookkeeping before the next session can own that task ID.
+	// v22: AttachableSession checks owner-side retirement and replacement
+	// state before reuse. External starts cannot take a queued restart's slot.
+	// PID-scoped width repairs verify the process when claiming a restart.
+	// v23: exit records, stream attachment, resize, and width-repair stops
+	// carry the producing or targeted PID across each owner boundary.
+	// v24: scoped exit lookups retain managed restart chains, and full-tree
+	// Hera reclaim stops verify the retiring PID at the owner.
+	// v25: session listings preserve pending restarts during prelaunch, and
+	// PID-scoped tree stops avoid worktree-wide detached process cleanup.
+	// v26: session listings and status retain ordinary launch reservations.
+	// v27: owner snapshots identify managed predecessors and report failed
+	// launches as retired while admission stays closed through finalization.
+	// v28: a queued managed restart identifies its predecessor before the
+	// retiring session's exit callback publishes its receipt.
+	// v29: slot observations and exit baselines are captured together.
+	// v30: full stops retain independently verified browser snapshots when
 	// another root or helper cannot be inspected during the same scan.
-	SupervisorStreamSurface = 21
+	SupervisorStreamSurface = 30
 )
 
 // SurfaceVersion is a supervisor's declared executed-surface identity: the pair
@@ -592,6 +618,8 @@ var SupervisorStreamPaths = []string{
 	"internal/agent/ringbuffer.go",            // the ring the sole readLoop tees into
 	"internal/claudeagents/claudeagents.go",   // `claude agents`/`claude stop` under the session's config dir
 	"internal/agent/runner.go",                // live session map, pendingRestart, Stop/StopAll, KickRerender
+	"internal/agent/iface.go",                 // owner-side attachability dispatch
+	"internal/agent/errors.go",                // typed stop refusal sent across the R/S boundary
 	"internal/agent/session.go",               // the single readLoop: PTY read → ring + writers, session log
 	"internal/agent/resident_auto.go",         // resident native permission fallback diagnostics
 	"internal/agent/terminal_color.go",        // PTY startup OSC color-query replies and duplicate filtering
@@ -619,8 +647,10 @@ var SupervisorStreamPaths = []string{
 // To re-record after an intentional change: run the guard test; its failure
 // message prints the computed digest to paste back here.
 const (
-	SpawnSurfaceDigest  = "afaabd1231de8da81bafc7ce0b64c53871c01d79125c127e6d14ede65e595eb1"
-	StreamSurfaceDigest = "7d6feacc9dc466e257436fb78aeeb1099e101d2124022d0d903338a7fe283050"
+	// The hera SKILL.md archive "when to call it" text (add-coord-reap-triggers)
+	// is guidance only and changes no session construction: digest-only.
+	SpawnSurfaceDigest  = "cdd25d73b3b690d28105b3a148716bbed503ac838821032275ded22db2854bd7"
+	StreamSurfaceDigest = "3dae7ea5ab80bd18443d75bf4c04d27dadf53c6c92a3b03ad421148d287b2acc"
 )
 
 // SurfaceDigest computes the SHA-256 over the declared manifest's file contents,

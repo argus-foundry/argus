@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/argus-foundry/argus/internal/app/agentview"
@@ -20,13 +21,12 @@ const inputOriginHeader = "X-Input-Origin"
 // inputOriginSystemValue is the header value signaling agentview.OriginSystem.
 const inputOriginSystemValue = "system"
 
-// OutputResult is the response from GetOutput: the byte tail plus the cursor
-// the client should pass as ?since=N on a subsequent StreamOutput call to
-// resume without overlap. Source is "ring", "log", or "live" (mirrors the
-// X-Source header the SPA inspects for diagnostics).
+// OutputResult holds recent output and its byte cursor. A nonzero PID scopes the
+// cursor to the process that produced it. Source is "ring", "log", or "live".
 type OutputResult struct {
 	Data        []byte
 	OutputTotal uint64
+	PID         int
 	Source      string
 }
 
@@ -62,7 +62,8 @@ func (c *Client) GetOutput(ctx context.Context, id string, tailBytes int, clean 
 			total = n
 		}
 	}
-	return &OutputResult{Data: data, OutputTotal: total, Source: resp.Header.Get("X-Source")}, nil
+	pid, _ := strconv.Atoi(resp.Header.Get("X-Argus-Session-Pid"))
+	return &OutputResult{Data: data, OutputTotal: total, PID: pid, Source: resp.Header.Get("X-Source")}, nil
 }
 
 // WriteInput sends bytes to the agent's PTY. Capped at 64 KiB by the server.
@@ -98,14 +99,37 @@ func (c *Client) GetSize(ctx context.Context, id string) (*PTYSize, error) {
 
 // ResizeResp mirrors the resize handler's response envelope.
 type ResizeResp struct {
-	Cols       int  `json:"cols"`
-	Rows       int  `json:"rows"`
-	Rerendered bool `json:"rerendered"`
+	Cols       int    `json:"cols"`
+	Rows       int    `json:"rows"`
+	Rerendered bool   `json:"rerendered"`
+	Deferred   string `json:"deferred"`
 }
 
 // Resize sends a SIGWINCH-equivalent resize to the agent's PTY.
 func (c *Client) Resize(ctx context.Context, id string, rows, cols uint16) (*ResizeResp, error) {
-	req := map[string]uint16{"rows": rows, "cols": cols}
+	return c.resize(ctx, id, rows, cols, RerenderResizeOptions{})
+}
+
+// RerenderResizeOptions describe the remote pane's current process and history.
+type RerenderResizeOptions struct {
+	ExpectedPID   int    `json:"expected_pid,omitempty"`
+	CommittedCols uint16 `json:"committed_cols,omitempty"`
+	RerenderNow   bool   `json:"rerender_now,omitempty"`
+	ScrolledUp    bool   `json:"scrolled_up,omitempty"`
+	ComposerDirty bool   `json:"composer_dirty,omitempty"`
+}
+
+// ResizeForRerender asks the session owner to evaluate the remote pane's width.
+func (c *Client) ResizeForRerender(ctx context.Context, id string, rows, cols uint16, options RerenderResizeOptions) (*ResizeResp, error) {
+	return c.resize(ctx, id, rows, cols, options)
+}
+
+func (c *Client) resize(ctx context.Context, id string, rows, cols uint16, options RerenderResizeOptions) (*ResizeResp, error) {
+	req := struct {
+		Rows uint16 `json:"rows"`
+		Cols uint16 `json:"cols"`
+		RerenderResizeOptions
+	}{rows, cols, options}
 	var resp ResizeResp
 	if err := c.doJSON(ctx, "POST", "/api/tasks/"+id+"/resize", req, &resp); err != nil {
 		return nil, err
@@ -121,9 +145,21 @@ func (c *Client) Resize(ctx context.Context, id string, rows, cols uint16) (*Res
 // This bypasses the *http.Client.Timeout because SSE is long-lived; the
 // caller controls cancellation via ctx.
 func (c *Client) StreamOutput(ctx context.Context, id string, since uint64) (*http.Response, error) {
+	return c.StreamOutputForPID(ctx, id, since, 0)
+}
+
+// StreamOutputForPID uses the cursor only if the expected PTY still owns it.
+func (c *Client) StreamOutputForPID(ctx context.Context, id string, since uint64, expectedPID int) (*http.Response, error) {
 	path := "/api/tasks/" + id + "/stream"
+	query := url.Values{}
 	if since > 0 {
-		path += "?since=" + strconv.FormatUint(since, 10)
+		query.Set("since", strconv.FormatUint(since, 10))
+	}
+	if expectedPID > 0 {
+		query.Set("expected_pid", strconv.Itoa(expectedPID))
+	}
+	if len(query) > 0 {
+		path += "?" + query.Encode()
 	}
 	// Bypass c.do because we want to return the live body without consuming
 	// it. Use a Request directly so we can disable any client-side timeout.

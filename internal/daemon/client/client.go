@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/rpc"
@@ -121,6 +122,9 @@ type Client struct {
 	// that needs the exiting handle's identity (the daemon stamping its exit-info
 	// cache) cannot recover it with Get. Fired instead of onSessionExit when set.
 	onSessionExitOwned func(taskID string, info daemon.ExitInfo, owner agent.SessionHandle)
+	// finalizing retains an exit in session listings while its callback applies
+	// the authoritative status. Guarded by c.mu.
+	finalizing map[string]*RemoteSession
 
 	// needsInput holds the daemon-computed "waiting on the user" set. When this
 	// Client is the daemon's supervisor-client (d.runner in supervisor mode), the
@@ -143,6 +147,22 @@ const accountProtocolVersion = 8
 // recycleSessionIDProtocolVersion is the first supervisor protocol that carries
 // the fresh pinned SessionID on RecycleReq.
 const recycleSessionIDProtocolVersion = 12
+
+// managedRestartProtocolVersion identifies the outgoing and successor
+// processes for a managed restart, including when the daemon reattaches.
+const managedRestartProtocolVersion = 18
+
+// CheckManagedRestartSupported checks the owner before preparing a restart.
+func (c *Client) CheckManagedRestartSupported(taskID string) error {
+	c.mu.Lock()
+	peer := c.peerProtocol
+	c.mu.Unlock()
+	if peer == 0 || peer >= managedRestartProtocolVersion {
+		return nil
+	}
+	uxlog.Log("[restart] owner cannot identify a successor task=%s protocol=v%d need=v%d", taskID, peer, managedRestartProtocolVersion)
+	return fmt.Errorf("%w: supervisor protocol v%d cannot identify a managed successor", agent.ErrSessionCoordinationUnsupported, peer)
+}
 
 // RecycleCarriesSessionID implements agent.RecycleIDCapable from the cached
 // handshake version (no round trip). An unhandshaken peer (0) is assumed
@@ -299,6 +319,9 @@ func (c *Client) checkResidentSupported(task *model.Task) error {
 
 // Start requests the daemon to start a session and opens a stream for its output.
 func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, error) {
+	if c.isClosed() {
+		return nil, ErrClientClosed
+	}
 	if task.ResumeOnly {
 		c.mu.Lock()
 		peer := c.peerProtocol
@@ -366,15 +389,13 @@ func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		}
 	}); err != nil {
 		uxlog.Log("client.Start: RPC FAILED task=%s err=%v", task.ID, err)
-		// A timeout specifically means we stopped waiting, not that the
-		// daemon-side start failed — callWithTimeout's dispatch goroutine
-		// keeps it running to completion regardless. Any other error here
-		// (a dead connection, a closed client) means the RPC genuinely can't
-		// complete. Only the timeout case is ambiguous enough that a caller
-		// like agent.CreateAndStart must not treat it as grounds to unwind
-		// (delete) a freshly created worktree/task the daemon might still
-		// finish starting.
-		if errors.Is(err, ErrRPCTimeout) {
+		// A timeout or interrupted connection can lose the reply after the
+		// supervisor received the request. Preserve the task and worktree
+		// because the supervisor can still finish the launch.
+		var transportErr *net.OpError
+		if errors.Is(err, ErrRPCTimeout) || errors.Is(err, io.ErrUnexpectedEOF) ||
+			errors.Is(err, io.ErrClosedPipe) || errors.As(err, &transportErr) ||
+			(errors.Is(err, rpc.ErrShutdown) && c.isClosed()) {
 			return nil, fmt.Errorf("%w: %w", agent.ErrStartAmbiguous, err)
 		}
 		return nil, err
@@ -383,6 +404,9 @@ func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 		uxlog.Log("client.Start: daemon error task=%s err=%s", task.ID, resp.Error)
 		if resp.ResumeUnavailable {
 			return nil, fmt.Errorf("%w: %s", agent.ErrResumeUnavailable, resp.Error)
+		}
+		if resp.SessionStarting {
+			return nil, agent.ErrSessionStarting
 		}
 		// resp.Ambiguous means the daemon's OWN Start call was itself an
 		// ambiguous RPC timeout (e.g. its second hop to the supervisor in P4
@@ -400,11 +424,16 @@ func (c *Client) Start(task *model.Task, cfg config.Config, rows, cols uint16, r
 	if resp.SessionID != "" {
 		task.SessionID = resp.SessionID
 	}
-	rs := c.getOrCreateSession(task.ID)
-	rs.mu.Lock()
-	rs.pid = resp.PID
-	rs.mu.Unlock()
-	return rs, nil
+	return c.sessionForStart(task.ID, resp.PID), nil
+}
+
+func (c *Client) isClosed() bool {
+	select {
+	case <-c.closed:
+		return true
+	default:
+		return false
+	}
 }
 
 // Get returns a SessionHandle for the task, or nil if not found.
@@ -424,10 +453,19 @@ func (c *Client) Get(taskID string) agent.SessionHandle {
 	if !info.Alive {
 		return nil
 	}
+	info.TaskID = taskID
+	return c.AttachObservedSession(info)
+}
 
-	rs = c.getOrCreateSession(taskID)
-	rs.updateInfo(info)
-	return rs
+// AttachObservedSession starts a process relay directly from an authoritative
+// listing, including when that process settles before another probe could run.
+func (c *Client) AttachObservedSession(info daemon.SessionInfo) agent.SessionHandle {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if rs := c.sessions[info.TaskID]; rs != nil {
+		return rs
+	}
+	return c.newSessionLocked(info.TaskID, info)
 }
 
 // ProbeSession asks the server about one session and surfaces an RPC failure
@@ -442,6 +480,54 @@ func (c *Client) ProbeSession(taskID string) (daemon.SessionInfo, error) {
 
 // Stop stops a session via RPC (full tree stop).
 func (c *Client) Stop(taskID string) error { return c.StopScoped(taskID, agent.StopTree) }
+
+func (c *Client) StopSettled(taskID string) error {
+	var resp daemon.StatusResp
+	if err := c.call("Daemon.StopSettledSession", &daemon.TaskIDReq{TaskID: taskID}, &resp); err != nil {
+		if strings.Contains(err.Error(), "can't find method Daemon.StopSettledSession") {
+			return agent.ErrSessionCoordinationUnsupported
+		}
+		return err
+	}
+	return stopReplyError(resp)
+}
+
+// StopRerenderForPID claims the bounded stop only for the identified PTY.
+func (c *Client) StopRerenderForPID(taskID string, expectedPID int) error {
+	if expectedPID <= 0 {
+		return agent.ErrSessionNotFound
+	}
+	return c.stopForPID("Daemon.StopRerenderForPID", taskID, agent.StopRerender, expectedPID)
+}
+
+func (c *Client) StopTreeForPID(taskID string, expectedPID int) error {
+	if expectedPID <= 0 {
+		return agent.ErrSessionNotFound
+	}
+	return c.stopForPID("Daemon.StopTreeForPID", taskID, agent.StopTree, expectedPID)
+}
+
+func (c *Client) CheckReclaimSessionRetired(taskID string) error {
+	return c.stopForPID("Daemon.StopTreeForPID", taskID, agent.StopTree, 0)
+}
+
+func (c *Client) stopForPID(method, taskID string, scope agent.StopScope, expectedPID int) error {
+	var resp daemon.StatusResp
+	req := &daemon.StopReq{TaskID: taskID, Scope: scope, ExpectedPID: expectedPID}
+	if err := c.call(method, req, &resp); err != nil {
+		if strings.Contains(err.Error(), "can't find method "+method) {
+			return agent.ErrSessionCoordinationUnsupported
+		}
+		if scope == agent.StopTree && expectedPID > 0 {
+			return fmt.Errorf("%w: %w", agent.ErrSessionStopUnconfirmed, err)
+		}
+		return err
+	}
+	if resp.Error == "" && !resp.OK {
+		return agent.ErrSessionCoordinationUnsupported
+	}
+	return stopReplyError(resp)
+}
 
 // StopScoped stops a session via RPC with the given scope.
 func (c *Client) StopScoped(taskID string, scope agent.StopScope) error {
@@ -460,10 +546,24 @@ func (c *Client) StopScoped(taskID string, scope agent.StopScope) error {
 		}
 		return err
 	}
-	if resp.Error != "" {
+	return stopReplyError(resp)
+}
+
+func stopReplyError(resp daemon.StatusResp) error {
+	switch resp.Error {
+	case "":
+		return nil
+	case agent.ErrSessionNotFound.Error():
+		return agent.ErrSessionNotFound
+	case agent.ErrSessionStarting.Error():
+		return agent.ErrSessionStarting
+	case agent.ErrSessionCoordinationUnsupported.Error():
+		return agent.ErrSessionCoordinationUnsupported
+	case agent.ErrSessionStopUnconfirmed.Error():
+		return agent.ErrSessionStopUnconfirmed
+	default:
 		return fmt.Errorf("%s", resp.Error)
 	}
-	return nil
 }
 
 // StopAll stops all sessions via RPC. Errors are silently ignored since
@@ -610,22 +710,55 @@ func (c *Client) HasSession(taskID string) bool {
 // can skip the InProgress→InReview transition while the daemon is mid
 // kick-restart for this task.
 func (c *Client) HasPendingRestart(taskID string) bool {
-	var resp daemon.PendingRestartResp
-	if err := c.call("Daemon.HasPendingRestart", &daemon.TaskIDReq{TaskID: taskID}, &resp); err != nil {
-		return false
-	}
-	return resp.Pending
+	pending, _ := c.hasPendingRestart(taskID)
+	return pending
 }
 
-// StartOrReattach returns the live session for task.ID if the daemon reports one
-// alive (reattached=true), otherwise starts a fresh one (reattached=false). This
-// satisfies agent.SessionRunner so the daemon's API resume path works when the
-// daemon's runner is a supervisor-client. Composed from Get + Start rather than a
-// dedicated RPC — the daemon-side StartSession already rejects a duplicate, and
-// Get's liveness probe is the same check the in-process runner does internally.
+func (c *Client) hasPendingRestart(taskID string) (bool, error) {
+	var resp daemon.PendingRestartResp
+	if err := c.call("Daemon.HasPendingRestart", &daemon.TaskIDReq{TaskID: taskID}, &resp); err != nil {
+		return false, err
+	}
+	return resp.Pending, nil
+}
+
+// AttachableSession asks the owner whether an existing session is ready to reuse.
+// An older peer cannot certify that a live session is safe to reattach.
+func (c *Client) AttachableSession(taskID string) (agent.SessionHandle, error) {
+	var resp daemon.AttachableSessionResp
+	if err := c.call("Daemon.AttachableSession", &daemon.TaskIDReq{TaskID: taskID}, &resp); err != nil {
+		if !strings.Contains(err.Error(), "can't find method Daemon.AttachableSession") {
+			return nil, err
+		}
+		info, err := c.ProbeSession(taskID)
+		if err != nil {
+			return nil, err
+		}
+		if info.Alive {
+			return nil, agent.ErrSessionCoordinationUnsupported
+		}
+		return nil, nil
+	}
+	if resp.Unsupported {
+		return nil, agent.ErrSessionCoordinationUnsupported
+	}
+	if resp.Pending {
+		return nil, agent.ErrSessionStarting
+	}
+	if resp.PID == 0 {
+		return nil, nil
+	}
+	if sess := c.Get(taskID); sess != nil && sess.Alive() && sess.PID() == resp.PID {
+		return sess, nil
+	}
+	uxlog.Log("client.AttachableSession: owner PID does not match local stream task=%s owner_pid=%d", taskID, resp.PID)
+	return nil, agent.ErrSessionStarting
+}
+
+// StartOrReattach attaches to a settled session or requests a fresh start.
 func (c *Client) StartOrReattach(task *model.Task, cfg config.Config, rows, cols uint16, resume bool) (agent.SessionHandle, bool, error) {
-	if existing := c.Get(task.ID); existing != nil {
-		return existing, true, nil
+	if existing, err := c.AttachableSession(task.ID); err != nil || existing != nil {
+		return existing, existing != nil, err
 	}
 	sess, err := c.Start(task, cfg, rows, cols, resume)
 	if err != nil {
@@ -646,28 +779,43 @@ func (c *Client) KickRerender(task *model.Task, cfg config.Config, rows, cols ui
 	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
 		return err
 	}
-	return c.kickRerender(task, rows, cols, false, "Daemon.KickRerender")
+	return c.kickRerender(task, rows, cols, false, "Daemon.KickRerender", 0)
 }
 
 func (c *Client) Revive(task *model.Task, cfg config.Config, rows, cols uint16) error {
 	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
 		return err
 	}
-	return c.kickRerender(task, rows, cols, true, "Daemon.KickRerender")
+	return c.kickRerender(task, rows, cols, true, "Daemon.KickRerender", 0)
 }
 
 func (c *Client) KickWidthRerender(task *model.Task, cfg config.Config, rows, cols uint16) error {
 	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
 		return err
 	}
-	return c.kickRerender(task, rows, cols, false, "Daemon.KickWidthRerender")
+	return c.kickRerender(task, rows, cols, false, "Daemon.KickWidthRerender", 0)
 }
 
-func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, method string) error {
+// KickWidthRerenderForPID has no unscoped fallback. An older peer cannot
+// guarantee that it is signaling the PTY verified by the caller.
+func (c *Client) KickWidthRerenderForPID(task *model.Task, cfg config.Config, rows, cols uint16, expectedPID int) error {
+	if expectedPID <= 0 {
+		return agent.ErrSessionNotFound
+	}
+	if err := c.checkResidentWorkerSupported(task, cfg); err != nil {
+		return err
+	}
+	return c.kickRerender(task, rows, cols, false, "Daemon.KickWidthRerenderForPID", expectedPID)
+}
+
+func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, method string, expectedPID int) error {
 	if err := c.checkAccountSupported(task); err != nil {
 		return err
 	}
 	if err := c.checkResidentSupported(task); err != nil {
+		return err
+	}
+	if err := c.CheckManagedRestartSupported(task.ID); err != nil {
 		return err
 	}
 	var resp daemon.StatusResp
@@ -689,14 +837,25 @@ func (c *Client) kickRerender(task *model.Task, rows, cols uint16, revive bool, 
 		Branch:          task.Branch,
 		Rows:            rows,
 		Cols:            cols,
+		ExpectedPID:     expectedPID,
 	}, &resp); err != nil {
 		if method == "Daemon.KickWidthRerender" && strings.Contains(err.Error(), "can't find method Daemon.KickWidthRerender") {
 			slog.Info("[rerender] peer lacks bounded kick; using ordinary kick", "task", task.ID)
-			return c.kickRerender(task, rows, cols, false, "Daemon.KickRerender")
+			return c.kickRerender(task, rows, cols, false, "Daemon.KickRerender", 0)
+		}
+		if expectedPID > 0 && strings.Contains(err.Error(), "can't find method Daemon.KickWidthRerenderForPID") {
+			return agent.ErrSessionCoordinationUnsupported
 		}
 		return err
 	}
 	if resp.Error != "" {
+		if expectedPID > 0 {
+			for _, sentinel := range []error{agent.ErrSessionNotFound, agent.ErrSessionStarting, agent.ErrResumeUnavailable, agent.ErrSessionCoordinationUnsupported} {
+				if resp.Error == sentinel.Error() {
+					return sentinel
+				}
+			}
+		}
 		return fmt.Errorf("%s", resp.Error)
 	}
 	if resp.SessionID != "" {
@@ -723,6 +882,9 @@ func (c *Client) Recycle(task *model.Task, cfg config.Config, rows, cols uint16)
 		return err
 	}
 	if err := c.checkResidentSupported(task); err != nil {
+		return err
+	}
+	if err := c.CheckManagedRestartSupported(task.ID); err != nil {
 		return err
 	}
 	var resp daemon.StatusResp
@@ -772,11 +934,38 @@ func (c *Client) SetNeedsInputIDs(ids []string) {
 // *agent.Session set, so it relays the supervisor's already-built SessionInfo —
 // synthetic pending-restart entries included). Nil on RPC failure.
 func (c *Client) ListSessionInfo() []daemon.SessionInfo {
+	infos, _ := c.ListSessionInfoChecked()
+	return infos
+}
+
+// ListSessionInfoChecked keeps a failed supervisor query distinct from an
+// empty listing when the daemon relays it to a connected client.
+func (c *Client) ListSessionInfoChecked() ([]daemon.SessionInfo, error) {
 	var resp daemon.ListResp
 	if err := c.call("Daemon.ListSessions", &daemon.Empty{}, &resp); err != nil {
-		return nil
+		return nil, err
 	}
-	return resp.Sessions
+	// A supervisor can list a retired process before its exit reaches the
+	// daemon. Keep the task pending while the local reader is waiting for
+	// that exit or its callback is applying the result.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	listed := make(map[string]bool, len(resp.Sessions))
+	for i, info := range resp.Sessions {
+		if !info.Alive && (c.sessions[info.TaskID] != nil || c.finalizing[info.TaskID] != nil) {
+			resp.Sessions[i] = daemon.SessionInfo{TaskID: info.TaskID, Alive: true}
+		}
+		listed[info.TaskID] = true
+	}
+	for _, sessions := range []map[string]*RemoteSession{c.sessions, c.finalizing} {
+		for id := range sessions {
+			if !listed[id] {
+				resp.Sessions = append(resp.Sessions, daemon.SessionInfo{TaskID: id, Alive: true})
+				listed[id] = true
+			}
+		}
+	}
+	return resp.Sessions, nil
 }
 
 // Hello performs the supervisor protocol handshake, returning its ProtocolVersion
@@ -864,17 +1053,20 @@ func (c *Client) callWithCompletion(method string, args, reply any, timeout time
 	}
 }
 
-// getOrCreateSession returns an existing RemoteSession or creates a new one
-// with a stream connection.
-func (c *Client) getOrCreateSession(taskID string) *RemoteSession {
+// sessionForStart binds an explicit launch to its own output history. An old
+// reader keeps its handle long enough to deliver its own exit notification.
+func (c *Client) sessionForStart(taskID string, pid int) *RemoteSession {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if rs, ok := c.sessions[taskID]; ok {
+	if rs := c.sessions[taskID]; rs != nil && rs.Alive() && rs.PID() == pid {
 		return rs
 	}
+	return c.newSessionLocked(taskID, daemon.SessionInfo{PID: pid})
+}
 
+func (c *Client) newSessionLocked(taskID string, info daemon.SessionInfo) *RemoteSession {
 	rs := newRemoteSession(taskID, c)
+	rs.pid, rs.info = info.PID, info
 	c.sessions[taskID] = rs
 
 	// Open a stream connection in the background.
@@ -937,53 +1129,95 @@ func (c *Client) BootInfo() (daemon.BootInfoResp, error) {
 	return resp, nil
 }
 
-// removeSessionStreamLost cleans up a session from the client's map and fires
-// the callback with StreamLost=true. Used when stream retries are exhausted or
-// the daemon is unreachable — the process may still be alive.
-func (c *Client) removeSessionStreamLost(taskID string) {
-	uxlog.Log("client.removeSessionStreamLost: task=%s", taskID)
+// forgetSession removes only the handle that owned the outgoing stream.
+func (c *Client) forgetSession(rs *RemoteSession, finalizing bool) (func(string, daemon.ExitInfo), func(string, daemon.ExitInfo, agent.SessionHandle)) {
 	c.mu.Lock()
-	rs := c.sessions[taskID]
-	delete(c.sessions, taskID)
-	fn, owned := c.onSessionExit, c.onSessionExitOwned
-	c.mu.Unlock()
-	c.fireSessionExit(fn, owned, taskID, daemon.ExitInfo{StreamLost: true}, rs)
+	defer c.mu.Unlock()
+	if c.sessions[rs.taskID] == rs {
+		delete(c.sessions, rs.taskID)
+		if finalizing {
+			if c.finalizing == nil {
+				c.finalizing = make(map[string]*RemoteSession)
+			}
+			c.finalizing[rs.taskID] = rs
+		}
+	}
+	return c.onSessionExit, c.onSessionExitOwned
 }
 
-// removeSession cleans up a session from the client's map, queries exit info
-// from the daemon, and fires the callback.
-func (c *Client) removeSession(taskID string) {
-	uxlog.Log("client.removeSession: task=%s", taskID)
-	c.mu.Lock()
-	rs := c.sessions[taskID]
-	delete(c.sessions, taskID)
-	fn, owned := c.onSessionExit, c.onSessionExitOwned
-	c.mu.Unlock()
+func (c *Client) removeSessionStreamLost(rs *RemoteSession) {
+	uxlog.Log("client.removeSessionStreamLost: task=%s", rs.taskID)
+	fn, owned := c.forgetSession(rs, false)
+	c.fireSessionExit(fn, owned, rs.taskID, daemon.ExitInfo{StreamLost: true, PID: rs.PID()}, rs)
+}
 
-	if fn != nil || owned != nil {
-		// Query exit info from daemon before firing callback.
-		var info daemon.ExitInfo
-		err := c.call("Daemon.GetExitInfo", &daemon.TaskIDReq{TaskID: taskID}, &info)
-		if err != nil {
-			// RPC failed → we have NO observed exit info. A zero-value ExitInfo
-			// would read CleanExit()==true and wrongly mark the task Complete
-			// (violating "Complete only on an observed clean exit"). Force
-			// StreamLost so HandleSessionExit treats it as "process maybe alive,
-			// status unchanged" — the tick reconciler later lands it InReview.
-			info.StreamLost = true
-		} else if info.NoEvidenceOfExit() {
-			// An older server (daemon or supervisor not yet restarted) answers
-			// "nothing recorded" with a zero ExitInfo, which reads as a clean
-			// exit. Right after a daemon restart a status probe can wrongly say
-			// a live session died; trusting that would complete a live
-			// coordinator (fix-bounce-false-complete). Treat it as unconfirmed.
-			uxlog.Log("client.removeSession: task=%s exit info carries no evidence of an exit, treating as stream lost", taskID)
-			info.StreamLost = true
-		}
-		uxlog.Log("client.removeSession: task=%s exitInfo err=%v rpcErr=%v stopped=%v streamLost=%v lastOutput=%d bytes",
-			taskID, info.Err, err, info.Stopped, info.StreamLost, len(info.LastOutput))
-		c.fireSessionExit(fn, owned, taskID, info, rs)
+// removeSession relays the outgoing process's exit. An owner-managed restart
+// keeps the handle in place so existing panes can follow it.
+func (c *Client) removeSession(rs *RemoteSession) (daemon.ExitInfo, bool) {
+	taskID := rs.taskID
+	uxlog.Log("client.removeSession: task=%s", taskID)
+	info := c.sessionExitInfo(rs)
+	if info.StreamLost || !info.PendingRestart {
+		c.finishSession(rs, info)
+		return info, false
 	}
+	if !c.relayRestartExit(rs, info) {
+		rs.close()
+		return info, false
+	}
+	return info, true
+}
+
+func (c *Client) relayRestartExit(rs *RemoteSession, info daemon.ExitInfo) bool {
+	c.mu.Lock()
+	fn, owned := c.onSessionExit, c.onSessionExitOwned
+	current := c.sessions[rs.taskID] == rs
+	c.mu.Unlock()
+	if current {
+		c.fireSessionExit(fn, owned, rs.taskID, info, rs)
+	}
+	return current
+}
+
+func (c *Client) finishSession(rs *RemoteSession, info daemon.ExitInfo) {
+	rs.close()
+	fn, owned := c.forgetSession(rs, !info.StreamLost)
+	c.fireSessionExit(fn, owned, rs.taskID, info, rs)
+	c.mu.Lock()
+	if c.finalizing[rs.taskID] == rs {
+		delete(c.finalizing, rs.taskID)
+	}
+	c.mu.Unlock()
+}
+
+func (c *Client) sessionExitInfo(rs *RemoteSession) daemon.ExitInfo {
+	return c.exitInfoForPID(rs.taskID, rs.PID())
+}
+
+// ObservedSessionExit returns the owner's retained exit record for pid.
+func (c *Client) ObservedSessionExit(taskID string, pid int) (daemon.ExitInfo, error) {
+	if pid <= 0 {
+		return daemon.ExitInfo{StreamLost: true}, nil
+	}
+	return c.exitInfoForPIDChecked(taskID, pid)
+}
+
+func (c *Client) exitInfoForPID(taskID string, pid int) daemon.ExitInfo {
+	info, _ := c.exitInfoForPIDChecked(taskID, pid)
+	return info
+}
+
+func (c *Client) exitInfoForPIDChecked(taskID string, pid int) (daemon.ExitInfo, error) {
+	var info daemon.ExitInfo
+	err := c.call("Daemon.GetExitInfo", &daemon.TaskIDReq{TaskID: taskID, ExpectedPID: pid}, &info)
+	if err != nil || info.NoEvidenceOfExit() || (pid > 0 && info.PID > 0 && info.PID != pid) {
+		// A missing result or an exit from a different process cannot settle
+		// this handle. Older peers may still return a zero-value reply.
+		info = daemon.ExitInfo{StreamLost: true, PID: pid}
+	}
+	uxlog.Log("client.sessionExitInfo: task=%s pid=%d exitPID=%d err=%v rpcErr=%v stopped=%v streamLost=%v lastOutput=%d bytes",
+		taskID, pid, info.PID, info.Err, err, info.Stopped, info.StreamLost, len(info.LastOutput))
+	return info, err
 }
 
 // SetFocused notifies the daemon that the TUI has entered or left agent view

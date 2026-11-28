@@ -1,0 +1,5 @@
+- [x] Record the departing PID at restart admission and cover the owner observation interval.
+- [x] Refresh PID-less recorded history on cached resume.
+- [x] Test and archive these requirements.
+- [x] Fence session launch during reclaim, and use scoped stops in the REST and standalone nuke paths.
+- [x] Treat a processless relay and an owner-confirmed pending replacement as reconnectable.

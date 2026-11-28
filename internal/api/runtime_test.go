@@ -361,6 +361,28 @@ func TestPatchTaskRuntime_Restart(t *testing.T) {
 	})
 }
 
+type oldRestartOwner struct{ agent.SessionRunner }
+
+func (oldRestartOwner) CheckManagedRestartSupported(string) error {
+	return agent.ErrSessionCoordinationUnsupported
+}
+
+func TestLiveRestartRejectsOldOwnerBeforePersisting(t *testing.T) {
+	srv, d := testServer(t)
+	task := &model.Task{Name: "old owner", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	sess := startCat(t, srv, d, task)
+	srv.runner = oldRestartOwner{srv.runner}
+	_, rev := runtimeGet(t, srv, task.ID)
+	w := runtimePatch(srv, task.ID, `{"prompt":"replacement","apply":"restart","force":true}`, ifMatch(rev))
+	testutil.Equal(t, w.Code, http.StatusConflict)
+	testutil.Equal(t, decodeBody(t, w)["code"], any("owner_unsupported"))
+	got, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Prompt, task.Prompt)
+	testutil.True(t, sess.Alive())
+}
+
 func TestWriteRestartFailed(t *testing.T) {
 	srv, d := testServer(t)
 	task := addStopped(t, d, nil)

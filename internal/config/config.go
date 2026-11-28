@@ -18,6 +18,7 @@ type Config struct {
 	Sandbox        SandboxConfig        `toml:"sandbox"`
 	KB             KBConfig             `toml:"kb"`
 	API            APIConfig            `toml:"api"`
+	Voice          VoiceConfig          `toml:"voice"`
 	Hera           HeraConfig           `toml:"hera"`
 	Resident       ResidentConfig       `toml:"resident"`
 	DevStack       DevStackConfig       `toml:"devstack"`
@@ -280,6 +281,15 @@ type ArgusConfig struct {
 type APIConfig struct {
 	Enabled  bool `toml:"enabled"`   // default false — must be turned on in settings
 	HTTPPort int  `toml:"http_port"` // default 7743
+}
+
+// VoiceConfig is the optional notify-back channel for a voice client.
+// config.toml only. An empty WebhookURL disables it.
+type VoiceConfig struct {
+	// WebhookURL is a loopback http or https URL. Argus POSTs a short JSON
+	// body when a session starts needing input and when a task completes.
+	// Anything other than a loopback host is ignored.
+	WebhookURL string `toml:"webhook_url"`
 }
 
 // KBConfig controls the knowledge base server.

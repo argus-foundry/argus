@@ -53,4 +53,15 @@ public enum ArgusError: Error, Sendable, Equatable {
         if case let .http(status, _) = self { return status }
         return nil
     }
+
+    /// True when a terminal cursor belongs to a retired process.
+    public var isStaleSession: Bool {
+        guard case let .http(status, body) = self, status == 409,
+              let response = try? JSONDecoder().decode(Conflict.self, from: Data(body.utf8)) else { return false }
+        return response.code == "stale_session"
+    }
+
+    private struct Conflict: Decodable {
+        let code: String
+    }
 }

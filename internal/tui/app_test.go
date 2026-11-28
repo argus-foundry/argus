@@ -880,7 +880,7 @@ func TestMaybeKickRerender_TUIDefersWhenBlockedOnPrompt(t *testing.T) {
 		readUI(t, app.tapp, func() {
 			_, cached := app.lastAttachCols[taskID]
 			cacheCleared = !cached
-			noPending = !app.pendingRerenderRestart[taskID]
+			noPending = !app.hasPendingRerenderRestart(taskID)
 		})
 		if cacheCleared && noPending {
 			settled = true
@@ -913,10 +913,14 @@ func TestMaybeKickRerenderAtWidth_KicksOnGenuineDrift(t *testing.T) {
 	defer stop()
 
 	task := &model.Task{ID: taskID, Name: "kick-me", Status: model.StatusInProgress, SessionID: "sid-resume", Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
 	seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 	sess := &fakeKickSession{idle: true, alive: true, initCols: 20}
 
-	readUI(t, app.tapp, func() { app.maybeKickRerenderAtWidth(task, sess, 120, nil) })
+	readUI(t, app.tapp, func() {
+		app.runner = getRunner{Runner: runner, sess: sess}
+		app.maybeKickRerenderAtWidth(task, sess, 120, nil)
+	})
 
 	deadline := time.Now().Add(uiTimeout)
 	stopped := false
@@ -934,7 +938,7 @@ func TestMaybeKickRerenderAtWidth_KicksOnGenuineDrift(t *testing.T) {
 	// processes survive (stop-finished-task-sessions).
 	testutil.Equal(t, agent.StopScope(sess.stopScope.Load()), agent.StopRerender)
 	readUI(t, app.tapp, func() {
-		if !app.pendingRerenderRestart[taskID] {
+		if !app.hasPendingRerenderRestart(taskID) {
 			t.Error("pendingRerenderRestart not set after a successful kick")
 		}
 	})
@@ -1000,6 +1004,7 @@ func TestMaybeKickRerenderAtWidth_LaterNarrowRebindStillKicksAfterDeferredWideBi
 	defer stop()
 
 	task := &model.Task{ID: taskID, Name: "drift", Status: model.StatusInProgress, SessionID: "sid-resume", Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
 	seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 	sess := &fakeKickSession{idle: false, alive: true, initCols: 80} // busy: bind-142 defers
 
@@ -1032,7 +1037,10 @@ func TestMaybeKickRerenderAtWidth_LaterNarrowRebindStillKicksAfterDeferredWideBi
 	// initCols (80) but nowhere near the 142 the content actually committed
 	// to while busy.
 	sess.idle = true
-	readUI(t, app.tapp, func() { app.maybeKickRerenderAtWidth(task, sess, 90, nil) })
+	readUI(t, app.tapp, func() {
+		app.runner = getRunner{Runner: runner, sess: sess}
+		app.maybeKickRerenderAtWidth(task, sess, 90, nil)
+	})
 
 	deadline = time.Now().Add(uiTimeout)
 	stopped := false
@@ -3495,6 +3503,26 @@ func TestReconcileWorksOnEmptyRunning(t *testing.T) {
 	}
 }
 
+type remoteReconcileStore struct {
+	*db.DB
+	remoteTaskCreator
+}
+
+func TestRemoteReconciliationLeavesDaemonStatus(t *testing.T) {
+	d := testDB(t)
+	app := New(&remoteReconcileStore{DB: d}, agent.NewRunner(nil), true)
+	task := &model.Task{ID: "remote-running", Name: "Remote", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+
+	app.mu.Lock()
+	app.refreshTasksWithIDs([]string{}, []string{}, false)
+	app.mu.Unlock()
+
+	current, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, current.Status, model.StatusInProgress)
+}
+
 // Covers the happy path (InProgress flipped) and idempotency on rows already
 // in a terminal state. The database.Tasks() error path is not exercised
 // directly — propagation is straight pass-through and the helper has no
@@ -3966,6 +3994,60 @@ func TestApp_HandleProjectFormKey_DoneSuccess(t *testing.T) {
 	cfg := d.Config()
 	if _, ok := cfg.Projects["newproj"]; !ok {
 		t.Error("project should be saved")
+	}
+}
+
+func TestApp_HandleProjectFormKey_RenameSuccess(t *testing.T) {
+	d := testDB(t)
+	app := New(d, agent.NewRunner(nil), false)
+	dir := t.TempDir()
+	testutil.NoError(t, d.SetProject("old", config.Project{Path: dir}))
+
+	app.openProjectForm(true, "old", config.Project{Path: dir})
+	app.projectForm.fields[pfFieldName] = []rune("fresh")
+	app.projectForm.focused = pfFieldProfile
+	app.handleProjectFormKey(formAdvanceKey)
+
+	testutil.Equal(t, app.mode, modeTaskList)
+	cfg := d.Config()
+	if _, ok := cfg.Projects["old"]; ok {
+		t.Error("old project name should be gone")
+	}
+	if _, ok := cfg.Projects["fresh"]; !ok {
+		t.Error("project should exist under new name")
+	}
+}
+
+func TestApp_HandleProjectFormKey_RenameErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		newName string
+		want    string
+	}{
+		{"collision", "other", "exists"},
+		{"slash", "a/b", "invalid project name"},
+		{"dotdot", "..", "invalid project name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			app := New(d, agent.NewRunner(nil), false)
+			dir := t.TempDir()
+			testutil.NoError(t, d.SetProject("old", config.Project{Path: dir}))
+			testutil.NoError(t, d.SetProject("other", config.Project{Path: dir}))
+
+			app.openProjectForm(true, "old", config.Project{Path: dir})
+			app.projectForm.fields[pfFieldName] = []rune(tt.newName)
+			app.projectForm.focused = pfFieldProfile
+			app.handleProjectFormKey(formAdvanceKey)
+
+			testutil.Equal(t, app.mode, modeProjectForm)
+			testutil.Equal(t, app.projectForm.done, false)
+			testutil.Contains(t, app.projectForm.errMsg, tt.want)
+			if _, ok := d.Config().Projects["old"]; !ok {
+				t.Error("old project must remain")
+			}
+		})
 	}
 }
 
@@ -4450,60 +4532,108 @@ func TestApp_HandleSessionExit_StreamLost(t *testing.T) {
 	testutil.Equal(t, got.Status, model.StatusInProgress)
 }
 
-// TestApp_HandleSessionExit_NonCleanGoesToInReview pins the daemon-client entry
-// point for a non-clean exit (non-empty Err, not stopped — e.g. a crash / exit
-// 127): CleanExit() is false → the row must land InReview, not Complete.
-func TestApp_HandleSessionExit_NonCleanGoesToInReview(t *testing.T) {
+func TestApp_HandleSessionExit_LeavesDaemonStatusAlone(t *testing.T) {
 	d := testDB(t)
 	runner := agent.NewRunner(nil)
-	app := New(d, runner, false)
-	task := &model.Task{ID: "t1", Project: "p", Name: "n", Status: model.StatusInProgress, CreatedAt: time.Now()}
+	app := New(d, runner, true)
+	task := &model.Task{ID: "t1", Project: "p", Name: "n", Status: model.StatusInProgress}
 	testutil.NoError(t, d.Add(task))
-	app.refreshTasks()
 
 	_, stop := wireApp(t, app)
 	t.Cleanup(stop)
 
-	done := make(chan struct{})
-	go func() {
-		app.HandleSessionExit("t1", daemon.ExitInfo{Err: "exit status 127"})
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(uiTimeout):
-		t.Fatal("HandleSessionExit blocked")
+	app.HandleSessionExit(task.ID, daemon.ExitInfo{Err: "exit status 127"})
+	waitForCond(t, app.tapp, "exit refresh to load task", func() bool {
+		return app.taskStatusString(task.ID) != ""
+	})
+	got, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.Status, model.StatusInProgress)
+}
+
+func TestApp_HandleSessionExit_PreservesResumedSession(t *testing.T) {
+	for _, ownerKnown := range []bool{true, false} {
+		name := "remote"
+		if ownerKnown {
+			name = "native"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			outgoing := &fakeKickSession{pid: 31}
+			replacement := &fakeKickSession{pid: 32, alive: true}
+			runner := getRunner{Runner: agent.NewRunner(nil), sess: replacement}
+			app := New(d, runner, true)
+			task := &model.Task{ID: "t1", Name: "Review", Status: model.StatusInProgress, AgentPID: outgoing.pid, SessionID: "outgoing"}
+			testutil.NoError(t, d.Add(task))
+			testutil.NoError(t, d.RecordSessionStop(task.ID))
+			testutil.NoError(t, d.RecordResumedSession(task.ID, replacement.pid, task.SessionID, "replacement"))
+			_, stop := wireApp(t, app)
+			t.Cleanup(stop)
+			readUI(t, app.tapp, func() {
+				app.mode = modeAgent
+				app.agentState.Reset(task.ID, task.Name)
+				app.agentPane.SetSession(replacement)
+			})
+
+			info := daemon.ExitInfo{Stopped: true}
+			if ownerKnown {
+				app.HandleSessionExitOwned(task.ID, info, outgoing)
+			} else {
+				app.HandleSessionExit(task.ID, info)
+			}
+			readUI(t, app.tapp, func() {
+				testutil.True(t, app.agentPane.Session() == replacement)
+			})
+			got, err := d.Get(task.ID)
+			testutil.NoError(t, err)
+			testutil.Equal(t, got.Status, model.StatusInProgress)
+			testutil.Equal(t, got.SessionID, "replacement")
+		})
 	}
-	syncUI(t, app.tapp)
-	got, _ := d.Get("t1")
-	testutil.Equal(t, got.Status, model.StatusInReview)
 }
 
 func TestApp_HandleSessionExit_DispatchesToUI(t *testing.T) {
 	d := testDB(t)
 	runner := agent.NewRunner(nil)
-	app := New(d, runner, false)
-	task := &model.Task{ID: "t1", Project: "p", Name: "n", Status: model.StatusInProgress, CreatedAt: time.Now()}
-	d.Add(task)
-	app.refreshTasks()
+	app := New(d, runner, true)
+	task := &model.Task{ID: "t1", Name: "Review", Status: model.StatusInReview}
+	testutil.NoError(t, d.Add(task))
 
 	_, stop := wireApp(t, app)
 	t.Cleanup(stop)
+	outgoing := &fakeKickSession{pid: 31}
+	readUI(t, app.tapp, func() {
+		app.mode = modeAgent
+		app.agentState.Reset(task.ID, task.Name)
+		app.agentPane.SetSession(outgoing)
+	})
 
-	done := make(chan struct{})
-	go func() {
-		// Clean daemon-reported exit (not stopped, no err) → CleanExit() → Complete.
-		app.HandleSessionExit("t1", daemon.ExitInfo{Stopped: false, LastOutput: []byte("done")})
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(uiTimeout):
-		t.Fatal("HandleSessionExit blocked")
-	}
-	syncUI(t, app.tapp)
-	got, _ := d.Get("t1")
-	testutil.Equal(t, got.Status, model.StatusComplete)
+	app.HandleSessionExitOwned(task.ID, daemon.ExitInfo{Stopped: true}, outgoing)
+	readUI(t, app.tapp, func() {
+		testutil.Nil(t, app.agentPane.Session())
+	})
+}
+
+func TestApp_HandleSessionExit_KeepsManagedRestartBound(t *testing.T) {
+	d := testDB(t)
+	app := New(d, agent.NewRunner(nil), true)
+	task := &model.Task{ID: "restart-view", Name: "Restart view", Status: model.StatusInProgress}
+	testutil.NoError(t, d.Add(task))
+	_, stop := wireApp(t, app)
+	t.Cleanup(stop)
+	session := &fakeKickSession{pid: 32, alive: true}
+	readUI(t, app.tapp, func() {
+		app.mode = modeAgent
+		app.agentState.Reset(task.ID, task.Name)
+		app.agentPane.SetSession(session)
+	})
+
+	app.HandleSessionExitOwned(task.ID, daemon.ExitInfo{Stopped: true, PendingRestart: true, PID: 32}, session)
+	app.HandleSessionExitOwned(task.ID, daemon.ExitInfo{Stopped: true, PID: 31}, session)
+
+	readUI(t, app.tapp, func() {
+		testutil.True(t, app.agentPane.Session() == session)
+	})
 }
 
 func TestApp_HandleSessionExitUI_TaskNotFound(t *testing.T) {
@@ -4597,13 +4727,13 @@ func TestHandleSessionExitUI_RerenderGateEntersOnNonCleanExit(t *testing.T) {
 	testutil.NoError(t, d.Add(task))
 
 	// Rerender restart was queued, but the user is NOT viewing this task's pane.
-	app.pendingRerenderRestart["t1"] = true
+	app.pendingRerenderRestart["t1"] = 0
 	app.mode = modeTaskList // not viewing → gate clears flag, falls through
 
 	app.handleSessionExitUI("t1", false /* cleanExit → non-clean (crash or stop) */, false)
 
 	// The rerender flag was consumed and the task settled InReview.
-	if app.pendingRerenderRestart["t1"] {
+	if app.hasPendingRerenderRestart("t1") {
 		t.Error("pendingRerenderRestart flag should have been consumed by the gate")
 	}
 	got, _ := d.Get("t1")
@@ -5821,6 +5951,7 @@ func TestMaybeKickRerenderAtWidth_DeferredNarrowBindKeepsTheWideAnchor(t *testin
 	defer stop()
 
 	task := &model.Task{ID: taskID, Name: "clobber", Status: model.StatusInProgress, SessionID: "sid-resume", Worktree: t.TempDir()}
+	testutil.NoError(t, d.Add(task))
 	seedTUITranscript(t, os.Getenv("HOME"), task.Worktree, task.SessionID, time.Time{})
 	sess := &fakeKickSession{idle: false, alive: true, initCols: 80} // busy throughout both binds
 
@@ -5855,7 +5986,10 @@ func TestMaybeKickRerenderAtWidth_DeferredNarrowBindKeepsTheWideAnchor(t *testin
 	// The agent finally goes idle and the pane rebinds at the SAME 90. Both
 	// gates must recognize the outstanding 142 drift and kick.
 	sess.idle = true
-	readUI(t, app.tapp, func() { app.maybeKickRerenderAtWidth(task, sess, 90, nil) })
+	readUI(t, app.tapp, func() {
+		app.runner = getRunner{Runner: runner, sess: sess}
+		app.maybeKickRerenderAtWidth(task, sess, 90, nil)
+	})
 
 	deadline := time.Now().Add(uiTimeout)
 	for time.Now().Before(deadline) && !sess.stopCalled.Load() {
@@ -6037,7 +6171,7 @@ func TestMaybeKickRerender_AutoSetting(t *testing.T) {
 			}
 			time.Sleep(150 * time.Millisecond) // give a (wrongly) spawned decision goroutine time to act
 			testutil.False(t, sess.stopCalled.Load())
-			readUI(t, app.tapp, func() { testutil.False(t, app.pendingRerenderRestart[task.ID]) })
+			readUI(t, app.tapp, func() { testutil.False(t, app.hasPendingRerenderRestart(task.ID)) })
 		})
 	}
 }

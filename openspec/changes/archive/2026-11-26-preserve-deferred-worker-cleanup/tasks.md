@@ -1,0 +1,4 @@
+- [x] Verify the local PTY exit before checked deletion revalidates the worktree.
+- [x] Persist the original branch lease, recover deferred cleanup and report its status.
+- [x] Fence delayed browser detail actions.
+- [x] Verify and archive the changes.

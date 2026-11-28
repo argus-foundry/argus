@@ -1,6 +1,8 @@
 package keymap
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -261,6 +263,31 @@ func TestBuild_UnknownActionIgnored(t *testing.T) {
 	kb := config.Keybindings{TaskList: map[string]string{"bogus": "x"}}
 	_, warns := Build(kb)
 	testutil.Equal(t, len(warns), 0)
+}
+
+func TestBuild_RetiredBoardDoneIgnored(t *testing.T) {
+	for _, spec := range []string{"d", "x", "not a keyspec"} {
+		t.Run(spec, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			testutil.NoError(t, os.WriteFile(path, []byte("[keybindings.hera_board]\ndone = '"+spec+"'\n"), 0600))
+			loader := config.NewFileLoader(path)
+			cfg := loader.Apply(config.DefaultConfig())
+			testutil.NoError(t, loader.Err())
+			km, warnings := Build(cfg.Keybindings)
+			testutil.Equal(t, len(warnings), 0)
+			act, ok := km.Resolve(CtxHeraBoard, ev(tcell.KeyRune, 'x', 0))
+			testutil.True(t, ok)
+			testutil.Equal(t, act, ActBoardDismiss)
+			act, ok = km.Resolve(CtxHeraBoard, ev(tcell.KeyRune, 'd', 0))
+			testutil.True(t, ok)
+			testutil.Equal(t, act, ActBoardDefer)
+			act, ok = km.Resolve(CtxHeraBoard, ev(tcell.KeyRune, 'D', 0))
+			testutil.True(t, ok)
+			testutil.Equal(t, act, ActBoardShowDeferred)
+			_, ok = km.BindingFor(CtxHeraBoard, Action("hera_board.done"))
+			testutil.False(t, ok)
+		})
+	}
 }
 
 func TestBuild_EmptySpecIgnored(t *testing.T) {

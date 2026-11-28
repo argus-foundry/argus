@@ -5,7 +5,7 @@ TBD - created by archiving change add-hera-auto-archive. Update Purpose after ar
 ## Requirements
 ### Requirement: Done-done predicate
 
-The system SHALL define a role as archivable as MERGED only when ALL of the following hold, and SHALL refuse with the first failing reason otherwise: its task status is `complete`; the role is not `blocked` (a live session parked at a prompt additionally refuses at archive time; the daemon's sticky needs-input set is not consulted); the role has no sent mail its recipient has not yet read (unread mail TO the role does not block: it is forwarded on archive); the task is bound to no other live role (a sub-coordinator's own coordinator hat in a bridged child orchestrator excepted); no plan-DAG node depends on it that is not itself done or archived; if it is a sub-coordinator (linked via `hera_orch_links` OR sharing its task with a child orchestrator's coordinator hat, the plan-DAG `kind=subcoord` shape), every child role is archived and it owns no open `decision` board item (open `fyi` items are re-posted to the parent coordinator's board and resolved, not blocking); its worktree has no dirty files and its branch is confirmed landed by the merge-safety classifier (or it has neither worktree nor branch); and it is not pinned, resident, or a standing-team member. Any unconfirmed or errored check SHALL refuse.
+The system SHALL define a role as archivable as MERGED only when ALL of the following hold, and SHALL refuse with the first failing reason otherwise: its task status is `complete`; the role is not `blocked` (a live session parked at a prompt additionally refuses at archive time; the daemon's sticky needs-input set is not consulted); the role has no sent mail its recipient has not yet read (unread mail TO the role does not block: it is forwarded on archive); the task is bound to no other live role (a sub-coordinator's own coordinator hat in a bridged child orchestrator excepted); no plan-DAG node depends on it that is not itself done or archived; if it is a sub-coordinator (linked via `hera_orch_links` OR sharing its task with a child orchestrator's coordinator hat, the plan-DAG `kind=subcoord` shape), every child role is archived and it owns no open `decision`, `action` or `todo` board item (open `fyi` items are re-posted to the parent coordinator's board and resolved, not blocking); its worktree has no dirty files and its branch is confirmed landed by the merge-safety classifier (or it has neither worktree nor branch); and it is not pinned, resident, or a standing-team member. Any unconfirmed or errored check SHALL refuse.
 
 #### Scenario: Completed role with a merged PR is archivable
 
@@ -24,7 +24,7 @@ The system SHALL define a role as archivable as MERGED only when ALL of the foll
 
 #### Scenario: Sub-coordinator fyi items are pushed to the parent
 
-- **WHEN** a sub-coordinator with two open `fyi` board items and no open `decision` items is archived
+- **WHEN** a sub-coordinator with two open `fyi` board items and no open `decision`, `action` or `todo` items is archived
 - **THEN** both items appear on the parent coordinator's board and the originals are resolved
 
 #### Scenario: Live dependent refuses
@@ -41,6 +41,11 @@ The system SHALL define a role as archivable as MERGED only when ALL of the foll
 
 - **WHEN** a role has sent a message its live recipient has not read
 - **THEN** the predicate refuses without `force`
+
+#### Scenario: Open obligations prevent archive
+
+- **WHEN** a sub-coordinator owns an open action or board todo, even with a pending trigger
+- **THEN** normal archive refuses naming the obligation so it cannot disappear with the coordinator
 
 ### Requirement: hera_archive coordinator tool
 
@@ -82,11 +87,11 @@ Archiving via `hera_archive` SHALL NOT remove the worktree or delete any local o
 
 ### Requirement: Archive is race-safe and atomic
 
-`hera_archive` SHALL perform every DB-side re-verification and every write in ONE database transaction: the task is still in a status allowed for its archive kind; the role and task are not pinned, resident or standing-team; the role is not `blocked`; no other live role is bound to the task (a sub-coordinator's own coordinator hat excepted); no hera mail sent by the role to a live recipient is unread; no live plan-DAG dependent; every child role archived; no open `decision` board item. In that same transaction it SHALL mark the role's unread mail read and forward its digest to the coordinator, mark stale daemon merge notices read, re-post the sub-coordinator's open `fyi` items to the parent coordinator's board, end the child coordinator binding(s), archive the child orchestrator(s) (both `hera_orch_links` children and plan-DAG `kind=subcoord` children), archive the task, hide the role, and write the archive record. Git safety (merged or handed-off) SHALL be checked before the transaction and re-checked immediately before it opens (a git subprocess must not run under the database lock), and session idleness SHALL be re-checked as the last step before commit. If any check or write fails, the whole transaction SHALL roll back, nothing SHALL be written, and the tool SHALL report the role as refused with the reason. Events SHALL be emitted only after commit.
+`hera_archive` SHALL perform every DB-side re-verification and every write in ONE database transaction: the task is still in a status allowed for its archive kind; the role and task are not pinned, resident or standing-team; the role is not `blocked`; no other live role is bound to the task (a sub-coordinator's own coordinator hat excepted); no hera mail sent by the role to a live recipient is unread; no live plan-DAG dependent; every child role archived; no open `decision`, `action` or `todo` board item. In that same transaction it SHALL mark the role's unread mail read and forward its digest to the coordinator, mark stale daemon merge notices read, re-post the sub-coordinator's open `fyi` items to the parent coordinator's board, end the child coordinator binding(s), archive the child orchestrator(s) (both `hera_orch_links` children and plan-DAG `kind=subcoord` children), archive the task, hide the role, and write the archive record. Git safety (merged or handed-off) SHALL be checked before the transaction and re-checked immediately before it opens (a git subprocess must not run under the database lock), and session idleness SHALL be re-checked as the last step before commit. If any check or write fails, the whole transaction SHALL roll back, nothing SHALL be written, and the tool SHALL report the role as refused with the reason. Events SHALL be emitted only after commit.
 
 #### Scenario: State changing after the predicate stops the archive
 
-- **WHEN** a new live binding, unread outbox mail, a reopened status, a live dependent, a live child role, or an open decision item appears after the predicate passed
+- **WHEN** a new live binding, unread outbox mail, a reopened status, a live dependent, a live child role, or an open decision/action/todo item appears after the predicate passed
 - **THEN** the transaction rolls back and nothing is archived
 
 #### Scenario: Any failing write step rolls everything back
@@ -243,4 +248,65 @@ Archiving a task through any argus surface (MCP `task_archive`, the REST archive
 
 - **WHEN** the REST archive endpoint receives `{"force":true,"reason":"x"}` for a live-bound task that fails the verdict
 - **THEN** the task and role archive with a `forced` record
+
+### Requirement: Daemon nudges coordinators about archivable roles
+
+When hera is enabled, the daemon SHALL run a watcher that tells a coordinator, through its normal hera inbox, which of its worker and freelance roles have become archivable.
+
+A role is archivable when a dry-run evaluation identical to `hera_archive(dry_run=true)` for that single role reports it archivable on either the merged or the handed-off path. That evaluation reuses the existing verdict, including the requirement that a live session be idle and not parked at a prompt. Any refusal, including a lookup error, SHALL produce no nudge for that role.
+
+Triggers:
+
+- The watcher SHALL be poked when the PR poller commits a changed PR state, when a role reports `hera_status(done)`, and when `hera_accept` runs.
+- After a debounce it SHALL sweep.
+- It SHALL also sweep periodically at a low frequency.
+
+Batching and dedup:
+
+- All archivable roles under one coordinator found in a sweep SHALL go out as ONE message.
+- At most one nudge SHALL be sent per coordinator within a minimum gap.
+- A role SHALL NOT be nudged again unless its archive kind, task status or PR state changed since the last nudge, or a long cooldown has passed. That record SHALL survive a daemon restart.
+
+Exclusions and delivery:
+
+- The watcher SHALL never nudge about coordinators, or about pinned roles, resident tasks or standing-team members.
+- The message SHALL be a self-addressed `[argus]` system notice to the role's orchestrator coordinator, delivered through the same idle-gated doorbell as other hera messages. A coordinator without a live binding SHALL receive nothing, and nothing is recorded.
+- The watcher SHALL NOT archive, stop, or change any role or task.
+- It SHALL log its sweeps, nudges and skips with uxlog.
+
+#### Scenario: Handed-off worker triggers one batched nudge
+
+- **WHEN** two workers under the same coordinator are idle with open, green, pushed PRs and `in_review` tasks, and the watcher sweeps
+- **THEN** the coordinator receives exactly one hera message whose body starts with `[argus] ` and lists both role names with their archive kind
+- **AND** neither role nor task is archived by the daemon
+
+#### Scenario: Busy or refused roles are not nudged
+
+- **WHEN** a worker's verdict refuses (CI failing, session busy, task `in_progress`, or a lookup error)
+- **THEN** no nudge mentions that role
+
+#### Scenario: No repeat nudge for an unchanged role
+
+- **WHEN** a role was nudged and its archive kind, task status and PR state are unchanged, and the cooldown has not passed
+- **THEN** later sweeps (including after a daemon restart) send no nudge about it
+
+#### Scenario: Changed state re-nudges
+
+- **WHEN** a role nudged as handed off later becomes archivable as merged
+- **THEN** the next eligible sweep nudges the coordinator about it again
+
+#### Scenario: Excluded roles are never nudged
+
+- **WHEN** a role is a coordinator, is pinned, or is bound to a resident or standing-team task
+- **THEN** the watcher never lists it in a nudge
+
+#### Scenario: Coordinator gap batches later finds
+
+- **WHEN** a role becomes archivable within the minimum gap after a nudge to the same coordinator
+- **THEN** no second message is sent during the gap, and the role is included in the next nudge after the gap
+
+#### Scenario: Poke runs a sweep after the debounce
+
+- **WHEN** a worker reports `hera_status(done)` and is idle with a green open PR when the debounce elapses
+- **THEN** the coordinator is nudged without waiting for the periodic sweep
 

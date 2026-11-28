@@ -61,6 +61,13 @@ func TestHeraCoordinatorOrientation_HumanBoard(t *testing.T) {
 	}
 }
 
+func TestHeraCoordinatorOrientation_Annotations(t *testing.T) {
+	got := HeraCoordinatorOrientation("board")
+	for _, rule := range []string{"address every annotation", "COMMENT", "DELETION", "suggestion", "fyi-actions", "comment-only decisions remain open"} {
+		t.Run(rule, func(t *testing.T) { testutil.Contains(t, got, rule) })
+	}
+}
+
 // TestHeraCoordinatorOrientation_CarriesFiveDisciplineHabits is a snapshot-style
 // test asserting the add-coordinator-context-management D4 habits all survive in
 // the spawn orientation text: small window, low-default-effort-with-escalation,
@@ -878,4 +885,29 @@ func TestSpawnHeraCoordinator_ExplicitBackendHonored(t *testing.T) {
 	got, err := d.Get(res.Task.ID)
 	testutil.NoError(t, err)
 	testutil.Equal(t, got.Backend, "claude-fast")
+}
+
+// TestHeraCoordinatorOrientation_ArchiveChecklist pins add-coord-reap-triggers:
+// archive guidance is its own moment-based checklist block, not a clause in
+// the dispatch paragraph, and the orientation stays roughly its prior length.
+func TestHeraCoordinatorOrientation_ArchiveChecklist(t *testing.T) {
+	got := HeraCoordinatorOrientation("o")
+	for _, rule := range []string{
+		"\n\nARCHIVE FINISHED ROLES with hera_archive(cwd=$PWD",
+		"\n- A worker reports done and its PR is merged, or open with CI not failing: hera_accept, confirm it is winding down, then hera_archive(role_name=...) in the same turn.",
+		"\n- Every hera_status / hera_inbox check or wake",
+		"sweep with hera_archive(dry_run=true)",
+		`[argus] "ready to archive"`,
+		"\n- Before going idle, and before reporting the orchestration finished: sweep with hera_archive.",
+		"force=true needs role_name and a reason, never in a sweep",
+		"hera_unarchive(role_name=...)",
+		"handed off",
+		"refusals are normal",
+	} {
+		t.Run(rule, func(t *testing.T) { testutil.Contains(t, got, rule) })
+	}
+	dispatch, _, ok := strings.Cut(got, "\n\n")
+	testutil.Equal(t, ok, true)
+	testutil.Equal(t, strings.Contains(dispatch, "hera_archive"), false)
+	testutil.Equal(t, len(got) < 7800, true) // 7510 on master before the checklist (net -9)
 }

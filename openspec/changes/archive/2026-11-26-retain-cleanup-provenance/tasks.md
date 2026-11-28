@@ -1,0 +1,3 @@
+- [x] Preserve resident and TUI classification repository identity.
+- [x] Reconcile delayed archival against the current task state.
+- [x] Verify and archive the changes.

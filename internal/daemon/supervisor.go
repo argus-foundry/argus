@@ -137,6 +137,7 @@ func NewSupervisor(cfgFn func() config.Config, identity ...agent.ResidentWorkerI
 		owner := core.runner.Get(taskID)
 
 		ei := ExitInfo{
+			PID:            core.finishedPID(taskID, owner),
 			Err:            errStr,
 			Stopped:        stopped,
 			LastOutput:     lastOutput,
@@ -144,8 +145,7 @@ func NewSupervisor(cfgFn func() config.Config, identity ...agent.ResidentWorkerI
 		}
 		core.mu.Lock()
 		core.recordExitLocked(taskID, ei, owner)
-		conns := core.streams[taskID]
-		delete(core.streams, taskID)
+		conns := core.takeExitedStreamsLocked(taskID, ei.PID)
 		core.mu.Unlock()
 
 		// Signal stream EOF to all connected clients by closing their conns.
@@ -156,6 +156,9 @@ func NewSupervisor(cfgFn func() config.Config, identity ...agent.ResidentWorkerI
 	}, identity...)
 
 	core = newSessionCore(runner, cfgFn, s.done)
+	runner.OnRestartStarted(func(taskID string, outgoingPID, successorPID int) {
+		core.linkRestart(taskID, outgoingPID, successorPID)
+	})
 	s.sessionCore = core
 	return s
 }

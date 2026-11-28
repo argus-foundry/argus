@@ -30,7 +30,11 @@ Write it so it makes sense weeks from now without this conversation:
   - **When**: the trigger condition, or "no trigger, at Aaron's convenience".
   - **Why**: one sentence on why it matters or what breaks if it's skipped.
   - **Refs**: any PR, branch, task, file path or command it depends on. Leave this out if there are none.
-- **kind**: `decision` if Aaron has to choose something before it can happen. Otherwise `fyi`.
+- **kind**: `todo` for future team work; `action` with `blocking: false` for a later step only Aaron can run; `action` with `blocking: true` when work is stuck until he acts now; `decision` for a choice; `fyi` for information only.
+- **trigger / trigger_pending**: use typed trigger text for action/todo conditions; a trigger defaults to pending on post. Set `trigger_pending: false` only after verifying the condition. Pending items and all board todos remain visible without ringing Aaron's attention.
+- **command**: for an action, carry the exact copyable command or human UI step, if known; it is displayed as data and never executed by the board. Never invent a command.
+
+Board `todo` means team work on the Hera board, separate from the Things 3 `todo_*` backend. Do not sync or call that backend. Actions resolve as Done; board todos resolve as Done or Dropped, with optional notes. Coordinators explicitly update readiness when the trigger happens.
 
 Don't invent details. If the trigger or action is unclear, write what was actually said.
 
@@ -42,8 +46,8 @@ If it errors because this task holds more than one live Hera binding, ask Aaron 
 
 ### It succeeds: you are a coordinator
 
-1. Look at the open items it returned. If one already covers the same follow-up, call `mcp__argus__hera_board_update(cwd, id, kind, subject, body)` with a merged rewrite. Update replaces all three fields, so carry forward anything still true from the old item.
-2. Otherwise call `mcp__argus__hera_board_post(cwd, kind, subject, body)`.
+1. Look at the open items it returned. If one already covers the same follow-up, call `mcp__argus__hera_board_update(cwd, id, kind, subject, body, ...)` with a merged rewrite and the appropriate typed metadata. Update replaces kind, subject and body, so carry forward anything still true. Omitted metadata is preserved; incompatible fields clear when kind changes.
+2. Otherwise call `mcp__argus__hera_board_post(cwd, kind, subject, body, ...)` with the typed metadata above. Explicit `blocking` is required for action posts.
 3. Reply to Aaron in one line: `Posted #<id>: <subject>` or `Updated #<id>: <subject>`.
 
 ### It errors with "board tools require a coordinator binding": you are a worker or freelance agent
@@ -55,7 +59,7 @@ mcp__argus__hera_send(
   cwd: "<pwd>",
   tldr: "Aaron asked to board: <subject>",
   status: "<your current role status, usually working>",
-  body: "Aaron ran /hera-remind-me and asked for this on your board. Please post it (or merge it into an existing item):\n\nkind: <kind>\nsubject: <subject>\n\n<body>"
+  body: "Aaron ran /hera-remind-me and asked for this on your board. Please post it (or merge it into an existing item):\n\nkind: <kind>\nsubject: <subject>\nmetadata: <blocking, trigger, trigger_pending, command as applicable>\n\n<body>"
 )
 ```
 

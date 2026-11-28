@@ -2,9 +2,12 @@ package apiclient
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -253,6 +256,155 @@ func TestSession_Resize_UpdatesCachedSize(t *testing.T) {
 	cols, rows := s.PTYSize()
 	testutil.Equal(t, cols, 120)
 	testutil.Equal(t, rows, 40)
+}
+
+func TestSession_ResizeForRerenderUsesServerDecision(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		testutil.Equal(t, r.Method, http.MethodPost)
+		testutil.Equal(t, r.URL.Path, "/api/tasks/t1/resize")
+		var req struct {
+			Rows          int  `json:"rows"`
+			Cols          int  `json:"cols"`
+			ScrolledUp    bool `json:"scrolled_up"`
+			ComposerDirty bool `json:"composer_dirty"`
+			ExpectedPID   int  `json:"expected_pid"`
+			CommittedCols int  `json:"committed_cols"`
+			RerenderNow   bool `json:"rerender_now"`
+		}
+		testutil.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		testutil.Equal(t, req.Rows, 40)
+		testutil.Equal(t, req.Cols, 120)
+		testutil.True(t, req.ScrolledUp)
+		testutil.True(t, req.ComposerDirty)
+		testutil.Equal(t, req.ExpectedPID, 123)
+		testutil.Equal(t, req.CommittedCols, 160)
+		testutil.True(t, req.RerenderNow)
+		testutil.NoError(t, json.NewEncoder(w).Encode(map[string]any{"rows": 40, "cols": 120, "rerendered": true}))
+	}))
+	defer srv.Close()
+	p := NewProvider(New(srv.URL, "tok", WithHTTPClient(srv.Client())))
+	defer p.Close()
+	s := newSession("t1", p)
+	resp, err := s.ResizeForRerender(40, 120, RerenderResizeOptions{
+		ExpectedPID: 123, CommittedCols: 160, RerenderNow: true, ScrolledUp: true, ComposerDirty: true,
+	})
+	testutil.NoError(t, err)
+	testutil.True(t, resp.Rerendered)
+}
+
+func TestProvider_SwitchClaudeSessionUsesServerOperation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		testutil.Equal(t, r.Method, http.MethodPost)
+		testutil.Equal(t, r.URL.Path, "/api/tasks/t1/claude-session")
+		var req map[string]string
+		testutil.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		testutil.Equal(t, req["session_id"], "chosen")
+		testutil.NoError(t, json.NewEncoder(w).Encode(map[string]string{"status": "switched"}))
+	}))
+	defer srv.Close()
+	p := NewProvider(New(srv.URL, "tok", WithHTTPClient(srv.Client())))
+	defer p.Close()
+	testutil.NoError(t, p.SwitchClaudeSession("t1", "chosen"))
+}
+
+func TestSession_StreamKeepsHistoryBoundToItsPID(t *testing.T) {
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pid := "123"
+		switch calls.Add(1) {
+		case 2:
+			testutil.Equal(t, r.URL.Query().Get("expected_pid"), "123")
+			testutil.Equal(t, r.URL.Query().Get("since"), "3")
+			pid = "456"
+		case 3:
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		w.Header().Set("X-Argus-Session-Pid", pid)
+		w.Header().Set("X-Argus-Session-Initial-Cols", "84")
+		w.Header().Set("X-Argus-Session-Initial-Rows", "25")
+		_, _ = w.Write([]byte("data: b2xk\n\n"))
+	}))
+	defer srv.Close()
+	p := NewProvider(New(srv.URL, "tok", WithHTTPClient(srv.Client())))
+	defer p.Close()
+	s := newSession("t1", p)
+	defer s.close()
+	ended, err := s.streamOnce()
+	testutil.ErrorIs(t, err, io.EOF)
+	testutil.False(t, ended)
+	testutil.Equal(t, s.PID(), 123)
+	cols, rows := s.InitialPTYSize()
+	testutil.Equal(t, cols, 84)
+	testutil.Equal(t, rows, 25)
+	testutil.Equal(t, string(s.RecentOutput()), "old")
+
+	ended, err = s.streamOnce()
+	testutil.ErrorIs(t, err, errStreamProcessChanged)
+	testutil.False(t, ended)
+	testutil.Equal(t, s.PID(), 123)
+	testutil.Equal(t, string(s.RecentOutput()), "old")
+
+	ended, err = s.streamOnce()
+	testutil.ErrorIs(t, err, errStreamProcessChanged)
+	testutil.False(t, ended)
+	testutil.Equal(t, string(s.RecentOutput()), "old")
+}
+
+func TestSession_RebindsManagedReplacementWithoutExitCallback(t *testing.T) {
+	opened := make(chan struct{}, 1)
+	var streams, snapshots atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tasks/t1/output":
+			if snapshots.Add(1) == 1 {
+				w.WriteHeader(http.StatusConflict)
+				return
+			}
+			w.Header().Set("X-Argus-Session-Pid", "456")
+			_, _ = io.WriteString(w, "w")
+		case "/api/tasks/t1":
+			_, _ = io.WriteString(w, `{"id":"t1","status":"in_review","live":false}`)
+		case "/api/tasks/t1/stream":
+			if streams.Add(1) == 1 {
+				w.Header().Set("X-Argus-Session-Pid", "123")
+				_, _ = io.WriteString(w, "data: b2xk\n\nevent: exit\ndata: {\"rerendering\":true}\n\n")
+				return
+			}
+			testutil.Equal(t, r.URL.Query().Get("since"), "")
+			testutil.Equal(t, r.URL.Query().Get("expected_pid"), "456")
+			w.Header().Set("X-Argus-Session-Pid", "456")
+			_, _ = io.WriteString(w, "data: bmV3\n\n")
+			w.(http.Flusher).Flush()
+			opened <- struct{}{}
+			<-r.Context().Done()
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	p := NewProvider(New(srv.URL, "tok", WithHTTPClient(srv.Client())))
+	defer p.Close()
+	var exits atomic.Int64
+	p.OnSessionExit(func(string, SessionExitInfo) { exits.Add(1) })
+	old := p.getOrCreateSession("t1")
+
+	select {
+	case <-opened:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement stream did not open")
+	}
+	select {
+	case <-old.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("retired pane source did not close")
+	}
+	next := p.Get("t1")
+	testutil.NotNil(t, next)
+	testutil.Equal(t, next.PID(), 456)
+	testutil.Equal(t, string(old.RecentOutput()), "old")
+	testutil.Equal(t, exits.Load(), int64(0))
+	testutil.Equal(t, snapshots.Load(), int64(2))
 }
 
 func TestSession_RingBufferReceivesStream(t *testing.T) {

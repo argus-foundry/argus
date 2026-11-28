@@ -9,6 +9,7 @@ import (
 )
 
 func TestDeltaSnapshotRelativeConfig(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"attributesfile", "textconv"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := initRepo(t, t.TempDir())
@@ -32,6 +33,7 @@ func TestDeltaSnapshotRelativeConfig(t *testing.T) {
 }
 
 func TestDeltaSnapshotDotSymlink(t *testing.T) {
+	t.Parallel()
 	for _, prefix := range []string{"default", "noprefix", "mnemonicprefix", "custom"} {
 		t.Run(prefix, func(t *testing.T) {
 			dir := initRepo(t, t.TempDir())
@@ -60,6 +62,7 @@ func TestDeltaSnapshotDotSymlink(t *testing.T) {
 }
 
 func TestUntrackedConverterFailure(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	testutil.NoError(t, os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("*.foo diff=custom\n"), 0o600))
 	testutil.NoError(t, os.WriteFile(filepath.Join(dir, "data.foo"), []byte("payload\n"), 0o600))
@@ -70,6 +73,7 @@ func TestUntrackedConverterFailure(t *testing.T) {
 }
 
 func TestUntrackedLiteralPathspec(t *testing.T) {
+	t.Parallel()
 	dir := initRepo(t, t.TempDir())
 	name := ":(exclude)*.txt"
 	testutil.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("LITERAL\n"), 0o600))

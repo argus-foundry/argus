@@ -47,7 +47,8 @@ type ProjectForm struct {
 	fields   [pfFieldCount][]rune // name, path, branch (fallback text), backend
 	cursors  [pfFieldCount]int
 	focused  int
-	editMode bool // true = editing (name read-only)
+	editMode bool // true = editing an existing project (name renamable)
+	origName string
 	done     bool
 	canceled bool
 	errMsg   string
@@ -168,7 +169,9 @@ func (pf *ProjectForm) LoadProject(name string, p config.Project) {
 	// wired (e.g. tests / remote).
 	pf.selectProfile(strings.TrimSpace(p.Profile))
 	pf.editMode = true
-	pf.focused = pfFieldPath // skip name in edit mode
+	pf.origName = name
+	pf.cursors[pfFieldName] = len(pf.fields[pfFieldName])
+	pf.focused = pfFieldPath
 }
 
 func (pf *ProjectForm) Done() bool          { return pf.done }
@@ -269,9 +272,6 @@ func (pf *ProjectForm) HandleKey(ev *tcell.EventKey) {
 	case tcell.KeyEnter:
 		if pf.focused < pfFieldProfile {
 			pf.focused++
-			if pf.editMode && pf.focused == pfFieldName {
-				pf.focused++
-			}
 			if pf.focused == pfFieldBranch {
 				pf.maybeLoadBranches()
 			}
@@ -282,9 +282,6 @@ func (pf *ProjectForm) HandleKey(ev *tcell.EventKey) {
 	case tcell.KeyTab:
 		pf.closePathAC()
 		pf.focused = (pf.focused + 1) % pfFieldCount
-		if pf.editMode && pf.focused == pfFieldName {
-			pf.focused++
-		}
 		if pf.focused == pfFieldBranch {
 			pf.maybeLoadBranches()
 		}
@@ -292,9 +289,6 @@ func (pf *ProjectForm) HandleKey(ev *tcell.EventKey) {
 	case tcell.KeyBacktab:
 		pf.closePathAC()
 		pf.focused = (pf.focused + pfFieldCount - 1) % pfFieldCount
-		if pf.editMode && pf.focused == pfFieldName {
-			pf.focused = pfFieldProfile // skip read-only name → last field
-		}
 		if pf.focused == pfFieldBranch {
 			pf.maybeLoadBranches()
 		}
@@ -320,12 +314,8 @@ func (pf *ProjectForm) HandleKey(ev *tcell.EventKey) {
 	// RenameTaskForm bindings via the shared widget word-boundary helpers.
 	f := pf.focused
 	hasAlt := ev.Modifiers()&tcell.ModAlt != 0
-	readOnly := pf.editMode && f == pfFieldName
 	switch ev.Key() {
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		if readOnly {
-			return
-		}
 		if hasAlt {
 			pf.fields[f], pf.cursors[f] = widget.DeleteWordLeft(pf.fields[f], pf.cursors[f])
 		} else if pf.cursors[f] > 0 {
@@ -337,18 +327,12 @@ func (pf *ProjectForm) HandleKey(ev *tcell.EventKey) {
 		}
 		return
 	case tcell.KeyCtrlW:
-		if readOnly {
-			return
-		}
 		pf.fields[f], pf.cursors[f] = widget.DeleteWordLeft(pf.fields[f], pf.cursors[f])
 		if f == pfFieldPath {
 			pf.updatePathAC()
 		}
 		return
 	case tcell.KeyDelete:
-		if readOnly {
-			return
-		}
 		if hasAlt {
 			pf.fields[f], pf.cursors[f] = widget.DeleteWordRight(pf.fields[f], pf.cursors[f])
 		} else if pf.cursors[f] < len(pf.fields[f]) {
@@ -379,9 +363,6 @@ func (pf *ProjectForm) HandleKey(ev *tcell.EventKey) {
 		pf.cursors[f] = len(pf.fields[f])
 		return
 	case tcell.KeyRune:
-		if readOnly {
-			return
-		}
 		r := ev.Rune()
 		if hasAlt {
 			// Alt+B: word left, Alt+F: word right, Alt+D: delete word right.
@@ -472,9 +453,6 @@ func (pf *ProjectForm) handleProfileSelector(ev *tcell.EventKey) {
 func (pf *ProjectForm) PasteHandler() func(pastedText string, setFocus func(p tview.Primitive)) {
 	return pf.WrapPasteHandler(func(pastedText string, setFocus func(p tview.Primitive)) {
 		f := pf.focused
-		if pf.editMode && f == pfFieldName {
-			return
-		}
 		// Ignore paste on selector fields.
 		if f == pfFieldBranch && pf.branchIsSelector() {
 			return
@@ -566,11 +544,7 @@ func (pf *ProjectForm) Draw(screen tcell.Screen) {
 			after := string(pf.fields[i][pf.cursors[i]:])
 			val = before + "█" + after
 		}
-		if pf.editMode && i == pfFieldName {
-			style = theme.StyleDimmed
-		} else {
-			style = tcell.StyleDefault
-		}
+		style = tcell.StyleDefault
 		valRunes := []rune(val)
 		if len(valRunes) > maxW {
 			valRunes = valRunes[len(valRunes)-maxW:]

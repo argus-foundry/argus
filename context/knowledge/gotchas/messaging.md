@@ -330,3 +330,7 @@ true)` and `db.Delete(id)`; entrypoints that go through `db.Update`
 ## Board decisions
 
 - **Decision submits commit successful resolutions and one self-addressed summary in the same transaction.** Invalid/stale items are per-item outcomes; never also write the dropped-decision notice; full notes stay on board items; evenly budget summary notes to 64 KiB and mark shortened notes with a full-item pointer.
+
+- **FYI receipts, resolutions and one comment summary commit in the same transaction.** Replay immutable role/action receipts before checking current item state, without re-emitting events or mail; comment-only preserves read state and revision, and silent dismiss never creates mail. Shortened notes point to master/device-authenticated receipt retrieval, which remains forbidden to page sessions.
+
+- **Human board deferral never rewrites `updated_at` or `is_read`; material agent edits retain `deferred_at`.** Apply attention suppression to both SQL summaries and `AttentionUnread`, publish the mutation event after releasing the DB lock, and leave explicit resolution available. Deferred items stay in MCP lists and full board snapshots; Decide defaults to hidden and requests `include_deferred=true` for its local visibility toggle.

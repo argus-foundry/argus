@@ -49,3 +49,10 @@ test('history prunes expansion identities to retained messages',async()=>{
  let id=1;const view=new AgentMessages({json:async()=>({messages:[{source:'hera',id:id++}],next_before_id:null})},null);view.render=()=>{};view.select({id:'a'});
  await view.refresh();view.expanded.add('hera:1');await view.refresh();assert.equal(view.expanded.size,0);
 });
+
+test('deferral uses revision-checked PUT and retains unread state through restore',async()=>{
+ const calls=[],stamp='2026-11-27T00:00:00Z',item={id:1,updated_at:'revision',read:false};
+ const view=new CoordinatorInbox({json:async(path,options)=>{const body=JSON.parse(options.body);calls.push({path,method:options.method,body});return {item:{...item,deferred_at:body.deferred?stamp:null},unread_count:body.deferred?0:1};}},null);view.render=()=>{};view.select({id:'a'},{role_id:2});view.items=[item];
+ assert.equal(view.showDeferred,false);await view.mutate(item,'defer',{deferred:true});assert.equal(view.items[0].deferred_at,stamp);assert.equal(view.items[0].read,false);assert.deepEqual(calls[0],{path:'/api/hera/roles/2/board/1/defer',method:'PUT',body:{deferred:true,expected_updated_at:'revision'}});
+ await view.mutate(view.items[0],'defer',{deferred:false});assert.equal(view.items[0].deferred_at,null);assert.equal(view.items[0].read,false);assert.equal(view.role.board_unread,1);
+});

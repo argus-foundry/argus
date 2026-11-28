@@ -109,3 +109,60 @@ func (a *App) mutateHeraBoard(d *db.DB, roleID, itemID int64, updatedAt time.Tim
 		a.heraPage.Refresh()
 	})
 }
+
+// completeHeraBoardItem resolves an action (done) or todo (done/dropped)
+// through the shared batch path at the revision the operator saw. It runs off
+// the UI thread; command text is never logged.
+func (a *App) completeHeraBoardItem(d *db.DB, item *db.HeraBoardItem, outcome string) {
+	actionID := fmt.Sprintf("tui-%d-%d", item.ID, time.Now().UnixNano())
+	results, err := d.FYIHeraBoardItems(item.RoleID, []db.HeraBoardFYIAction{{
+		ActionID:          actionID,
+		ItemID:            item.ID,
+		ExpectedUpdatedAt: item.UpdatedAt,
+		Action:            outcome,
+	}})
+	result := ""
+	if err == nil && len(results) == 1 {
+		result = results[0].Outcome
+	}
+	uxlog.Log("[board] complete role=%d item=%d kind=%s outcome=%s result=%q err=%v", item.RoleID, item.ID, item.Kind, outcome, result, err)
+	a.tapp.QueueUpdateDraw(func() {
+		switch {
+		case err != nil:
+			a.statusbar.SetError("Board update failed: " + err.Error())
+		case result == "resolved":
+			a.statusbar.SetInfo(fmt.Sprintf("#%d marked %s", item.ID, outcome))
+			a.heraPage.Refresh()
+		case result == "conflict":
+			a.statusbar.SetError(fmt.Sprintf("#%d changed; review it and try again", item.ID))
+			a.heraPage.Refresh()
+		case result == "already_resolved":
+			a.statusbar.SetInfo(fmt.Sprintf("#%d is already resolved", item.ID))
+			a.heraPage.Refresh()
+		default:
+			a.statusbar.SetError(fmt.Sprintf("#%d not applied (%s)", item.ID, result))
+		}
+	})
+}
+
+// copyBoardCommand puts the exact stored step on the clipboard; nothing runs.
+func (a *App) copyBoardCommand(item *db.HeraBoardItem) {
+	uxlog.Log("[board] copy item=%d bytes=%d", item.ID, len(item.Command))
+	a.copyToClipboard(item.Command, "Copied step", nil)
+}
+
+// deferHeraBoardItem uses the same human REST mutation as web, off the UI thread.
+func (a *App) deferHeraBoardItem(item *db.HeraBoardItem, deferred bool) {
+	client, err := a.maintenanceClientFactory()
+	if err == nil {
+		payload := fmt.Sprintf(`{"deferred":%t,"expected_updated_at":%q}`, deferred, item.UpdatedAt.Format(time.RFC3339Nano))
+		err = client.do(context.Background(), "PUT", fmt.Sprintf("/api/hera/roles/%d/board/%d/defer", item.RoleID, item.ID), strings.NewReader(payload), nil)
+	}
+	uxlog.Log("[board] human defer role=%d item=%d deferred=%v err=%v", item.RoleID, item.ID, deferred, err)
+	a.tapp.QueueUpdateDraw(func() {
+		if err != nil {
+			a.statusbar.SetError("Board defer failed: " + err.Error())
+		}
+		a.heraPage.Refresh()
+	})
+}

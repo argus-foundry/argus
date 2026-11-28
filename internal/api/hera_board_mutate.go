@@ -132,3 +132,41 @@ func (s *Server) handleHeraBoardDismiss(w http.ResponseWriter, r *http.Request) 
 	item, unread, err := s.db.DismissHeraBoardItem(roleID, itemID, exp, req.Note)
 	s.writeBoardResult(w, "dismiss", roleID, itemID, item, unread, err)
 }
+
+func (s *Server) handleHeraBoardDefer(w http.ResponseWriter, r *http.Request) {
+	if !decisionReadAccess(r) {
+		writeCodedErr(w, http.StatusForbidden, "human_access_required", "human board access required")
+		return
+	}
+	if authOrigin(r) == "rail-board" {
+		if _, ok := s.decisionRole(w, r); !ok {
+			return
+		}
+	}
+	roleID, itemID, ok := s.boardTarget(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, boardBodyMaxBytes)
+	var req struct {
+		Deferred *bool  `json:"deferred"`
+		Expected string `json:"expected_updated_at"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&req); err != nil || req.Deferred == nil {
+		writeCodedErr(w, http.StatusBadRequest, "invalid_request", "invalid JSON body: deferred is required")
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		writeCodedErr(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	exp, ok := parseExpected(req.Expected)
+	if !ok {
+		writeCodedErr(w, http.StatusBadRequest, "invalid_request", "expected_updated_at must be nonzero RFC3339")
+		return
+	}
+	item, unread, err := s.db.SetHeraBoardItemDeferred(roleID, itemID, *req.Deferred, exp)
+	s.writeBoardResult(w, "defer", roleID, itemID, item, unread, err)
+}

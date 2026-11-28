@@ -30,6 +30,485 @@ test.describe('terminal', () => {
     await expect(page.locator('#term-status-text')).toHaveText('live');
   });
 
+  test('terminal waits between stale replacement snapshots', async ({ page }) => {
+    const requestedAt: number[] = [];
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      requestedAt.push(Date.now());
+      if (requestedAt.length <= 2) {
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+      } else {
+        await route.continue();
+      }
+    });
+    await login(page);
+    await page.locator('.task-item').first().click();
+    await expect(page.locator('.term-status.live')).toBeVisible({ timeout: 5000 });
+    expect(requestedAt.length).toBeGreaterThanOrEqual(3);
+    expect(requestedAt[2] - requestedAt[1]).toBeGreaterThanOrEqual(200);
+  });
+
+  test('a superseded terminal recovery leaves the reopened terminal attached', async ({ page }) => {
+    let requests = 0;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      switch (++requests) {
+      case 1:
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+        return;
+      case 2:
+        await held;
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } }).catch(() => {});
+        return;
+      default:
+        await route.continue();
+      }
+    });
+    try {
+      await login(page);
+      await page.locator('.task-item').first().click();
+      await expect.poll(() => requests).toBe(2);
+      await page.locator('#detail-view .detail-back').click();
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('.term-status.live')).toBeVisible({ timeout: 5000 });
+      release!();
+      await page.waitForTimeout(350);
+      expect(requests).toBe(3);
+      await expect(page.locator('.term-status.live')).toBeVisible();
+    } finally {
+      release!();
+    }
+  });
+
+  test('leaving the terminal tab cancels a pending recovery snapshot', async ({ page }) => {
+    let requests = 0;
+    let streams = 0;
+    page.on('request', request => {
+      if (/\/api\/tasks\/[^/]+\/stream(?:\?|$)/.test(request.url())) streams++;
+    });
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      if (++requests === 1) {
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+        return;
+      }
+      await held;
+      await route.continue().catch(() => {});
+    });
+    try {
+      await login(page);
+      await page.locator('.task-item').first().click();
+      await expect.poll(() => requests).toBe(2);
+      await page.evaluate(() => (window as any).switchTab('settings'));
+      release!();
+      await page.waitForTimeout(350);
+      await expect(page.locator('#settings-view')).toBeVisible();
+      expect(await page.evaluate(() => (window as any).term == null)).toBe(true);
+      expect(requests).toBe(2);
+      expect(streams).toBe(0);
+    } finally {
+      release!();
+    }
+  });
+
+  test('an unauthorized recovery snapshot logs out and detaches the terminal', async ({ page }) => {
+    let snapshots = 0;
+    let streams = 0;
+    page.on('request', request => {
+      if (/\/api\/tasks\/[^/]+\/stream(?:\?|$)/.test(request.url())) streams++;
+    });
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      if (++snapshots === 1) {
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+      } else {
+        await route.fulfill({ status: 401, json: { error: 'unauthorized' } });
+      }
+    });
+
+    await login(page);
+    await page.locator('.task-item').first().click();
+    await expect(page.locator('#auth-screen')).toBeVisible();
+    await expect(page.locator('#detail-view')).not.toHaveClass(/\bopen\b/);
+    expect(await page.evaluate(() => [(window as any).term, (window as any).currentTask])).toEqual([null, null]);
+    expect(snapshots).toBe(2);
+    expect(streams).toBe(0);
+  });
+
+  test('signing in again keeps Settings as the only visible tab', async ({ page }) => {
+    await login(page);
+    await page.locator('.tab[data-tab="settings"]').click();
+    await expect(page.locator('#settings-view')).toBeVisible();
+    await page.getByRole('button', { name: 'Forget token' }).click();
+    await expect(page.locator('#auth-screen')).toBeVisible();
+    await page.locator('#token-input').fill('test-token');
+    await page.locator('#auth-screen button').click();
+    await expect(page.locator('#main-app')).toBeVisible();
+    await expect(page.locator('#settings-view')).toBeVisible();
+    await expect(page.locator('#tasks-view')).toBeHidden();
+  });
+
+  test('resume completion cannot replace a reopened terminal view', async ({ page }) => {
+    let requested = false;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks\/[^/]+\/resume$/, async route => {
+      requested = true;
+      await held;
+      await route.fulfill({ status: 200, json: {} }).catch(() => {});
+    });
+    try {
+      await login(page);
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('.term-status.live')).toBeVisible();
+      await page.evaluate(() => { (window as any).pendingResume = (window as any).resumeTask(); });
+      await expect.poll(() => requested).toBe(true);
+      await page.locator('#detail-view .detail-back').click();
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('.term-status.live')).toBeVisible();
+      await expect(page.locator('#btn-overflow')).toBeEnabled();
+      await page.evaluate(() => { (window as any).reopenedTerm = (window as any).term; });
+      release!();
+      const sameTerminal = await page.evaluate(async () => {
+        await (window as any).pendingResume;
+        return (window as any).term === (window as any).reopenedTerm;
+      });
+      expect(sameTerminal).toBe(true);
+    } finally {
+      release!();
+    }
+  });
+
+  for (const action of ['fork', 'rename', 'archive', 'delete']) test(`late ${action} leaves the reopened terminal view alone`, async ({ page }) => {
+    let requested = false;
+    let serverName: string | undefined;
+    let deletedID: string | undefined;
+    const movesOutOfList = action === 'delete' || action === 'archive';
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks(?:\?|$)/, async route => {
+      if (!movesOutOfList && !serverName) return route.continue();
+      const response = await route.fetch();
+      const body = await response.json();
+      if (serverName) body.tasks[0].name = serverName;
+      if (deletedID) body.tasks = body.tasks.filter(task => task.id !== deletedID);
+      if (movesOutOfList) {
+        body.tasks.push({ id: 'unrelated-task', name: 'Other task', project: 'test-proj', status: 'pending', live: false });
+      }
+      await route.fulfill({ response, json: body });
+    });
+    await page.route(/\/api\/tasks\/[^/?]+(?:\/(?:fork|rename|archive))?$/, async route => {
+      const request = route.request();
+      if (request.method() === 'GET' || !['POST', 'DELETE'].includes(request.method())) return route.continue();
+      requested = true;
+      await held;
+      if (action === 'rename') serverName = 'Renamed by server';
+      if (action === 'delete') deletedID = new URL(request.url()).pathname.split('/').at(-1);
+      if (action === 'archive') deletedID = new URL(request.url()).pathname.split('/').at(-2);
+      await route.fulfill({ status: 200, json: { id: 'forked-task' } }).catch(() => {});
+    });
+    page.on('dialog', dialog => dialog.type() === 'prompt' ? dialog.accept('Action result') : dialog.accept());
+    try {
+      await login(page);
+      await page.locator('.task-item').filter({ hasText: 'echo-bash' }).first().click();
+      await expect(page.locator('.term-status.live')).toBeVisible();
+      await expect(page.locator('#btn-overflow')).toBeEnabled();
+      await page.evaluate(action => {
+        const app = window as any;
+        const mutate = { fork: app.forkTask, rename: app.renameTask, archive: () => app.setArchive(true), delete: app.deleteTask };
+        app.pendingAction = mutate[action]();
+      }, action);
+      await expect.poll(() => requested).toBe(true);
+      await page.locator('#detail-view .detail-back').click();
+      if (movesOutOfList) await page.locator('.task-item').filter({ hasText: 'Other task' }).click();
+      else await page.locator('.task-item').first().click();
+      await expect(page.locator('#term .xterm')).toBeVisible();
+      await expect(page.locator('#btn-overflow')).toBeEnabled();
+      const title = await page.locator('#detail-title').textContent();
+      await page.evaluate(() => { (window as any).reopenedTerm = (window as any).term; });
+      release!();
+      const sameTerminal = await page.evaluate(async () => {
+        await (window as any).pendingAction;
+        return (window as any).term === (window as any).reopenedTerm;
+      });
+      expect(sameTerminal).toBe(true);
+      await expect(page.locator('#detail-title')).toHaveText(serverName ?? title!);
+    } finally {
+      release!();
+    }
+  });
+
+  for (const archive of [true, false]) test(`successful ${archive ? 'Archive' : 'Unarchive'} closes a reopened task outside the selected list`, async ({ page }) => {
+    let archived = !archive;
+    let requested = false;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks(?:\?|$)/, async route => {
+      const url = new URL(route.request().url());
+      const selectedArchive = url.searchParams.get('archived') === '1';
+      url.search = '';
+      const response = await route.fetch({ url: String(url) });
+      const body = await response.json();
+      body.tasks = selectedArchive === archived ? body.tasks.map(task => ({ ...task, archived })) : [];
+      await route.fulfill({ response, json: body });
+    });
+    await page.route(/\/api\/tasks\/[^/]+\/(?:archive|unarchive)$/, async route => {
+      requested = true;
+      await held;
+      archived = archive;
+      await route.fulfill({ status: 200, json: { archived } }).catch(() => {});
+    });
+    await page.route(/\/api\/tasks\/[^/?]+$/, async route => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const response = await route.fetch();
+      const task = await response.json();
+      if (archived) task.archived = true;
+      else delete task.archived;
+      await route.fulfill({ response, json: task });
+    });
+    try {
+      await login(page);
+      if (!archive) await page.evaluate(() => (window as any).setListFilter('archived'));
+      await page.locator('.task-item').filter({ hasText: 'echo-bash' }).click();
+      await page.evaluate(archive => { (window as any).pendingArchive = (window as any).setArchive(archive); }, archive);
+      await expect.poll(() => requested).toBe(true);
+      await page.locator('#detail-view .detail-back').click();
+      await page.locator('.task-item').filter({ hasText: 'echo-bash' }).click();
+      release!();
+      await page.evaluate(() => (window as any).pendingArchive);
+      await expect(page.locator('#detail-view')).not.toHaveClass(/\bopen\b/);
+      await expect(page.locator('.task-item')).toHaveCount(0);
+    } finally {
+      release!();
+    }
+  });
+
+  test('late Archive leaves the active terminal reopened after Unarchive', async ({ page }) => {
+    let archived = false;
+    let archiveCommitted = false;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks(?:\?|$)/, async route => {
+      const url = new URL(route.request().url());
+      const selectedArchive = url.searchParams.get('archived') === '1';
+      url.search = '';
+      const response = await route.fetch({ url: String(url) });
+      const body = await response.json();
+      body.tasks = selectedArchive === archived ? body.tasks.map(task => ({ ...task, archived })) : [];
+      await route.fulfill({ response, json: body });
+    });
+    await page.route(/\/api\/tasks\/[^/?]+$/, async route => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const response = await route.fetch();
+      const task = await response.json();
+      if (archived) task.archived = true;
+      else delete task.archived;
+      await route.fulfill({ response, json: task });
+    });
+    await page.route(/\/api\/tasks\/[^/]+\/(?:archive|unarchive)$/, async route => {
+      const archive = route.request().url().endsWith('/archive');
+      archived = archive;
+      if (archive) {
+        archiveCommitted = true;
+        await held;
+      }
+      await route.fulfill({ status: 200, json: { archived: archive } }).catch(() => {});
+    });
+    try {
+      await login(page);
+      const task = page.locator('.task-item').filter({ hasText: 'echo-bash' });
+      await task.click();
+      await page.evaluate(() => { (window as any).pendingArchive = (window as any).setArchive(true); });
+      await expect.poll(() => archiveCommitted).toBe(true);
+      await page.locator('#detail-view .detail-back').click();
+      await page.evaluate(() => (window as any).setListFilter('archived'));
+      await task.click();
+      await page.evaluate(() => (window as any).setArchive(false));
+      await expect(page.locator('#detail-view')).not.toHaveClass(/\bopen\b/);
+      await page.evaluate(() => (window as any).setListFilter('active'));
+      await task.click();
+      await expect(page.locator('.term-status.live')).toBeVisible();
+      await page.evaluate(() => { (window as any).reopenedTerm = (window as any).term; });
+      release!();
+      expect(await page.evaluate(async () => {
+        await (window as any).pendingArchive;
+        return (window as any).term === (window as any).reopenedTerm;
+      })).toBe(true);
+    } finally {
+      release!();
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+    }
+  });
+
+  test('successful Delete closes a reopened view of the deleted task', async ({ page }) => {
+    let deletedID: string | undefined;
+    let requested = false;
+    let release: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route(/\/api\/tasks(?:\?|$)/, async route => {
+      if (!deletedID) return route.continue();
+      const response = await route.fetch();
+      const body = await response.json();
+      body.tasks = body.tasks.filter(task => task.id !== deletedID);
+      await route.fulfill({ response, json: body });
+    });
+    await page.route(/\/api\/tasks\/[^/?]+$/, async route => {
+      if (route.request().method() !== 'DELETE') return route.continue();
+      requested = true;
+      await held;
+      deletedID = new URL(route.request().url()).pathname.split('/').at(-1);
+      await route.fulfill({ status: 200, json: { status: 'deleted' } }).catch(() => {});
+    });
+    page.on('dialog', dialog => dialog.accept());
+    try {
+      await login(page);
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('.term-status.live')).toBeVisible();
+      await page.evaluate(() => { (window as any).pendingDelete = (window as any).deleteTask(); });
+      await expect.poll(() => requested).toBe(true);
+      await page.locator('#detail-view .detail-back').click();
+      await page.locator('.task-item').first().click();
+      await expect(page.locator('#btn-overflow')).toBeEnabled();
+      release!();
+      await page.evaluate(() => (window as any).pendingDelete);
+      await expect(page.locator('#detail-view')).not.toHaveClass(/\bopen\b/);
+      await expect(page.locator('#term .xterm')).toHaveCount(0);
+    } finally {
+      release!();
+    }
+  });
+
+  for (const stage of ['body', 'render']) test(`a stalled replacement snapshot ${stage} reaches the terminal recovery deadline`, async ({ page }) => {
+    await page.addInitScript(stage => {
+      const original = window.fetch.bind(window);
+      let snapshots = 0;
+      window.fetch = async (...args) => {
+        const response = await original(...args);
+        if (/\/api\/tasks\/[^/]+\/output(?:\?|$)/.test(response.url) && ++snapshots === 2) {
+          if (stage === 'body') {
+            const bytes = await response.arrayBuffer();
+            response.arrayBuffer = () => new Promise(resolve => {
+              (window as any).releaseSnapshot = () => resolve(bytes);
+            });
+          } else {
+            const terminal = (window as any).term;
+            const write = terminal.write.bind(terminal);
+            terminal.write = (data: unknown, callback?: () => void) => {
+              if (data instanceof Uint8Array && callback) {
+                (window as any).releaseSnapshot = callback;
+              } else {
+                write(data, callback);
+              }
+            };
+          }
+        }
+        return response;
+      };
+    }, stage);
+    let streams = 0;
+    page.on('request', request => {
+      if (/\/api\/tasks\/[^/]+\/stream(?:\?|$)/.test(request.url())) streams++;
+    });
+    let initial = true;
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      if (initial) {
+        initial = false;
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+      } else {
+        await route.continue();
+      }
+    });
+    await login(page);
+    await page.locator('.task-item').first().click();
+    await expect.poll(() => page.evaluate(() => typeof (window as any).releaseSnapshot)).toBe('function');
+    await expect(page.locator('#term-status-text')).toHaveText('session ended', { timeout: 17_000 });
+    await page.evaluate(() => (window as any).releaseSnapshot());
+    await expect(page.locator('#term-status-text')).toHaveText('session ended');
+    expect(streams).toBe(0);
+  });
+
+  test('list refresh keeps an active recovery deadline through stream admission', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.EventSource = new Proxy(window.EventSource, {
+        construct(target, args) {
+          const source = Reflect.construct(target, args);
+          if (String(args[0]).includes('/stream?')) (window as any).recoverySource = source;
+          return source;
+        },
+      });
+    });
+    let detailPolled = false;
+    let refreshLive = true;
+    let snapshots = 0;
+    let streamRequests = 0;
+    let detailReleased: () => void;
+    let streamReleased: () => void;
+    const detailHeld = new Promise<void>(resolve => { detailReleased = resolve; });
+    const streamHeld = new Promise<void>(resolve => { streamReleased = resolve; });
+    await page.route(/\/api\/tasks(?:\?|$)/, async route => {
+      const response = await route.fetch();
+      const body = await response.json();
+      for (const task of body.tasks) task.live = refreshLive;
+      await route.fulfill({ response, json: body });
+    });
+    await page.route(/\/api\/tasks\/[^/?]+$/, async route => {
+      detailPolled = true;
+      await detailHeld;
+      await route.continue().catch(() => {});
+    });
+    await page.route(/\/api\/tasks\/[^/]+\/output(?:\?|$)/, async route => {
+      if (++snapshots === 1) {
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+      } else {
+        await route.continue();
+      }
+    });
+    await page.route(/\/api\/tasks\/[^/]+\/stream(?:\?|$)/, async route => {
+      streamRequests++;
+      await streamHeld;
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'data: late\n\n' }).catch(() => {});
+    });
+
+    try {
+      await login(page);
+      await page.locator('.task-item').first().click();
+      await expect.poll(() => detailPolled).toBe(true);
+      for (const live of [false, true]) {
+        refreshLive = live;
+        await page.evaluate(() => (window as any).refresh());
+        expect(await page.evaluate(() => (window as any).currentTask.live)).toBe(live);
+      }
+      expect(snapshots).toBe(1);
+      detailReleased!();
+      await expect.poll(() => streamRequests).toBe(1);
+      await expect(page.locator('#term-status-text')).toHaveText('session ended', { timeout: 17_000 });
+      expect(await page.evaluate(() => (window as any).recoverySource?.readyState)).toBe(2);
+      streamReleased!();
+      await expect(page.locator('#term-status-text')).toHaveText('session ended');
+    } finally {
+      detailReleased!();
+      streamReleased!();
+    }
+  });
+
+  test('terminal waits between refused replacement streams', async ({ page }) => {
+    const requestedAt: number[] = [];
+    await page.route(/\/api\/tasks\/[^/]+\/stream(?:\?|$)/, async route => {
+      requestedAt.push(Date.now());
+      if (requestedAt.length <= 3) {
+        await route.fulfill({ status: 409, json: { code: 'stale_session' } });
+      } else {
+        await route.continue();
+      }
+    });
+    await login(page);
+    await page.locator('.task-item').first().click();
+    await expect(page.locator('.term-status.live')).toBeVisible({ timeout: 5000 });
+    expect(requestedAt.length).toBeGreaterThanOrEqual(4);
+    expect(requestedAt[2] - requestedAt[1]).toBeGreaterThanOrEqual(200);
+    expect(requestedAt[3] - requestedAt[2]).toBeGreaterThanOrEqual(200);
+  });
+
   test('typing forwards to PTY and echoes back', async ({ page }) => {
     await login(page);
     await page.locator('.task-item').first().click();

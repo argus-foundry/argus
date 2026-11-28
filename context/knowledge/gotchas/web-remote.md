@@ -43,6 +43,8 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 
 ## xterm.js / SSE
 
+- **Pair a live output cursor with the PID from its snapshot.** Pass `X-Argus-Session-Pid` as `expected_pid` on the stream request and refresh the snapshot on `stale_session`. A replacement PTY starts a new log and cursor.
+
 - **base64 SSE chunks → `Uint8Array`, not string** — `term.write` accepts both, but using a string forces UTF-8 round-tripping that mangles raw bytes from agent output (status bars, ANSI sequences with high-byte content). Always decode base64 → byte array via `b64ToBytes`.
 - **SSE writes must go through `bufferOrWrite`, not `term.write` directly** — iOS Safari kills momentum-scroll the moment JS mutates the xterm viewport, so any `term.write` while the user is scrolled into history (`!termIsAtBottom()`) cancels the active fling and the scroll dies after one line. `bufferOrWrite` queues bytes in `pendingChunks` (capped at 256KB FIFO) and `flushPending` drains them once `term.onScroll` reports we're back at the bottom or the jump-bottom button is tapped. Don't add a second SSE write path that skips this gate.
 - **`termIsAtBottom()` alone is NOT enough — also gate on `termTouching` and `isTermScrolling` (scrollend-driven).** Two race windows kill iOS momentum even when the at-bottom check is in place: (1) between `touchstart` and the first scroll event, viewportY hasn't moved yet so JS still sees at-bottom, and a write that lands here cancels the fling; (2) during momentum after `touchend`, the moment `viewportY` snaps back to `baseY` a write races the still-active fling. The earlier 200ms-since-last-scroll heuristic was unreliable because iOS throttles scroll events during native momentum (long gaps with no scroll dispatched), so the gate opened mid-fling. The current implementation uses the **standard `scrollend` pattern** (matches React PR #32427 and argyleink/scrollyfills): native `scrollend` on `.xterm-viewport` when available (Safari 26.2+, Chrome, Firefox), polyfill via debounced scroll (100ms) + active-pointer tracking otherwise. `bufferOrWrite` checks `termIsAtBottom() && !termTouching && !isTermScrolling`. `isTermScrolling` flips true on the first `scroll` event and back to false on `scrollend` (or polyfilled equivalent — debounce only fires when no finger is down). Touch + viewport listeners are attached in `setupTerm()` and MUST be removed in `destroyTerm()` (named function refs in `termTouchEl` / `termViewportEl`) or they accumulate across open/close cycles.
@@ -327,4 +329,58 @@ Non-obvious invariants for the SPA + REST API + push notifications stack.
 
 ## Board decisions
 
-- **`/decide` is a standalone shell, excluded from service-worker caching.** Strip the single-use 90-second fragment ticket before fetching; exchange for an 8-hour in-memory role session kept only in sessionStorage; decision auth permits only that role’s decisions GET and answers POST; never treat it as a device or plugin token, and bump SW_VERSION for shell changes.
+- **`/decide` is a standalone shell, excluded from service-worker caching.** Strip the single-use 90-second fragment ticket before fetching; exchange for an 8-hour in-memory rail-board session kept only in sessionStorage; decision auth permits only scoped navigation and current rail-visible board reads/actions; never treat it as a device or plugin token, and bump SW_VERSION for shell changes.
+- **Restore `/decide` appearance in the head before styles/body, and guard access to localStorage itself as well as reads/writes.** The theme key holds only light/dark/system; System stays CSS-driven so live OS changes work, and storage failure must not prevent temporary selection.
+- **Decision links must remain DOM-built and skip backtick code spans, including code inside bold text.** Use the inline renderer for every displayed decision field; only HTTP(S) anchors get blank targets with noopener noreferrer, and punctuation removed from the destination must remain visible as text.
+- **Do not assume window.close succeeds for an OS-opened `/decide` tab, and complete only when every submitted action has a matching accepted result (commented for comment-only; resolved/already_resolved for answers and dismissals).** Keep unsuccessful submissions editable; a blocked close needs a sent confirmation and finished guards on polling, late errors, bootstrap loads and clipboard completions so removed controls are never updated.
+
+- **FYI retry IDs must work on phone HTTP origins: use crypto.getRandomValues, not secure-context-only randomUUID.** Persist the original action ID and immutable payload before first send; lock uncertain responses until retry confirms them, and clear acknowledged comments even though their FYIs stay open. An access refusal on a retry does not settle an earlier unknown commit; keep its frozen payload until receipt replay confirms it.
+
+- **A rail-board session is dynamic board-only authority, never a device credential.** Recheck the shared rail projection on every read/write; keep hidden-board drafts unavailable while other boards submit, and never close on a refused or missing result. Strip a new ticket and supersede any stored session before exchange, including failure paths.
+
+- **Poll snapshots must be accepted explicitly rather than overwrite edits.** Fence late results by submission generation and stop polling on completion; compare consistent snapshot shapes to avoid a permanent refresh banner.
+
+- **Decide anchors use the rendered projection, never raw Markdown or visual line wraps.** Literal LF text nodes separate paragraph/list blocks and source fields; offsets are UTF-16 while contexts are Unicode code points and limits are UTF-8 bytes. Shared Go/browser vectors guard emoji and inline-formatting drift.
+
+- **Paint overlapping Decide highlights oldest first and retain every annotation ID.** Newer marks receive the direct click, while panel entries retain access to earlier ranges; rebuild marks from source text after removal so removing an overlap cannot erase another annotation.
+
+- **Keep native touch selection intact before opening annotation controls.** Capture the range before focus moves, delay touch/selectionchange capture, exclude selectable fields from tab swipes, and clamp the toolbar to the visual viewport. Browser phone-width checks do not replace physical iOS/Android long-press and keyboard QA.
+
+- **Both Decide submit buttons use the same frozen payload and action ID.** Submit refreshes in place with inline receipts; Submit & close alone attempts closing after all actions are confirmed. Uncertain responses keep annotation removal/edit locked until the exact payload is reconciled.
+
+- **A closed-item feedback rejection is independent of sibling revision conflicts.** Replay receipts first; new feedback on an agent-resolved item remains invalid and includes the closed item so Decide can explain that the response was not saved. Conflict resets clear the response selection, so whole-draft invalidity must never be reported as a missing note; validate the note separately and retain immutable payloads for uncertain retries.
+- **Decide action/todo cards (add-board-action-todo-kinds) reuse the FYI batch path, not the decision one.** `BoardDecisions.endpoint(kind)` sends every non-decision kind to `/fyi-actions` with `action:'done'|'dropped'` plus a client-generated `action_id` that is retried verbatim from `draft.sent`; batches stay split per role+kind so a failed todo batch never blocks actions.
+- **Priority order lives in one pure function (`BoardDecisions.order`/`band`), applied client-side per tab.** Bands: blocking actions, then decisions/FYIs/ready actions, then pending-trigger items and todos; ascending id inside a band. The server order is not trusted, and `order` must not mutate the record list.
+- **New kinds are deliberately not annotatable.** Their body skips `selectable()` and the Annotations trigger is hidden, and `valid()` rejects a completion draft that carries annotations; adding annotation support needs backend work first (out of scope for this change).
+- **Keyboard shortcuts stay Decisions/FYIs only; swipe walks all four tabs.** `navigate` still maps ⌘/Ctrl ←/→ to decision/fyi to keep existing behavior, while `adjacent()` moves one tab without wrapping. Tabs use `flex-wrap` so four labels never overflow at phone width.
+- **A command/step is only ever `textContent` in a `<pre>` plus a Copy button.** Nothing is executed, linkified or parsed; clipboard failure falls back to the shared `#copy-fallback` textarea.
+- **Nav rows may lack `actions`/`todos` against an older daemon** — every count read goes through `countOf`/`total` with a `||0` default, so the page degrades to the two-kind view instead of rendering `NaN`.
+
+- **Decide closed-draft recovery must exclude only definitive closed/unavailable drafts from the queue; frozen uncertain payloads remain immutable and retryable.** Keep written notes and annotation quotes in collapsed recovery even when a bare already_resolved choice/Done can be treated as accepted; that outcome does not prove new written feedback was saved.
+- **Board trigger_pending alone changes attention/order, not authored response revision.** Emit the update and mark unread, but keep updated_at stable so queued Done receipts remain valid; body/command/trigger text/blocking edits still advance it.
+
+- **Theia must compare the snapshot PID before appending cached scrollback.** The remote TUI retains a retired pane handle during replacement and swaps it to a fresh ring after verifying the new PID.
+
+- **Recorded output without a PID has no live cursor.** Refresh the cached display from the recorded snapshot. A stale-session conflict during replacement keeps the remote pane waiting even when the task’s workflow status is already in review.
+
+- **The PWA recovery loop awaits each terminal attach.** A stale snapshot stays within that loop and its delay and deadline.
+
+- **PWA recovery owns one attachment generation.** Superseding that attachment cancels its reads and discards late rendering. The deadline continues through the snapshot body and paint.
+
+- **All exits from detail cancel the terminal attachment.** The PWA keeps recovery pending through xterm’s write callback and EventSource acceptance. HTTP rejection retries within the original deadline.
+
+- **Resume belongs to the detail view that initiated it.** Back, a tab switch, or logout ends that view, even when the user immediately reopens the same task. A late resume result cannot replace the reopened terminal.
+
+- **List refresh and online reconnect leave an active recovery in charge of attaching.** During a restart the list can briefly report a non-live task, then report it live before the recovery poll detects it. Keep the original recovery deadline through stream admission.
+
+- **Apply task action results only to the originating detail visit.** A request can still succeed after Back or a tab switch. A later view may even show the same task, so check the visit before changing its title, closing it, or opening a fork.
+
+- **Use fresh model fields to render a reopened task.** Each detail visit owns its action controls, and list refresh applies the current task's authoritative name independently of terminal reattachment.
+
+- **A successful delete applies to the task ID across visits.** If the current detail still shows that ID, close it. Leave another task's view open.
+
+- **Archive and Unarchive can remove the current task from its list.** After success, close a reopened view of that same task if it moved to the other filter.
+
+- **Re-read archival state before applying a response to a newer detail visit.** The server can commit a later Unarchive before the earlier Archive response arrives in the browser.
+
+- **The task API omits `archived` for active tasks.** Treat an omitted field as false when deciding whether a reopened terminal still belongs in its list.

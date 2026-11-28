@@ -2,11 +2,12 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -28,7 +29,7 @@ func TryLockRepo(repoDir string) (unlock func(), ok bool) {
 	if repoDir == "" {
 		return func() {}, true
 	}
-	v, _ := repoLocks.LoadOrStore(repoDir, &sync.Mutex{})
+	v, _ := repoLocks.LoadOrStore(TaskGitWorkingDirectory(repoDir), &sync.Mutex{})
 	mu := v.(*sync.Mutex)
 	if mu.TryLock() {
 		return mu.Unlock, true
@@ -65,39 +66,220 @@ func RemoveWorktreeAndLocalBranchLocked(worktreePath, branch, repoDir string) (r
 		return "", "", ""
 	}
 	uxlog.Log("[worktree] RemoveWorktreeAndLocalBranch: path=%q branch=%q repoDir=%q", worktreePath, branch, repoDir)
+	dir, actualBranch, leaseTip := WorktreeRemoteBranchLease(worktreePath, branch, repoDir)
 	RemoveWorktree(worktreePath, repoDir)
-	if branch == "" {
+	if actualBranch == "" {
 		uxlog.Log("[worktree] branch is empty, skipping branch cleanup")
 		return "", "", ""
 	}
-	dir := repoDir
-	if dir == "" {
-		dir = filepath.Dir(worktreePath)
-	}
 	pruneWorktrees(dir)
-	// Same base-branch inference as RemoveWorktreeAndBranch.
-	actualBranch := branch
-	if !strings.HasPrefix(branch, "argus/") {
-		actualBranch = "argus/" + filepath.Base(worktreePath)
-		uxlog.Log("[worktree] stored branch %q is not argus/*, trying inferred branch %q", branch, actualBranch)
-	}
-	leaseTip = revParseCommit(dir, "refs/remotes/origin/"+actualBranch)
-	if leaseTip == "" {
-		leaseTip = revParseCommit(dir, "refs/heads/"+actualBranch)
-	}
 	DeleteBranch(dir, actualBranch)
 	return dir, actualBranch, leaseTip
 }
 
+// WorktreeRemoteBranchLease captures the remote-tracking or local tip before
+// resident deletion can defer worktree removal to a later owner.
+func WorktreeRemoteBranchLease(worktreePath, branch, repoDir string) (remoteRepoDir, remoteBranch, leaseTip string) {
+	return WorktreeRemoteBranchLeaseContext(context.Background(), worktreePath, branch, repoDir)
+}
+
+// WorktreeRemoteBranchLeaseContext captures the ref within the caller's budget.
+func WorktreeRemoteBranchLeaseContext(ctx context.Context, worktreePath, branch, repoDir string) (remoteRepoDir, remoteBranch, leaseTip string) {
+	if branch == "" || (worktreePath == "" && repoDir == "") {
+		return "", "", ""
+	}
+	dir := repoDir
+	if dir == "" {
+		dir = ResidentCleanupRepository(ctx, worktreePath, "")
+		if dir == "" {
+			return "", "", ""
+		}
+	}
+	// Same base-branch inference as RemoveWorktreeAndBranch.
+	actualBranch := branch
+	if worktreePath != "" && !strings.HasPrefix(branch, "argus/") {
+		actualBranch = "argus/" + filepath.Base(worktreePath)
+		uxlog.Log("[worktree] stored branch %q is not argus/*, trying inferred branch %q", branch, actualBranch)
+	}
+	leaseTip = revParseCommit(ctx, dir, "refs/remotes/origin/"+actualBranch)
+	if leaseTip == "" {
+		leaseTip = revParseCommit(ctx, dir, "refs/heads/"+actualBranch)
+	}
+	return dir, actualBranch, leaseTip
+}
+
+// ResidentCleanupRepository resolves a surviving linked worktree when its
+// configured repository is unavailable. The common Git directory survives
+// removal of the linked checkout.
+func ResidentCleanupRepository(ctx context.Context, worktree, repoDir string) string {
+	var linkedRepo string
+	if worktree != "" {
+		if _, err := os.Lstat(filepath.Join(worktree, ".git")); err == nil {
+			linkedRepo, _ = TaskGitRepositoryID(ctx, worktree)
+		}
+	}
+	if repoDir != "" {
+		directory := TaskGitWorkingDirectory(repoDir)
+		if configured, err := TaskGitRepositoryID(ctx, directory); err == nil && (linkedRepo == "" || SamePath(linkedRepo, configured)) {
+			return directory
+		}
+	}
+	if linkedRepo == "" {
+		return ""
+	}
+	if filepath.Base(linkedRepo) == ".git" {
+		return filepath.Dir(linkedRepo)
+	}
+	return linkedRepo
+}
+
+// CleanupResidentLocalGit checks registration before deleting, and never
+// substitutes recursive filesystem deletion for a refusal from Git.
+func CleanupResidentLocalGit(ctx context.Context, worktree, branch, repoDir string, repoLocked bool) (bool, error) {
+	if worktree == "" && branch == "" {
+		return false, nil
+	}
+	if !repoLocked {
+		unlock, err := lockRepoContext(ctx, repoDir)
+		if err != nil {
+			return false, err
+		}
+		defer unlock()
+	}
+	removed := false
+	if worktree != "" {
+		if testGuard(worktree) {
+			return false, errors.New("worktree path blocked during test")
+		}
+		path, err := checkedTaskWorktree(ctx, worktree, repoDir)
+		if err == nil {
+			stopDevStackFor(path)
+			stopBrowsersFor(path)
+			if _, _, err := RunTaskGit(ctx, repoDir, "worktree", "remove", "--force", path); err != nil {
+				return false, fmt.Errorf("remove resident worktree: %w", err)
+			}
+			removed = true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	if branch != "" && repoDir != "" {
+		if worktree != "" {
+			if _, _, err := RunTaskGit(ctx, repoDir, "worktree", "prune"); err != nil {
+				return false, err
+			}
+		}
+		if out, _, err := RunTaskGit(ctx, repoDir, "branch", "-D", "--", branch); err != nil {
+			uxlog.Log("[worktree] resident local delete failed repo=%q branch=%q err=%v output=%q", repoDir, branch, err, out)
+		}
+	}
+	return removed, VerifyResidentLocalRemoval(ctx, worktree, branch, repoDir)
+}
+
+// VerifyResidentLocalRemoval checks the actual filesystem and ref state. The
+// best-effort removal helpers may log a failure without returning one.
+func VerifyResidentLocalRemoval(ctx context.Context, worktree, branch, repoDir string) error {
+	if worktree != "" {
+		if _, err := os.Stat(worktree); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return fmt.Errorf("verify worktree removal: %w", err)
+			}
+			return errors.New("resident worktree remains after cleanup")
+		}
+	}
+	if branch == "" {
+		return nil
+	}
+	if repoDir == "" {
+		return errors.New("repository unavailable for local branch verification")
+	}
+	_, code, err := RunTaskGit(ctx, repoDir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if err == nil {
+		return errors.New("resident branch remains after cleanup")
+	}
+	if code != 1 {
+		return fmt.Errorf("verify local branch removal: %w", err)
+	}
+	return nil
+}
+
+// TaskGitBranchTip resolves a local branch ref without fetching.
+func TaskGitBranchTip(ctx context.Context, repoDir, branch string) string {
+	return revParseCommit(ctx, repoDir, "refs/heads/"+branch)
+}
+
+// DeleteStackedBranchContext removes a stack link whose classified tip is
+// unchanged. Leave origin alone unless the same commit was tracked there.
+func DeleteStackedBranchContext(ctx context.Context, repoDir, branch, expectedTip, originStamp string) bool {
+	if expectedTip == "" || TaskGitBranchTip(ctx, repoDir, branch) != expectedTip {
+		return false
+	}
+	remoteMatches := originStamp != "" && revParseCommit(ctx, repoDir, "refs/remotes/origin/"+branch) == expectedTip
+	localDeleted := deleteStackedLocalBranch(ctx, repoDir, branch, expectedTip)
+	if remoteMatches && (localDeleted || TaskGitBranchTip(ctx, repoDir, branch) == expectedTip) {
+		if err := DeleteRemoteBranchAtOrigin(ctx, repoDir, branch, expectedTip, originStamp); err == nil {
+			return true
+		} else {
+			uxlog.Log("[worktree] stacked origin delete failed repo=%q branch=%q err=%v", repoDir, branch, err)
+		}
+	}
+	return localDeleted
+}
+
+func deleteStackedLocalBranch(ctx context.Context, repoDir, branch, expectedTip string) bool {
+	ref := "refs/heads/" + branch
+	worktrees, _, err := RunTaskGit(ctx, repoDir, "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		uxlog.Log("[worktree] stacked checkout inspection failed repo=%q branch=%q err=%v", repoDir, branch, err)
+		return false
+	}
+	var worktree string
+	for field := range strings.SplitSeq(worktrees, "\x00") {
+		if path, ok := strings.CutPrefix(field, "worktree "); ok {
+			worktree = path
+		}
+		// Rebase and bisect detach HEAD while retaining use of a branch.
+		// A pending rebase can also be updating other branch refs.
+		if field == "branch "+ref || (field == "detached" && worktreeRefOperationPending(ctx, worktree)) {
+			uxlog.Log("[worktree] stacked local branch still in use repo=%q branch=%q", repoDir, branch)
+			return false
+		}
+	}
+	if _, _, err := RunTaskGit(ctx, repoDir, "update-ref", "--no-deref", "-d", ref, expectedTip); err != nil {
+		uxlog.Log("[worktree] stacked local delete refused repo=%q branch=%q err=%v", repoDir, branch, err)
+		return false
+	}
+	if out, _, err := runTaskGit(ctx, repoDir, taskGitOptions{ignoreAlternateConfig: true}, "config", "--local", "--remove-section", "branch."+branch); err != nil && !strings.Contains(out, "no such section:") {
+		uxlog.Log("[worktree] stacked branch config removal failed repo=%q branch=%q err=%v", repoDir, branch, err)
+	}
+	return true
+}
+
+// worktreeRefOperationPending refuses deletion when Git could still need
+// a branch ref from a detached checkout.
+func worktreeRefOperationPending(ctx context.Context, worktree string) bool {
+	if worktree == "" {
+		return true
+	}
+	gitDir, err := taskGitPath(ctx, worktree, "rev-parse", "--absolute-git-dir")
+	if err != nil || !filepath.IsAbs(gitDir) {
+		return true
+	}
+	for _, marker := range []string{"rebase-apply", "rebase-merge", "BISECT_START"} {
+		if _, err := os.Stat(filepath.Join(gitDir, marker)); !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	return false
+}
+
 // revParseCommit resolves ref to a commit id in dir, "" when it does not.
-func revParseCommit(dir, ref string) string {
-	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
-	cmd.Dir = dir
-	out, err := cmd.Output()
+func revParseCommit(ctx context.Context, dir, ref string) string {
+	out, _, err := RunTaskGit(ctx, dir, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return out
 }
 
 // ErrRemoteBranchChanged reports that DeleteRemoteBranchContext's lease
@@ -119,27 +301,74 @@ var ErrRemoteBranchGone = errors.New("remote branch already gone")
 // re-created branch). It does not take the repo lock: a slow push must never
 // block a later local removal in the same repo.
 func DeleteRemoteBranchContext(ctx context.Context, repoDir, branch, expectTip string) error {
-	if branch == "" || repoDir == "" {
+	if repoDir == "" {
+		return nil
+	}
+	return deleteLeasedRemoteBranch(ctx, func(args ...string) (string, int, error) {
+		return RunTaskGit(ctx, repoDir, args...)
+	}, "origin", branch, expectTip, true)
+}
+
+// DeleteRemoteBranchAtOrigin pins verified destinations so Git cannot resolve
+// a newly configured origin between the identity check and the push.
+func DeleteRemoteBranchAtOrigin(ctx context.Context, repoDir, branch, expectTip, expectedOrigin string) error {
+	stamp, targets := taskGitOrigin(ctx, repoDir)
+	if stamp == "" || stamp != expectedOrigin {
+		return errors.New("original origin changed or is unavailable")
+	}
+	// Keep the remote name so Git invokes transport settings and hooks for
+	// origin. Replacing the pushurl list affects this invocation only.
+	configArgs := []string{"-c", "remote.origin.pushurl="}
+	configCount := 0
+	if raw := os.Getenv("GIT_CONFIG_COUNT"); raw != "" {
+		var err error
+		configCount, err = strconv.Atoi(raw)
+		if err != nil || configCount < 0 || configCount+len(targets) < configCount {
+			return errors.New("invalid Git configuration environment")
+		}
+	}
+	env := []string{"GIT_CONFIG_COUNT=" + strconv.Itoa(configCount+len(targets))}
+	for i, target := range targets {
+		token := "argus-reclaim-" + rand.Text()
+		index := strconv.Itoa(configCount + i)
+		// get-url already applied Git's rewrite rules. Make the target the
+		// result of a new rewrite, so Git does not apply a second rule to it.
+		env = append(env, "GIT_CONFIG_KEY_"+index+"=url."+target+".insteadOf",
+			"GIT_CONFIG_VALUE_"+index+"="+token)
+		configArgs = append(configArgs, "-c", "remote.origin.pushurl="+token)
+	}
+	run := func(args ...string) (string, int, error) {
+		command := append(append([]string(nil), configArgs...), args...)
+		return runTaskGit(ctx, repoDir, taskGitOptions{env: env}, command...)
+	}
+	resolved, _, err := runTaskGit(ctx, repoDir, taskGitOptions{env: env, exactStdout: true}, append(configArgs, "remote", "get-url", "--push", "--all", "origin")...)
+	if err != nil || resolved != strings.Join(targets, "\n")+"\n" {
+		return errors.New("unable to pin original Git push destinations")
+	}
+	return deleteLeasedRemoteBranch(ctx, run, "origin", branch, expectTip, false)
+}
+
+type taskGitCommand func(...string) (string, int, error)
+
+func deleteLeasedRemoteBranch(ctx context.Context, run taskGitCommand, remote, branch, expectTip string, includeGitOutput bool) error {
+	if branch == "" {
 		return nil
 	}
 	if expectTip == "" {
 		return fmt.Errorf("delete origin branch %s: no expected tip to lease on; left in place", branch)
 	}
 	ref := "refs/heads/" + branch
-	cmd := exec.CommandContext(ctx, "git", "push", "--force-with-lease="+ref+":"+expectTip, "origin", ":"+ref)
-	cmd.Dir = repoDir
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	out, err := cmd.CombinedOutput()
+	msg, _, err := run("push", "--force-with-lease="+ref+":"+expectTip, remote, ":"+ref)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("git push origin --delete %s: %w", branch, ctxErr)
 		}
-		msg := strings.TrimSpace(string(out))
 		// Current git reports a lease mismatch, including a branch already gone
 		// from origin, as "stale info"; some versions report the gone case as
 		// "remote ref does not exist". Either way ls-remote classifies it.
 		if strings.Contains(msg, "stale info") || strings.Contains(msg, "remote ref does not exist") {
-			present, lsErr := remoteBranchExists(ctx, repoDir, ref)
+			_, code, lsErr := run("ls-remote", "--exit-code", remote, ref)
+			present, lsErr := remoteRefExists(code, lsErr)
 			switch {
 			case lsErr == nil && !present:
 				return fmt.Errorf("%w: origin has no %s", ErrRemoteBranchGone, branch)
@@ -147,6 +376,9 @@ func DeleteRemoteBranchContext(ctx context.Context, repoDir, branch, expectTip s
 				return fmt.Errorf("%w: origin %s is no longer at %s (could not confirm it still exists: %w)", ErrRemoteBranchChanged, branch, expectTip, lsErr)
 			}
 			return fmt.Errorf("%w: origin %s is no longer at %s", ErrRemoteBranchChanged, branch, expectTip)
+		}
+		if !includeGitOutput {
+			return fmt.Errorf("git push origin --delete %s: %w", branch, err)
 		}
 		return fmt.Errorf("git push origin --delete %s: %w: %s", branch, err, msg)
 	}
@@ -157,15 +389,15 @@ func DeleteRemoteBranchContext(ctx context.Context, repoDir, branch, expectTip s
 // by ctx. It only classifies a failed lease for logging; it never decides a
 // delete.
 func remoteBranchExists(ctx context.Context, repoDir, ref string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--exit-code", "origin", ref)
-	cmd.Dir = repoDir
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	err := cmd.Run()
-	var exitErr *exec.ExitError
+	_, code, err := RunTaskGit(ctx, repoDir, "ls-remote", "--exit-code", "origin", ref)
+	return remoteRefExists(code, err)
+}
+
+func remoteRefExists(code int, err error) (bool, error) {
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.As(err, &exitErr) && exitErr.ExitCode() == 2:
+	case code == 2:
 		return false, nil // --exit-code: no matching ref
 	default:
 		return false, err

@@ -9,6 +9,7 @@ import (
 )
 
 func TestIsAncestor(t *testing.T) {
+	t.Parallel()
 	t.Run("true when commit is an ancestor of target", func(t *testing.T) {
 		dir := initRepo(t, t.TempDir())
 		baseSHA := headSHA(t, dir)
@@ -76,6 +77,7 @@ func TestIsAncestor(t *testing.T) {
 }
 
 func TestResolveDefaultBranch(t *testing.T) {
+	t.Parallel()
 	t.Run("uses configured value when non-empty, without probing the remote", func(t *testing.T) {
 		short, ref, err := ResolveDefaultBranch("/nonexistent/path/should/not/be/touched", "drn/master")
 		testutil.NoError(t, err)

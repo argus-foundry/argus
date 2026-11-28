@@ -10,13 +10,26 @@ import (
 	"github.com/argus-foundry/argus/internal/testutil"
 )
 
+// limitCodexMoveMetadata shrinks the move metadata limit for one test. Callers
+// must not be t.Parallel (the limit is a package var).
+func limitCodexMoveMetadata(t *testing.T, n int64) {
+	t.Helper()
+	old := maxCodexMoveMetadataBytes
+	maxCodexMoveMetadataBytes = n
+	t.Cleanup(func() { maxCodexMoveMetadataBytes = old })
+}
+
 func TestCodexMoveLargeNativeMetadata(t *testing.T) {
+	// Same boundary as production (default scanner buffer < header < limit <
+	// header), just scaled down: 64 KiB bufio default, 256 KiB limit.
+	const limit int64 = 256 << 10
+	limitCodexMoveMetadata(t, limit)
 	for _, tc := range []struct {
 		name   string
 		size   int
 		reject bool
 	}{
-		{"70KiB", 70 << 10, false}, {"1MiB", 1 << 20, false}, {"over4MiB", 4 << 20, true},
+		{"70KiB", 70 << 10, false}, {"underLimit", int(limit) - 4<<10, false}, {"overLimit", int(limit) + 4<<10, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newCodexMoveFixture(t)
@@ -31,7 +44,7 @@ func TestCodexMoveLargeNativeMetadata(t *testing.T) {
 			before := fullMoveRow(t, filepath.Join(f.srcHome, codexStateDB))
 			_, res, err := MoveTaskAccount(f.d, &moveRunner{}, AccountMoveInput{TaskID: f.task.ID, Account: "cx"})
 			if tc.reject {
-				testutil.True(t, len(header) > 4<<20)
+				testutil.True(t, int64(len(header)) > limit)
 				testutil.ErrorIs(t, err, ErrAccount)
 				got, getErr := f.d.Get(f.task.ID)
 				testutil.NoError(t, getErr)

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -151,11 +152,56 @@ func TestSmoke_HeraBoardWheelScrollTallItem(t *testing.T) {
 // uiTimeout is the maximum time to wait for tview event loop operations.
 const uiTimeout = 2 * time.Second
 
-// eventSettle is the time to let injected events propagate from the
-// SimulationScreen's event queue into tview's event loop. SimulationScreen
-// delivers events via a channel that tview polls in a separate goroutine,
-// so injected events aren't instantly visible to QueueUpdate callbacks.
-const eventSettle = 50 * time.Millisecond
+// barrierTimeout bounds one syncUI barrier. It is only ever spent on a failing
+// test (a healthy barrier returns in microseconds), so it is generous enough
+// to survive a heavily loaded CI host without becoming a flake source.
+const barrierTimeout = 10 * time.Second
+
+// barrierKey is the sentinel syncUI sends through the SimulationScreen. No test
+// injects it and no keymap binds it; barrierCapture swallows it before any
+// app handler, widget or PTY can see it.
+const barrierKey = tcell.KeyF64
+
+// barrierState is the per-application barrier plumbing registered by simApp.
+type barrierState struct {
+	sim tcell.SimulationScreen
+	hit chan struct{} // buffered(1): the sentinel reached the input capture
+}
+
+var barriers sync.Map // *tview.Application -> *barrierState
+
+// barrierCapture wraps inner so the sentinel is consumed here and everything
+// else is delegated untouched. Returning nil for the sentinel makes tview run
+// its own post-event draw, so "sentinel observed" implies every earlier event
+// has been handled AND drawn. It must stay ONE function literal: ensureBarrier
+// recognises an already-installed wrapper by its code pointer.
+func barrierCapture(st *barrierState, inner func(*tcell.EventKey) *tcell.EventKey) func(*tcell.EventKey) *tcell.EventKey {
+	return func(ev *tcell.EventKey) *tcell.EventKey {
+		if ev.Key() == barrierKey {
+			select {
+			case st.hit <- struct{}{}:
+			default:
+			}
+			return nil
+		}
+		if inner == nil {
+			return ev
+		}
+		return inner(ev)
+	}
+}
+
+// ensureBarrier makes sure the app's current input capture is a barrier
+// wrapper. Tests are free to call SetInputCapture themselves (many install a
+// private F12 FIFO); the next syncUI simply re-wraps whatever is there now.
+func ensureBarrier(st *barrierState, app *tview.Application) {
+	cur := app.GetInputCapture()
+	probe := barrierCapture(st, nil)
+	if cur != nil && reflect.ValueOf(cur).Pointer() == reflect.ValueOf(probe).Pointer() {
+		return
+	}
+	app.SetInputCapture(barrierCapture(st, cur))
+}
 
 // pasteCapture is a minimal tview.Primitive that records paste events.
 type pasteCapture struct {
@@ -216,7 +262,17 @@ func simApp(t *testing.T) (*tview.Application, tcell.SimulationScreen, *lazyScre
 	// Critical: EnableMouse/EnablePaste AFTER SetScreen.
 	app.EnableMouse(true)
 	app.EnablePaste(true)
+	registerBarrier(t, app, sim)
 	return app, sim, ls
+}
+
+// registerBarrier gives app a syncUI barrier backed by sim. simApp does this
+// itself; call it directly only for an application wired to a sim screen by
+// hand.
+func registerBarrier(t *testing.T, app *tview.Application, sim tcell.SimulationScreen) {
+	t.Helper()
+	barriers.Store(app, &barrierState{sim: sim, hit: make(chan struct{}, 1)})
+	t.Cleanup(func() { barriers.Delete(app) })
 }
 
 // runApp starts the tview event loop in a goroutine and returns a function to
@@ -251,18 +307,42 @@ func runApp(t *testing.T, app *tview.Application) func() {
 	return stop
 }
 
-// syncUI waits for injected events to propagate through the tview event loop.
-// It sleeps briefly to let SimulationScreen deliver events, then executes a
-// QueueUpdate round-trip to confirm tview has processed them.
+// syncUI is a barrier: when it returns, every event injected before the call
+// (sim.Inject*, QueueEvent) has been handled by tview's event loop and the
+// draw that follows each of them has completed. It sends a sentinel key down
+// the same FIFO the injected events travel and waits for the input capture to
+// see it, then does a QueueUpdate round-trip so the loop is idle again.
+//
+// It does NOT wait for ASYNC work (a goroutine that later calls
+// QueueUpdateDraw, a refresher, a timer). Tests that depend on such work must
+// use waitForCond on the observable result, never a longer sleep.
 func syncUI(t *testing.T, app *tview.Application) {
 	t.Helper()
-	time.Sleep(eventSettle)
+	v, ok := barriers.Load(app)
+	if !ok {
+		t.Fatal("syncUI: application was not created by simApp, so it has no barrier")
+	}
+	st := v.(*barrierState)
+	// tview's SetInputCapture/GetInputCapture are unlocked, so touch the capture
+	// only on the UI goroutine.
+	app.QueueUpdate(func() { ensureBarrier(st, app) })
+	select { // drop a stale hit from a timed-out earlier barrier
+	case <-st.hit:
+	default:
+	}
+	st.sim.InjectKey(barrierKey, 0, 0)
+	select {
+	case <-st.hit:
+	case <-time.After(barrierTimeout):
+		t.Fatalf("syncUI: barrier key not observed within %v: the event loop is stuck or not running, "+
+			"a handler is blocking it, or a paste is still open (paste swallows keys)", barrierTimeout)
+	}
 	ch := make(chan struct{})
 	app.QueueUpdate(func() { close(ch) })
 	select {
 	case <-ch:
-	case <-time.After(uiTimeout):
-		t.Fatal("timed out waiting for tview event loop")
+	case <-time.After(barrierTimeout):
+		t.Fatalf("syncUI: tview event loop did not return to idle within %v", barrierTimeout)
 	}
 }
 
@@ -604,46 +684,29 @@ func TestSmoke_ReconciliationUsesNameSafeStatusWrite(t *testing.T) {
 	testutil.Equal(t, got.Name, "haiku-name")
 }
 
-// TestSmoke_SessionExitFlipUsesNameSafeStatusWrite covers the fourth rerouted
-// write path: handleSessionExitUI's InProgress→Complete/InReview flip. It now
-// persists via db.SetStatus (name-safe) instead of full-row db.Update, and the
-// `t.Status == InProgress` guard makes a second exit notification a no-op — the
-// guard that also prevents a double status/completed event when the daemon
-// already flipped the row before the TUI's notification arrives.
+// TestSmoke_SessionExitFlipUsesNameSafeStatusWrite pins standalone exit
+// persistence: the partial status write preserves the task name, and a
+// second notification does not repeat the transition or restamp EndedAt.
 func TestSmoke_SessionExitFlipUsesNameSafeStatusWrite(t *testing.T) {
 	d := testDB(t)
 	task := &model.Task{Name: "haiku-name", Status: model.StatusInProgress, Project: "p"}
-	if err := d.Add(task); err != nil {
-		t.Fatal(err)
-	}
-	// Daemon mode (daemonConnected=true) so this pins the daemon-mode flip path
-	// (HandleSessionExit → handleSessionExitUI → name-safe db.SetStatus). Called
-	// directly (no event loop) so the unrelated tick/refresh reconciler — which,
-	// post-fix, lands a sessionless InProgress row in InReview — can't race the
-	// flip and make the InProgress guard skip it. The reconciler→InReview path is
-	// covered by TestSmoke_ReconciliationUsesNameSafeStatusWrite; here we isolate
-	// the exit-flip write itself.
-	app := New(d, agent.NewRunner(nil), true)
-	// New()'s initial refreshTasks() reconciles this sessionless InProgress row to
-	// InReview in daemon mode (correct — no live session). Reset to InProgress so
-	// this test exercises the EXIT-FLIP write itself, not the reconciler (the
-	// reconciler→InReview path is covered by TestSmoke_ReconciliationUsesNameSafeStatusWrite).
-	testutil.NoError(t, d.SetStatus(task.ID, model.StatusInProgress))
+	testutil.NoError(t, d.Add(task))
+	app := New(d, agent.NewRunner(nil), false)
+	_, stop := wireApp(t, app)
+	t.Cleanup(stop)
 
-	// Clean self-exit (cleanExit=true) → Complete, name preserved by the partial write.
-	app.handleSessionExitUI(task.ID, true /* cleanExit */, false)
-	got, _ := d.Get(task.ID)
+	app.NotifySessionExit(task.ID, nil, false, nil)
+	got, err := d.Get(task.ID)
+	testutil.NoError(t, err)
 	testutil.Equal(t, got.Status, model.StatusComplete)
 	testutil.Equal(t, got.Name, "haiku-name")
 	firstEnded := got.EndedAt
 
-	// Second notification: row is no longer InProgress, so the guard skips the
-	// flip entirely — status and ended_at must be untouched (no re-stamp, no
-	// duplicate event).
-	app.handleSessionExitUI(task.ID, true /* cleanExit */, false)
-	got, _ = d.Get(task.ID)
+	app.NotifySessionExit(task.ID, nil, false, nil)
+	got, err = d.Get(task.ID)
+	testutil.NoError(t, err)
 	testutil.Equal(t, got.Status, model.StatusComplete)
-	testutil.Equal(t, got.EndedAt.Equal(firstEnded), true)
+	testutil.True(t, got.EndedAt.Equal(firstEnded))
 }
 
 func TestSmoke_RestartDaemonPrompt_OpensAndSkips(t *testing.T) {
@@ -1076,7 +1139,7 @@ func TestSmoke_NewTaskFormPaste(t *testing.T) {
 	}
 	app.tapp.QueueEvent(tcell.NewEventPaste(false))
 
-	// Poll for the prompt to populate. syncUI's 50 ms eventSettle is enough
+	// Poll for the prompt to populate. syncUI is a barrier, not a sleep, so it is enough
 	// on a quiet machine but not reliably enough under -race on CI, where
 	// draining 20 queued events through the tcell→tview boundary can take
 	// longer than the fixed wait. Use 5s (not uiTimeout) because this is

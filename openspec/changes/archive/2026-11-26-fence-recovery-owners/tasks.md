@@ -1,0 +1,4 @@
+- [x] Cover legacy history and hidden-role graduation.
+- [x] Fence resident worker reclaim through confirmed retirement.
+- [x] Keep recovery and tab ownership across browser lifecycle events.
+- [x] Verify and archive the changes.

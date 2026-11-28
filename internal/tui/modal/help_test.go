@@ -41,11 +41,11 @@ func TestHelpModal_InputHandler(t *testing.T) {
 
 func TestHelpModal_Draw(t *testing.T) {
 	// Height must clear the full section list (the modal scrolls when it can't);
-	// 140 leaves headroom so every section — including the last ones, Hera plan
+	// 180 leaves headroom so every section — including the last ones, Hera plan
 	// DAG and Modals & Forms — renders without scrolling.
-	sim := drawAt(t, 100, 160)
+	sim := drawAt(t, 100, 180)
 	m := NewHelpModal()
-	m.SetRect(0, 0, 100, 160)
+	m.SetRect(0, 0, 100, 180)
 	m.Draw(sim)
 	sim.Sync()
 
@@ -58,10 +58,16 @@ func TestHelpModal_Draw(t *testing.T) {
 	body := screenString(sim)
 	testutil.Contains(t, body, "Keybindings")
 	testutil.Contains(t, body, "Coordinator board")
-	testutil.Contains(t, body, "answer decisions in browser")
+	testutil.Contains(t, body, "open Decide board in browser")
 	testutil.Contains(t, body, "toggle plan / human board")
 	testutil.Contains(t, body, "compose reply / approve exact resident call")
-	testutil.Contains(t, body, "dismiss item / deny resident call")
+	testutil.Contains(t, body, "clear (dismiss FYI · done action/todo · deny call)")
+	testutil.False(t, strings.Contains(body, "mark action / todo done"))
+	testutil.Contains(t, body, "copy action command / step")
+	testutil.Contains(t, body, "defer / restore selected item")
+	testutil.Contains(t, body, "show / hide deferred items")
+	testutil.Contains(t, body, "previous board kind tab")
+	testutil.Contains(t, body, "next board kind tab")
 	testutil.Contains(t, body, "Task List")
 	testutil.Contains(t, body, "toggle all Tasks projects open")
 	testutil.Contains(t, body, "select tasks; skip headers and focus-fold projects")
@@ -359,9 +365,9 @@ func TestHelpModal_DrawShowsScrollPositionWhenOverflow(t *testing.T) {
 
 func TestHelpModal_DrawHidesScrollHintWhenFits(t *testing.T) {
 	// Give the modal enough room that every row fits.
-	sim := drawAt(t, 100, 160)
+	sim := drawAt(t, 100, 180)
 	m := NewHelpModal()
-	m.SetRect(0, 0, 100, 160)
+	m.SetRect(0, 0, 100, 180)
 	m.Draw(sim)
 	sim.Sync()
 	body := screenString(sim)

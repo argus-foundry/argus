@@ -15,6 +15,7 @@ type ProjectJSON struct {
 	Branch  string         `json:"branch,omitempty"`
 	Backend string         `json:"backend,omitempty"`
 	Sandbox map[string]any `json:"sandbox,omitempty"`
+	NewName string         `json:"new_name,omitempty"`
 }
 
 // ListProjects returns just the project names (sorted).

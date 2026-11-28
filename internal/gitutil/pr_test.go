@@ -34,6 +34,7 @@ func initTestUxlog(t *testing.T) func() string {
 // --- mapPRState pure-function tests (no process spawning) ---
 
 func TestMapPRState_AllMappings(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		raw      string
@@ -97,11 +98,13 @@ func TestMapPRState_AllMappings(t *testing.T) {
 }
 
 func TestMapPRState_MalformedJSON(t *testing.T) {
+	t.Parallel()
 	_, _, err := mapPRState(`{not valid json`, 0)
 	testutil.Error(t, err)
 }
 
 func TestMapPRState_EmptyOutput_NonZeroExit(t *testing.T) {
+	t.Parallel()
 	// Non-zero exit without the specific "no pull requests found" text is a
 	// transient error (network, auth) — caller must not clobber cached value.
 	_, _, err := mapPRState("", 1)
@@ -109,6 +112,7 @@ func TestMapPRState_EmptyOutput_NonZeroExit(t *testing.T) {
 }
 
 func TestMapPRState_UnrecognizedOpenDecision(t *testing.T) {
+	t.Parallel()
 	// Unknown reviewDecision values from future GitHub API versions should
 	// fall through to AwaitingReview to stay conservative.
 	got, _, err := mapPRState(`{"state":"OPEN","isDraft":false,"reviewDecision":"FUTURE_VALUE","url":""}`, 0)
@@ -219,6 +223,7 @@ func TestFetchPRState_GhUnauthenticated_LogsOnce(t *testing.T) {
 }
 
 func TestMapPRState_UnexpectedState(t *testing.T) {
+	t.Parallel()
 	_, _, err := mapPRState(`{"state":"UNKNOWN_STATE","isDraft":false,"reviewDecision":"","url":""}`, 0)
 	testutil.Error(t, err)
 	testutil.Contains(t, err.Error(), "unexpected gh pr state")
@@ -240,6 +245,7 @@ func TestFetchPRState_ExecLevelError_Code0(t *testing.T) {
 }
 
 func TestErrGhAuth_ErrorMethod(t *testing.T) {
+	t.Parallel()
 	e := &errGhAuth{msg: "please run gh auth login"}
 	testutil.Contains(t, e.Error(), "gh unauthenticated")
 	testutil.Contains(t, e.Error(), "please run gh auth login")

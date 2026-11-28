@@ -11,7 +11,7 @@ import (
 
 func TestBoardZeroExpectedRevision(t *testing.T) {
 	for _, action := range []struct{ method, path string }{
-		{"PUT", "read-state"}, {"POST", "dismiss"},
+		{"PUT", "read-state"}, {"PUT", "defer"}, {"POST", "dismiss"},
 	} {
 		t.Run(action.path, func(t *testing.T) {
 			for _, revision := range []string{"0001-01-01T00:00:00Z", "0001-01-01T01:00:00+01:00"} {
@@ -22,7 +22,7 @@ func TestBoardZeroExpectedRevision(t *testing.T) {
 					sink := &boardSink{}
 					prev := events.SetSink(sink)
 					t.Cleanup(func() { events.SetSink(prev) })
-					body := fmt.Sprintf(`{"read":true,"expected_updated_at":%q,"note":"stop"}`, revision)
+					body := fmt.Sprintf(`{"deferred":true,"read":true,"expected_updated_at":%q,"note":"stop"}`, revision)
 					rr := doBoard(s, action.method, fmt.Sprintf("/api/hera/roles/%d/board/%d/%s", c.ID, item.ID, action.path), body)
 					testutil.Equal(t, rr.Code, 400)
 					testutil.Equal(t, codeOf(t, rr), "invalid_request")
@@ -48,7 +48,7 @@ func TestBoardMutationConsumesBoundedBody(t *testing.T) {
 		method, path string
 		limit        int
 	}{
-		{"PUT", "read-state", 80 * 1024}, {"POST", "dismiss", 394240},
+		{"PUT", "read-state", 80 * 1024}, {"PUT", "defer", 80 * 1024}, {"POST", "dismiss", 394240},
 	} {
 		t.Run(action.path, func(t *testing.T) {
 			for _, tc := range []struct {
@@ -68,7 +68,7 @@ func TestBoardMutationConsumesBoundedBody(t *testing.T) {
 					sink := &boardSink{}
 					prev := events.SetSink(sink)
 					t.Cleanup(func() { events.SetSink(prev) })
-					body := fmt.Sprintf(`{"read":true,"expected_updated_at":%q,"note":"stop"}`, ts(item.UpdatedAt))
+					body := fmt.Sprintf(`{"deferred":true,"read":true,"expected_updated_at":%q,"note":"stop"}`, ts(item.UpdatedAt))
 					if tc.padding > 0 {
 						body += strings.Repeat(" ", tc.padding-len(body))
 					} else {

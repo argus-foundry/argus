@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test';
+export default defineConfig({testDir:'./tests',testMatch:'decide-submit.spec.ts',workers:1,timeout:15000,reporter:'list',use:{screenshot:'only-on-failure',trace:'retain-on-failure'},projects:[1200,390].flatMap(width=>['light','dark'].map(colorScheme=>({name:width+'-'+colorScheme,use:{browserName:'chromium' as const,viewport:{width,height:844},colorScheme:colorScheme as 'light'|'dark',isMobile:width===390,hasTouch:width===390}})))});

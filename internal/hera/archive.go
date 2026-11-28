@@ -287,8 +287,8 @@ func childrenVerdict(store ArchiveStore, role *db.HeraRole, taskID string) Archi
 				return refuse("board unreadable (%v)", err)
 			}
 			for _, it := range items {
-				if it.Kind == "decision" && !it.Resolved {
-					return refuse("open decision board item %q", it.Subject)
+				if (it.Kind == "decision" || it.Kind == "action" || it.Kind == "todo") && !it.Resolved {
+					return refuse("open %s board item %q", it.Kind, it.Subject)
 				}
 			}
 		}

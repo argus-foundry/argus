@@ -2842,7 +2842,7 @@ The Hera coordinator and agent panes SHALL render the Tasks view's LAUNCH banner
 
 ### Requirement: Board hint and mailbox presentation
 
-The Hera TUI SHALL render the coordinator-board focus-aware muted hint on a reserved bottom interior row, clipping at narrow widths and scrolling items above it, including when empty. Its rebindable labels SHALL track the active keymap. Unread mailbox markers on orchestrator headers and bridging sub-coordinator rows SHALL use the theme's orange color while retaining selected-row attributes; normal coordinator markers SHALL keep their existing style.
+The Hera TUI SHALL render the coordinator-board focus-aware muted hint on a reserved bottom interior row, clipping at narrow widths and scrolling items above it, including when empty. Its rebindable labels SHALL track the active keymap. Mailbox markers on orchestrator headers and bridging sub-coordinator rows SHALL keep the envelope glyph and take their color from the most urgent open attention item, graded through the shared attention predicate: red for an open blocking action, orange for an open decision or a ready non-blocking action, blue when only FYIs are open. A coordinator whose open items are only todos and/or trigger-pending actions SHALL show the normal coordinator marker with its existing style. The color SHALL retain selected-row attributes. The next-needs-input jump hotkey SHALL continue to target only coordinators with an unread decision; neither an FYI nor an action (blocking or not) SHALL by itself make a coordinator a jump target.
 
 #### Scenario: Board focus changes
 
@@ -2857,7 +2857,37 @@ The Hera TUI SHALL render the coordinator-board focus-aware muted hint on a rese
 #### Scenario: Selected unread coordinator
 
 - **WHEN** an unread coordinator header or bridging sub-coordinator row is selected
-- **THEN** only its mailbox glyph is orange and its selected-row attributes remain intact
+- **THEN** only its mailbox glyph takes the urgency color and its selected-row attributes remain intact
+
+#### Scenario: Blocking action
+
+- **WHEN** a coordinator has an open blocking action, with or without other items
+- **THEN** its envelope is red
+
+#### Scenario: Decision or ready action
+
+- **WHEN** the most urgent open item is a decision or a ready non-blocking action
+- **THEN** its envelope is orange
+
+#### Scenario: FYI only
+
+- **WHEN** the only open attention items are FYIs
+- **THEN** its envelope is blue
+
+#### Scenario: Quiet items only
+
+- **WHEN** a coordinator's open items are only todos and/or trigger-pending actions
+- **THEN** it shows no envelope and the normal coordinator marker
+
+#### Scenario: Blocking action does not make a jump target
+
+- **WHEN** a coordinator's only attention item is a blocking action
+- **THEN** the next-needs-input jump does not select that coordinator
+
+#### Scenario: FYI does not make a jump target
+
+- **WHEN** a coordinator's only attention items are FYIs
+- **THEN** the next-needs-input jump does not select that coordinator
 
 ### Requirement: Single expanded board item
 
@@ -3038,29 +3068,88 @@ The system SHALL, on submit of the new-coordinator form, immediately overlay an 
 
 ### Requirement: Board `o` opens the decision page in the browser
 
-With the coordinator board focused, the bound `hera_board.decide` key (default `o`) SHALL ask the daemon for a launch ticket for the board's coordinator role and open the daemon-served decision page in the default browser, passing the selected item as the page's focus. It SHALL work on any selected row, including `fyi` rows, and with no selection. It SHALL NOT change selection, expansion, read state, focus or the coordinator composer. If the board has no open `decision` items it SHALL show a one-line notice and open nothing. If the REST API is not enabled it SHALL show a notice telling the user to enable it in Settings and open nothing. In `--remote` mode, where the Hera page is inert, the key SHALL do nothing. The action SHALL log under the `[board]` prefix without logging the ticket.
+With a visible coordinator board focused, the bound hera_board.decide key (default o) SHALL request a launch ticket and open the common rail/drawer decision page with that coordinator preselected, passing any selected open decision or FYI as focus. The same page SHALL permit selecting other rail-visible coordinators; launch role SHALL not restrict session scope. The key SHALL work without selection and on an empty or FYI-only board. An empty selected board SHALL show `Nothing open for <name>` rather than suppressing browser launch. TUI selection, expansion, read state, focus and composer SHALL remain unchanged. If REST is disabled the footer SHALL instruct enabling it in Settings and open nothing. In remote mode, where Hera is inert, the key SHALL do nothing. Launch SHALL retain the 90-second single-use fragment-ticket and eight-hour session lifetime and log success/failure/skips under board without credentials. The default key and rebindable action SHALL remain unchanged.
 
-#### Scenario: Open from a structured decision
+#### Scenario: Open current board
 
-- **WHEN** Aaron focuses the board, selects a structured decision and presses `o`
-- **THEN** the browser opens the decision page for that coordinator focused on that item and the board state is unchanged
+- **WHEN** Aaron presses o on a visible coordinator
+- **THEN** the shared page opens with that coordinator selected and other visible coordinators available in the nav
 
-#### Scenario: Open from a plain or fyi row
+#### Scenario: FYI focus
 
-- **WHEN** Aaron presses `o` on a `fyi` row while a plain decision is open
-- **THEN** the page opens with that decision's card present and no card focused
+- **WHEN** Aaron presses o on an FYI-only board’s selected FYI
+- **THEN** that coordinator and FYIs tab are selected and the FYI is focused
 
-#### Scenario: Nothing to answer
+#### Scenario: Empty board
 
-- **WHEN** Aaron presses `o` and the board has only `fyi` items or no items
-- **THEN** a one-line notice says there are no open decisions and no browser is opened
+- **WHEN** Aaron presses o on a visible coordinator with no open items
+- **THEN** the browser opens with that greyed coordinator selected and its empty state shown in both tabs
+
+#### Scenario: No selection
+
+- **WHEN** no board row is selected and Aaron presses o
+- **THEN** the coordinator is preselected without an item focus target
 
 #### Scenario: API disabled
 
-- **WHEN** Aaron presses `o` and the REST API is not enabled
-- **THEN** the footer says to enable the API in Settings and no browser is opened
+- **WHEN** o is pressed with REST disabled
+- **THEN** the footer says to enable the API in Settings and no browser opens
 
 #### Scenario: Reply key unchanged
 
-- **WHEN** Aaron presses `r` on any board item
+- **WHEN** r is pressed on any board item
 - **THEN** the plain reply prefix is composed exactly as before
+
+### Requirement: Coordinator board kind tabs
+
+The TUI coordinator board SHALL show a single-row Decisions, FYIs, Actions, Todos, All tab strip, in that order, separated by ` · `. Counts SHALL include all open items of each kind on that coordinator's board, regardless of read or deferred state; All SHALL sum the counts. Every label SHALL be followed by one plain space before its count or count box. The selected tab SHALL be a single filled block containing one leading space, label, space, count and one trailing space, using its kind's existing color (decisions blue, FYIs teal, actions orange/brown, todos slate, All blue) and contrasting dark text, including when its count is zero. Unselected labels SHALL use normal/dim text followed by one plain unfilled space; nonzero counts SHALL retain a symmetric colored count box with one padding cell on each side, while zero counts SHALL remain dim with no fill or extra trailing padding. Rendering SHALL stay within the panel, abbreviating labels and clipping around the selected tab when necessary; the selected tab SHALL never be clipped entirely out of view at positive widths. Visible strips SHALL NOT begin or end with an orphan separator.
+
+#### Scenario: Mixed board
+
+- **WHEN** a board contains four decisions, three FYIs, two actions and six todos
+- **THEN** the tabs show counts 4, 3, 2, 6 and 15 and filtering does not change those totals
+
+#### Scenario: Navigation and selection
+
+- **WHEN** the focused board receives the rebindable previous/next tab action (default Left/Right)
+- **THEN** the selected tab moves with clamped endpoints, logs a `[board] tab` change and filters all navigation, expansion, scrolling, reply, clear and copy actions (clear dismisses FYIs/decisions, completes actions/todos as done, and retains resident-call denial) to visible items
+- **AND** the selected item is retained if visible, otherwise the first visible item is selected
+
+#### Scenario: Initial and remembered selection
+
+- **WHEN** a coordinator is shown for the first time
+- **THEN** Decisions is selected if nonempty, otherwise the first nonempty kind, otherwise All
+- **AND** subsequent visits restore the session's chosen tab for that coordinator without persistence
+
+#### Scenario: Pane traversal
+
+- **WHEN** modified arrows are used on the board
+- **THEN** the existing pane focus ladder still operates
+
+#### Scenario: Explicit attention jump
+
+- **WHEN** ctrl+g targets a board whose current kind has no attention item
+- **THEN** the board switches to All and selects its first attention item
+
+#### Scenario: Narrow and empty board
+
+- **WHEN** the panel is narrow or counts are zero
+- **THEN** the strip stays inside its rectangle and the selected tab stays represented at every positive width
+- **AND** unselected empty counts have no colored fill, while the selected tab retains its filled block
+
+#### Scenario: Selected filled tab in either terminal theme
+
+- **WHEN** any tab is selected on a light or dark terminal background
+- **THEN** its padding, label, separating space and count share one kind-colored fill and contrasting dark ink
+
+#### Scenario: Unselected label and count spacing
+
+- **WHEN** an unselected tab is rendered
+- **THEN** its normal/dim label is followed by one plain unfilled space and its count or symmetric padded count box
+- **AND** a nonzero count retains its kind-colored count box, while a zero count remains dim without a box or extra trailing padding
+
+#### Scenario: Clean truncated boundaries
+
+- **WHEN** the strip cannot fit every abbreviated tab
+- **THEN** whole neighboring tabs are omitted around the selected tab without leaving a leading or trailing separator
+- **AND** only the selected tab itself is clipped when it cannot fit by itself

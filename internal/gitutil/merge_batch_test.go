@@ -86,6 +86,7 @@ func TestFetchMergeCandidatesBatch_QueryUsesFirst5OrderedByCreatedAtDesc(t *test
 }
 
 func TestBuildMergeCandidateQuery_Shape(t *testing.T) {
+	t.Parallel()
 	q := buildMergeCandidateQuery("drn", "argus", map[string]string{"argus/a": "t1"})
 	testutil.Contains(t, q, `repository(owner: "drn", name: "argus")`)
 	testutil.Contains(t, q, `t1: pullRequests(headRefName: "argus/a", first: 5, orderBy: {field: CREATED_AT, direction: DESC})`)

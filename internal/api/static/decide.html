@@ -1,10 +1,23 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="referrer" content="no-referrer"><title>Open decisions · Argus</title>
-<!-- Layout adapted from Aaron's decision/template.html. System fonts; no external assets. -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="referrer" content="no-referrer"><title>Decide · Argus</title>
+<script id="decision-theme">
+globalThis.BoardDecisionTheme = (() => {
+  const key='board-decision-theme',valid=value=>['light','dark','system'].includes(value)?value:'system';
+  function read() {try{return valid(globalThis.localStorage.getItem(key));}catch{return 'system';}}
+  function set(value,persist=true) {
+    const mode=valid(value);document.documentElement.dataset.theme=mode;
+    if(persist)try{globalThis.localStorage.setItem(key,mode);}catch{}
+    return mode;
+  }
+  set(read(),false);
+  return {set};
+})();
+</script>
 <style>
 /* Layout: one reading column under a sticky tally bar. Decisions are open
    sections split by rules; only the options are boxed, because they are the
    things you pick. */
 :root {
+  color-scheme: light;
   --bg: #f2f4f8;
   --surface: #ffffff;
   --ink: #171f2d;
@@ -62,6 +75,10 @@ code {
   font-family: var(--mono); font-size: .9em;
   background: var(--line); padding: 1px 5px; border-radius: 4px;
 }
+a { color: var(--accent); overflow-wrap: anywhere; }
+.theme { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.theme select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 7px; }
+.theme select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Tally bar */
 .bar {
@@ -182,16 +199,53 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 #copy-fallback { font: 13px/1.5 var(--mono); min-height: 12rem; }
 .fatal { padding-block: 48px; color: var(--warn); }
 
-.focused {outline:2px solid var(--accent);outline-offset:8px;} .btn:disabled{opacity:.5;cursor:default;} .segs {flex-wrap:wrap;} .decision{overflow-wrap:anywhere;} </style>
-</head><body>
-<header class="bar"><div class="wrap bar-in"><div class="segs" id="segs"></div><span class="tally" id="tally" aria-live="polite">Loading decisions…</span></div></header>
-<main class="wrap"><div class="lede"><h1>Open decisions</h1><p class="intro">Choose the answers you’re ready to give. The rest stay open.</p><p id="status" role="status"></p><p id="updates" hidden><span id="changes"></span> <button class="btn" id="refresh">Refresh</button></p></div>
-<div id="decisions"></div><section class="finish"><div class="actions"><button class="btn primary" id="submit" disabled>Submit answers</button><button class="btn" id="accept" hidden>Take the recommendations</button><button class="btn" id="copy">Copy answers</button></div><p id="summary" aria-live="polite"></p><textarea id="copy-fallback" readonly hidden aria-label="Answers to copy"></textarea></section></main>
+.focused {background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent);border-radius:6px;padding-inline:14px;} .btn:disabled{opacity:.5;cursor:default;} .segs {flex-wrap:wrap;} .decision{overflow-wrap:anywhere;}
+
+.mock-control{border-bottom:1px dashed var(--line);padding-block:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px}.mock-control select,.switcher select{font:inherit;color:var(--ink);background:var(--surface);padding:9px;border:1px solid var(--line);border-radius:6px;max-width:100%;min-width:0}.mock-control label{display:flex;gap:8px;align-items:center;flex:1;min-width:0}.mock-control select{flex:1}.mock-control .btn{font-size:13px;padding:8px 12px}.preview-label{color:var(--muted);font:12px var(--mono);margin:0}.tabs{display:flex;gap:8px;margin-block:22px 0}.tabs .btn{flex:1}.tabs [aria-selected="true"],.fyi-actions [aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}.switcher{display:grid;gap:8px;padding-block:18px;border-bottom:1px solid var(--line)}.switcher .btn{justify-self:start;font-size:14px;padding:6px 10px}.switcher label{display:grid;gap:6px;font-size:14px}.directory-row{width:100%;text-align:left;display:grid;gap:8px;margin-bottom:12px;padding:20px}.directory-row strong{font:600 1.25rem var(--display)}.directory-meta{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:14px}.directory-row .queued{color:var(--accent)}.directory{margin-top:28px}.subtle{font-size:14px;color:var(--muted);margin:0}.fyi-actions{display:flex;gap:8px;flex-wrap:wrap}.fyi-actions .btn{font-size:14px;padding:10px 12px}.queue{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding-block:14px;z-index:6;box-shadow:0 -8px 24px var(--bg)}.queue-inner{display:grid;gap:10px}.queue .btn.primary{flex:1}.queue p{margin:0;font-size:13px;color:var(--muted)}.queue .actions{align-items:center}.note textarea{font-size:16px}.lede{padding-block:28px 18px}.lede p{margin:0}.decision{scroll-margin-top:110px}.count,.pill,.trade .k{text-transform:none;letter-spacing:0}.confirmation{padding-block:45px;display:grid;gap:20px}.confirmation h1{font-size:2rem}.receipt{padding-block:16px;border-top:1px solid var(--line);display:grid;gap:6px}.receipt p{margin:0}.error{color:var(--warn)}.clear{border:0;background:transparent;color:var(--accent);font:inherit;text-decoration:underline;padding:8px 0}.directory-heading{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-block:24px 8px}.directory-heading h2{font-size:1rem}.note label{font-weight:500}.review-list{display:grid;gap:10px}.review-list .receipt{padding:12px 0}.mock-scope{font-size:13px;color:var(--muted)}@media(max-width:450px){.mock-control{gap:10px}.mock-control label{flex-basis:100%}.theme{margin-left:0}.bar-in{justify-content:space-between}.lede{padding-top:24px}.trade{grid-template-columns:4.4rem minmax(0,1fr)}.queue .actions{gap:8px}.queue .btn{padding:10px 12px}.directory-row{padding:16px}}
+
+.page-layout{display:grid;grid-template-columns:250px minmax(0,1fr);max-width:1300px;margin:auto;min-height:75vh}.board-column{min-width:0}.board-column>.wrap{max-width:50rem}#rail{border-right:1px solid var(--line);padding:24px 10px;position:sticky;top:52px;align-self:start;max-height:calc(100vh - 150px);overflow:auto}.rail-heading{font:600 16px var(--display);padding:0 12px}.rail-help{color:var(--muted);font-size:12px;padding:0 12px;margin-bottom:22px}.rail-row{width:100%;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--ink);font:inherit;text-align:left;display:flex;gap:8px;align-items:center;padding:13px 12px;margin:4px 0;cursor:pointer}.rail-row:hover{background:var(--surface)}.rail-row[aria-current="true"]{border-color:var(--accent);background:var(--accent-soft);box-shadow:inset 3px 0 var(--accent)}.rail-row.empty{color:var(--muted)}.rail-row.empty .row-name{opacity:.6}.rail-row.nested{padding-left:28px}.row-name{flex:1;min-width:0;overflow-wrap:anywhere}.row-counts{font:12px var(--mono);color:var(--muted);white-space:nowrap}.rail-row .queued-dot{width:6px;height:6px;flex-shrink:0;border-radius:50%;background:var(--accent)}.row-branch{color:var(--muted)}.phone-trigger{display:none}.queue-inner{max-width:60rem}dialog{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:18px;max-width:calc(100vw - 36px);width:350px;box-sizing:border-box}dialog::backdrop{background:rgba(0,0,0,.45)}.drawer-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:22px}.drawer-head h2{font-size:1.2rem}.tabs-help{font-size:12px;color:var(--muted);margin:8px 0 0}.mock-control{max-width:1300px}.mock-control .preview-label{flex:1}@media(max-width:700px){.page-layout{display:block}#rail{display:none}.phone-trigger{display:block;width:calc(100% - 32px);margin:16px 16px 0;text-align:left}.tabs-help{display:none}.queue{padding-bottom:max(14px,env(safe-area-inset-bottom,0px))}}
+
+/* Compact tool layout; count badges keep open-item semantics. */
+:root{--bg:#e8ecf2;--fyi-badge:#155e75;--on-fyi-badge:#fff}
+:root[data-theme="dark"]{--bg:#10141b;--fyi-badge:#67e8f9;--on-fyi-badge:#083344}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10141b;--fyi-badge:#67e8f9;--on-fyi-badge:#083344}}
+body{font-size:14px;line-height:1.45}h1{font-size:1.4rem;line-height:1.2}h2{font-size:1.1rem;line-height:1.25}.confirmation h1{font-size:1.4rem}
+.wrap{max-width:60rem}.page-layout{max-width:1540px;grid-template-columns:228px minmax(0,1fr)}.board-column>.wrap{max-width:60rem;padding-inline:20px}.mock-control{max-width:1540px;padding-block:6px;gap:6px}.mock-control .btn{font-size:12px;padding:4px 10px}.bar-in{padding-block:6px}.theme{font-size:12px}.theme select{padding:5px;border-radius:4px}.tally{font-size:12px}.lede{padding-block:14px 10px;gap:6px}.intro{max-width:none}.mock-scope{font:11px/1.4 var(--mono)}
+.decision{gap:10px;padding-block:17px}.count{gap:7px;font:11px/1.4 var(--mono)}.state{font:11px/1.4 var(--mono);padding:1px 5px;border-radius:3px}.situation{gap:6px;max-width:none}.situation ul,.situation ol{padding-left:20px;margin-block:6px}.situation p{margin:0}.pill{font:10px/1.4 var(--mono);padding:1px 5px;border-radius:3px}.options{gap:6px}.opt{padding:8px 10px;gap:8px;border-radius:4px;min-height:40px;box-sizing:border-box}.opt input{width:16px;height:16px;margin-top:2px}.opt-body{gap:3px}.opt-head{gap:4px 8px}.opt-label{font-size:14px}.trade{font-size:12px;line-height:1.4;gap:6px;grid-template-columns:4.25rem minmax(0,1fr)}.trade .k{font:10px/1.4 var(--mono);padding-top:1px}.why{margin-top:2px;padding-top:5px;font-size:12px}.note{gap:4px}.note label{font-size:12px}.note textarea{font-size:14px;min-height:3.5rem;padding:7px 9px;border-radius:4px}.hint{font-size:12px}.subtle{font-size:12px}.actions{gap:6px}.btn{font-size:13px;font-weight:500;padding:6px 10px;border-radius:4px;min-height:32px}.fyi-actions{gap:6px}.fyi-actions .btn{font-size:12px;padding:6px 10px}.clear{font-size:12px;padding:4px 0}.queue{padding-block:8px;box-shadow:none}.queue-inner{gap:6px;max-width:72rem}.queue p{font-size:12px}.queue .actions{gap:6px}.tabs{margin-block:12px 0;gap:6px}.tabs .btn{font:12px/1.4 var(--mono);display:flex;justify-content:center;align-items:center;gap:8px;padding:6px 10px}.tabs-help{font:10px/1.4 var(--mono);margin-top:5px}
+.count-badge{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 4px;box-sizing:border-box;border:1px solid transparent;border-radius:3px;background:var(--accent);color:var(--on-accent);font:600 12px/1 var(--mono);font-variant-numeric:tabular-nums}.count-badge.fyi{background:var(--fyi-badge);color:var(--on-fyi-badge)}.count-badge.action{background:var(--warn);color:var(--bg)}.count-badge.todo{background:var(--muted);color:var(--bg)}.count-badge.zero{background:transparent;color:var(--muted);border-color:var(--line)}
+#rail{padding:12px 7px;top:44px}.rail-heading{font:500 12px/1.4 var(--mono);padding-inline:8px}.rail-help{font:10px/1.4 var(--mono);padding-inline:8px;margin-block:5px 12px}.rail-row{font-size:13px;line-height:18px;padding:5px 8px;min-height:30px;box-sizing:border-box;margin:1px 0;gap:6px;border-radius:4px}.rail-row.nested{padding-left:20px}.rail-row[aria-current="true"]{box-shadow:inset 2px 0 var(--accent)}.row-counts{display:inline-flex;gap:3px;align-items:center}.row-counts .count-badge{min-width:18px;height:18px;font-size:10px;padding:0 3px}.rail-row .queued-dot{width:4px;height:4px}dialog{border-radius:4px;padding:12px}.drawer-head{margin-bottom:12px}.drawer-head h2{font:500 13px var(--mono)}.receipt{padding-block:10px;gap:4px}.confirmation{padding-block:24px;gap:12px}
+@media(max-width:700px){.page-layout{display:block}.board-column>.wrap{padding-inline:12px}.wrap{padding-inline:12px}.phone-trigger{width:calc(100% - 24px);margin:10px 12px 0;font-size:13px}.btn,.theme select,.rail-row,.clear{min-height:40px}.rail-row{padding-block:10px}.mock-control .btn{min-height:32px}.note textarea{font-size:16px}.queue .btn{min-height:40px;padding:7px 10px}.queue{padding-bottom:max(8px,env(safe-area-inset-bottom,0px))}.opt{min-height:40px}.lede{padding-top:14px}.tabs .btn{min-height:40px}.fyi-actions .btn{min-height:40px}.theme select{min-height:40px}.trade{grid-template-columns:4.25rem minmax(0,1fr)}}
+
+body .page-layout{grid-template-columns:200px minmax(0,1fr) 290px;max-width:1540px}.board-column>.wrap{padding-inline:18px}.selectable{cursor:text;user-select:text;-webkit-user-select:text;border-radius:2px}.selectable:focus-visible{outline:1px dashed var(--accent);outline-offset:3px}.selectable a{user-select:text}.selection-body p{margin:5px 0}.selection-body ul,.selection-body ol{padding-left:20px;margin-block:5px}.selection-body li{margin-block:4px}.annotation-trigger{margin-left:auto;border:1px solid var(--line);border-radius:3px;background:var(--surface);color:var(--accent);font:11px var(--mono);padding:4px 7px;cursor:pointer}.opt{cursor:default}.opt-label{cursor:text}.range-highlight{padding:1px 0;border-radius:1px;cursor:pointer;color:inherit}.range-comment{background:#ffe18c66;border-bottom:2px solid #ad7900}.range-delete{background:#f5737350;text-decoration:line-through;text-decoration-color:#d64747;border-bottom:1px solid #d64747}.range-flash{outline:2px solid var(--accent);outline-offset:3px;animation:flash 1s ease-in-out 2}@keyframes flash{50%{background:var(--accent-soft)}}#annotation-panel{position:sticky;top:46px;align-self:start;max-height:calc(100vh - 140px);overflow:auto;border-left:1px solid var(--line);padding:14px 12px;box-sizing:border-box}.annotation-panel-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px}.annotation-panel-head h2{font:600 13px var(--mono)}.annotation-help{font-size:11px;color:var(--muted);margin:10px 0 15px}.annotation-card{border:1px solid var(--line);border-radius:3px;background:var(--surface);padding:10px;margin:8px 0;display:grid;gap:7px;cursor:pointer;overflow-wrap:anywhere}.annotation-card.selected{border-color:var(--accent)}.annotation-card:focus-visible{outline:2px solid var(--accent)}.annotation-card-head{display:flex;justify-content:space-between;align-items:center;font:11px var(--mono)}.annotation-card blockquote,.annotation-composer blockquote{border-left:2px solid var(--line);margin:0;padding-left:8px;font:11px/1.5 var(--mono);color:var(--muted);overflow-wrap:anywhere}.annotation-card p{font-size:12px;margin:0;white-space:pre-wrap}.annotation-card .actions{gap:12px}.annotation-card .clear{min-height:24px;font-size:11px}.delete-label{color:var(--warn)}.comment-label{color:var(--accent)}.annotation-composer{border:1px solid var(--accent);border-radius:3px;padding:10px;display:grid;gap:8px;background:var(--surface);margin:10px 0}.annotation-composer label,.annotation-composer strong{font:600 12px var(--mono)}.annotation-composer textarea{min-height:110px;font-size:14px;padding:8px;border-radius:3px}.annotation-composer .btn{font-size:12px}#selection-toolbar{position:fixed;z-index:50;background:var(--surface);border:1px solid var(--line);border-radius:4px;box-shadow:0 3px 12px #0003;display:flex;gap:2px;padding:3px;max-width:calc(100vw - 16px);box-sizing:border-box}#selection-toolbar .btn{font-size:12px;min-height:36px;border:0;padding:5px 12px;background:transparent}#annotation-sheet{padding:0;max-width:100%;width:100%;max-height:80dvh;margin:auto 0 0;position:fixed;inset:auto 0 0;box-sizing:border-box;border-radius:5px 5px 0 0}.sheet-head{display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;background:var(--bg);padding:10px 12px;z-index:1;border-bottom:1px solid var(--line)}.sheet-head h2{font:600 13px var(--mono)}#sheet-content{padding:12px}.annotation-trigger{min-height:28px}
+@media(max-width:1000px) and (min-width:851px){body .page-layout{grid-template-columns:175px minmax(0,1fr) 260px}.board-column>.wrap{padding-inline:12px}}
+@media(max-width:850px){body .page-layout{display:block}#rail,#annotation-panel{display:none!important}.phone-trigger{display:block;width:calc(100% - 24px);margin:10px 12px 0}.board-column>.wrap{padding-inline:12px}.annotation-trigger,#selection-toolbar .btn,.annotation-card .clear{min-height:40px}.annotation-composer textarea{font-size:16px}.annotation-composer .btn{min-height:40px}.annotation-panel-head h2{font-size:14px}.annotation-card p{font-size:14px}.annotation-card blockquote{font-size:12px}.range-highlight{padding:2px 0}}
+
+.tabs{flex-wrap:wrap}.tabs .btn{flex:1 1 6.5rem;min-width:0}.decision.blocking{border-left:4px solid var(--warn);padding-left:12px}.decision.later{opacity:.88}.pill.blocking{background:var(--warn);color:var(--bg);font-weight:600}.pill.later{border:1px solid var(--line);color:var(--muted)}.meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.command{display:grid;gap:6px}.command pre{margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:4px;background:var(--surface);font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}.command .btn{justify-self:start}
+.submit-note{padding:28px 0;border-bottom:1px solid var(--line)}.submit-note h2{margin:0 0 8px}.submit-note.compact{padding:14px 0;display:grid;gap:4px}.tab-attention{color:var(--warn)}.unsent-recovery{font-size:13px;border-top:1px solid var(--line);padding:12px 0;color:var(--muted)}.unsent-recovery summary{cursor:pointer}.recovery-body{padding:12px 0}.recovery-body pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;color:var(--ink)}.review-actions,.recovery-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start}.review-actions .btn,.recovery-actions .btn{font-size:13px;padding:8px 10px;justify-self:start}.review-group h2{font-size:1rem;margin-top:24px}.receipt{text-align:left}.receipt .hint{margin:4px 0}.item-status{margin:12px 0}
+</style></head>
+<body>
+<header class="bar"><div class="wrap bar-in"><strong>Argus / Decide</strong><span class="tally" id="tally" aria-live="polite">Loading boards…</span><label class="theme">Theme <select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header>
+<button class="btn phone-trigger" id="drawer-trigger">Coordinators ▾</button>
+<div class="page-layout"><aside id="rail"><h2 class="rail-heading">Coordinators</h2><p class="rail-help">⌘ / Ctrl ↑ ↓ to move</p><nav id="desktop-nav" aria-label="Coordinators"></nav></aside><div class="board-column"><div class="wrap"><p id="status" role="status"></p><p id="updates" hidden><span id="changes">Boards changed.</span> <button class="btn" id="refresh">Refresh</button></p><main id="main" tabindex="-1"></main></div></div><aside id="annotation-panel" aria-label="Item annotations"></aside></div>
+<footer class="queue" id="queue"><div class="wrap queue-inner"><div class="actions"><button class="btn" id="review" disabled>Review queued</button><button class="btn primary" id="submit" disabled>Submit</button><button class="btn" id="submit-close" disabled>Submit &amp; close</button><button class="btn" id="copy">Copy responses</button></div><p id="queued-description"></p><p id="summary" aria-live="polite"></p><textarea id="copy-fallback" readonly hidden aria-label="Responses to copy"></textarea></div></footer>
+<dialog id="drawer"><div class="drawer-head"><h2>Coordinators</h2><button class="btn" id="drawer-close">Close</button></div><nav id="phone-nav" aria-label="Choose coordinator"></nav></dialog>
+<div id="selection-toolbar" role="toolbar" aria-label="Annotate selected text" hidden></div><dialog id="annotation-sheet" aria-labelledby="sheet-title"><div class="sheet-head"><h2 id="sheet-title">Annotations</h2><button class="btn" id="sheet-close">Close</button></div><div id="sheet-content"></div></dialog>
 <script id="decision-logic">
 globalThis.BoardDecisions = (() => {
   function draftKey(role,item) { return `board-decision:${role}:${item.id}:${item.updated_at}`; }
+  function noteError(item,draft) {
+    if(typeof draft?.note!=='string'||new TextEncoder().encode(draft.note).length>4096)return 'Required note missing or too long. Edit this response.';
+    const required=item.kind==='decision'?(draft.choice==='other'||(!draft.choice&&draft.action==='comment')):item.kind==='fyi'&&['comment','comment_and_dismiss'].includes(draft.action);
+    if(required&&!draft.note.trim()&&(draft.choice==='other'||!(draft.annotations||[]).length))return 'Required note missing or too long. Edit this response.';
+    return '';
+  }
   function valid(item,draft) {
-    if (!draft || typeof draft.note!=='string') return false;
+    if (!draft || typeof draft.note!=='string' || new TextEncoder().encode(draft.note).length>4096) return false;
+    const a=draft.annotations||[];if(!Array.isArray(a))return false;
+    if(draft.stale||a.length>20||a.some(v=>!v||!['COMMENT','DELETION'].includes(v.type)||typeof v.comment!=='string'||new TextEncoder().encode(v.comment).length>4096||(v.type==='COMMENT'&&!v.comment.trim())))return false;
+    if(item.kind==='decision'&&!draft.choice&&draft.action==='comment')return !!draft.note.trim()||!!a.length;
+    if(item.kind==='action'||item.kind==='todo')return !a.length&&(item.kind==='todo'?['done','dropped']:['done']).includes(draft.action);
+    if(item.kind==='fyi')return ['comment','dismiss','comment_and_dismiss'].includes(draft.action)&&(draft.action==='dismiss'?!a.length:(!!draft.note.trim()||!!a.length));
     if (draft.choice === 'other') return !!draft.note.trim();
     return !!item.structured?.options.some(option => option.id === draft.choice);
   }
@@ -202,135 +256,489 @@ globalThis.BoardDecisions = (() => {
     if (result.outcome === 'conflict') return {item:result.item,draft:{choice:'',note:draft?.note || ''},status:'conflict'};
     return {item,draft,status:result.outcome === 'resolved' ? 'answered' : ['already_resolved','not_found'].includes(result.outcome) ? 'closed' : 'invalid'};
   }
-  function inline(parent,text,doc) {
+  function finish(answers,results,win,confirm) {
+    if(!answers.length || !Array.isArray(results) || results.length!==answers.length)return false;
+    const outcomes=new Map(results.map(result=>[result?.item_id,result?.outcome]));
+    if(outcomes.size!==answers.length || answers.some(answer=>!['resolved','already_resolved'].includes(outcomes.get(answer.item_id))))return false;
+    try{win.close();}catch{}
+    if(!win.closed)confirm(answers.length);
+    return true;
+  }
+  function links(parent,text,doc) {
     let at=0;
-    for (const match of text.matchAll(/(`[^`]+`|\*\*[^*]+\*\*)/g)) {
+    for(const match of text.matchAll(/\bhttps?:\/\/[^\s<>"'`]+/gi)) {
+      let url=match[0];
+      // Sentence punctuation is text; balanced URL brackets stay in the link.
+      const pairs={')':'(',']':'[','}':'{'};
+      while(url) {
+        const end=url.slice(-1),open=pairs[end];
+        if(/[.,!?:;]/.test(end) || (open && url.split(end).length>url.split(open).length))url=url.slice(0,-1);else break;
+      }
+      try {const parsed=new URL(url);if(!['http:','https:'].includes(parsed.protocol) || !parsed.hostname)continue;}catch{continue;}
       parent.append(doc.createTextNode(text.slice(at,match.index)));
-      const bold=match[0].startsWith('**'),node=doc.createElement(bold ? 'strong':'code');
-      node.append(doc.createTextNode(match[0].slice(bold?2:1,bold?-2:-1)));parent.append(node);at=match.index+match[0].length;
+      const link=doc.createElement('a');link.textContent=url;
+      link.setAttribute('href',url);link.setAttribute('target','_blank');link.setAttribute('rel','noopener noreferrer');parent.append(link);
+      at=match.index+url.length;
     }
     parent.append(doc.createTextNode(text.slice(at)));
   }
+  function inline(parent,text,doc) {
+    let at=0;
+    for (const match of text.matchAll(/(`[^`]+`|\*\*[^*]+\*\*)/g)) {
+      links(parent,text.slice(at,match.index),doc);
+      const bold=match[0].startsWith('**'),node=doc.createElement(bold ? 'strong':'code');
+      const content=match[0].slice(bold?2:1,bold?-2:-1);
+      if(bold)inline(node,content,doc);else node.textContent=content;
+      parent.append(node);at=match.index+match[0].length;
+    }
+    links(parent,text.slice(at),doc);
+  }
   function markup(text,doc) {
-    const root=doc.createElement('div');let list=null,listTag='',paragraph=null;
+    const root=doc.createElement('div');let lists=[],paragraph=null,blocks=0;
     for (const line of String(text || '').split('\n')) {
-      if (!line.trim()) {list=null;paragraph=null;continue;}
-      const bullet=line.match(/^\s*(- |\d+\. )(.*)$/);
+      if (!line.trim()) {lists=[];paragraph=null;continue;}
+      const bullet=line.match(/^(\s*)(- |\d+\. )(.*)$/);
       if (bullet) {
-        const tag=bullet[1]==='- '?'ul':'ol';
-        if (!list || listTag!==tag) {list=doc.createElement(tag);root.append(list);listTag=tag;}
-        const li=doc.createElement('li');inline(li,bullet[2],doc);list.append(li);paragraph=null;
+        const tag=bullet[2]==='- '?'ul':'ol',depth=bullet[1].length;
+        while(lists.length&&lists.at(-1).depth>depth)lists.pop();
+        if(lists.at(-1)?.depth===depth&&lists.at(-1).tag!==tag)lists.pop();
+        if(!lists.length||lists.at(-1).depth<depth){const node=doc.createElement(tag),parent=lists.at(-1)?.lastItem||root;parent.append(node);lists.push({depth,tag,node});}
+        const current=lists.at(-1),list=current.node;
+        if(blocks++)list.append(doc.createTextNode('\n'));
+        const li=doc.createElement('li');inline(li,bullet[3],doc);list.append(li);current.lastItem=li;paragraph=null;
       } else {
-        list=null;if (!paragraph) {paragraph=doc.createElement('p');root.append(paragraph);} else paragraph.append(doc.createTextNode(' '));inline(paragraph,line,doc);
+        lists=[];if (!paragraph) {paragraph=doc.createElement('p');if(blocks++)root.append(doc.createTextNode('\n'));root.append(paragraph);} else paragraph.append(doc.createTextNode(' '));inline(paragraph,line,doc);
       }
     }
     return root;
   }
-  return {draftKey,valid,payload,outcome,markup};
+  function batches(records) {
+    const groups=new Map();
+    for(const record of records){const key=record.role+':'+record.item.kind;let group=groups.get(key);if(!group){group=[];groups.set(key,group);}group.push(record);}
+    return [...groups.values()].flatMap(group=>{const out=[];for(let n=0;n<group.length;n+=16)out.push({role:group[0].role,kind:group[0].item.kind,records:group.slice(n,n+16)});return out;});
+  }
+  function accepted(kind,sent,result){return !!result&&sent.item_id===result.item_id&&(!sent.action_id||sent.action_id===result.action_id)&&(sent.action==='comment'?result.outcome==='commented':sent.annotations?.length?result.outcome==='resolved':['resolved','already_resolved'].includes(result.outcome));}
+  const TABS=['decision','fyi','action','todo'];
+  const isCompletion=kind=>kind==='action'||kind==='todo';
+  // Everything except decisions posts to the batched fyi-actions path (action_id + done/dropped).
+  const endpoint=kind=>kind==='decision'?'/answers':'/fyi-actions';
+  // Bands: 0 blocking actions, 1 decisions/FYIs/ready non-blocking actions, 2 pending items and todos. Ascending id inside a band.
+  function band(item){if(item.kind==='todo'||item.trigger_pending)return 2;return item.kind==='action'&&item.blocking?0:1;}
+  function order(items){return [...items].sort((a,b)=>band(a)-band(b)||a.id-b.id);}
+  function adjacent(tab,dx){const at=TABS.indexOf(tab);return TABS[Math.max(0,Math.min(TABS.length-1,(at<0?0:at)+(dx<0?1:-1)))];}
+  function editable(target){return !!target?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]');}
+  function navigate(e,rows,role,tab){
+    if(e.isComposing||e.altKey||e.shiftKey||!(e.metaKey||e.ctrlKey)||editable(e.target)||!rows.length)return null;
+    if(e.key==='ArrowUp'||e.key==='ArrowDown'){const at=rows.findIndex(row=>row.role_id===role);return {role:rows[Math.max(0,Math.min(rows.length-1,at+(e.key==='ArrowDown'?1:-1)))].role_id,tab};}
+    if(e.key==='ArrowLeft'||e.key==='ArrowRight')return {role,tab:e.key==='ArrowLeft'?'decision':'fyi'};
+    return null;
+  }
+  return {draftKey,valid,noteError,payload,outcome,markup,inline,finish,batches,accepted,editable,navigate,TABS,isCompletion,endpoint,band,order,adjacent};
 })();
 </script>
 <script>
 (async () => {
   'use strict';
-  // Strip the launch credential before any request, including error paths.
   const ticket=new URLSearchParams(location.hash.slice(1)).get('t');
-  if (location.hash) history.replaceState(null,'',location.pathname+location.search);
-  const role=new URLSearchParams(location.search).get('role'),focus=new URLSearchParams(location.search).get('focus');
+  if(location.hash)history.replaceState(null,'',location.pathname+location.search);
+  const query=new URLSearchParams(location.search),focus=Number(query.get('focus'));
   const $=id=>document.getElementById(id),L=globalThis.BoardDecisions;
-  const sessionKey=`board-decision-session:${role}`,base=`/api/hera/roles/${role}/board`;
-  let session='',items=[],drafts={},states={},pending=null,busy=false,expired=false,generation=0;
-  const read=(storage,key)=>{try{return globalThis[storage].getItem(key);}catch{return null;}};
-  const save=(storage,key,value)=>{try{globalThis[storage].setItem(key,value);}catch{$('summary').textContent='Draft storage is unavailable. Copy answers before leaving.';}};
-  function message(text) {$('status').textContent=text;}
-  function expire() {expired=true;message('This link expired. Press o in Argus to reopen it. Your drafts are kept; you can still copy answers.');update();}
-  async function api(path,method='GET',body) {
+  const storage={read(key){try{return JSON.parse(localStorage.getItem(key));}catch{return null;}},save(key,value){try{localStorage.setItem(key,JSON.stringify(value));}catch{if(!finished)$('summary').textContent='Draft storage unavailable. Copy responses before leaving.';}}};
+  const sessionKey='board-decision-session',draftKey='board-responses';
+  let showDeferred=false;
+  let session='',rows=[],records={},selected=0,tab='decision',screen='browse',pending=null,busy=false,expired=false,finished=false,generation=0,polling=false,acceptedSnapshot='';
+  const acceptedCounts={answers:0,comments:0,dismissals:0,completions:0};
+  let submitNotice=null;
+  function clearNotice(){submitNotice=null;document.querySelector('.submit-note')?.remove();}
+  const key=(role,id)=>`${role}:${id}`,base=role=>`/api/hera/roles/${role}/board`;
+  const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
+  const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.onclick=fn;return b;};
+  const fmt=(tag,cls,text)=>{const n=el(tag,cls);L.inline(n,String(text||''),document);return n;};
+  const queued=()=>Object.values(records).filter(r=>r.draft.sent||!r.recovery&&(r.draft.choice||r.draft.action));
+  const attention=r=>!r.item.deferred_at&&!r.recovery&&!r.closed&&!r.unavailable&&r.attention;
+  function recover(r){
+    if(r.draft.sent)return; // An uncertain payload must be reconciled before edits/discard.
+    const d=r.draft,written=!!d.note.trim()||anns(r).length||d.stale?.note?.trim()||d.stale?.annotations?.length;
+    r.recovery=!!written;r.attention=false;r.status='';
+    r.draft=written?{...draft(),note:d.note,annotations:anns(r),...(d.stale?{stale:d.stale}:{})}:draft();
+  }
+  function recoveryText(r){const d=r.draft;return [labelFor(r.role),`#${r.item.id} ${r.item.subject}`,d.note,...anns(r).map(a=>`${a.type}: ${a.quote}\n${a.comment||''}`),d.stale?.note!==d.note?d.stale?.note:'',...(d.stale?.annotations||[]).map(a=>`${a.type}: ${a.quote}\n${a.comment||''}`)].filter(Boolean).join('\n\n');}
+  async function copyText(text){try{await navigator.clipboard.writeText(text);}catch{$('copy-fallback').hidden=false;$('copy-fallback').value=text;$('copy-fallback').select();}}
+  function renderRecovery(main){
+    for(const r of Object.values(records).filter(r=>r.recovery)){
+      const detail=el('details','unsent-recovery'),summary=el('summary','','1 unsent note, its item is '+(r.unavailable?'unavailable':'closed'));
+      const body=el('div','recovery-body');body.append(el('pre','',recoveryText(r)));
+      const actions=el('div','recovery-actions');actions.append(button('Copy unsent note',()=>copyText(recoveryText(r))),button('Discard unsent note',()=>{r.draft=draft();r.recovery=false;persist();render();}));
+      body.append(actions);detail.append(summary,body);main.append(detail);
+    }
+  }
+  const rowFor=role=>rows.find(r=>r.role_id===role);
+  const labelFor=role=>{const r=rowFor(role)||Object.values(records).find(r=>r.role===role);return r?`${r.orchestrator} / ${r.coordinator}`:`Coordinator ${role}`;};
+  const draft=()=>({choice:'',action:'',note:'',annotations:[]});
+  const anns=r=>Array.isArray(r.draft.annotations)?r.draft.annotations:[];
+  const toolbar=$('selection-toolbar'),sheet=$('annotation-sheet');
+  let activeItem='',activeAnnotation='',selectionDraft=null,composer=null,selectionTimer,restoreFocus=null,annotationError=null;
+  const fieldsFor=r=>[...document.querySelectorAll(`#decision-${r.item.id} [data-field]`)];
+  const fieldKey=n=>n.dataset.field;
+  function selectable(r,path,node){
+    node.dataset.field=path;node.classList.add('selectable');node.tabIndex=0;
+    const name=path==='body'?'this passage':path==='reason'?'the recommendation reason':'this option '+path.split('.').at(-1);
+    node.setAttribute('aria-label',`Annotate ${name}. Press Enter to select this passage.`);
+    node.onkeydown=e=>{if(e.target===node&&e.key==='Enter'){e.preventDefault();const range=document.createRange();range.selectNodeContents(node);const s=getSelection();s.removeAllRanges();s.addRange(range);captureSelection();toolbar.querySelector('button')?.focus();}};
+    return node;
+  }
+  // Synchronous SHA-256 also works on HTTP origins where SubtleCrypto is absent.
+  function hashText(text){
+    const bytes=new TextEncoder().encode(text),words=[],primes=[],constants=[];
+    for(let n=2;constants.length<64;n++){if(primes.some(p=>n%p===0))continue;primes.push(n);constants.push((Math.cbrt(n)%1*4294967296)|0);}
+    const state=primes.slice(0,8).map(n=>(Math.sqrt(n)%1*4294967296)|0),size=((bytes.length+9+63)>>6)<<4;
+    for(let n=0;n<bytes.length;n++)words[n>>2]=(words[n>>2]||0)|(bytes[n]<<(24-(n%4)*8));
+    words[bytes.length>>2]=(words[bytes.length>>2]||0)|(128<<(24-(bytes.length%4)*8));words[size-1]=bytes.length*8;
+    const ro=(n,b)=>(n>>>b)|(n<<(32-b));
+    for(let offset=0;offset<size;offset+=16){const w=Array.from({length:64},(_,n)=>words[offset+n]||0);for(let n=16;n<64;n++){const a=w[n-15],b=w[n-2];w[n]=(w[n-16]+(ro(a,7)^ro(a,18)^(a>>>3))+w[n-7]+(ro(b,17)^ro(b,19)^(b>>>10)))|0;}
+      let [a,b,c,d,e,f,g,h]=state;for(let n=0;n<64;n++){const t=(h+(ro(e,6)^ro(e,11)^ro(e,25))+((e&f)^(~e&g))+constants[n]+w[n])|0,u=((ro(a,2)^ro(a,13)^ro(a,22))+((a&b)^(a&c)^(b&c)))|0;h=g;g=f;f=e;e=(d+t)|0;d=c;c=b;b=a;a=(t+u)|0;}[a,b,c,d,e,f,g,h].forEach((v,n)=>state[n]=(state[n]+v)|0);
+    }return state.map(n=>(n>>>0).toString(16).padStart(8,'0')).join('');
+  }
+  function captureSelection(){
+    if(busy||expired||finished||sheet.open||composer||document.activeElement?.closest('#selection-toolbar'))return;
+    const s=getSelection();if(!s?.rangeCount||s.isCollapsed){toolbar.hidden=true;return;}
+    const range=s.getRangeAt(0),parent=n=>n.nodeType===3?n.parentElement:n;
+    const start=parent(range.startContainer)?.closest('[data-field]'),end=parent(range.endContainer)?.closest('[data-field]');
+    if(!start||!end||start.closest('.decision')!==end.closest('.decision')){toolbar.hidden=true;return;}
+    const r=Object.values(records).find(r=>`decision-${r.item.id}`===start.closest('.decision').id);if(!r||r.draft.sent||r.draft.stale)return;
+    const fields=fieldsFor(r),a=fields.indexOf(start),b=fields.indexOf(end);if(a<0||b<a)return;
+    const offset=(field,node,pos)=>{const p=document.createRange();p.selectNodeContents(field);p.setEnd(node,pos);return p.toString().length;};
+    const lo=offset(start,range.startContainer,range.startOffset),hi=offset(end,range.endContainer,range.endOffset);
+    const text=fields.slice(a,b+1).map((f,n)=>f.textContent.slice(n===0?lo:0,n===b-a?hi:undefined)).join('\n');if(!text.trim())return;
+    const whole=fields.map(f=>f.textContent).join('\n'),from=fields.slice(0,a).reduce((n,f)=>n+f.textContent.length+1,0)+lo;
+    let quote='',quoteBytes=0;for(const c of text){const size=new TextEncoder().encode(c).length;if(quoteBytes+size>512)break;quote+=c;quoteBytes+=size;}
+    selectionDraft={record:key(r.role,r.item.id),revision:r.item.updated_at,quote,start_path:fieldKey(start),end_path:fieldKey(end),start_offset:lo,end_offset:hi,selected_text_hash:hashText(text),prefix:Array.from(whole.slice(0,from)).slice(-64).join(''),suffix:Array.from(whole.slice(from+text.length)).slice(0,64).join('')};
+    activeItem=selectionDraft.record;annotationError=null;renderPanel();
+    toolbar.replaceChildren(button('Copy',async()=>{try{await navigator.clipboard.writeText(text);}catch{message('Copy unavailable. Use the browser Copy command on the selected text.');}toolbar.hidden=true;}),button('Delete',()=>saveSelection('DELETION','')),button('Comment',()=>{composer={...selectionDraft,type:'COMMENT',comment:''};toolbar.hidden=true;openPanel(activeItem,true);}));
+    const rect=range.getBoundingClientRect(),v=window.visualViewport;
+    toolbar.hidden=false;toolbar.style.left=Math.max(8,Math.min(innerWidth-toolbar.offsetWidth-8,rect.left))+'px';toolbar.style.top=Math.max((v?.offsetTop||0)+8,Math.min((v?.height||innerHeight)+(v?.offsetTop||0)-60,rect.top-48))+'px';
+  }
+  function saveSelection(type,comment){
+    const pending=composer||selectionDraft,r=records[pending?.record];if(!r||r.draft.sent||busy||expired)return;
+    if(pending.revision!==r.item.updated_at){
+      const old=r.draft.stale;r.draft.stale={revision:pending.revision,note:old?.note||r.draft.note,annotations:[...(old?.annotations||[]),{...pending,type,comment}]};
+      composer=null;selectionDraft=null;toolbar.hidden=true;persist();render();message('The item changed. Your feedback is kept in a stale draft; review it before sending.');return;
+    }
+    if((type==='COMMENT'&&!comment.trim())||new TextEncoder().encode(comment).length>4096||(!pending.annotation_id&&anns(r).length>=20)){
+      const text='Comments need text up to 4 KiB. Maximum 20 annotations per item.';annotationError={record:pending.record,text};message(text);renderPanel();
+      if(!composer){const error=el('span','hint',text);error.setAttribute('role','alert');toolbar.append(error);}return;
+    }
+    const a={...pending,type,comment,annotation_id:pending.annotation_id||'ann-'+crypto.getRandomValues(new Uint32Array(4)).join('-')};delete a.record;
+    const existing=anns(r).findIndex(v=>v.annotation_id===a.annotation_id);r.draft.annotations=[...anns(r)];if(existing<0)r.draft.annotations.push(a);else r.draft.annotations[existing]=a;
+    if(!r.draft.choice&&!r.draft.action){r.draft.action='comment';r.draft.implicit=true;}
+    if(r.draft.action==='dismiss')r.draft.action='comment_and_dismiss';
+    clearNotice();r.attention=false;r.status='';activeAnnotation=a.annotation_id;activeItem=key(r.role,r.item.id);composer=null;annotationError=null;selectionDraft=null;toolbar.hidden=true;getSelection()?.removeAllRanges();persist();render();
+  }
+  function openPanel(id,focusComposer=false){
+    activeItem=id;restoreFocus=document.activeElement;renderPanel();if(innerWidth<=850&&!sheet.open)sheet.showModal();
+    if(focusComposer)document.querySelector((sheet.open?'#sheet-content':'#annotation-panel')+' textarea')?.focus();
+  }
+  function closeSheet(){sheet.close();composer=null;const r=records[activeItem];(document.querySelector(`#decision-${r?.item.id} .annotation-trigger`)||restoreFocus)?.focus();}
+  function sortedAnnotations(r){const paths=fieldsFor(r).map(fieldKey);return anns(r).map((a,n)=>({...a,sequence:n})).sort((a,b)=>paths.indexOf(a.start_path)-paths.indexOf(b.start_path)||a.start_offset-b.start_offset||paths.indexOf(a.end_path)-paths.indexOf(b.end_path)||a.end_offset-b.end_offset||a.sequence-b.sequence);}
+  function chooseAnnotation(r,a,edit=false){
+    activeItem=key(r.role,r.item.id);activeAnnotation=a.annotation_id;composer=edit?{...a,record:activeItem,revision:r.item.updated_at}:null;renderPanel();
+    const marks=[...document.querySelectorAll('mark[data-ann]')].filter(n=>n.dataset.ann===a.annotation_id);marks[0]?.scrollIntoView({block:'center',behavior:'smooth'});for(const m of marks)m.classList.add('range-flash');setTimeout(()=>marks.forEach(m=>m.classList.remove('range-flash')),2000);if(edit)openPanel(activeItem,true);
+  }
+  function renderPanel(){
+    const r=records[activeItem]?.role===selected&&!records[activeItem].closed&&!records[activeItem].unavailable&&records[activeItem].item.kind===tab?records[activeItem]:Object.values(records).find(r=>r.role===selected&&!r.closed&&!r.unavailable&&r.item.kind===tab);
+    $('annotation-panel').hidden=screen!=='browse'||L.isCompletion(tab);
+    for(const target of [$('annotation-panel'),$('sheet-content')]){
+      target.replaceChildren();if(!r){target.append(el('p','subtle','Select an item to see its annotations.'));continue;}
+      activeItem=key(r.role,r.item.id);const head=el('div','annotation-panel-head');head.append(el('h2','','Annotations'),el('span','subtle',`#${r.item.id} · ${anns(r).length} / 20`));target.append(head,el('p','subtle',r.item.subject),el('p','annotation-help','Select text → Comment or Delete. Activate an annotation to find its highlight.'));
+      if(annotationError?.record===activeItem){const error=el('p','hint',annotationError.text);error.setAttribute('role','alert');target.append(error);}
+      const locked=busy||expired||!!r.draft.sent;
+      for(const a of sortedAnnotations(r)){
+        const card=el('section','annotation-card'+(activeAnnotation===a.annotation_id?' selected':''));card.tabIndex=0;card.setAttribute('aria-label',`${a.type==='DELETION'?'Delete suggestion':'Comment'}: ${a.quote}`);
+        card.append(el('strong',a.type==='DELETION'?'delete-label':'comment-label',a.type==='DELETION'?'Delete suggestion':'Comment'),el('blockquote','',a.quote));if(a.comment)card.append(el('p','',a.comment));
+        const controls=el('div','actions');if(a.type==='COMMENT'){const b=button('Edit',()=>chooseAnnotation(r,a,true),'clear');b.disabled=locked;controls.append(b);}
+        const remove=button('Remove',()=>{clearNotice();r.draft.annotations=anns(r).filter(v=>v.annotation_id!==a.annotation_id);if(!anns(r).length&&r.draft.implicit){r.draft.action='';delete r.draft.implicit;}composer=null;persist();render();},'clear');remove.disabled=locked;controls.append(remove);card.append(controls);
+        card.onclick=e=>{if(!e.target.closest('button'))chooseAnnotation(r,a);};card.onkeydown=e=>{if(e.target===card&&['Enter',' '].includes(e.key)){e.preventDefault();chooseAnnotation(r,a);}};target.append(card);
+      }
+      if(!anns(r).length)target.append(el('p','subtle','No annotations yet. Select a phrase to get started.'));
+      if(composer?.record===activeItem){
+        const edit=el('section','annotation-composer'),label=el('label','','Comment'),input=el('textarea');input.id=target===$('annotation-panel')?'compose-desktop':'compose-phone';label.htmlFor=input.id;input.value=composer.comment;input.oninput=()=>composer.comment=input.value;
+        const save=()=>saveSelection('COMMENT',input.value);input.onkeydown=e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();save();}if(e.key==='Escape'){e.preventDefault();composer=null;renderPanel();}};
+        edit.append(el('strong','',composer.annotation_id?'Edit comment':'New comment'),el('blockquote','',composer.quote),label,input,el('p','subtle','Up to 4 KiB · maximum 20 annotations per item'));
+        const controls=el('div','actions');controls.append(button('Save comment',save,'btn primary'),button('Cancel',()=>{composer=null;renderPanel();}));edit.append(controls);target.append(edit);
+      }
+      target.append(button('General comment ↗',()=>{if(sheet.open)closeSheet();document.getElementById('note-'+r.item.id)?.focus();},'clear'));
+    }
+  }
+  function paintHighlights(){
+    for(const r of Object.values(records)){
+      const fields=fieldsFor(r),paths=fields.map(fieldKey);
+      for(const a of anns(r)){
+        const start=paths.indexOf(a.start_path),end=paths.indexOf(a.end_path);if(start<0||end<start)continue;
+        for(let n=start;n<=end;n++){
+          const field=fields[n],lo=n===start?a.start_offset:0,hi=n===end?a.end_offset:field.textContent.length;
+          const walker=document.createTreeWalker(field,NodeFilter.SHOW_TEXT),pieces=[];let text,offset=0;
+          while(text=walker.nextNode()){const len=text.textContent.length,from=Math.max(0,lo-offset),to=Math.min(len,hi-offset);if(to>from)pieces.push({text,from,to});offset+=len;}
+          for(const p of pieces.reverse()){const range=document.createRange();range.setStart(p.text,p.from);range.setEnd(p.text,p.to);const mark=el('mark','range-highlight '+(a.type==='DELETION'?'range-delete':'range-comment'));mark.dataset.ann=a.annotation_id;mark.tabIndex=0;mark.setAttribute('aria-label',a.type==='DELETION'?'Delete suggestion':'Comment');mark.onclick=e=>{if(getSelection()?.toString().trim())return;e.preventDefault();e.stopPropagation();openPanel(key(r.role,r.item.id));chooseAnnotation(r,a);};mark.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();openPanel(key(r.role,r.item.id));chooseAnnotation(r,a);}};range.surroundContents(mark);}
+        }
+      }
+    }
+  }
+  document.addEventListener('selectionchange',()=>{clearTimeout(selectionTimer);selectionTimer=setTimeout(()=>{if(!L.editable(document.activeElement))captureSelection();},400);});
+  document.addEventListener('mouseup',e=>{if(!e.target.closest('#selection-toolbar,.annotation-card,.annotation-composer,button'))setTimeout(captureSelection,0);});
+  document.addEventListener('touchend',()=>{clearTimeout(selectionTimer);selectionTimer=setTimeout(captureSelection,400);},{passive:true});
+  document.addEventListener('click',e=>{if(e.target.closest('[data-field] a')&&getSelection()?.toString().trim())e.preventDefault();});
+  toolbar.onpointerdown=e=>e.preventDefault();
+  $('sheet-close').onclick=closeSheet;sheet.addEventListener('cancel',e=>{e.preventDefault();closeSheet();});
+  sheet.addEventListener('keydown',e=>{if(e.key!=='Tab')return;const nodes=[...sheet.querySelectorAll('button,textarea,[tabindex="0"]')].filter(n=>!n.disabled),first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')toolbar.hidden=true;});
+  function persist(){storage.save(draftKey,records);storage.save('board-response-counts',acceptedCounts);}
+  function message(text){if(!finished&&!expired)$('status').textContent=text;}
+  function returnLink(){const a=el('a','btn','Return to Argus');a.href='/';return a;}
+  function expire(){if(finished)return;expired=true;$('status').textContent=query.has('role')?'This session expired. Press o in Argus to reopen. Drafts are kept.':'This session expired. Return to Argus to relaunch. Drafts are kept.';if(!$('status').querySelector('a'))$('status').append(' ',returnLink());update();}
+  async function api(path,method='GET',body){
     const response=await fetch(path,{method,cache:'no-store',headers:{'Content-Type':'application/json',...(session?{Authorization:`Bearer ${session}`}:{})},body:body===undefined?undefined:JSON.stringify(body)});
-    if (response.status===401 || response.status===403) {expire();throw new Error('Session expired');}
-    if (!response.ok) throw new Error('Could not reach the decision board. Refresh or try again.');
-    return response.json();
+    let data;try{data=await response.json();}catch{data={};}
+    if(response.status===401){expire();throw Object.assign(Error('Session expired'),{definitive:true});}
+    if(!response.ok)throw Object.assign(Error(data.error||'Could not reach the board. Try again.'),{definitive:response.status>=400&&response.status<500,unavailable:response.status===403});
+    return data;
   }
-  function element(tag,className,text) {const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;}
-  function persist(item) {save('localStorage',L.draftKey(role,item),JSON.stringify(drafts[item.id]));}
-  function active() {return items.filter(item=>!['answered','closed'].includes(states[item.id]));}
-  function update() {
-    const open=active(),decided=L.payload(open,drafts).length;
-    $('tally').textContent=`${decided} of ${open.length} decided`;
-    let missingNote=false;
-    for(const item of open) {const d=drafts[item.id];if(d?.choice==='other' && !d.note.trim())missingNote=true;const seg=$(`seg-${item.id}`);if(seg)seg.dataset.done=String(L.valid(item,d));}
-    $('submit').disabled=expired || busy || !decided || missingNote;$('refresh').disabled=busy;
-    const count=open.filter(item=>!drafts[item.id]?.choice && item.structured?.recommended).length;
-    $('accept').hidden=!count;$('accept').disabled=busy;$('accept').textContent=`Take the recommendation for the ${count} undecided`;
+  function update(){
+    if(finished)return;
+    const q=queued(),invalid=q.some(r=>!L.valid(r.item,r.draft));
+    const boards=new Set(q.map(r=>r.role)).size;
+    $('tally').textContent=`${q.length} queued · ${boards} ${boards===1?'board':'boards'}`;
+    $('submit').disabled=busy||expired||!q.length||invalid;
+    $('review').disabled=busy;
+    $('submit-close').disabled=$('submit').disabled;
+    $('submit').textContent=busy?'Sending…':'Submit';
+    $('submit-close').textContent=busy?'Sending…':'Submit & close';
+    $('queued-description').textContent=invalid?'Add required notes before submitting.':q.length?`${q.length} ${q.length===1?'action':'actions'} across ${boards} ${boards===1?'coordinator':'coordinators'}. Unselected items stay open.`:'Only selected actions are submitted. Everything else stays open.';
   }
-  function render() {
-    $('decisions').replaceChildren();$('segs').replaceChildren();
-    for(const item of items) {
-      const draft=drafts[item.id] || (drafts[item.id]={choice:'',note:''}),state=states[item.id],closed=['answered','closed'].includes(state);
-      const card=element('section','decision');card.id=`decision-${item.id}`;
-      const count=element('p','count',`Decision #${item.id}`);count.append(element('span','state',state || 'Open'));card.append(count,element('h2','',item.subject));
-      if(state==='conflict')card.append(element('p','hint','Claude changed this decision. Your note is kept below; review the updated options and choose again.'));
-      if(state==='invalid')card.append(element('p','hint','This answer needs attention. Choose an option or add a note for Something else.'));
-      const situation=element('div','situation');situation.append(L.markup(item.body,document));card.append(situation);
-      const options=element('fieldset','options');options.setAttribute('aria-label',item.subject);options.disabled=closed || busy;
-      for(const option of [...(item.structured?.options || []),...(item.structured?[{id:'other',label:'Something else'}]:[])]) {
-        const label=element('label',`opt${option.id==='other'?' other':''}`),input=element('input');input.type='radio';input.name=`choice-${item.id}`;input.value=option.id;input.checked=draft.choice===option.id;
-        input.addEventListener('change',()=>{draft.choice=option.id;persist(item);const hint=card.querySelector('.note-required');if(hint)hint.hidden=!(draft.choice==='other' && !draft.note.trim());update();});
-        const body=element('div','opt-body'),head=element('div','opt-head');head.append(element('span','opt-label',option.label));
-        if(option.id===item.structured.recommended)head.append(element('span','pill','Recommended'));body.append(head);
-        if(option.summary)body.append(element('div','',option.summary));
-        for(const [key,text] of [['Upside',option.upside],['Downside',option.downside]])if(text){const row=element('div','trade');row.append(element('span','k',key),element('span','',text));body.append(row);}
-        if(option.id===item.structured.recommended && item.structured.reason)body.append(element('div','why',`Why Claude recommends it: ${item.structured.reason}`));
-        label.append(input,body);options.append(label);
+  const total=row=>(row.decisions||0)+(row.fyis||0)+(row.actions||0)+(row.todos||0);
+  const countOf=(row,kind)=>showDeferred?Object.values(records).filter(r=>r.role===row.role_id&&!r.closed&&!r.unavailable&&r.item.kind===kind).length:row[{decision:'decisions',fyi:'fyis',action:'actions',todo:'todos'}[kind]]||0;
+  const TAB_LABEL={decision:'Decisions',fyi:'FYIs',action:'Actions',todo:'Todos'},KIND_LABEL={decision:'Decision',fyi:'FYI',action:'Action',todo:'Todo'};
+  function badge(kind,n){const b=el('span',`count-badge ${kind}${!n?' zero':''}`,String(n));b.setAttribute('aria-hidden','true');return b;}
+  function drawNav(){
+    for(const id of ['desktop-nav','phone-nav']){
+      const nav=$(id);nav.replaceChildren();
+      for(const row of rows){
+        const n=total(row),b=button('',()=>{visit(row.role_id);if($('drawer').open)closeDrawer();},`rail-row${!n?' empty':''}`);
+        let depth=0,parent=row.parent_role_id,seen=new Set();while(parent&&!seen.has(parent)){seen.add(parent);depth++;parent=rowFor(parent)?.parent_role_id;}
+        b.style.paddingLeft=`${10+depth*16}px`;b.dataset.role=row.role_id;b.setAttribute('aria-current',String(selected===row.role_id));b.setAttribute('aria-label',`${row.orchestrator} / ${row.coordinator}, ${row.decisions} decisions, ${row.fyis} FYIs, ${row.actions||0} actions, ${row.todos||0} todos`);
+        if(depth)b.append(el('span','row-branch','↳'));
+        b.append(el('span','row-name',row.orchestrator));
+        if(n){const counts=el('span','row-counts');counts.append(badge('decision',row.decisions),badge('fyi',row.fyis));if(row.actions)counts.append(badge('action',row.actions));if(row.todos)counts.append(badge('todo',row.todos));b.append(counts);}
+        if(queued().some(r=>r.role===row.role_id)||Object.values(records).some(r=>r.role===row.role_id&&attention(r))){const dot=el('span','queued-dot');dot.setAttribute('aria-label','Queued response or needs another look');b.append(dot);}
+        nav.append(b);
+      }
+    }
+    $('drawer-trigger').textContent=`${rowFor(selected)?.orchestrator||'Coordinators'} ▾`;
+  }
+  function visit(role){if(busy)return;clearNotice();selected=role;screen='browse';render();window.scrollTo(0,0);}
+  function renderCard(main,r){
+    const i=r.item,d=r.draft,done=L.isCompletion(i.kind),card=el('section',`decision${i.blocking?' blocking':''}${i.trigger_pending?' later':''}`);card.id=`decision-${i.id}`;
+    const count=el('p','count',`${KIND_LABEL[i.kind]||'Decision'} #${i.id}`),state=el('span','state',attention(r)?'Needs another look':r.status||((d.choice||d.action)?'Queued':i.deferred_at&&!i.read?'Unread':'Open'));
+    count.append(state);if(i.deferred_at)count.append(el('span','pill','Deferred'));const defer=button(i.deferred_at?'Restore':'Defer',()=>deferItem(r));defer.disabled=busy||!!d.sent;count.append(defer);if(!done)count.append(button('Annotations '+anns(r).length,()=>openPanel(key(r.role,i.id)),'annotation-trigger'));card.append(count,fmt('h2','',i.subject));const body=el('div','situation');body.append(done?L.markup(i.body,document):selectable(r,'body',L.markup(i.body,document)));card.append(body);if(attention(r))card.append(el('p','hint item-status',r.status));
+    if(done){
+      const meta=el('div','meta');if(i.blocking)meta.append(el('span','pill blocking','Blocking'));
+      if(i.trigger_pending)meta.append(el('span','pill later','Later'),el('span','subtle',`Waiting for: ${i.trigger}`));else if(i.trigger)meta.append(el('span','pill later','Ready'),el('span','subtle',`Trigger: ${i.trigger}`));
+      if(meta.children.length)card.append(meta);
+      if(i.command){
+        const cmd=el('div','command'),pre=el('pre');pre.textContent=i.command;pre.tabIndex=0;pre.setAttribute('aria-label','Step to run (not executed by this page)');
+        const copy=button('Copy',async()=>{try{await navigator.clipboard.writeText(i.command);copy.textContent='Copied';setTimeout(()=>{copy.textContent='Copy';},1500);}catch{$('copy-fallback').hidden=false;$('copy-fallback').value=i.command;$('copy-fallback').select();}});copy.setAttribute('aria-label',`Copy step for ${KIND_LABEL[i.kind]} #${i.id}`);
+        cmd.append(el('p','subtle',i.kind==='action'?'Step':'Command'),pre,copy);card.append(cmd);
+      }
+    }
+    card.onpointerdown=e=>{if(!e.target.closest('button,input,textarea')){activeItem=key(r.role,i.id);renderPanel();}};
+    const locked=busy||expired||!!d.sent;
+    const changed=()=>{clearNotice();r.status='';r.attention=false;card.querySelector('.item-status')?.remove();persist();hint.hidden=!L.noteError(i,d);state.textContent=(d.action||d.choice)?'Queued':'Open';drawNav();update();};
+    if(i.kind==='decision'&&i.structured){
+      const options=el('fieldset','options');options.setAttribute('aria-label',i.subject);
+      for(const o of [...i.structured.options,{id:'other',label:'Something else'}]){
+        const label=el('div',`opt${o.id==='other'?' other':''}`),input=el('input');input.type='radio';input.name=`choice-${i.id}`;input.value=o.id;input.setAttribute('aria-label',o.label);input.checked=d.choice===o.id;input.disabled=locked;input.onchange=()=>{d.choice=o.id;changed();};
+        const ob=el('div','opt-body'),head=el('div','opt-head');head.append(o.id==='other'?el('span','opt-label',o.label):selectable(r,`options.${o.id}.label`,fmt('span','opt-label',o.label)));if(o.id===i.structured.recommended)head.append(el('span','pill','Recommended'));ob.append(head);
+        if(o.summary)ob.append(selectable(r,`options.${o.id}.summary`,fmt('div','',o.summary)));for(const [k,v]of [['Upside',o.upside],['Downside',o.downside]])if(v){const trade=el('div','trade');trade.append(el('span','k',k),selectable(r,`options.${o.id}.${k.toLowerCase()}`,fmt('span','',v)));ob.append(trade);}
+
+        if(o.id===i.structured.recommended&&i.structured.reason){const why=el('div','why');why.append(el('span','','Why the coordinator recommends it: '),selectable(r,'reason',fmt('span','',i.structured.reason)));ob.append(why);}
+        label.append(input,ob);options.append(label);
       }
       card.append(options);
-      const note=element('div','note'),label=element('label','',item.structured?'Note (required for Something else)':'Your answer');label.htmlFor=`note-${item.id}`;
-      const textarea=element('textarea');textarea.id=label.htmlFor;textarea.value=draft.note;textarea.disabled=closed || busy;
-      const hint=element('p','hint note-required','Add a note to answer Something else.');hint.hidden=!(draft.choice==='other' && !draft.note.trim());card.append(hint);
-      textarea.addEventListener('input',()=>{draft.note=textarea.value;if(!item.structured)draft.choice='other';hint.hidden=!(draft.choice==='other' && !draft.note.trim());persist(item);update();});note.append(label,textarea);card.append(note);$('decisions').append(card);
-      const seg=element('button','seg');seg.id=`seg-${item.id}`;seg.setAttribute('aria-label',`Jump to decision #${item.id}`);seg.addEventListener('click',()=>card.scrollIntoView({behavior:'smooth'}));$('segs').append(seg);
     }
-    update();
-  }
-  function load(next) {
-    generation++;
-    const old=new Map(items.map(i=>[i.id,i.updated_at]));items=next;save('localStorage',`board-decision-items:${role}`,JSON.stringify(next));
-    for(const item of items)if(old.get(item.id)!==item.updated_at || !drafts[item.id]) {try{drafts[item.id]=JSON.parse(read('localStorage',L.draftKey(role,item))) || {choice:'',note:''};}catch{drafts[item.id]={choice:'',note:''};}states[item.id]='';}
-    pending=null;$('updates').hidden=true;render();
-  }
-  $('accept').addEventListener('click',()=>{for(const item of active())if(!drafts[item.id].choice && item.structured?.recommended){drafts[item.id].choice=item.structured.recommended;persist(item);}render();});
-  $('refresh').addEventListener('click',()=>{if(pending)load(pending);});
-  $('submit').addEventListener('click',async()=>{
-    const answers=L.payload(active(),drafts).slice(0,16);if(!answers.length){message('Submit up to 16 answers at a time.');return;}
-    busy=true;generation++;render();
-    try {
-      const response=await api(base+'/answers','POST',{answers});let answered=0,attention=0;
-      for(const result of response.results) {
-        const index=items.findIndex(i=>i.id===result.item_id);if(index<0)continue;
-        const next=L.outcome(items[index],drafts[result.item_id],result);items[index]=next.item;drafts[result.item_id]=next.draft;states[result.item_id]=next.status;persist(items[index]);
-        if(next.status==='answered')answered++;else attention++;
+    const note=el('div','note'),label=el('label','',done?'Note (optional)':i.kind==='decision'&&!i.structured?'General comment / your answer (required)':'General comment'+(i.structured?' (required for Something else)':'')),text=el('textarea');text.id=`note-${i.id}`;label.htmlFor=text.id;text.value=d.note;text.disabled=locked;text.maxLength=4096;text.oninput=()=>{d.note=text.value;if(i.kind==='decision'&&!i.structured&&d.action!=='comment')d.choice=d.note.trim()?'other':'';changed();};note.append(label,text);card.append(note);
+    const hint=el('p','hint','Add a note to send this response (up to 4 KiB).');hint.hidden=!L.noteError(i,d);hint.setAttribute('role','alert');card.append(hint);
+    if(i.kind==='decision'&&!i.structured&&d.action==='comment'){const answer=button('Use general comment as answer',()=>{d.choice='other';d.action='';delete d.implicit;persist();render();});answer.disabled=locked;card.append(answer);}
+    if(done){
+      const actions=el('div','fyi-actions');
+      for(const [action,name]of (i.kind==='todo'?[['done','Done'],['dropped','Dropped']]:[['done','Done']])){
+        const b=button(name,()=>{clearNotice();r.attention=false;r.status='';d.action=d.action===action?'':action;delete d.action_id;persist();render();});b.disabled=locked;b.setAttribute('aria-pressed',String(d.action===action));actions.append(b);
       }
-      save('localStorage',`board-decision-items:${role}`,JSON.stringify(items));
-      $('summary').textContent=`${answered} answered, ${attention} need attention`;
-    } catch(error) {if(!expired)message(error.message);}finally{busy=false;render();}
-  });
-  $('copy').addEventListener('click',async()=>{
-    const text=items.filter(i=>drafts[i.id]?.choice || drafts[i.id]?.note).map(i=>{const d=drafts[i.id],label=i.structured?.options.find(o=>o.id===d.choice)?.label || 'Something else';return `#${i.id} ${i.subject}\nChoice: ${label}\nNote: ${d.note || 'none'}`;}).join('\n\n');
-    try{await navigator.clipboard.writeText(text);$('summary').textContent='Answers copied.';}catch{const box=$('copy-fallback');box.value=text;box.hidden=false;box.focus();box.select();}
-  });
-  if(!/^\d+$/.test(role || '')){message('Open this page by pressing o on a coordinator board in Argus.');return;}
-  try {const cached=JSON.parse(read('localStorage',`board-decision-items:${role}`));if(Array.isArray(cached))load(cached);}catch{}
- session=read('sessionStorage',sessionKey) || '';
-  try {
-    if(ticket){session='';const result=await api('/api/hera/board/decision-session','POST',{ticket});if(String(result.role_id)!==role)throw new Error('This link belongs to a different board.');session=result.session;save('sessionStorage',sessionKey,session);}
-    if(!session){expire();return;}
-    load((await api(base+'/decisions')).items);message(items.length?'':'No open decisions.');
-    if(focus){const card=$(`decision-${focus}`);if(card){card.classList.add('focused');card.scrollIntoView();}}
-  }catch(error){if(!expired)message(error.message);return;}
-  setInterval(async()=>{
-    if(document.hidden || expired || busy)return;
-    const observed=generation;
-    try{const next=(await api(base+'/decisions')).items;if(observed!==generation || busy)return;const revisions=new Map(items.map(i=>[i.id,i.updated_at]));const added=next.filter(i=>!revisions.has(i.id)).length,changed=next.filter(i=>revisions.has(i.id) && revisions.get(i.id)!==i.updated_at).length,closed=items.filter(i=>!next.some(n=>n.id===i.id) && !['answered','closed'].includes(states[i.id])).length;
-      if(added || changed || closed){pending=next;$('changes').textContent=`Claude updated ${changed} decisions, added ${added}, and closed ${closed}.`;$('updates').hidden=false;}
-    }catch(error){if(!expired)message(error.message);}
-  },20000);
+      card.append(actions,el('p','subtle',d.action==='done'?'Mark done. The coordinator is notified.':d.action==='dropped'?'Drop this todo. The coordinator is notified.':'Nothing is run or sent until you choose and submit.'));
+    }
+    if(i.kind==='fyi'){
+      const actions=el('div','fyi-actions');
+      for(const [action,name]of [['comment','Comment'],['dismiss','Dismiss'],['comment_and_dismiss','Comment and dismiss']]){
+        const b=button(name,()=>{clearNotice();r.attention=false;r.status='';d.action=d.action===action?'':action;if(d.action==='dismiss'&&anns(r).length)d.action='comment_and_dismiss';delete d.implicit;delete d.action_id;persist();render();});b.disabled=locked;b.setAttribute('aria-pressed',String(d.action===action));actions.append(b);
+      }
+      card.append(actions,el('p','subtle',d.action==='dismiss'?'Dismiss silently. No coordinator message.':d.action==='comment'?'Send feedback. This FYI stays open.':d.action==='comment_and_dismiss'?'Send feedback and dismiss this FYI.':'Typing alone does not queue feedback. Choose an action.'));
+    }
+    if(d.stale){const recovery=el('section','annotation-card');recovery.append(el('strong','','Stale draft — review before sending'),el('p','',d.stale.note||''));for(const a of d.stale.annotations||[])recovery.append(el('blockquote','',a.quote),el('p','',a.comment));recovery.append(button('Remove stale draft',()=>{delete d.stale;persist();render();}),button('Copy stale draft',async()=>{const text=JSON.stringify(d.stale,null,2);try{await navigator.clipboard.writeText(text);}catch{$('copy-fallback').hidden=false;$('copy-fallback').value=text;$('copy-fallback').select();}}));card.append(recovery);}
+    if(d.sent&&!attention(r))card.append(el('p','hint','Result unconfirmed. Retry this exact response before editing it.'));
+    if(d.choice||d.action){const clear=button('Clear queued response',()=>{r.draft=draft();persist();render();},'clear');clear.disabled=locked;card.append(clear);}
+    main.append(card);
+  }
+  function renderReview(main){
+    const heading=el('section','lede');heading.append(el('h1','','Queued responses'));main.append(heading);
+    main.append(button('← Keep reviewing boards',()=>{screen='browse';render();}));
+    const groups=new Map();for(const r of queued()){if(!groups.has(r.role))groups.set(r.role,[]);groups.get(r.role).push(r);}
+    for(const [role,items]of groups){
+      const group=el('section','review-group');group.append(el('h2','',labelFor(role)));
+      for(const r of items){
+        const i=r.item,d=r.draft,row=el('section','receipt');row.append(el('strong','',`#${i.id} ${i.subject}`),el('p','subtle',d.choice?i.structured?.options.find(o=>o.id===d.choice)?.label||'Something else':({done:'Done',dropped:'Dropped',comment:'Comment',dismiss:'Dismiss',comment_and_dismiss:'Comment and dismiss'}[d.action]||d.action)));
+        if(d.note)row.append(el('p','',d.note));
+        for(const a of anns(r)){const entry=el('div','annotation-card');entry.append(el('strong','',a.type==='DELETION'?'Delete suggestion':'Comment'),el('blockquote','',a.quote));if(a.comment)entry.append(el('p','',a.comment));row.append(entry);}
+        const status=r.unavailable||!rowFor(role)?'Coordinator unavailable. Retry to confirm any uncertain response.':r.status||L.noteError(i,d);if(status)row.append(el('p','hint',status));
+        const actions=el('div','review-actions');
+        if(rowFor(role)&&!r.unavailable&&!r.closed)actions.append(button('Edit on board',()=>{clearNotice();selected=role;tab=i.kind;screen='browse';render();document.getElementById(`decision-${i.id}`)?.scrollIntoView();}));
+        const clear=button('Clear queued response',()=>{r.draft=draft();r.attention=false;r.status='';persist();render();});clear.disabled=busy||!!d.sent;actions.append(clear);row.append(actions);group.append(row);
+      }main.append(group);
+    }
+    if(!groups.size)main.append(el('p','subtle','Nothing queued.'));
+  }
+  function render(){
+    if(finished)return;toolbar.hidden=true;const main=$('main');main.replaceChildren();drawNav();
+    if(screen==='review')renderReview(main);
+    else {
+      const row=rowFor(selected),lede=el('section','lede');main.append(lede);
+      if(!row){lede.append(el('h1','','No visible coordinators'),el('p','intro','Return to Argus or refresh when a coordinator is available.'));if(queued().length)lede.append(button('Review queued responses',()=>{screen='review';render();}));}
+      else {
+        lede.append(el('h1','',row.orchestrator),el('p','subtle',`${row.coordinator} · Choose responses to queue. Everything else stays open.`));
+        const tabs=el('div','tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Board items');
+        for(const kind of L.TABS){const label=TAB_LABEL[kind],n=countOf(row,kind);const b=button('',()=>{clearNotice();tab=kind;render();});b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===kind));b.setAttribute('aria-label',`${label}, ${n} open`);b.append(el('span','',label),badge(kind,n));if(Object.values(records).some(r=>r.role===selected&&r.item.kind===kind&&attention(r))){b.dataset.attention='true';b.append(el('span','tab-attention',' ·'));b.setAttribute('aria-label',`${label}, ${n} open, needs another look`);}tabs.append(b);}main.append(tabs,el('p','tabs-help','⌘ / Ctrl ← Decisions · → FYIs · Actions and Todos via tabs or swipe'));
+        const parked=Object.values(records).filter(r=>r.role===selected&&!r.closed&&!r.unavailable&&r.item.deferred_at).length;const visibility=button(`${showDeferred?'Hide':'Show'} deferred (${parked})`,()=>{showDeferred=!showDeferred;render();});visibility.setAttribute('aria-pressed',String(showDeferred));main.append(visibility);
+        const byItem=new Map(Object.values(records).filter(r=>r.role===selected&&!r.closed&&!r.unavailable&&(showDeferred||!r.item.deferred_at)&&r.item.kind===tab).map(r=>[r.item,r])),visible=L.order([...byItem.keys()]).map(item=>byItem.get(item));
+        if(submitNotice&&submitNotice.role===selected&&submitNotice.tab===tab){const note=el('section',`submit-note${visible.length?' compact':''}`);note.setAttribute('role','status');note.append(el(visible.length?'strong':'h2','',submitNotice.failed?(submitNotice.sent?'Responses sent to Argus':'Responses need another look'):'Answers sent to Argus'),el('p','subtle',submitNotice.failed?`${submitNotice.sent} sent · ${submitNotice.failed} needs another look`:'Your responses have been sent.'));main.append(note);}
+        if(!visible.length&&!submitNotice){const empty=el('section','decision');empty.append(el('h2','',total(row)?`No open ${TAB_LABEL[tab].toLowerCase()}`:`Nothing open for ${row.orchestrator}`));main.append(empty);}
+        if(tab==='decision'&&visible.some(r=>r.item.structured?.recommended&&!r.draft.choice)){const b=button('Take the recommendations',()=>{clearNotice();for(const r of visible)if(!r.draft.choice&&r.item.structured?.recommended&&!r.draft.sent){r.draft.choice=r.item.structured.recommended;r.attention=false;r.status='';}persist();render();});b.disabled=busy;main.append(b);}
+        for(const r of visible)renderCard(main,r);
+      }
+    }
+    renderRecovery(main);update();paintHighlights();renderPanel();
+  }
+  function reconcile(next){
+    rows=next.rows;acceptedSnapshot=JSON.stringify(next);
+    const latest=new Map(next.boards.flatMap(b=>b.items.map(item=>[key(b.role,item.id),{...b,item}])));
+    for(const r of Object.values(records)){
+      if(r.status?.startsWith('Item changed.')){r.attention=true;r.status='Item changed. Review this version and choose your response again.';}
+      if(r.status==='invalid'){r.attention=true;r.status='Could not save this response. Check it and try again.';}
+      r.unavailable=!rowFor(r.role)||next.unavailable.includes(r.role);
+      const current=latest.get(key(r.role,r.item.id));
+      if(r.unavailable){recover(r);continue;}
+      if(!current){if(!r.draft.sent){r.closed=true;recover(r);}continue;}
+      if(r.recovery)continue;
+      if(r.item.updated_at!==current.item.updated_at&&!r.draft.sent){r.draft={...draft(),note:r.draft.note,...(anns(r).length?{stale:{revision:r.item.updated_at,note:r.draft.note,annotations:anns(r)}}:r.draft.stale?{stale:r.draft.stale}:{})};r.attention=true;r.status='Item changed. Your note is kept; choose your response again.';}
+      if(!r.draft.sent)r.item=current.item;r.closed=false;
+    }
+    for(const [k,b]of latest){if(!records[k])records[k]={role:b.role,coordinator:b.coordinator,orchestrator:b.orchestrator,item:b.item,draft:draft()};}
+    if(!rowFor(selected))selected=rows.find(total)?.role_id||rows[0]?.role_id||0;
+    persist();pending=null;$('updates').hidden=true;render();
+  }
+  async function deferItem(r){
+    if(busy||r.draft.sent)return;busy=true;render();
+    try{const response=await api(base(r.role)+'/'+r.item.id+'/defer','PUT',{deferred:!r.item.deferred_at,expected_updated_at:r.item.updated_at});r.item=response.item;if(r.item.deferred_at){r.draft.choice='';r.draft.action='';}persist();reconcile(await snapshot());}
+    catch(e){r.status=e.status===409?'Item changed. Review this version and try again.':'Could not update deferral. Refresh and try again.';r.attention=true;$('summary').textContent=r.status;}
+    finally{busy=false;render();}
+  }
+  async function snapshot(){
+    const nav=await api('/api/hera/board/decision-navigation');const unavailable=[];
+    const boards=await Promise.all(nav.roles.map(async row=>{try{return {...await api(base(row.role_id)+'/decide-items?include_deferred=true'),role:row.role_id};}catch(e){if(e.unavailable){unavailable.push(row.role_id);return {role:row.role_id,items:[]};}throw e;}}));
+    return {rows:nav.roles,boards,unavailable};
+  }
+  function sent(){
+    finished=true;generation++;clearInterval(timer);storage.save('board-response-counts',{answers:0,comments:0,dismissals:0,completions:0});
+    try{window.close();}catch{}
+    if(window.closed)return;
+    const main=el('main','wrap');main.tabIndex=-1;const section=el('section','confirmation');section.append(el('h1','','Actions sent — you can close this tab'),el('p','intro',`${acceptedCounts.answers} answers · ${acceptedCounts.comments} comments · ${acceptedCounts.dismissals} dismissals · ${acceptedCounts.completions} completions`),returnLink());main.append(section);document.body.replaceChildren(main);main.focus();
+  }
+  async function submit(closeAfter=false){
+    if(busy||expired||finished)return;
+    const q=queued();if(!q.length||q.some(r=>!L.valid(r.item,r.draft)))return;
+    busy=true;generation++;pending=null;$('updates').hidden=true;render();
+    let failed=false;const roundRole=selected,roundTab=tab;let failureCount=0,roundConfirmed=0;
+    for(const group of L.batches(q)){
+      const previouslyUncertain=group.records.map(r=>!!r.draft.sent);
+      const payload=group.records.map(r=>{
+        const d=r.draft;if(d.sent)return d.sent;
+        const p={item_id:r.item.id,expected_updated_at:r.item.updated_at,note:d.note};
+        if(group.kind!=='decision'){d.action_id=d.action_id||Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');p.action_id=d.action_id;p.action=d.action;if(d.action==='dismiss')p.note=''; }else{p.choice=d.choice;p.action=d.choice?'answer':'comment';}
+        if(anns(r).length){p.annotations=anns(r).map(({annotation_id,type,start_path,end_path,start_offset,end_offset,selected_text_hash,prefix,suffix,comment})=>({annotation_id,type,start_path,end_path,start_offset,end_offset,selected_text_hash,prefix,suffix,comment}));}
+        if(!p.action_id&&(p.annotations?.length||p.action==='comment')){d.action_id=d.action_id||'action-'+crypto.getRandomValues(new Uint32Array(4)).join('-');p.action_id=d.action_id;}
+        d.sent=p;return p;
+      });persist();
+      try{
+        const response=await api(base(group.role)+L.endpoint(group.kind),'POST',group.kind==='decision'?{answers:payload}:{actions:payload});
+        for(let n=0;n<group.records.length;n++){
+          const r=group.records[n],p=payload[n];const matches=Array.isArray(response.results)&&response.results.length===payload.length?response.results.filter(v=>v.item_id===p.item_id&&(!p.action_id||v.action_id===p.action_id)):[];const result=matches.length===1?matches[0]:null;
+          if(L.accepted(group.kind,p,result)&&!(result.outcome==='already_resolved'&&(r.draft.note.trim()||anns(r).length||r.draft.stale))){
+            roundConfirmed++;
+            if(L.isCompletion(group.kind))acceptedCounts.completions++;else if(group.kind==='decision'&&p.action!=='comment')acceptedCounts.answers++;else{if(p.action!=='dismiss'&&result.outcome!=='already_resolved')acceptedCounts.comments++;if(group.kind==='fyi'&&p.action!=='comment')acceptedCounts.dismissals++;}
+            if(!(p.action==='comment')){const row=rowFor(r.role);if(row){const field={fyi:'fyis',action:'actions',todo:'todos',decision:'decisions'}[group.kind];row[field]=Math.max(0,(row[field]||0)-1);}}
+            r.draft=draft();r.attention=false;r.recovery=false;r.status=p.action==='comment'?'Comment sent · still open':p.action==='dropped'?'Dropped':p.action==='done'?'Done':'Accepted';r.closed=p.action!=='comment';
+          }else{
+            failed=true;failureCount++;r.attention=true;r.status=result?.outcome==='invalid'?'Could not save this response. Check it and try again.':result?.outcome||'Result unconfirmed. Retry to confirm.';
+            if(result&&['conflict','invalid','not_found','already_resolved'].includes(result.outcome)){
+              const note=r.draft.note,stale=anns(r).length?{revision:r.item.updated_at,note,annotations:anns(r)}:undefined;r.draft={...r.draft,sent:undefined,action_id:undefined};
+              if(result.outcome==='conflict'){r.item=result.item;r.draft={...draft(),note,...(stale?{stale}:{})};r.status='Item changed. Your note is kept; choose your response again.';}
+              else if(result.outcome==='not_found'||result.outcome==='already_resolved'||result.item?.resolved){if(result.item)r.item=result.item;r.closed=true;recover(r);}
+            }
+          }
+        }
+      }catch(e){
+        failed=true;failureCount+=group.records.length;for(const [n,r] of group.records.entries()){r.status=e.message;r.attention=true;if(e.unavailable)r.unavailable=true;if(e.definitive&&!previouslyUncertain[n]){delete r.draft.sent;delete r.draft.action_id;if(e.unavailable)recover(r);}}
+      }
+      persist();
+    }
+    if(!failed&&closeAfter){busy=false;sent();return;}
+    screen='browse';selected=roundRole;tab=roundTab;
+    let refreshError='';
+    try{const next=await snapshot();reconcile(next);}catch(e){refreshError='Board refresh failed: '+e.message;}
+    busy=false;
+    submitNotice={role:roundRole,tab:roundTab,sent:roundConfirmed,failed:failureCount};
+    message(refreshError);render();window.scrollTo(0,0);
+  }
+  function closeDrawer(){$('drawer').close();$('drawer-trigger').focus();}
+  $('drawer-trigger').onclick=()=>{$('drawer').showModal();};$('drawer-close').onclick=closeDrawer;$('drawer').addEventListener('cancel',e=>{e.preventDefault();closeDrawer();});
+  $('drawer').addEventListener('keydown',e=>{if(e.key!=='Tab')return;const nodes=[...$('drawer').querySelectorAll('button')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}});
+  document.addEventListener('keydown',e=>{if(busy||finished||$('drawer').open||sheet.open||composer||getSelection()?.toString())return;const next=L.navigate(e,rows,selected,tab);if(!next)return;e.preventDefault();clearNotice();selected=next.role;tab=next.tab;screen='browse';render();$('main').focus({preventScroll:true});});
+  let touch=null;$('main').addEventListener('touchstart',e=>{touch=e.touches.length===1&&!L.editable(e.target)&&!e.target.closest('button,a,label,input,textarea,select,[data-field],mark,[role="button"],[role="tab"]')?{x:e.touches[0].clientX,y:e.touches[0].clientY}:null;},{passive:true});
+  $('main').addEventListener('touchend',e=>{const start=touch;touch=null;if(!start||!e.changedTouches.length||busy||screen!=='browse'||getSelection()?.toString())return;const dx=e.changedTouches[0].clientX-start.x,dy=e.changedTouches[0].clientY-start.y;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5){clearNotice();tab=L.adjacent(tab,dx);render();}},{passive:true});
+  $('main').addEventListener('input',clearNotice);
+  $('main').addEventListener('change',clearNotice);
+  $('main').addEventListener('click',e=>{if(e.target.closest('.fyi-actions button,.options input,.clear,.annotation-card button')&&!busy)clearNotice();},true);
+  $('theme').value=document.documentElement.dataset.theme||'system';$('theme').onchange=()=>BoardDecisionTheme.set($('theme').value);
+  $('review').onclick=()=>{screen='review';render();};$('submit').onclick=()=>submit(false);$('submit-close').onclick=()=>submit(true);$('refresh').onclick=()=>{if(pending&&!busy)reconcile(pending);};
+  $('copy').onclick=async()=>{
+    const text=queued().map(r=>`${labelFor(r.role)}\n#${r.item.id} ${r.item.subject}\n${r.draft.choice||r.draft.action}\n${r.draft.action==='dismiss'?'':r.draft.note}\n${anns(r).map(a=>`${a.type==='DELETION'?'Delete suggestion':'Comment'}: ${a.quote}\n${a.comment}`).join('\n')}`).join('\n\n');
+    try{await navigator.clipboard.writeText(text);if(!finished)$('summary').textContent='Responses copied.';}catch{if(finished)return;$('copy-fallback').hidden=false;$('copy-fallback').value=text;$('copy-fallback').select();}
+  };
+  async function poll(){
+    if(document.hidden||busy||expired||finished||polling)return;
+    const epoch=generation;polling=true;
+    try{const next=await snapshot();if(finished||busy||epoch!==generation)return;if(acceptedSnapshot!==JSON.stringify(next)){pending=next;$('updates').hidden=false;}}
+    catch(e){if(!finished&&epoch===generation)message(e.message);}
+    finally{polling=false;}
+  }
+  const timer=setInterval(poll,20000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});
+  try{
+    const savedCounts=storage.read('board-response-counts');if(savedCounts)for(const k of Object.keys(acceptedCounts))acceptedCounts[k]=Number.isSafeInteger(savedCounts[k])&&savedCounts[k]>0?savedCounts[k]:0;
+    const saved=storage.read(draftKey);if(saved&&typeof saved==='object')records=Object.fromEntries(Object.entries(saved).filter(([,r])=>r?.item&&r?.draft&&typeof r.draft.note==='string'));
+    if(ticket){try{sessionStorage.removeItem(sessionKey);}catch{};const exchange=await api('/api/hera/board/decision-session','POST',{ticket});session=exchange.session;selected=Number(exchange.initial_role_id)||0;try{sessionStorage.setItem(sessionKey,JSON.stringify({session,initial_role_id:selected}));}catch{message('Session storage unavailable. Keep this page open.');}}
+    else{let savedSession;try{savedSession=JSON.parse(sessionStorage.getItem(sessionKey));}catch{}session=savedSession?.session||'';selected=Number(savedSession?.initial_role_id)||0;}
+    if(!session){expire();render();return;}
+    const epoch=generation,next=await snapshot();if(finished||epoch!==generation)return;
+    reconcile(next);const initial=Object.values(records).find(r=>r.role===selected&&r.item.id===focus&&!r.closed);
+    const counts=rowFor(selected);tab=(counts&&countOf(counts,'decision')?'decision':'')||initial?.item.kind||(counts&&L.TABS.find(k=>countOf(counts,k)))||'decision';render();
+    if(initial&&initial.item.kind===tab){const n=document.getElementById(`decision-${focus}`);n?.classList.add('focused');n?.scrollIntoView();}
+  }catch(e){if(!finished){message(e.message);render();}}
 })();
+
 </script></body></html>

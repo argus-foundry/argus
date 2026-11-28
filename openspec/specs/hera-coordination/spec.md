@@ -997,12 +997,37 @@ The gater SHALL validate every nonempty derived plan-node base against the targe
 
 ### Requirement: Coordinators proactively archive done-done roles
 
-The coordinator orientation and the builtin `hera` skill SHALL instruct coordinators to call `hera_archive` for roles that are done-done: after accepting a role and receiving its winding-down confirmation, after a merged-PR notice for a role's work, and as a sweep before reporting an orchestrator finished. They SHALL also instruct coordinators that a worker whose PR is open, green, and pushed with a clean worktree may be archived without waiting for the merge (a handed-off archive), that `force=true` with a `reason` is the coordinator-only escape hatch (never used in a sweep), that `hera_unarchive` hands a role back, and that a closed-unmerged PR of a handed-off role brings it back with a board decision item. They SHALL state that refusals carry reasons the coordinator should resolve or leave in place, and that archive does not delete worktrees.
+The coordinator orientation and the builtin `hera` skill SHALL present archive guidance as a short checklist tied to moments, not as a clause inside other prose. The checklist SHALL name these triggers:
 
-#### Scenario: Orientation mentions the archive duty and handoff
+- when a worker reports done and its PR is merged or open with CI not failing: call `hera_accept`, confirm the role is winding down, then call `hera_archive(role_name=...)` in the same turn
+- on every status check or wake (`hera_status`, `hera_inbox`, handling a wake, including an `[argus]` "ready to archive" notice): sweep with `hera_archive(dry_run=true)` and archive whatever passes
+- before going idle, and before reporting the orchestration finished: sweep with `hera_archive`
 
-- **WHEN** the coordinator orientation or `hera` skill is rendered
-- **THEN** it includes guidance to archive done-done roles with `hera_archive`, to sweep before declaring done, and to use handed-off archive, `force`+`reason`, and `hera_unarchive`
+They SHALL also tell coordinators that:
+
+- a worker whose PR is open with CI not failing, pushed, and with a clean worktree may be archived without waiting for the merge (a handed-off archive)
+- `force=true` with a `reason` is the coordinator-only escape hatch, for a single named role, never used in a sweep
+- `hera_unarchive` hands a role back
+- a closed-unmerged PR of a handed-off role brings it back with a board decision item
+- refusals are normal and carry reasons, and archive does not delete worktrees or branches
+
+The orientation's archive guidance SHALL be its own block, separate from the opening dispatch paragraph.
+
+#### Scenario: Orientation carries moment-based archive triggers
+
+- **WHEN** the coordinator orientation is rendered
+- **THEN** it contains an archive checklist naming the worker-done moment (with `hera_accept` then `hera_archive(role_name=...)`), the every-status-check `hera_archive(dry_run=true)` sweep, and the before-idle / before-finished sweep
+- **AND** it states that `force` needs a named role and a reason and is never used in a sweep, and mentions handed-off archive and `hera_unarchive`
+
+#### Scenario: Archive guidance is not buried in the dispatch paragraph
+
+- **WHEN** the coordinator orientation is rendered
+- **THEN** the archive checklist starts on its own line, after the paragraph that opens with the dispatch rule
+
+#### Scenario: Skill names the same moments
+
+- **WHEN** the builtin `hera` skill's `hera_archive` entry is read
+- **THEN** it lists the worker-done, every-status-check and before-idle/finished moments, and says the daemon may send an `[argus]` ready-to-archive notice that the coordinator acts on with a sweep
 
 ### Requirement: hera_unarchive coordinator tool
 
@@ -1017,4 +1042,32 @@ The system SHALL provide a coordinator-only `hera_unarchive(cwd, role_name, [orc
 
 - **WHEN** the role is not archived
 - **THEN** the tool returns an error and writes nothing
+
+### Requirement: hera_new_orchestrator delivers the coordinator orientation
+
+On success, `hera_new_orchestrator` SHALL include a "Coordinator orientation" section in its tool result containing the same orientation a recycle of the new coordinator role would carry: `HeraCoordinatorOrientation` for the new orchestrator when the caller holds no live worker binding in another orchestrator, and `HeraSubCoordinatorOrientation` (naming the new orchestrator and the caller's parent orchestrator) when it does. Rejected calls SHALL NOT include it.
+
+#### Scenario: A plain task bootstrapping an orchestrator receives the full orientation
+
+- **WHEN** a task with no hera binding calls hera_new_orchestrator(name=X) successfully
+- **THEN** the tool result contains `HeraCoordinatorOrientation("X")`, including the context-discipline habits
+
+#### Scenario: A self-promoting worker receives the sub-coordinator orientation
+
+- **WHEN** a task holding a live worker binding in orchestrator P calls hera_new_orchestrator(name=B) successfully
+- **THEN** the tool result contains `HeraSubCoordinatorOrientation` naming B and P, and not the top-level coordinator orientation
+
+### Requirement: hera_new_orchestrator keeps the caller's prompt when none is given
+
+When `hera_new_orchestrator` is called without a `prompt`, the new coordinator role's stored mission SHALL be the calling task's current prompt, so a later recycle seed's original-prompt section shows what the session was doing before it promoted itself. An explicit `prompt` SHALL still be stored as given.
+
+#### Scenario: Omitted prompt falls back to the task prompt
+
+- **WHEN** a task whose prompt is "build the importer" calls hera_new_orchestrator without `prompt`
+- **THEN** the new coordinator role's prompt is "build the importer"
+
+#### Scenario: Explicit prompt wins
+
+- **WHEN** hera_new_orchestrator is called with `prompt` set
+- **THEN** the new coordinator role's prompt is that value, not the task prompt
 

@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -19,6 +22,207 @@ type fakeReclaimRunner struct {
 	liveTaskID string
 	stopErr    error
 	stopped    chan struct{}
+}
+
+type connectedReclaimRunner struct {
+	*agent.Runner
+	session   agent.SessionHandle
+	attachErr error
+	stop      func(string, int) error
+	checkErr  error
+}
+
+func (r connectedReclaimRunner) AttachableSession(string) (agent.SessionHandle, error) {
+	return r.session, r.attachErr
+}
+
+func (r connectedReclaimRunner) HasSession(string) bool { return r.session != nil }
+
+func (r connectedReclaimRunner) StopTreeForPID(id string, pid int) error {
+	return r.stop(id, pid)
+}
+
+func (r connectedReclaimRunner) CheckReclaimSessionRetired(string) error { return r.checkErr }
+
+func TestHeraReclaimConnectedArmsSessionBeforeStop(t *testing.T) {
+	d := testDB(t)
+	task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress}
+	orch, err := d.CreateHeraOrchestrator("new-team", "")
+	testutil.NoError(t, err)
+	const pid = 42
+	type observation struct {
+		armed, locked bool
+		taskID        string
+		pid           int
+		err           error
+		bindErr       error
+	}
+	observed := make(chan observation, 1)
+	runner := connectedReclaimRunner{
+		Runner:  agent.NewRunner(nil),
+		session: &fakeKickSession{pid: pid, alive: true},
+		stop: func(id string, expectedPID int) error {
+			armed, err := d.ConsumeHeraReclaimStop(task.ID, pid)
+			unlock, acquired, lockErr := d.TryLockSessionMutation(task.ID)
+			if acquired {
+				unlock()
+			}
+			_, _, bindErr := d.CreateHeraRoleWithBinding(db.CreateHeraRoleInput{
+				OrchestratorID: orch.ID, Name: "joining", Kind: db.HeraKindCoordinator,
+			}, task.ID, task.Worktree)
+			observed <- observation{armed: armed, locked: !acquired, taskID: id, pid: expectedPID, err: errors.Join(err, lockErr), bindErr: bindErr}
+			return nil
+		},
+	}
+	app := New(d, runner, true)
+	testutil.NoError(t, d.Add(task))
+	seedHeraReclaim(t, d, task)
+	app.heraReclaimAndArchiveTask(task.ID)
+	select {
+	case got := <-observed:
+		testutil.NoError(t, got.err)
+		testutil.True(t, got.armed)
+		testutil.True(t, got.locked)
+		testutil.Equal(t, got.taskID, task.ID)
+		testutil.Equal(t, got.pid, pid)
+		testutil.ErrorIs(t, got.bindErr, db.ErrHeraReclaimInProgress)
+	case <-time.After(2 * time.Second):
+		t.Fatal("reclaim did not stop the active session")
+	}
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.True(t, row.Archived)
+	testutil.Equal(t, row.Status, model.StatusInProgress)
+	testutil.False(t, app.consumeHeraReclaimPending(task.ID))
+}
+
+func TestHeraReclaimConnectedUnconfirmedPreservesWorktree(t *testing.T) {
+	const pid = 42
+	for _, tc := range []struct {
+		name        string
+		attachErr   error
+		checkErr    error
+		stopErr     error
+		wantPending bool
+	}{
+		{name: "launch pending", attachErr: agent.ErrSessionStarting},
+		{name: "empty slot unconfirmed", checkErr: agent.ErrSessionCoordinationUnsupported},
+		{name: "unsupported stop", stopErr: agent.ErrSessionCoordinationUnsupported},
+		{name: "replacement", stopErr: agent.ErrSessionNotFound},
+		{name: "stop response lost", stopErr: agent.ErrSessionStopUnconfirmed, wantPending: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			worktree := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+			testutil.NoError(t, os.MkdirAll(worktree, 0o750))
+			task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Worktree: worktree}
+			var stopCalls int
+			runner := connectedReclaimRunner{
+				Runner:    agent.NewRunner(nil),
+				attachErr: tc.attachErr,
+				checkErr:  tc.checkErr,
+				stop: func(id string, expectedPID int) error {
+					stopCalls++
+					testutil.Equal(t, id, task.ID)
+					testutil.Equal(t, expectedPID, pid)
+					return tc.stopErr
+				},
+			}
+			wantCalls := 0
+			if tc.stopErr != nil {
+				runner.session = &fakeKickSession{pid: pid, alive: true}
+				wantCalls = 1
+			}
+			app := New(d, runner, true)
+			testutil.NoError(t, d.Add(task))
+			seedHeraReclaim(t, d, task)
+			app.reclaimConnectedHeraTask(runner, d, task.ID)
+			testutil.Equal(t, stopCalls, wantCalls)
+			pending, err := d.HeraReclaimStopPending(task.ID)
+			testutil.NoError(t, err)
+			testutil.Equal(t, pending, tc.wantPending)
+			testutil.True(t, agent.DirExists(worktree))
+		})
+	}
+}
+
+func TestHeraReclaimConnectedRetiredRemovesWorktree(t *testing.T) {
+	d := testDB(t)
+	worktree := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+	testutil.NoError(t, os.MkdirAll(worktree, 0o750))
+	task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInReview, Worktree: worktree}
+	testutil.NoError(t, d.Add(task))
+	runner := connectedReclaimRunner{Runner: agent.NewRunner(nil)}
+	app := New(d, runner, true)
+
+	seedHeraReclaim(t, d, task)
+	app.reclaimConnectedHeraTask(runner, d, task.ID)
+
+	testutil.False(t, agent.DirExists(worktree))
+	_, err := d.Get(task.ID)
+	testutil.ErrorIs(t, err, db.ErrTaskNotFound)
+}
+
+func TestHeraReclaimConnectedPreservesCoordinatorBinding(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		name := "retired"
+		if live {
+			name = "active"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			worktree := filepath.Join(t.TempDir(), ".argus", "worktrees", "worker")
+			testutil.NoError(t, os.MkdirAll(worktree, 0o750))
+			task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Worktree: worktree}
+			testutil.NoError(t, d.Add(task))
+			orch := seedHeraOrch(t, d, "outside")
+			role := seedHeraRoleOnTask(t, d, orch, "coord", db.HeraKindCoordinator, task.ID, worktree)
+			stopCalls := 0
+			runner := connectedReclaimRunner{
+				Runner: agent.NewRunner(nil),
+				stop: func(string, int) error {
+					stopCalls++
+					return nil
+				},
+			}
+			if live {
+				runner.session = &fakeKickSession{pid: 42, alive: true}
+			}
+			app := New(d, runner, true)
+
+			app.reclaimConnectedHeraTask(runner, d, task.ID)
+
+			row, err := d.Get(task.ID)
+			testutil.NoError(t, err)
+			testutil.False(t, row.Archived)
+			testutil.True(t, agent.DirExists(worktree))
+			testutil.Equal(t, stopCalls, 0)
+			_, err = d.HeraLiveBindingByRole(role.ID)
+			testutil.NoError(t, err)
+		})
+	}
+}
+
+func TestHeraReclaimConnectedTickLeavesArmedTaskInProgress(t *testing.T) {
+	d := testDB(t)
+	const pid = 42
+	task := &model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, AgentPID: pid, Archived: true}
+	testutil.NoError(t, d.Add(task))
+	armed, err := d.ArmHeraReclaimStop(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.True(t, armed)
+	app := New(d, agent.NewRunner(nil), true)
+
+	app.mu.Lock()
+	app.refreshTasksWithIDs([]string{}, nil, false)
+	app.mu.Unlock()
+
+	row, err := d.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Status, model.StatusInProgress)
+	matched, err := d.ConsumeHeraReclaimStop(task.ID, pid)
+	testutil.NoError(t, err)
+	testutil.True(t, matched)
 }
 
 func newFakeReclaimRunner(liveTaskID string) *fakeReclaimRunner {
@@ -59,6 +263,7 @@ func TestHeraReclaimAndArchiveTask_LiveTaskCompletesAfterAsyncExit(t *testing.T)
 
 	testutil.NoError(t, d.Add(&model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Project: "p", CreatedAt: time.Now()}))
 
+	seedHeraReclaim(t, d, &model.Task{ID: "tw"})
 	reclaimed := app.heraReclaimAndArchiveTask("tw")
 	testutil.Equal(t, reclaimed, false) // no worktree/branch on this task, nothing to reclaim
 
@@ -104,6 +309,7 @@ func TestHeraReclaimAndArchiveTask_NoLiveSessionMarkerDoesNotLeak(t *testing.T) 
 
 	testutil.NoError(t, d.Add(&model.Task{ID: "tw", Name: "tw", Status: model.StatusInProgress, Project: "p", CreatedAt: time.Now()}))
 
+	seedHeraReclaim(t, d, &model.Task{ID: "tw"})
 	app.heraReclaimAndArchiveTask("tw")
 
 	task, err := d.Get("tw")

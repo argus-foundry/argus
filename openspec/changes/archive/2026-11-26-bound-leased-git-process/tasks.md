@@ -1,0 +1,4 @@
+- [x] Bound both leased remote commands and their subprocesses.
+- [x] Verify lock release after canceling a Git command with an active child.
+- [x] Verify linked worktree registration, stack owner checks, and PWA filter transitions.
+- [x] Archive the verified change.

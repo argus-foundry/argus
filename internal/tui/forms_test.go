@@ -253,14 +253,14 @@ func TestProjectForm_PasteHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("paste skips read-only name in edit mode", func(t *testing.T) {
+	t.Run("paste edits name in edit mode", func(t *testing.T) {
 		pf2 := NewProjectForm()
 		pf2.LoadProject("locked", config.Project{})
 		pf2.focused = pfFieldName
 		paste2 := pf2.PasteHandler()
 		paste2("overwrite", func(p tview.Primitive) {})
-		if got := string(pf2.fields[pfFieldName]); got != "locked" {
-			t.Errorf("name changed to %q, should stay locked", got)
+		if got := string(pf2.fields[pfFieldName]); got != "lockedoverwrite" {
+			t.Errorf("name = %q, want lockedoverwrite", got)
 		}
 	})
 }

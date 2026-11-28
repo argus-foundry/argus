@@ -90,4 +90,8 @@
 
 ## Board decisions
 
+- **Board Left/Right are rebindable navigation exceptions; preserve navigation modifiers in keymap lookup.** Modified arrows still traverse panes. Board arrival detection and title attention use the complete snapshot, while commands use the filtered list; an explicit ctrl+g broadens to All when its remembered tab has no attention item.
+
 - **The board’s `o` opens the coordinator’s complete decision round without acknowledging or changing the board selection.** Resolve it through `hera_board.decide`; `d` suggests dismissal and `a` conflicts with the rail archive mnemonic, so neither is the default.
+- **Board `x` clears by kind: dismiss FYI/decision, complete action/todo as done, or retain resident approval review-and-deny.** Completion uses `FYIHeraBoardItems` with the visible `expected_updated_at` off the UI thread; todo dropping remains on web Decide. The retired `hera_board.done` override is silently ignored by the keymap's unknown-action handling; command contents never enter logs.
+- **Attention and order are computed in `internal/hera/model/boardattn.go` (`BoardQuiet`/`BoardAttention`/`SortBoardItems`), shared by the model's `BoardUnread`, the board title count and the resident auto-show loop.** Pending-trigger items and *every* todo are quiet: they stay listed but never raise the unread badge, board auto-landing or `ctrl+g`, because the rail/jump code only reads `BoardUnread`. Order is blocking actions, ordinary, then quiet; ascending id within each band. The TUI re-sorts defensively (idempotent) in case a model arrives unsorted.

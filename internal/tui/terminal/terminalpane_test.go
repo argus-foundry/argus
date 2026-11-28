@@ -3597,6 +3597,25 @@ func denseLogContent(targetBytes int) string {
 	return b.String()
 }
 
+// shrinkReplayReadWindow scales the 8MB initial read window and extend chunk
+// down to n bytes for one test, so a BUG-E style "log larger than the window"
+// scenario needs a ~1MB log instead of 10-20MB (emulated under -race). The
+// boundary under test (log > window, extend reaches strictly further back) is
+// unchanged. Callers must not be t.Parallel: the window is a package var.
+func shrinkReplayReadWindow(t *testing.T, n int64) {
+	t.Helper()
+	oldFloor, oldChunk := replayReadFloor, scrollExtendChunk
+	replayReadFloor, scrollExtendChunk = n, n
+	t.Cleanup(func() { replayReadFloor, scrollExtendChunk = oldFloor, oldChunk })
+}
+
+// TestReplayReadWindowDefaults pins the production window so the shrunken
+// values the BUG-E tests inject can never silently become the real ones.
+func TestReplayReadWindowDefaults(t *testing.T) {
+	testutil.Equal(t, replayReadFloor, int64(8<<20))
+	testutil.Equal(t, scrollExtendChunk, int64(8<<20))
+}
+
 // TestTerminalPane_ScrollExtendReachesOlderHistory reproduces BUG-E end-to-end
 // through asyncReplayRebuild: after reattaching to a long, escape-dense session,
 // a ceiling-hit rebuild that trusts the line heuristic (extend=false) re-reads
@@ -3606,7 +3625,8 @@ func TestTerminalPane_ScrollExtendReachesOlderHistory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a multi-MB log and emulates it")
 	}
-	setupTaskLog(t, "dense", denseLogContent(20*1024*1024)) // 20MB dense
+	shrinkReplayReadWindow(t, 256<<10)
+	setupTaskLog(t, "dense", denseLogContent(1280<<10)) // 5 windows of dense output
 	cols, rows := 120, 24
 	tp := NewTerminalPane()
 
@@ -3660,8 +3680,9 @@ func TestTerminalPane_Draw_ScrollExtendSmoke(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a multi-MB log and emulates it")
 	}
-	// Just over the 8MB initial window so the first build leaves firstByte > 0.
-	setupTaskLog(t, "dense-draw", denseLogContent(10*1024*1024)) // 10MB dense
+	// Just over the (shrunken) initial window so the first build leaves firstByte > 0.
+	shrinkReplayReadWindow(t, 256<<10)
+	setupTaskLog(t, "dense-draw", denseLogContent(320<<10))
 	sim := newSim(t, 60, 12)
 	tp := NewTerminalPane()
 	tp.SetRect(0, 0, 60, 12)

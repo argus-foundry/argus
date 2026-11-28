@@ -124,11 +124,30 @@ func TestThumbnail_Unsupported(t *testing.T) {
 
 func TestThumbnail_OversizedDimensionsRejected(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	src := filepath.Join(agent.ArtifactsDir("task"), "huge.png")
-	// 9000x9000 = 81 MP, a tiny solid-color file that would decode to ~324 MB.
-	writePNG(t, src, 9000, 9000, color.NRGBA{A: 255})
-	_, err := Thumbnail(context.Background(), "task", &model.Artifact{Filename: "huge.png", Type: model.ArtifactImage}, src)
+	// The production limit is 24 MP (an 81 MP PNG takes ~25s to encode under
+	// -race), so shrink the limit and use real, decodable images either side of
+	// it. A real image matters: a truncated body also yields ErrNoThumbnail, so
+	// only an image that WOULD decode proves the size guard is what rejects.
+	old := maxThumbPixels
+	maxThumbPixels = 1000
+	t.Cleanup(func() { maxThumbPixels = old })
+	dir := agent.ArtifactsDir("task")
+	art := func(name string) *model.Artifact { return &model.Artifact{Filename: name, Type: model.ArtifactImage} }
+
+	big := filepath.Join(dir, "big.png")
+	writePNG(t, big, 40, 40, color.NRGBA{A: 255}) // 1600 px > 1000
+	_, err := Thumbnail(context.Background(), "task", art("big.png"), big)
 	testutil.True(t, errors.Is(err, ErrNoThumbnail))
+
+	ok := filepath.Join(dir, "ok.png")
+	writePNG(t, ok, 30, 30, color.NRGBA{A: 255}) // 900 px <= 1000
+	_, err = Thumbnail(context.Background(), "task", art("ok.png"), ok)
+	testutil.NoError(t, err)
+}
+
+// TestThumbnail_ProductionPixelLimit pins the real limit the test above shrinks.
+func TestThumbnail_ProductionPixelLimit(t *testing.T) {
+	testutil.Equal(t, maxThumbPixels, 24*1000*1000)
 }
 
 func TestThumbnail_VideoWithoutFFmpeg(t *testing.T) {

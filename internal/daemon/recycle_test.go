@@ -27,6 +27,36 @@ func recycleTestConfig() config.Config {
 	}
 }
 
+type oldRecycleOwner struct{ *agent.Runner }
+
+func (oldRecycleOwner) CheckManagedRestartSupported(string) error {
+	return agent.ErrSessionCoordinationUnsupported
+}
+
+func TestRecycleOldOwnerKeepsLiveTask(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	database, err := db.OpenInMemory()
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	cfg := recycleTestConfig()
+	runner := oldRecycleOwner{agent.NewRunner(nil)}
+	t.Cleanup(runner.StopAll)
+	task := &model.Task{
+		ID: "old-recycle", Name: "old recycle", Worktree: t.TempDir(),
+		Status: model.StatusInProgress, SessionID: "existing", Prompt: "existing prompt",
+	}
+	testutil.NoError(t, database.Add(task))
+	sess, err := runner.Start(task, cfg, 24, 80, false)
+	testutil.NoError(t, err)
+	err = restartSessionWithSeedPrompt(database, runner, func() config.Config { return cfg }, task, "new prompt", "")
+	testutil.ErrorIs(t, err, agent.ErrSessionCoordinationUnsupported)
+	row, err := database.Get(task.ID)
+	testutil.NoError(t, err)
+	testutil.Equal(t, row.Prompt, "existing prompt")
+	testutil.Equal(t, row.SessionID, "existing")
+	testutil.True(t, sess.Alive())
+}
+
 // seedHeraRecycleCoordinator creates a task + orchestrator + bound
 // coordinator role for heraRecycleRunner tests, mirroring
 // internal/hera/recycle_test.go's seedRecycleCoordinator (unexported to that

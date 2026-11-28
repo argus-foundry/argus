@@ -42,15 +42,12 @@ type MutateStore interface {
 	PinHeraRole(id int64) error
 	UnpinHeraRole(id int64) error
 	RenameHeraRole(id int64, newName string) error
-	NukeHeraRole(id int64) error
+	NukeHeraRoleAndEndBinding(id int64) error
 
 	HeraRoleStatusFor(roleID int64) (*db.HeraRoleStatus, error)
 	UpsertHeraRoleStatus(roleID int64, status db.HeraRoleStatusValue) error
 	RollHeraWorkerToReview(taskID string) (bool, error)
 	ClearHeraReadyToClose(taskID string) error
-
-	HeraLiveBindingByRole(roleID int64) (*db.HeraBinding, error)
-	EndHeraBinding(bindingID int64, reason string) error
 }
 
 // Ops is the thin in-process mutation layer the Hera-view rail keys drive. Each
@@ -246,12 +243,7 @@ func (o *Ops) StepStatus(sel heramodel.Selection, dir int) error {
 // orchestrator's kanban_status) per Aaron's explicit "wrapping to active"
 // instruction — overloading one shared ladder with a wrap flag would make the
 // existing clamped caller (StepStatus) harder to read for no shared benefit.
-var kanbanOrder = []db.HeraKanbanStatus{
-	db.HeraKanbanActive,
-	db.HeraKanbanBacklog,
-	db.HeraKanbanBlocked,
-	db.HeraKanbanDone,
-}
+var kanbanOrder = heramodel.RailKanbanOrder()
 
 func kanbanIndex(s db.HeraKanbanStatus) int {
 	for i, v := range kanbanOrder {
@@ -289,20 +281,13 @@ func (o *Ops) KanbanStep(sel heramodel.Selection, dir int) error {
 // bridges a child) and marks the role row NUKED (nuked_at + archived_at) so it
 // leaves the rail entirely — NEVER a hard delete. The role row, its status, its
 // inbox messages, and its bound argus task all survive for DB-only recovery. The
-// App owns the argus-task + worktree side (stop session, reclaim worktree, archive
-// task when sole-bound) BEFORE calling this. The binding-end is soft-fail so a
-// transient error still lands the nuke mark.
+// App handles the task and worktree after the nuke and binding end commit.
 func (o *Ops) NukeRole(r *heramodel.RoleView) error {
 	if r == nil {
 		return errNoTarget
 	}
-	if b, err := o.store.HeraLiveBindingByRole(r.RoleID); err == nil && b != nil {
-		if eErr := o.store.EndHeraBinding(b.ID, db.HeraEndReasonUserDeleted); eErr != nil {
-			uxlog.Log("[hera-view] nuke role %d: end binding %d failed: %v", r.RoleID, b.ID, eErr)
-		}
-	}
 	uxlog.Log("[hera-view] nuke role %d (%s) orch=%d", r.RoleID, r.Name, r.OrchID)
-	return o.store.NukeHeraRole(r.RoleID)
+	return o.store.NukeHeraRoleAndEndBinding(r.RoleID)
 }
 
 // NukeOrchestrator marks an orchestrator row NUKED (Tier-2 EOL, BUG-022) — the

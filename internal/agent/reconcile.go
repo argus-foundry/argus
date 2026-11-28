@@ -91,6 +91,13 @@ func reconcileSessions(database *db.DB, alive, previous map[string]bool, livenes
 		if alive[t.ID] {
 			continue // re-attached live supervisor session — leave InProgress
 		}
+		if t.Archived {
+			pending, err := database.HeraReclaimStopPending(t.ID)
+			if err != nil || pending {
+				slog.Info("reconcile: reclaim exit unsettled", "task", t.ID, "pending", pending, "err", err)
+				continue
+			}
+		}
 		t.SetStatus(model.StatusInReview)
 		if uerr := database.Update(t); uerr != nil {
 			slog.Warn("reconcile: update failed", "task", t.ID, "name", t.Name, "err", uerr)

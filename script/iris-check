@@ -16,7 +16,7 @@
 #     fmt      -> fmt-check        (goimports -l . must be empty)
 #     vet      -> vet              (go vet ./...)
 #     vuln     -> vuln             (govulncheck ./...)
-#     test     -> test            (go test -race -count=1 ./...)
+#     test     -> test            (Makefile RACE_FLAGS + -count=1 ./...)
 #     cover    -> test-cover-gate  (race suite + coverage floor)
 #     build    -> build            (go build ./...)
 #

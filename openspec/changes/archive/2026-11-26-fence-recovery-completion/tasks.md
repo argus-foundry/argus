@@ -1,0 +1,4 @@
+- [x] Enforce PWA recovery ownership and cancellation.
+- [x] Recover unarchived nuke candidates and distinguish missing receipts.
+- [x] Fence bulk deletion and release standalone ownership after cleanup.
+- [x] Verify and archive the requirements.
