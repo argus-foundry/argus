@@ -33,6 +33,7 @@ import (
 	dclient "github.com/argus-foundry/argus/internal/daemon/client"
 	"github.com/argus-foundry/argus/internal/db"
 	"github.com/argus-foundry/argus/internal/gitutil"
+	herasvc "github.com/argus-foundry/argus/internal/hera"
 	heramodel "github.com/argus-foundry/argus/internal/hera/model"
 	"github.com/argus-foundry/argus/internal/launchagent"
 	"github.com/argus-foundry/argus/internal/macapps"
@@ -204,6 +205,13 @@ type App struct {
 	// override it to avoid a real git repo / network call, mirroring
 	// classifyNukeCandidateFn's own test-seam pattern above.
 	classifyStackInferredFn func(ctx context.Context, p mergesafety.StackParams, tipVerdicts map[string]mergesafety.Verdict) (mergesafety.Verdict, error)
+
+	// stackTasksInRepositoryFn builds the cascade discovery pass's
+	// base_branch index for one repository. It shells out to git once per
+	// task it is given, so classifyStackedBranchesForCascade calls it at
+	// most once per repository. Defaults to herasvc.StackTasksInRepository;
+	// tests override it to count calls.
+	stackTasksInRepositoryFn func(ctx context.Context, cfg config.Config, repo agent.TaskGitRepository, tasks []*model.Task) map[string]*model.Task
 
 	// New task form (created on demand)
 	newTaskForm *NewTaskForm
@@ -839,6 +847,7 @@ func New(database store.Store, runner agent.SessionProvider, daemonConnected boo
 	app.maintenanceClientFactory = app.newLocalMaintenanceClient
 	app.classifyNukeCandidateFn = app.classifyNukeCandidate
 	app.classifyStackInferredFn = mergesafety.ClassifyStackInferred
+	app.stackTasksInRepositoryFn = herasvc.StackTasksInRepository
 
 	app.settings = NewSettingsView(database)
 	app.settings.Keys = app.activeKeymap

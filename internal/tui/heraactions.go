@@ -917,7 +917,9 @@ func (a *App) heraCascadeNukeFrom(rootID int64) {
 	// (fix-hera-nuke-cleanup) then runs over whatever classified NOT-SAFE —
 	// both passes complete before the confirm modal opens at all, per spec.
 	go func() {
+		started := time.Now()
 		verdicts := a.classifyTasksConcurrentlyVerdicts(reclaimIDs)
+		tierA := time.Since(started)
 		confirmed := 0
 		var notSafeIDs []string
 		for _, id := range reclaimIDs {
@@ -935,6 +937,8 @@ func (a *App) heraCascadeNukeFrom(rootID int64) {
 			}
 			extra = a.classifyStackedBranchesForCascade(context.Background(), notSafeIDs, inCascade)
 		}
+		uxlog.Log("[hera-view] cascade classify: orch=%d tasks=%d safe=%d not_safe=%d stacked=%d tier_a=%s total=%s",
+			rootID, len(reclaimIDs), confirmed, len(notSafeIDs), len(extra), tierA.Round(time.Millisecond), time.Since(started).Round(time.Millisecond))
 		a.tapp.QueueUpdateDraw(func() { reviewThenConfirm(confirmed, extra) })
 	}()
 }

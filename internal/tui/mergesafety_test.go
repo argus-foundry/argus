@@ -143,6 +143,70 @@ func TestClassifyStackedBranchesForCascade_NoDescendantIsNoop(t *testing.T) {
 	testutil.Equal(t, len(extra), 0)
 }
 
+// TestClassifyStackedBranchesForCascade_IndexesOncePerRepository guards the
+// ~30s Ctrl+D stall: the base_branch index costs one git call per task it is
+// given, so it must be built once per repository (not once per not-safe
+// candidate) and only over tasks stacked on another task's branch.
+func TestClassifyStackedBranchesForCascade_IndexesOncePerRepository(t *testing.T) {
+	d := testDB(t)
+	testutil.NoError(t, d.SetProject("p", config.Project{Path: stackFixtureRepo(t), Branch: "master"}))
+	now := time.Now()
+	tasks := []*model.Task{
+		{ID: "root", Name: "root", Project: "p", Branch: "b0", Status: model.StatusInProgress, CreatedAt: now},
+		{ID: "task1", Name: "task1", Project: "p", Branch: "b1", BaseBranch: "b0", Status: model.StatusInProgress, CreatedAt: now},
+		{ID: "task2", Name: "task2", Project: "p", Branch: "b2", BaseBranch: "b1", Status: model.StatusInProgress, CreatedAt: now},
+		{ID: "task3", Name: "task3", Project: "p", Branch: "b3", BaseBranch: "b2", Status: model.StatusInProgress, CreatedAt: now},
+		{ID: "noise1", Name: "noise1", Project: "p", Branch: "n1", BaseBranch: "origin/main", Status: model.StatusInProgress, CreatedAt: now},
+		{ID: "noise2", Name: "noise2", Project: "p", Branch: "n2", BaseBranch: "gone-branch", Status: model.StatusInProgress, CreatedAt: now},
+	}
+	for _, task := range tasks {
+		testutil.NoError(t, d.Add(task))
+	}
+	app := New(d, agent.NewRunner(nil), false)
+	app.classifyStackInferredFn = func(ctx context.Context, p mergesafety.StackParams, tipVerdicts map[string]mergesafety.Verdict) (mergesafety.Verdict, error) {
+		return mergesafety.Verdict{Safe: true, Tier: mergesafety.TierStackInferred, Reason: "stubbed"}, nil
+	}
+	var calls int
+	var indexed []string
+	real := app.stackTasksInRepositoryFn
+	app.stackTasksInRepositoryFn = func(ctx context.Context, cfg config.Config, repo agent.TaskGitRepository, given []*model.Task) map[string]*model.Task {
+		calls++
+		for _, g := range given {
+			indexed = append(indexed, g.ID)
+		}
+		return real(ctx, cfg, repo, given)
+	}
+
+	notSafe := []string{"root", "task1", "noise1", "noise2"}
+	inCascade := map[string]bool{"root": true, "noise1": true, "noise2": true}
+	extra := app.classifyStackedBranchesForCascade(context.Background(), notSafe, inCascade)
+
+	testutil.Equal(t, calls, 1)
+	testutil.DeepEqual(t, indexed, []string{"task1", "task2", "task3"})
+	got := map[string]bool{}
+	for _, c := range extra {
+		got[c.TaskID] = true
+	}
+	testutil.DeepEqual(t, got, map[string]bool{"task1": true, "task2": true})
+}
+
+func TestStackLinkTasks(t *testing.T) {
+	tasks := []*model.Task{
+		{ID: "a", Branch: "a"},
+		{ID: "b", Branch: "b", BaseBranch: "a"},
+		{ID: "c", Branch: "c", BaseBranch: "origin/main"},
+		{ID: "d", Branch: "d", BaseBranch: "b"},
+		{ID: "e", BaseBranch: ""},
+	}
+	links, bases := stackLinkTasks(tasks)
+	var ids []string
+	for _, l := range links {
+		ids = append(ids, l.ID)
+	}
+	testutil.DeepEqual(t, ids, []string{"b", "d"})
+	testutil.DeepEqual(t, bases, map[string]bool{"a": true, "b": true})
+}
+
 func TestCascadeStackConfirmationUsesClassifiedRepository(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	d := testDB(t)
